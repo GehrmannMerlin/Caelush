@@ -324,3 +324,226 @@ does not implement them.
 
 D0-A ends at the documented boundary, static architecture rule, and regression
 baseline. None of the deferred runtime features is implemented in this round.
+
+---
+
+## D0-B Contract Addendum
+
+- **Round:** Caelush Desktop & Cloud — D0-B
+- **Source baseline:** `e263e601ac8b974662b881eb85b5b5f575260069`
+- **Current product/workspace version:** `0.1.0`
+- **Target stable product version:** `1.0.0`, only after D8-B
+- **Daemon API / Protocol:** `/api/v1`, version `v1` / integer `1`
+
+This addendum resolves D0-A's `DEFERRED — D0-B CONTRACT DETAIL` markers only
+for the version, compatibility, Cloud API, signed update policy, and build
+contract sections below. It freezes data and failure semantics; it does not
+implement future Electron, Cloud, Host Token, Profile, or updater runtime
+behavior. The prior D0-A regression baseline remains unchanged.
+
+The source audit found no separate complete Desktop/Cloud design package in
+this repository. The contract is based on the D0-A freeze plus explicit D0-B
+product decisions. The contract-first choices and fields that were not
+specified by an earlier design are marked as such in the OpenAPI document and
+must be reviewed in the owning implementation round; they are not represented
+as already-running Cloud behavior.
+
+### Desktop ↔ Daemon compatibility
+
+The existing production Daemon continues to be the sole Agent composition
+root. Its `/api/v1/health` and `/api/v1/info` contracts report API `v1` and
+Protocol `1`. `DaemonInfoSchema` remains strict. Its existing required
+capabilities retain their meanings; the three Desktop capabilities below are
+optional declarations and do not authorize behavior by themselves.
+
+| Capability                | Meaning when implemented                                                      | Production status at D0-B       |
+| ------------------------- | ----------------------------------------------------------------------------- | ------------------------------- |
+| `desktopHostAuthV1`       | Desktop Main authenticates the owned Daemon process for the active generation | Not implemented; not advertised |
+| `desktopProfileBindingV1` | Daemon is bound to one selected opaque Profile for its process lifetime       | Not implemented; not advertised |
+| `desktopLocalProxyV1`     | Desktop-only local proxy and request authorization are active                 | Not implemented; not advertised |
+
+The client compatibility evaluator requires:
+
+1. A valid strict `DaemonInfo` payload.
+2. Exact API `v1` and Protocol `1`.
+3. Exact full SemVer product string equality between Desktop and Daemon for
+   the first controlled release tuple.
+4. The trusted Main's verified host-identity result.
+5. All required capabilities. Missing optional capabilities are returned as
+   unavailable and can only disable their dependent feature.
+
+Unknown or malformed fields, unsupported versions, missing required
+capabilities, or unverified host identity fail closed. A Desktop capability
+listed as required is rejected while it remains absent from the evaluator's
+implemented capability set, even if a Daemon were to claim it. The current
+implemented set is empty. The evaluator contains no process, network, Cloud,
+filesystem, Provider, Run, or Agent operation. See
+[`product-version-and-compatibility.md`](./product-version-and-compatibility.md)
+for the first release matrix.
+
+The schema extension is optional and strict, not `passthrough`. Existing
+production Daemon composition does not add any Desktop field, which preserves
+older strict Web/CLI clients. Ordinary Web/CLI continue their existing Health
+then Info handshake. Ordinary Launcher reuse, version checks, and external
+Daemon warning behavior are unchanged. Desktop must never use ordinary Daemon
+reuse as evidence of authenticated Profile ownership.
+
+### Desktop private startup messages
+
+The following logical messages define the D0-B contract shape. The exact
+Windows Pipe/IPC transport is D0-C work. The executable implementation of
+one-time bootstrap, Host Token, Profile binding, and proxy authorization is
+D4 work.
+
+| Message                 | Direction                    | Required logical fields                                                                                                                                                                                            | Failure behavior                                                                                                     |
+| ----------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `START_DESKTOP_DAEMON`  | Main → private child channel | `ipcProtocolVersion: 1`, unpredictable `generationId`, opaque `profileId`, `desktopVersion`, `expectedDaemonVersion`, `apiVersion: "v1"`, `protocolVersion: 1`, `requiredCapabilities`, one-time `bootstrapSecret` | Invalid schema, expired/consumed secret, or generation mismatch fails startup; do not retry with an ordinary Daemon  |
+| `DAEMON_READY`          | Child → Main private channel | matching `generationId`, child identity evidence, `daemonVersion`, `apiVersion`, `protocolVersion`, selected ephemeral loopback port, actual capability set, bootstrap acceptance                                  | Reject if identity evidence, generation, port, versions, or requirements do not validate                             |
+| `DAEMON_STARTUP_FAILED` | Child → Main private channel | matching `generationId`, stable safe failure code                                                                                                                                                                  | Main returns a safe state; no exception, path, token, or secret is exposed to Renderer                               |
+| `STOP_DESKTOP_DAEMON`   | Main → private child channel | matching `generationId`, bounded shutdown request                                                                                                                                                                  | Main waits only for the configured shutdown budget, then invalidates the generation and terminates the owned process |
+
+The bootstrap secret is high entropy, single use, scoped to one process
+generation, and short lived. It is carried only on the trusted private
+Main/child channel. It must never appear in process arguments, environment
+variables, logs, Renderer/preload state, LocalStorage, a URL, Daemon HTTP
+payloads, or Cloud API requests. Its generation is discarded after acceptance
+or failure. The exact encoding, process evidence, IPC transport, timeout
+hardening, and Windows ownership checks are D0-C details.
+
+`DAEMON_READY` reports an OS-assigned ephemeral port bound only to IPv4
+loopback (`127.0.0.1`). Desktop does not select a predictable shared port, bind
+to all interfaces, or expose the port to Renderer. A Main-to-Daemon Health/Info
+handshake must verify the same API, Protocol, exact product version, required
+capabilities, process generation, and Host Token before the workspace becomes
+available. The existing Launcher startup budget is 10 seconds; Desktop's
+initial readiness budget is also 10 seconds, followed by a bounded shutdown
+budget that D0-C must validate on Windows. A timeout fails closed.
+
+The Host Token is scoped to the owned Daemon process generation and is
+invalidated on exit, restart, Profile switch, or failed binding. A restarted
+Daemon receives a new bootstrap and new Host Token; stale messages, tokens, and
+proxy requests from an earlier generation are rejected. D4 determines and
+implements token construction, rotation, in-memory custody, and request
+verification. Only trusted Main/Daemon code may hold the token. Main attaches
+it to allowed proxied `/api/v1` requests as `X-Caelush-Host-Token`; it does not
+forward Renderer-supplied authorization headers. Health/Info is not a bypass
+around owned-process verification.
+
+The Local Protocol Proxy preserves the existing Daemon request body and
+response semantics, SSE frames, durable `Last-Event-ID`, cancellation, and
+reconnection behavior. It only forwards the allowlisted Daemon API origin and
+routes; it strips hop-by-hop headers and rejects arbitrary target URLs. The
+Daemon remains the authority for Sessions, Runs, Tools, Runtime, SQLite,
+Context, Provider credentials, and RunEvents. Cloud identity, email, device,
+offline grant, update, and Desktop UI/panel fields are excluded from DaemonInfo,
+Daemon route payloads, Agent Context, Prompt Surface, Security Prompt, and
+Prompt Cache fingerprints.
+
+### Desktop ↔ Cloud OpenAPI V1
+
+The contract-first OpenAPI 3.1 document is
+[`cloud-api-v1.openapi.json`](./cloud-api-v1.openapi.json). It defines the
+frozen 13-operation surface:
+
+| Area                   | Operations                                                                                         |
+| ---------------------- | -------------------------------------------------------------------------------------------------- |
+| Registration and login | `POST /v1/auth/register`, `/verify-email`, `/resend-verification`, `/login`, `/refresh`, `/logout` |
+| Password recovery      | `POST /v1/auth/forgot-password`, `/reset-password`, `/change-password`                             |
+| Account and devices    | `GET /v1/account/me`, `GET /v1/account/devices`, `DELETE /v1/account/devices/{deviceId}`           |
+| Desktop update policy  | `GET /v1/desktop/update-policy`                                                                    |
+
+Successful response bodies include a UUID `requestId`. Errors use a stable
+`CloudError` code, safe bounded message, retryability flag, and `requestId`;
+database exceptions and stack traces are never response data. Inputs and
+outputs are UTF-8 JSON; all timestamps are RFC 3339 UTC; identities are UUIDs.
+Production Cloud requests use HTTPS and access tokens use the Bearer header.
+Registration, verification resend, and password-recovery responses do not
+reveal whether an email address is registered or verified. Refresh tokens are
+rotated in the JSON body, never in a URL, and replay revokes the token family.
+
+| Credential / grant | Frozen lifetime                                     |
+| ------------------ | --------------------------------------------------- |
+| Access Token       | 15 minutes                                          |
+| Refresh Token      | 30-day sliding lifetime, capped at 90 days absolute |
+| Offline Grant      | Up to 15 days, bound to a device, Ed25519 signed    |
+
+Desktop Main is the Cloud credential boundary. Access and Refresh Tokens never
+go to Renderer or Local Daemon. The Daemon does not contact Cloud to decide
+whether a local Agent action may execute. Cloud receives no workspace files or
+paths, Sessions, Messages, Runs, Tool data, model prompts/outputs, Provider
+keys, Prompt Cache material/fingerprints, terminal I/O, or browser history,
+cookies, or page content. The API intentionally defines no Agent execution,
+chat synchronization, file upload, or prompt telemetry route.
+
+The OpenAPI document is a contract-first D0-B design, not output generated by
+or proof of a running FastAPI service. Fields that were not specified by an
+earlier source design are called out in the OpenAPI descriptions and remain
+subject to owner review during D1/D2 implementation. D1-A–D1-C own Cloud auth;
+D2-A–D2-B own device, refresh-session, and offline-grant implementation. The
+compatibility checker rejects endpoint/method removal, contract semantics or
+authentication changes, request additions that become required, response
+field/status removal, type/constraint changes, and real schema regressions.
+Schema or OpenAPI changes outside its analyzed subset report
+`UNDETERMINED` and require manual compatibility review; they are not treated as
+automatic PASS.
+
+### Preload, Profile, and Vault
+
+The D0-A Preload namespace allowlist remains exactly `account`, `window`,
+`workspace`, `browser`, and `update`, with one schema per method. There is no
+generic invoke, arbitrary Shell, arbitrary path read/write, arbitrary network
+request, raw Cloud token return, or Electron/Node object exposure. Per-method
+DTO refinements and sender/state validation are D3-A–D3-B work.
+
+The Windows profile root, opaque account directory, independent SQLite,
+system-vault requirements, legacy-import confirmation, and migration backup
+rules remain as frozen in D0-A. The existing
+`ai_provider_credentials.secret_value` stores Provider API Key plaintext in
+SQLite and remains `MIGRATION REQUIRED — D4-C`. No Schema, key store, or
+credential authority runtime change occurs in D0-B.
+
+### Version and update trust
+
+The canonical product-version and first Desktop/Daemon/Web compatibility
+matrix is in
+[`product-version-and-compatibility.md`](./product-version-and-compatibility.md).
+`0.1.0` remains current; `1.0.0` is a target only after D8-B. Channels are
+`dev`, `beta`, and `stable`. Protocol/API versions evolve independently from
+product SemVer.
+
+The signed policy fields, constrained JCS bytes, Ed25519 key selection,
+SemVer/channel checks, revision monotonicity, allowed release host, and
+artifact verification order are in
+[`signed-update-policy-contract.md`](./signed-update-policy-contract.md).
+The trust order is signed Cloud policy, exact artifact size/SHA-512 and
+manifest binding, then Windows Authenticode publisher verification. Cloud
+policy revisions cannot roll back. The Cloud policy and Updater Manifest must
+refer to one artifact. An unverified download is never sent to an installer,
+and mandatory updates wait for Core's safe durable boundary. D0-B has no
+production signer, updater, downloader, version-changing release pipeline, or
+Authenticode implementation.
+
+### Build graph
+
+[`desktop-build-graph.md`](./desktop-build-graph.md) distinguishes the
+existing portable Node archive from the not-yet-implemented Electron installer
+and supplies the D0-C Windows POC checklist. Node/SQLite/PTY/Sandbox ABI and
+Electron resource staging are not claimed as verified by the D0-B documents or
+unit tests.
+
+### Deferred Implementation Map
+
+| Round     | Sole primary responsibility                                        | D0-B status                                                                                                                       |
+| --------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| D0-B      | Version source, protocol detail, Desktop capability, build graph   | Contract and static checks frozen; runtime features deferred                                                                      |
+| D0-C      | Windows Electron/Node/SQLite/PTY/SSE technical POC                 | Must prove clean Windows x64 launch, runtime/native compatibility, SSE and process lifecycle                                      |
+| D1-A–D1-C | Cloud identity/authentication foundation                           | Implement the OpenAPI auth surface in the independent Cloud repository; add contract compatibility tests                          |
+| D2-A–D2-B | Devices, Refresh and offline authorization                         | Implement UUID device/session ownership, token rotation/replay handling, and device-bound signed grants                           |
+| D3-A–D3-B | Electron shell, Preload, login state machine                       | Implement the frozen five Preload namespaces and per-method DTO/sender/state checks                                               |
+| D4-A–D4-D | Profile, Host Token, proxy, Provider Key and legacy data migration | Implement private bootstrap/Host Token/process generation, profile isolation, proxy, Key migration and backup-safe import         |
+| D5-A–D5-C | Right panel, files, terminal, browser and editor                   | Renderer features through the reviewed Main APIs and existing Daemon authority                                                    |
+| D6-A–D6-B | Windows install and upgrade compatibility                          | Implement Desktop Resource Manifest, native resource staging, signed installer and migration-safe upgrades                        |
+| D7-A–D7-C | Cloud release policy and Desktop auto-update                       | Implement signer custody/rotation, policy-manifest-artifact matching, download, integrity, Authenticode and safe install boundary |
+| D8-A–D8-B | Production deployment, security acceptance and stable release      | Deploy Cloud, complete independent security acceptance, and only then claim stable `1.0.0`                                        |
+
+No D0-C or later implementation is performed by this addendum.

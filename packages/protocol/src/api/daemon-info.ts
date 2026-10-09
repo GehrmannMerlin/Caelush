@@ -32,6 +32,9 @@ const DaemonCapabilitiesSchema = z
     sessionTranscript: z.literal(true).optional(),
     sessionContinuityPreflight: z.literal(true).optional(),
     sessionTurnPresentation: z.literal(true).optional(),
+    desktopHostAuthV1: z.literal(true).optional(),
+    desktopProfileBindingV1: z.literal(true).optional(),
+    desktopLocalProxyV1: z.literal(true).optional(),
   })
   .strict();
 

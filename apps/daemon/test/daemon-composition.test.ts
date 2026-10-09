@@ -171,6 +171,7 @@ describe("daemon production composition", () => {
         runRecovery: true,
         cancellation: true,
         approvals: true,
+        sessionContinuityPreflight: true,
         sessionTranscript: true,
         sessionTurnPresentation: true,
         sseReplay: true,
@@ -198,6 +199,9 @@ describe("daemon production composition", () => {
         },
       },
     });
+    expect(composition.info.capabilities).not.toHaveProperty("desktopHostAuthV1");
+    expect(composition.info.capabilities).not.toHaveProperty("desktopProfileBindingV1");
+    expect(composition.info.capabilities).not.toHaveProperty("desktopLocalProxyV1");
     expect(JSON.stringify(composition.info)).not.toContain("secret-that-must-not-be-public");
     expect(() =>
       composition.modelCanonicalizer.canonicalize({

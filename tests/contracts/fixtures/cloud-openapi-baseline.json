@@ -1,0 +1,1570 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Caelush Cloud API",
+    "version": "1.0.0",
+    "description": "Contract-first public API baseline for the independent Caelush Cloud service. This is not generated from or validated against a running FastAPI service.",
+    "x-caelush-contract-status": "CONTRACT_FIRST_D0-B"
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "The Desktop release configures the Cloud origin. Production origins must use HTTPS and a separately reviewed hostname allowlist."
+    }
+  ],
+  "tags": [
+    {
+      "name": "Authentication"
+    },
+    {
+      "name": "Account"
+    },
+    {
+      "name": "Desktop Update"
+    }
+  ],
+  "paths": {
+    "/v1/auth/register": {
+      "post": {
+        "tags": ["Authentication"],
+        "operationId": "registerAccount",
+        "summary": "Start account registration",
+        "description": "Accepts an email and password and starts email verification. The public response is indistinguishable for new and already registered addresses.",
+        "security": [],
+        "x-caelush-authentication": "NONE",
+        "x-caelush-idempotency": "Repeated requests for the same address return the same generic accepted outcome; delivery is rate-limited.",
+        "x-caelush-security": [
+          "Do not enumerate accounts",
+          "Do not return account tokens before email verification"
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/RegisterRequest"
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/Accepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/auth/verify-email": {
+      "post": {
+        "tags": ["Authentication"],
+        "operationId": "verifyEmailAddress",
+        "summary": "Verify an email address",
+        "security": [],
+        "x-caelush-authentication": "EMAIL_VERIFICATION_PROOF",
+        "x-caelush-idempotency": "Verification proof is single-use; repeat submission returns a generic invalid-or-used proof error.",
+        "x-caelush-security": [
+          "Proof is carried only in the JSON body",
+          "Do not disclose account state in errors"
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/VerifyEmailRequest"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/VerificationAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/auth/resend-verification": {
+      "post": {
+        "tags": ["Authentication"],
+        "operationId": "resendEmailVerification",
+        "summary": "Request another email verification message",
+        "description": "Known and unknown addresses receive the same public accepted response.",
+        "security": [],
+        "x-caelush-authentication": "NONE",
+        "x-caelush-idempotency": "Repeated requests return the same generic accepted outcome; delivery is rate-limited.",
+        "x-caelush-security": ["Do not enumerate accounts", "Do not expose verification state"],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/EmailAddressRequest"
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/Accepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/auth/login": {
+      "post": {
+        "tags": ["Authentication"],
+        "operationId": "login",
+        "summary": "Authenticate an account and bind a device key",
+        "security": [],
+        "x-caelush-authentication": "ACCOUNT_CREDENTIALS_AND_DEVICE_PUBLIC_KEY",
+        "x-caelush-idempotency": "A successful request creates or resumes one device-bound session; login is not idempotent and returns newly issued tokens.",
+        "x-caelush-security": [
+          "Unverified email and invalid credentials use the same public authentication failure",
+          "Accept only an Ed25519 public device key",
+          "Never return a private key"
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/LoginRequest"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AuthResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/InvalidCredentials"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/auth/refresh": {
+      "post": {
+        "tags": ["Authentication"],
+        "operationId": "refreshSession",
+        "summary": "Rotate refresh credentials",
+        "security": [],
+        "x-caelush-authentication": "REFRESH_TOKEN_IN_JSON_BODY",
+        "x-caelush-idempotency": "Single-use rotation is non-idempotent. Reuse of a rotated token revokes the associated token family.",
+        "x-caelush-security": [
+          "Refresh Token is never accepted in a URL",
+          "Device revocation prevents online refresh"
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/RefreshRequest"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AuthResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/RefreshRejected"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "tags": ["Authentication"],
+        "operationId": "logoutSession",
+        "summary": "Revoke the authenticated session",
+        "security": [
+          {
+            "AccessToken": []
+          }
+        ],
+        "x-caelush-authentication": "BEARER_ACCESS_TOKEN",
+        "x-caelush-idempotency": "Revoking the same session more than once returns the same successful outcome.",
+        "x-caelush-security": ["Revocation is scoped to the authenticated session"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OperationSucceeded"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/auth/forgot-password": {
+      "post": {
+        "tags": ["Authentication"],
+        "operationId": "requestPasswordReset",
+        "summary": "Request a password reset message",
+        "description": "Known and unknown addresses receive the same generic accepted response.",
+        "security": [],
+        "x-caelush-authentication": "NONE",
+        "x-caelush-idempotency": "Repeated requests return the same generic accepted outcome; delivery is rate-limited.",
+        "x-caelush-security": [
+          "Do not enumerate accounts",
+          "Do not return reset proof in the response"
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/EmailAddressRequest"
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/Accepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/auth/reset-password": {
+      "post": {
+        "tags": ["Authentication"],
+        "operationId": "resetPassword",
+        "summary": "Set a password using a reset proof",
+        "security": [],
+        "x-caelush-authentication": "PASSWORD_RESET_PROOF",
+        "x-caelush-idempotency": "Reset proof is single-use; a repeated or invalid proof returns the same generic recovery error.",
+        "x-caelush-security": [
+          "Proof is carried only in the JSON body",
+          "Do not disclose whether an account exists"
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/ResetPasswordRequest"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OperationSucceeded"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/RecoveryRejected"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/auth/change-password": {
+      "post": {
+        "tags": ["Authentication"],
+        "operationId": "changePassword",
+        "summary": "Change the authenticated account password",
+        "security": [
+          {
+            "AccessToken": []
+          }
+        ],
+        "x-caelush-authentication": "BEARER_ACCESS_TOKEN_AND_CURRENT_PASSWORD",
+        "x-caelush-idempotency": "Not idempotent; requires the current password and invalidates other refresh sessions after success.",
+        "x-caelush-security": [
+          "Require current password proof",
+          "Do not expose password provider or database errors"
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/ChangePasswordRequest"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OperationSucceeded"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/account/me": {
+      "get": {
+        "tags": ["Account"],
+        "operationId": "getCurrentAccount",
+        "summary": "Get the authenticated account projection",
+        "security": [
+          {
+            "AccessToken": []
+          }
+        ],
+        "x-caelush-authentication": "BEARER_ACCESS_TOKEN",
+        "x-caelush-idempotency": "Safe read; repeated requests do not mutate account state.",
+        "x-caelush-security": ["Return only the authenticated account projection"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AccountResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/account/devices": {
+      "get": {
+        "tags": ["Account"],
+        "operationId": "listAccountDevices",
+        "summary": "List devices owned by the authenticated account",
+        "security": [
+          {
+            "AccessToken": []
+          }
+        ],
+        "x-caelush-authentication": "BEARER_ACCESS_TOKEN",
+        "x-caelush-idempotency": "Safe read; cursor pages are stable for the request snapshot.",
+        "x-caelush-security": [
+          "Return no device key material",
+          "Never return devices owned by another account"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DevicePageLimit"
+          },
+          {
+            "$ref": "#/components/parameters/OpaqueCursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/DeviceListResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/account/devices/{deviceId}": {
+      "delete": {
+        "tags": ["Account"],
+        "operationId": "revokeAccountDevice",
+        "summary": "Revoke a device owned by the authenticated account",
+        "security": [
+          {
+            "AccessToken": []
+          }
+        ],
+        "x-caelush-authentication": "BEARER_ACCESS_TOKEN",
+        "x-caelush-idempotency": "Revoking an already-revoked owned device returns the same successful outcome; unknown and non-owned IDs share DEVICE_NOT_FOUND.",
+        "x-caelush-security": [
+          "Device ownership is checked by Cloud",
+          "Revocation prevents online Refresh"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DeviceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/DeviceRevoked"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/DeviceNotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/desktop/update-policy": {
+      "get": {
+        "tags": ["Desktop Update"],
+        "operationId": "getDesktopUpdatePolicy",
+        "summary": "Get a signed update policy for a Desktop release",
+        "description": "This endpoint is public so an unauthenticated installation can discover a signed release policy. The response contains no account-specific data and is not an authorization decision for Agent execution.",
+        "security": [],
+        "x-caelush-authentication": "NONE_SIGNED_POLICY",
+        "x-caelush-idempotency": "Safe read; the same revision represents immutable policy content.",
+        "x-caelush-security": [
+          "Client enforces a compiled HTTPS host allowlist",
+          "RequestId is outside the signed payload",
+          "Reject expired or rolled-back policy revisions"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Platform"
+          },
+          {
+            "$ref": "#/components/parameters/Architecture"
+          },
+          {
+            "$ref": "#/components/parameters/ReleaseChannel"
+          },
+          {
+            "$ref": "#/components/parameters/CurrentVersion"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SignedUpdatePolicy"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/PolicyNotAvailable"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "AccessToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque access token",
+        "description": "15-minute Access Token. Desktop Main owns it; it is never returned to Renderer or Daemon."
+      }
+    },
+    "parameters": {
+      "DeviceId": {
+        "name": "deviceId",
+        "in": "path",
+        "required": true,
+        "description": "Cloud device UUID owned by the authenticated account.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "DevicePageLimit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        }
+      },
+      "OpaqueCursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "Platform": {
+        "name": "platform",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "const": "windows"
+        }
+      },
+      "Architecture": {
+        "name": "arch",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "const": "x64"
+        }
+      },
+      "ReleaseChannel": {
+        "name": "channel",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ReleaseChannel"
+        }
+      },
+      "CurrentVersion": {
+        "name": "currentVersion",
+        "in": "query",
+        "required": true,
+        "description": "Public product version only; no account, device, workspace, or Runtime metadata is sent.",
+        "schema": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$",
+          "maxLength": 256
+        }
+      }
+    },
+    "requestBodies": {
+      "RegisterRequest": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RegisterRequest"
+            }
+          }
+        }
+      },
+      "VerifyEmailRequest": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/VerifyEmailRequest"
+            }
+          }
+        }
+      },
+      "EmailAddressRequest": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/EmailAddressRequest"
+            }
+          }
+        }
+      },
+      "LoginRequest": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/LoginRequest"
+            }
+          }
+        }
+      },
+      "RefreshRequest": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RefreshRequest"
+            }
+          }
+        }
+      },
+      "ResetPasswordRequest": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ResetPasswordRequest"
+            }
+          }
+        }
+      },
+      "ChangePasswordRequest": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ChangePasswordRequest"
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "Accepted": {
+        "description": "Accepted without disclosing account existence.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AcceptedResponse"
+            }
+          }
+        }
+      },
+      "VerificationAccepted": {
+        "description": "The verification proof was accepted.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OperationSucceededResponse"
+            }
+          }
+        }
+      },
+      "OperationSucceeded": {
+        "description": "The operation completed.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OperationSucceededResponse"
+            }
+          }
+        }
+      },
+      "AuthResult": {
+        "description": "Short-lived tokens and safe account/device projections. Token fields are consumed by Desktop Main only.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AuthResult"
+            }
+          }
+        }
+      },
+      "AccountResponse": {
+        "description": "Authenticated account projection.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AccountResponse"
+            }
+          }
+        }
+      },
+      "DeviceListResponse": {
+        "description": "Bounded page of account-owned device projections.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DeviceListResponse"
+            }
+          }
+        }
+      },
+      "DeviceRevoked": {
+        "description": "Device revocation outcome.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DeviceRevocationResponse"
+            }
+          }
+        }
+      },
+      "SignedUpdatePolicy": {
+        "description": "Signed immutable update policy; requestId is not part of the signed payload.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SignedUpdatePolicyResponse"
+            }
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "Malformed request.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorResponse"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Missing, invalid, expired, or revoked access credential.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorResponse"
+            }
+          }
+        }
+      },
+      "InvalidCredentials": {
+        "description": "Invalid credentials or unverified account; the response does not reveal which condition occurred.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorResponse"
+            }
+          }
+        }
+      },
+      "RefreshRejected": {
+        "description": "Invalid, expired, replayed, revoked, or device-revoked refresh credential.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorResponse"
+            }
+          }
+        }
+      },
+      "RecoveryRejected": {
+        "description": "Invalid or already-used recovery proof.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorResponse"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "A state conflict or one-time proof reuse.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorResponse"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The authenticated operation is not permitted.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorResponse"
+            }
+          }
+        }
+      },
+      "DeviceNotFound": {
+        "description": "Device does not exist for this account; non-owned IDs use the same response.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorResponse"
+            }
+          }
+        }
+      },
+      "ValidationError": {
+        "description": "Request validation failed without internal implementation details.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorResponse"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Rate limit exceeded; retryable is true only when the response policy permits retry.",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorResponse"
+            }
+          }
+        }
+      },
+      "PolicyNotAvailable": {
+        "description": "No policy is available for the requested release tuple.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorResponse"
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "Unexpected internal failure; no database or stack details are returned.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorResponse"
+            }
+          }
+        }
+      },
+      "ServiceUnavailable": {
+        "description": "Temporarily unavailable service.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "RequestId": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "ReleaseChannel": {
+        "type": "string",
+        "enum": ["dev", "beta", "stable"]
+      },
+      "CloudError": {
+        "type": "object",
+        "required": ["code", "message", "retryable", "requestId"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "REQUEST_INVALID",
+              "AUTH_INVALID_CREDENTIALS",
+              "AUTH_VERIFICATION_INVALID",
+              "AUTH_TOKEN_INVALID",
+              "AUTH_TOKEN_EXPIRED",
+              "AUTH_REFRESH_REPLAYED",
+              "AUTH_SESSION_REVOKED",
+              "AUTH_RECOVERY_INVALID",
+              "ACCOUNT_FORBIDDEN",
+              "DEVICE_NOT_FOUND",
+              "DEVICE_LIMIT_REACHED",
+              "RATE_LIMITED",
+              "UPDATE_POLICY_NOT_AVAILABLE",
+              "UPDATE_POLICY_INVALID_REQUEST",
+              "INTERNAL_ERROR",
+              "SERVICE_UNAVAILABLE"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "Safe user-facing text; never a database exception, internal path, token, or stack trace."
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/RequestId"
+          }
+        }
+      },
+      "ApiErrorResponse": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/CloudError"
+          }
+        }
+      },
+      "AccountEntitlement": {
+        "type": "object",
+        "required": ["code", "enabled"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_.-]{0,63}$"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AccountView": {
+        "type": "object",
+        "required": ["userId", "email", "emailVerified", "entitlements", "createdAt"],
+        "properties": {
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 320
+          },
+          "emailVerified": {
+            "type": "boolean"
+          },
+          "entitlements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountEntitlement"
+            },
+            "maxItems": 128
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339 UTC timestamp ending in Z."
+          }
+        }
+      },
+      "DeviceView": {
+        "type": "object",
+        "required": ["deviceId", "label", "createdAt", "lastSeenAt", "revokedAt", "current"],
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastSeenAt": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "revokedAt": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "current": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AuthTokens": {
+        "type": "object",
+        "required": [
+          "tokenType",
+          "accessToken",
+          "accessExpiresAt",
+          "refreshToken",
+          "refreshExpiresAt",
+          "refreshAbsoluteExpiresAt"
+        ],
+        "properties": {
+          "tokenType": {
+            "type": "string",
+            "const": "Bearer"
+          },
+          "accessToken": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 8192,
+            "x-caelush-secret": true,
+            "description": "Returned to trusted Desktop Main only; never forwarded to Renderer, Daemon, logs, or URLs."
+          },
+          "accessExpiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "refreshToken": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 8192,
+            "x-caelush-secret": true,
+            "description": "Returned to trusted Desktop Main only; never forwarded to Renderer, Daemon, logs, or URLs."
+          },
+          "refreshExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "30-day sliding lifetime from rotation, capped by the absolute expiry."
+          },
+          "refreshAbsoluteExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "90-day maximum lifetime from session creation."
+          }
+        }
+      },
+      "OfflineGrantPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "grantId",
+          "userId",
+          "deviceId",
+          "issuedAt",
+          "expiresAt",
+          "entitlements",
+          "keyId"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "integer",
+            "const": 1
+          },
+          "grantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deviceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "issuedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Must be no later than 15 days after issuedAt."
+          },
+          "entitlements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountEntitlement"
+            },
+            "maxItems": 128
+          },
+          "keyId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      },
+      "OfflineGrantEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["envelopeVersion", "payload", "signature"],
+        "properties": {
+          "envelopeVersion": {
+            "type": "integer",
+            "const": 1
+          },
+          "payload": {
+            "$ref": "#/components/schemas/OfflineGrantPayload"
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{86}$",
+            "description": "Unpadded Base64URL Ed25519 signature over the canonical payload bytes."
+          }
+        }
+      },
+      "AuthResult": {
+        "type": "object",
+        "required": ["requestId", "sessionId", "account", "device", "tokens", "offlineGrant"],
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/RequestId"
+          },
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account": {
+            "$ref": "#/components/schemas/AccountView"
+          },
+          "device": {
+            "$ref": "#/components/schemas/DeviceView"
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/AuthTokens"
+          },
+          "offlineGrant": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OfflineGrantEnvelope"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "AcceptedResponse": {
+        "type": "object",
+        "required": ["requestId", "status"],
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/RequestId"
+          },
+          "status": {
+            "type": "string",
+            "const": "ACCEPTED"
+          }
+        }
+      },
+      "OperationSucceededResponse": {
+        "type": "object",
+        "required": ["requestId", "status"],
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/RequestId"
+          },
+          "status": {
+            "type": "string",
+            "const": "SUCCEEDED"
+          }
+        }
+      },
+      "AccountResponse": {
+        "type": "object",
+        "required": ["requestId", "account"],
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/RequestId"
+          },
+          "account": {
+            "$ref": "#/components/schemas/AccountView"
+          }
+        }
+      },
+      "DeviceListResponse": {
+        "type": "object",
+        "required": ["requestId", "devices", "nextCursor"],
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/RequestId"
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeviceView"
+            },
+            "maxItems": 100
+          },
+          "nextCursor": {
+            "type": ["string", "null"],
+            "maxLength": 512
+          }
+        }
+      },
+      "DeviceRevocationResponse": {
+        "type": "object",
+        "required": ["requestId", "deviceId", "revoked"],
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/RequestId"
+          },
+          "deviceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revoked": {
+            "type": "boolean",
+            "const": true
+          }
+        }
+      },
+      "DesktopRelease": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "artifactUrl", "artifactSize", "sha512", "releaseNotes"],
+        "properties": {
+          "version": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "SemVer 2.0.0; must equal DesktopUpdatePolicy.latestVersion."
+          },
+          "artifactUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://",
+            "description": "Client checks the hostname against its compiled release-domain allowlist."
+          },
+          "artifactSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "sha512": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{128}$",
+            "description": "Lowercase hexadecimal SHA-512 of the exact installer artifact bytes."
+          },
+          "releaseNotes": {
+            "type": "string",
+            "maxLength": 16384
+          }
+        }
+      },
+      "DesktopUpdatePolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "product",
+          "platform",
+          "arch",
+          "channel",
+          "currentVersion",
+          "latestVersion",
+          "minimumSupportedVersion",
+          "mandatory",
+          "graceDeadline",
+          "revision",
+          "release",
+          "issuedAt",
+          "expiresAt",
+          "keyId"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "integer",
+            "const": 1
+          },
+          "product": {
+            "type": "string",
+            "const": "caelush"
+          },
+          "platform": {
+            "type": "string",
+            "const": "windows"
+          },
+          "arch": {
+            "type": "string",
+            "const": "x64"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/ReleaseChannel"
+          },
+          "currentVersion": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "The client version echoed from the policy request and covered by the signature."
+          },
+          "latestVersion": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "SemVer 2.0.0 and equal to release.version."
+          },
+          "minimumSupportedVersion": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "SemVer 2.0.0; a mandatory gate applies only while this signed policy is valid."
+          },
+          "mandatory": {
+            "type": "boolean"
+          },
+          "graceDeadline": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "RFC 3339 UTC timestamp; null means no grace period for a mandatory policy or no mandatory deadline."
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "description": "Positive safe integer, strictly monotonic per product/platform/arch/channel tuple."
+          },
+          "release": {
+            "$ref": "#/components/schemas/DesktopRelease"
+          },
+          "issuedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "keyId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          }
+        }
+      },
+      "SignedUpdatePolicyEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["envelopeVersion", "payload", "signature"],
+        "properties": {
+          "envelopeVersion": {
+            "type": "integer",
+            "const": 1
+          },
+          "payload": {
+            "$ref": "#/components/schemas/DesktopUpdatePolicy"
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{86}$",
+            "description": "Unpadded Base64URL Ed25519 signature over RFC 8785 JCS UTF-8 bytes of payload."
+          }
+        }
+      },
+      "SignedUpdatePolicyResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requestId", "signedPolicy"],
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/RequestId",
+            "description": "Transport correlation only; it is outside the signed payload."
+          },
+          "signedPolicy": {
+            "$ref": "#/components/schemas/SignedUpdatePolicyEnvelope"
+          }
+        }
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["email", "password"],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 320
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "writeOnly": true
+          }
+        }
+      },
+      "VerifyEmailRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["verificationToken"],
+        "properties": {
+          "verificationToken": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 4096,
+            "writeOnly": true
+          }
+        }
+      },
+      "EmailAddressRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["email"],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 320
+          }
+        }
+      },
+      "LoginDeviceRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "publicKey"],
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "publicKey": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "description": "Unpadded Base64URL raw 32-byte Ed25519 public key; private keys never leave the Windows Secure Vault."
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["email", "password", "device"],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 320
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "writeOnly": true
+          },
+          "device": {
+            "$ref": "#/components/schemas/LoginDeviceRequest"
+          }
+        }
+      },
+      "RefreshRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["refreshToken"],
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 8192,
+            "writeOnly": true,
+            "description": "Submitted only in the JSON body; URL query transport is forbidden."
+          }
+        }
+      },
+      "ResetPasswordRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["resetToken", "newPassword"],
+        "properties": {
+          "resetToken": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 4096,
+            "writeOnly": true
+          },
+          "newPassword": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "writeOnly": true
+          }
+        }
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["currentPassword", "newPassword"],
+        "properties": {
+          "currentPassword": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "writeOnly": true
+          },
+          "newPassword": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "writeOnly": true
+          }
+        }
+      }
+    }
+  },
+  "x-caelush-api-base-path": "/v1",
+  "x-caelush-transport": {
+    "requestEncoding": "UTF-8 JSON",
+    "productionRequiresHttps": true,
+    "timestamps": "RFC 3339 UTC ending in Z",
+    "userDeviceSessionIds": "UUID",
+    "successResponseRequestIdRequired": true,
+    "errorResponseRequestIdRequired": true,
+    "accountEnumeration": "Forbidden"
+  }
+}
