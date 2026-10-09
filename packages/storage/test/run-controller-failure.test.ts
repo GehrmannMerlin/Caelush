@@ -16,6 +16,7 @@ import {
   RunRetryRegistry,
   type RunCompletionPersistencePort,
   type RunExecutionStore,
+  type InterruptedHistoryLifecyclePort,
 } from "@caelush/core";
 import { EventBus } from "./support/test-event-notifier.js";
 import { describe, expect, it } from "vitest";
@@ -85,6 +86,7 @@ async function setup(options: {
     schedule(delayMs: number, callback: () => void | Promise<void>): { cancel(): void };
   };
   clockState?: { value: number };
+  interruptedHistory?: InterruptedHistoryLifecyclePort;
 }) {
   const storage = await openCaelushStorage({ path: ":memory:" });
   const run = makeRun(options.maxSteps, options.timeoutMs);
@@ -120,6 +122,9 @@ async function setup(options: {
     completionStore: options.completion?.(storage) ?? storage.execution,
     events: eventBus,
     completion: createStorageTestCompletionAssembly(storage, clock),
+    ...(options.interruptedHistory === undefined
+      ? {}
+      : { interruptedHistory: options.interruptedHistory }),
     configResolver: {
       resolve: async () => ({
         baseSystemPrompt: "synthetic",
@@ -175,6 +180,36 @@ function toolTurn(): PartialTurnResult {
 }
 
 describe("RunController failure and maxSteps boundaries", () => {
+  it("settles cancellation before starting best-effort interrupted-history closure", async () => {
+    const closureStarted: Array<{ readonly runId: string; readonly status: string }> = [];
+    let finishClosure!: () => void;
+    const pendingClosure = new Promise<void>((resolve) => {
+      finishClosure = resolve;
+    });
+    const fixture = await setup({
+      complete: async () => finalTurn(),
+      interruptedHistory: {
+        preflight: async () => undefined,
+        closeCancelled(run) {
+          closureStarted.push({ runId: run.id, status: run.status });
+          return pendingClosure;
+        },
+      },
+    });
+
+    try {
+      const result = await fixture.controller.cancel(fixture.run.id);
+
+      expect(result.run.status).toBe("CANCELLED");
+      expect(await fixture.storage.runs.get(fixture.run.id)).toMatchObject({ status: "CANCELLED" });
+      expect(closureStarted).toEqual([{ runId: fixture.run.id, status: "CANCELLED" }]);
+      finishClosure();
+    } finally {
+      finishClosure();
+      await fixture.storage.close();
+    }
+  });
+
   it("wakes a provider retry with a new Step and no Tool replay", async () => {
     const scheduled: Array<{
       callback: () => void | Promise<void>;

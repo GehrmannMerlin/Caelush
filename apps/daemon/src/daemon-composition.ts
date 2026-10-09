@@ -18,6 +18,7 @@ import {
 import { createLocalProjectInspector } from "@caelush/coding-agent";
 import { createAIError, createAISubsystem, createCacheResolver, isJsonObject } from "@caelush/ai";
 import type { ProviderStreamPolicy } from "./config.js";
+import { createInterruptedToolHistoryService } from "./services/interrupted-tool-history.js";
 import { createModelTransportRecoveryPort } from "./providers/model-transport-recovery.js";
 import {
   createDaemonApiAdapters,
@@ -1078,6 +1079,13 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   const verificationExecution = createRunBoundVerificationExecution(runtime, options.storage.runs);
   const verificationWorkspace = createRunBoundVerificationWorkspace(runtime);
   const verificationGit = createRunBoundVerificationGit(runtime);
+  const interruptedHistory = createInterruptedToolHistoryService({
+    storage: options.storage,
+    messages,
+    toolTurn,
+    events: eventNotifier,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+  });
   const controller = new RunController({
     agentExecution,
     modelTransportRecovery,
@@ -1088,6 +1096,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     configResolver: executionConfigResolver,
     messages,
     toolTurn,
+    interruptedHistory,
     clock,
     eventIdFactory: { create: createEventId },
     approvals: options.storage.approvals,

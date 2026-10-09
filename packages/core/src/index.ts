@@ -198,6 +198,7 @@ export type { ToolRawObservationRefResolver } from "./run-tool-observation-recov
 export type {
   EventIdFactory,
   RunControllerDependencies,
+  InterruptedHistoryLifecyclePort,
   RunExecutionConfig,
   RunExecutionConfigResolver,
   ApprovalResolutionPort,

@@ -1588,22 +1588,35 @@ export class RunController {
     const state = snapshot.state;
     if (state === undefined) throw new RunControllerInputError("Run execution has no AgentState");
 
+    const signal = this.executionSignal(snapshot.run.id);
+    let conversation: import("@caelush/agent").AgentConversationSnapshot;
+    try {
+      await this.dependencies.interruptedHistory?.preflight(snapshot.run);
+      conversation = await this.dependencies.messages.conversation.loadSnapshot({
+        sessionId: snapshot.run.sessionId,
+        currentRunId: snapshot.run.id,
+      });
+    } catch (cause) {
+      if (signal.aborted) return this.finalizeAbortedExecution(snapshot);
+      return this.failBoundaryLocked(
+        snapshot,
+        {
+          code: "CONVERSATION_CONTINUITY_INCOMPATIBLE",
+          message: "Saved session history could not be safely prepared. No model request was sent.",
+          retryable: true,
+          phase: "LLM",
+        },
+        cause,
+      );
+    }
+
     const execution = await this.dependencies.agentExecution.resolve(snapshot.run);
     const transportSelection = this.resolveModelTransportSelection(snapshot);
-    const signal = this.executionSignal(snapshot.run.id);
     const step = allocateRunAgentStep({
       state,
       runId: snapshot.run.id,
       stepId: execution.stepIds.create(),
       now: this.dependencies.clock.now(),
-    });
-
-    // The semantic repository is the only production loader of the durable conversation. The
-    // directive already carries durable message references, so no Core compatibility projector may
-    // rewrite it into an AI-message history or substitute a newer projection version here.
-    const conversation = await this.dependencies.messages.conversation.loadSnapshot({
-      sessionId: snapshot.run.sessionId,
-      currentRunId: snapshot.run.id,
     });
 
     // The Core-private record of what the boundary, the context engine and the provider actually
@@ -3007,6 +3020,16 @@ export class RunController {
       ],
     });
     this.notify(commit.events);
+    const closure = this.dependencies.interruptedHistory?.closeCancelled(
+      commit.snapshot.run,
+      current.continuation?.type === "WAITING_TOOL_RESULTS"
+        ? current.continuation.observationPolicy
+        : undefined,
+      current.continuation?.type === "WAITING_TOOL_RESULTS"
+        ? current.continuation.sourceStepId
+        : undefined,
+    );
+    if (closure !== undefined) void closure.catch(() => undefined);
     return this.resultFromSnapshot(commit.snapshot);
   }
 

@@ -272,6 +272,17 @@ function rowToRecord(row: MessageRow): AgentMessageRecord {
   };
 }
 
+/** Read one Run's immutable Message V2 records while the caller owns a SQLite transaction. */
+export function listAgentMessageRecordsByRunInTransaction(
+  client: CaelushDatabase["client"],
+  runId: RunId,
+): AgentMessageRecord[] {
+  const rows = client
+    .prepare(`SELECT ${ROW_COLUMNS} FROM agent_messages WHERE run_id = ? ORDER BY sequence ASC`)
+    .all(runId) as unknown as MessageRow[];
+  return rows.map(rowToRecord);
+}
+
 function parseJsonColumn<T>(value: string, identity: string): T {
   try {
     return JSON.parse(value) as T;

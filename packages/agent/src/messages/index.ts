@@ -22,6 +22,7 @@ export {
   createAgentMessageIdFactory,
   createConversationTurnIdFactory,
   createDeterministicConversationTurnIdFactory,
+  deriveInterruptedToolResultMessageId,
   deriveLegacyAgentMessageId,
   createScriptedAgentMessageIdFactory,
   createSeededConversationTurnIdFactory,
@@ -319,3 +320,14 @@ export type {
   ConversationSelectorOptions,
   SelectedAgentConversation,
 } from "./conversation/selector.js";
+
+export {
+  InterruptedToolBatchReconciliationError,
+  reconcileInterruptedToolBatches,
+} from "./conversation/interrupted-tool-batch-reconciler.js";
+export type {
+  InterruptedToolCallClassification,
+  MissingToolInvocationEvidence,
+  ReconciledInterruptedToolBatch,
+  ReconciledInterruptedToolCall,
+} from "./conversation/interrupted-tool-batch-reconciler.js";

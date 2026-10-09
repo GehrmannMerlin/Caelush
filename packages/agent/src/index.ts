@@ -989,6 +989,7 @@ export {
   createDeterministicConversationTurnIdFactory,
   createScriptedAgentMessageIdFactory,
   deriveLegacyAgentMessageId,
+  deriveInterruptedToolResultMessageId,
   createAgentConversationRepository,
   createSeededConversationTurnIdFactory,
   createSingleTurnConversationSnapshot,
@@ -996,6 +997,8 @@ export {
   createStandardAgentMessageProjectorRegistry,
   digestJsonObject,
   digestJsonValue,
+  InterruptedToolBatchReconciliationError,
+  reconcileInterruptedToolBatches,
   executionUnitId,
   fingerprintProjection,
   isAgentMessageId,
@@ -1062,6 +1065,10 @@ export {
 } from "./messages/index.js";
 export type {
   AgentAssistantContentPart,
+  InterruptedToolCallClassification,
+  MissingToolInvocationEvidence,
+  ReconciledInterruptedToolBatch,
+  ReconciledInterruptedToolCall,
   AgentAssistantMessage,
   AgentAssistantModelProvenance,
   AgentAssistantTextItem,

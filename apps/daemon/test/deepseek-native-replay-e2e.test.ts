@@ -1,15 +1,17 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelDescriptor, ModelDescriptorSourcePort } from "@caelush/ai";
-import { createTimestampMs } from "@caelush/protocol";
-import { makeRun, makeSession } from "../../../packages/storage/test/support/fixtures.js";
+import { createLLMCallId, createTimestampMs } from "@caelush/protocol";
+import { makeRun, makeSession, makeStep } from "../../../packages/storage/test/support/fixtures.js";
 import type { CaelushStorage } from "@caelush/storage";
 import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
 import { createReplayProtection, createInjectedReplayKeyProvider } from "@caelush/security";
-import type { RunEventNotifierPort } from "@caelush/agent";
+import type { AgentMessageRecordDraft, RunEventNotifierPort } from "@caelush/agent";
+import { createPrivateReplayReference } from "@caelush/agent";
 import {
   applyToolEffectsToAgentState,
   createCodingToolSettlementExtensionDecoder,
@@ -17,6 +19,11 @@ import {
 } from "@caelush/coding-agent";
 import { composeDaemon } from "../src/daemon-composition.js";
 import type { DaemonComposition } from "../src/daemon-composition.js";
+import {
+  createAssistantMessageAppend,
+  createExternalToolResultMessageAppend,
+  createUserMessageAppend,
+} from "@caelush/core";
 import { WorkspaceService } from "../src/workspaces/workspace-service.js";
 import { SessionPresentationService } from "../src/services/session-presentation-service.js";
 import { SessionTranscriptService } from "../src/services/session-transcript-service.js";
@@ -182,6 +189,18 @@ function providerHandler() {
   };
 }
 
+function canonicalReplayJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalReplayJson).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalReplayJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
 async function openStore(databasePath: string): Promise<CaelushStorage> {
   return openCaelushStorage({
     path: databasePath,
@@ -220,6 +239,390 @@ async function compose(
 }
 
 describe("DeepSeek private native replay production trajectory", () => {
+  it("closes an interrupted open Tool batch before a new Provider request and preserves native replay", async () => {
+    directory = await mkdtemp(join(tmpdir(), "caelush-ic-a-replay-"));
+    provider = await createControllableProviderServer(async (request, response) => {
+      beginOpenAISse(response);
+      if (request.index === 0) {
+        writeOpenAIChunk(response, {
+          model: MODEL_ID,
+          delta: { reasoning_content: "private continuation reasoning" },
+        });
+      }
+      writeOpenAIChunk(response, {
+        model: MODEL_ID,
+        delta: {
+          content:
+            request.index === 0
+              ? "Continuity preserved."
+              : JSON.stringify({ verdict: "PASS", summary: "verified" }),
+        },
+      });
+      finishResponse(response, "stop");
+    });
+    storage = await openStore(join(directory, "caelush.db"));
+
+    const workspace = await new WorkspaceService({
+      repository: storage.workspaces,
+    }).registerWorkspace({
+      path: directory,
+    });
+    const workspaceRef = {
+      id: workspace.workspace.id,
+      path: workspace.workspace.canonicalPath,
+    };
+    const session = makeSession({
+      workspaceId: workspace.workspace.id,
+      defaultWorkspace: workspaceRef,
+    });
+    const interruptedRun = makeRun(session.id, {
+      goal: "Complete the interrupted Tool batch.",
+      workspace: workspaceRef,
+      model: { provider: "deepseek", model: MODEL_ID },
+      runtime: { id: "local", kind: "local" },
+      permissionProfile: "FULL_ACCESS",
+      approvalPolicy: "NEVER_ASK",
+      limits: { maxSteps: 8, maxToolCalls: 16, timeoutMs: 60_000 },
+    });
+    await storage.sessions.insert(session);
+    await storage.runs.insert(interruptedRun);
+    const publicEvents: unknown[] = [];
+    composition = await compose(storage, publicEvents, {
+      enabled: false,
+      counter: { value: 0 },
+    });
+
+    const calls = Array.from({ length: 12 }, (_, index) => ({
+      id: `ic-a-call-${index + 1}`,
+      input: { path: `historical-${index + 1}.txt` },
+      rawArguments: JSON.stringify({ path: `historical-${index + 1}.txt` }),
+    }));
+    const batches = [calls.slice(0, 2), calls.slice(2, 4), calls.slice(4, 8), calls.slice(8, 12)];
+    const interruptedSteps = batches.map((_, index) =>
+      makeStep(interruptedRun.id, {
+        sequence: index + 1,
+        status: "COMPLETED",
+        startedAt: createTimestampMs(110 + index * 10),
+        finishedAt: createTimestampMs(115 + index * 10),
+      }),
+    );
+    for (const step of interruptedSteps) await storage.steps.insert(step);
+
+    const originalUserDraft = createUserMessageAppend(
+      composition.messages,
+      interruptedRun,
+      "GOAL",
+    ).draft;
+    const providerBinding = composition.ai.providers.get("deepseek");
+    const descriptor = composition.ai.models.resolve({ provider: "deepseek", model: MODEL_ID });
+    const queryParams = providerBinding.queryParams ?? {};
+    const adapterCompatibility = descriptor.adapterMetadata?.["openai-compatible"];
+    const connectionFingerprint = createHash("sha256")
+      .update(
+        canonicalReplayJson({
+          endpoint: providerBinding.endpoint,
+          queryParams,
+          providerCompatibility: providerBinding.compatibility ?? null,
+          modelCompatibility: adapterCompatibility,
+        }),
+      )
+      .digest("hex");
+
+    const authority = composition.messages;
+    const beforeRunRecords: AgentMessageRecordDraft[] = [originalUserDraft];
+    const privateReplayWrites = [];
+    const replayIdentities = [];
+    const reasoningByBatch = [
+      REASONING_A,
+      REASONING_B,
+      REASONING_C,
+      "private interruption reasoning D",
+    ];
+    for (const [batchIndex, batch] of batches.entries()) {
+      const step = interruptedSteps[batchIndex];
+      const reasoning = reasoningByBatch[batchIndex];
+      if (step === undefined || reasoning === undefined)
+        throw new Error("incomplete batch fixture");
+      const llmCallId = createLLMCallId();
+      const assistantAppend = createAssistantMessageAppend(
+        authority,
+        interruptedRun,
+        step.id,
+        {
+          callId: llmCallId,
+          model: { provider: "deepseek", model: MODEL_ID },
+          finishReason: "TOOL_CALLS",
+          assistantMessage: {
+            role: "assistant",
+            content: batch.map((call) => ({
+              type: "tool-call" as const,
+              toolCallId: call.id,
+              toolName: "read_file" as const,
+              input: call.input,
+            })),
+          },
+        },
+        "COMMENTARY",
+      );
+      const identity = {
+        sessionId: String(session.id),
+        runId: String(interruptedRun.id),
+        messageId: String(assistantAppend.draft.messageId),
+        callId: llmCallId,
+        providerId: "deepseek",
+        model: MODEL_ID,
+        api: API_ID,
+        replayVersion: 1 as const,
+      };
+      replayIdentities.push(identity);
+      beforeRunRecords.push({
+        ...assistantAppend.draft,
+        data: {
+          ...assistantAppend.draft.data,
+          providerState: createPrivateReplayReference(identity),
+        },
+      });
+
+      const privateReplayPayload = new TextEncoder().encode(
+        JSON.stringify({
+          version: 1,
+          providerId: "deepseek",
+          model: MODEL_ID,
+          api: API_ID,
+          connectionFingerprint,
+          reasoning: { state: "PRESENT", content: reasoning },
+          toolCalls: batch.map((call) => ({
+            id: call.id,
+            name: "read_file",
+            rawArguments: call.rawArguments,
+            argumentMode: "PROVIDER_JSON",
+          })),
+        }),
+      );
+      privateReplayWrites.push(await storage.privateReplay.prepare(identity, privateReplayPayload));
+      privateReplayPayload.fill(0);
+
+      if (batchIndex < 3) {
+        for (const call of batch) {
+          beforeRunRecords.push(
+            createExternalToolResultMessageAppend(
+              authority,
+              interruptedRun,
+              step.id,
+              {
+                role: "tool",
+                toolCallId: call.id,
+                toolName: "read_file",
+                content: `existing result ${calls.indexOf(call) + 1}`,
+                isError: false,
+              },
+              {
+                maxSingleObservationTokens: 4_096,
+                maxObservationBatchTokens: 16_384,
+              },
+            ).draft,
+          );
+        }
+      }
+    }
+    const orderedRunRecords = beforeRunRecords.map((draft, index) => ({
+      ...draft,
+      createdAt: createTimestampMs(110 + index),
+    }));
+    await storage.execution.commit({
+      run: interruptedRun,
+      expectedStateRevision: null,
+      expectedContinuationRevision: null,
+      stepWrites: [],
+      messagesToAppend: orderedRunRecords.map((draft) => ({ draft })),
+      privateReplayWrites,
+      events: [],
+    });
+    await storage.runs.update({
+      ...interruptedRun,
+      status: "CANCELLED",
+      startedAt: createTimestampMs(105),
+      finishedAt: createTimestampMs(125),
+    });
+
+    const failedContinuationRun = makeRun(session.id, {
+      createdAt: createTimestampMs(200),
+      status: "FAILED",
+      startedAt: createTimestampMs(205),
+      finishedAt: createTimestampMs(220),
+      goal: "Continue after the previous run was interrupted.",
+      workspace: workspaceRef,
+      model: interruptedRun.model,
+      runtime: interruptedRun.runtime,
+      permissionProfile: "FULL_ACCESS",
+      approvalPolicy: "NEVER_ASK",
+    });
+    await storage.runs.insert(failedContinuationRun);
+    const failedRunUserDraft = createUserMessageAppend(
+      composition.messages,
+      failedContinuationRun,
+      "GOAL",
+    ).draft;
+    const priorFailedRunRecords = await storage.messageRecords.append(failedContinuationRun.id, [
+      { ...failedRunUserDraft, createdAt: createTimestampMs(210) },
+    ]);
+
+    const originalRecords = await storage.messageRecords.listByRun(interruptedRun.id);
+    const originalReplayEnvelopes = replayIdentities.map(
+      (identity) =>
+        storage.messageRecords.database.client
+          .prepare("SELECT envelope_json FROM private_replays WHERE message_id = ?")
+          .get(identity.messageId) as { readonly envelope_json: string } | undefined,
+    );
+    expect(originalReplayEnvelopes.every((row) => row !== undefined)).toBe(true);
+
+    const nextRun = makeRun(session.id, {
+      createdAt: createTimestampMs(300),
+      completionContract: "NATURAL_V1",
+      goal: "Continue the same task after the failed continuation attempt.",
+      workspace: workspaceRef,
+      model: interruptedRun.model,
+      runtime: interruptedRun.runtime,
+      permissionProfile: "FULL_ACCESS",
+      approvalPolicy: "NEVER_ASK",
+      limits: { maxSteps: 8, maxToolCalls: 16, timeoutMs: 60_000 },
+    });
+    await storage.runs.insert(nextRun);
+
+    const initialSnapshot = await composition.messages.conversation.loadSnapshot({
+      sessionId: session.id,
+      currentRunId: nextRun.id,
+    });
+    const initialHistoricalMessages = initialSnapshot.turns
+      .find((turn) => turn.runId === interruptedRun.id)
+      ?.messages.map((stored) => stored.message);
+    const initialAssistantBatches = initialHistoricalMessages?.filter(
+      (message) => message.type === "ASSISTANT",
+    );
+    expect(
+      initialAssistantBatches?.map(
+        (message) => message.content.filter((part) => part.type === "TOOL_CALL").length,
+      ),
+    ).toEqual([2, 2, 4, 4]);
+    expect(
+      initialHistoricalMessages?.filter((message) => message.type === "TOOL_RESULT"),
+    ).toHaveLength(8);
+    expect(
+      initialSnapshot.turns
+        .find((turn) => turn.runId === failedContinuationRun.id)
+        ?.messages.filter((stored) => stored.message.type === "USER"),
+    ).toHaveLength(1);
+    const result = await composition.controller.start(nextRun.id);
+    const resultDiagnosticRecords = await storage.messageRecords.listByRun(interruptedRun.id);
+    expect(
+      result.run.status,
+      JSON.stringify({
+        error: result.error,
+        providerRequests: provider.requests.length,
+        oldRunToolResults: resultDiagnosticRecords.filter(
+          (record) => record.messageType === "TOOL_RESULT",
+        ).length,
+      }),
+    ).toBe("COMPLETED");
+    expect(provider.requests.length).toBe(1);
+
+    const requestMessages = provider.requests[0]?.body["messages"] as Record<string, unknown>[];
+    const providerAssistantBatches = requestMessages.filter(
+      (message) => message.role === "assistant" && Array.isArray(message["tool_calls"]),
+    );
+    expect(
+      providerAssistantBatches.map((message) => (message["tool_calls"] as unknown[]).length),
+    ).toEqual([2, 2, 4, 4]);
+    const providerToolCalls = providerAssistantBatches.flatMap(
+      (message) =>
+        message["tool_calls"] as {
+          readonly id: string;
+          readonly function: { readonly arguments: string };
+        }[],
+    );
+    expect(providerAssistantBatches.map((message) => message["reasoning_content"])).toEqual(
+      reasoningByBatch,
+    );
+    expect(providerToolCalls.map((call) => [call.id, call.function.arguments])).toEqual(
+      calls.map((call) => [call.id, call.rawArguments]),
+    );
+    const providerToolResults = requestMessages.filter((message) => message.role === "tool");
+    expect(providerToolResults.map((message) => message["tool_call_id"])).toEqual(
+      calls.map((call) => call.id),
+    );
+    expect(providerToolResults.slice(0, 8).map((message) => message["content"])).toEqual(
+      Array.from({ length: 8 }, (_, index) => `existing result ${index + 1}`),
+    );
+    expect(
+      providerToolResults
+        .slice(8)
+        .every((message) =>
+          String(message["content"]).includes(
+            "not started because the previous run was interrupted",
+          ),
+        ),
+    ).toBe(true);
+    expect(
+      requestMessages.some(
+        (message) =>
+          message.role === "user" &&
+          message["content"] === "Continue after the previous run was interrupted.",
+      ),
+    ).toBe(true);
+    const failedRunUserIndexes = requestMessages.flatMap((message, index) =>
+      message.role === "user" &&
+      message["content"] === "Continue after the previous run was interrupted."
+        ? [index]
+        : [],
+    );
+    const currentRunUserIndex = requestMessages.findIndex(
+      (message) =>
+        message.role === "user" &&
+        message["content"] === "Continue the same task after the failed continuation attempt.",
+    );
+    expect(failedRunUserIndexes).toHaveLength(1);
+    expect(currentRunUserIndex).toBeGreaterThan(failedRunUserIndexes[0] ?? -1);
+    expect(failedRunUserIndexes[0]).toBeGreaterThan(
+      requestMessages.findIndex(
+        (message) => message.role === "tool" && message["tool_call_id"] === calls.at(-1)?.id,
+      ),
+    );
+
+    const afterRunRecords = await storage.messageRecords.listByRun(interruptedRun.id);
+    expect(afterRunRecords.slice(0, originalRecords.length)).toEqual(originalRecords);
+    expect(afterRunRecords.filter((record) => record.messageType === "TOOL_RESULT")).toHaveLength(
+      12,
+    );
+    expect((await storage.runs.get(interruptedRun.id))?.status).toBe("CANCELLED");
+    expect(
+      (await storage.messageRecords.listByRun(nextRun.id)).filter(
+        (record) => record.messageType === "USER",
+      ),
+    ).toHaveLength(1);
+    expect(await storage.messageRecords.listByRun(failedContinuationRun.id)).toEqual(
+      priorFailedRunRecords,
+    );
+    expect((await storage.runs.get(failedContinuationRun.id))?.status).toBe("FAILED");
+    expect(
+      afterRunRecords.filter((record) => record.messageType === "TOOL_RESULT").slice(0, 8),
+    ).toEqual(originalRecords.filter((record) => record.messageType === "TOOL_RESULT"));
+    const afterReplayEnvelopes = replayIdentities.map(
+      (identity) =>
+        storage.messageRecords.database.client
+          .prepare("SELECT envelope_json FROM private_replays WHERE message_id = ?")
+          .get(identity.messageId) as { readonly envelope_json: string } | undefined,
+    );
+    expect(afterReplayEnvelopes.map((row) => row?.envelope_json)).toEqual(
+      originalReplayEnvelopes.map((row) => row?.envelope_json),
+    );
+    expect(await storage.toolInvocations.listByRun(interruptedRun.id)).toHaveLength(0);
+    expect(
+      publicEvents.some((event) =>
+        reasoningByBatch.some((reasoning) => JSON.stringify(event).includes(reasoning)),
+      ),
+    ).toBe(false);
+  }, 60_000);
+
   it("captures, atomically stores, restarts, and replays two Tool-turn reasoning histories", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-c3-replay-"));
     await writeFile(join(directory, "README.md"), "before\n", "utf8");

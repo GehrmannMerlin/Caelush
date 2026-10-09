@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import type { RunId } from "@caelush/protocol";
+import type { RunId, SessionId } from "@caelush/protocol";
 
 /**
  * Message Domain identity.
@@ -62,6 +62,45 @@ const TURN_ID_PATTERN =
 /** True when the value has the exact shape this domain mints. */
 export function isAgentMessageId(value: unknown): value is AgentMessageId {
   return typeof value === "string" && MESSAGE_ID_PATTERN.test(value);
+}
+
+/**
+ * Derive the stable identity of one Interrupted History Closure result.
+ *
+ * The full durable scope participates in the digest so a repeated repair reuses the same identity,
+ * while another Session, Run, Assistant message, Tool Call, or closure version cannot collide by
+ * construction.
+ */
+export function deriveInterruptedToolResultMessageId(input: {
+  readonly sessionId: SessionId;
+  readonly sourceRunId: RunId;
+  readonly assistantMessageId: AgentMessageId;
+  readonly toolCallId: string;
+  readonly closureVersion: number;
+}): AgentMessageId {
+  if (
+    input.toolCallId.length === 0 ||
+    !Number.isSafeInteger(input.closureVersion) ||
+    input.closureVersion < 1
+  ) {
+    throw new TypeError(
+      "Interrupted Tool Result identity requires a call id and positive version.",
+    );
+  }
+  const digest = createHash("sha256")
+    .update(
+      [
+        "caelush.interrupted-tool-result",
+        String(input.sessionId),
+        String(input.sourceRunId),
+        String(input.assistantMessageId),
+        input.toolCallId,
+        String(input.closureVersion),
+      ].join("\u0000"),
+      "utf8",
+    )
+    .digest();
+  return agentMessageId(`${AGENT_MESSAGE_ID_PREFIX}${uuidV7FromBytes(digest)}`);
 }
 
 /** True when the value has the exact shape this domain mints. */

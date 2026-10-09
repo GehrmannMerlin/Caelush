@@ -149,6 +149,21 @@ export interface RunOwnedResourceControllerPort {
 }
 
 /**
+ * The host-owned repair path for durable Tool history that was interrupted by a terminal Run.
+ * Core controls when it runs; the host owns the session scan, SQLite facts, and safe projection.
+ */
+export interface InterruptedHistoryLifecyclePort {
+  /** Repair eligible cancelled history and validate the conversation before a model boundary opens. */
+  preflight(run: AgentRun): Promise<void>;
+  /** Best-effort repair after the Run's CANCELLED state has durably committed. */
+  closeCancelled(
+    run: AgentRun,
+    observationPolicy?: import("@caelush/agent").ToolObservationPolicySnapshot,
+    observationPolicySourceStepId?: import("@caelush/protocol").StepId,
+  ): Promise<void>;
+}
+
+/**
  * The three canonical Tool System authorities, as one pipeline.
  *
  * ```text
@@ -235,6 +250,7 @@ export interface RunControllerDependencies {
    * `ToolBatchRequest`.
    */
   readonly toolTurn?: ToolTurnPipeline;
+  readonly interruptedHistory?: InterruptedHistoryLifecyclePort;
   readonly clock: { now(): import("@caelush/protocol").TimestampMs };
   readonly eventIdFactory: EventIdFactory;
   readonly approvals?: ApprovalResolutionPort;
