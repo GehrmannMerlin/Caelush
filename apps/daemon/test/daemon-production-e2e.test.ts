@@ -77,8 +77,116 @@ class FixtureProvider implements ApiAdapter {
   }
 }
 
+class PlainAnswerProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
+  calls = 0;
+
+  stream(): AsyncGenerator<AIAdapterEvent> {
+    this.calls += 1;
+    return this.events();
+  }
+
+  private async *events(): AsyncGenerator<AIAdapterEvent> {
+    yield { type: "text.delta", payload: { text: "The requested note is ready." } };
+    yield { type: "adapter.finish", payload: { finishReason: "STOP" } };
+  }
+}
+
 describe("daemon production composition E2E", () => {
-  it("executes tools, verification, completion, and durable SSE replay through the client", async () => {
+  it("naturally completes a plain task and reads the single final answer after daemon restart", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "caelush-natural-completion-e2e-"));
+    directory = workspacePath;
+    const provider = new PlainAnswerProvider();
+    const databasePath = join(workspacePath, "caelush.db");
+    daemon = await startDaemon({
+      databasePath,
+      port: 0,
+      sseHeartbeatIntervalMs: 0,
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+    });
+    const client = new CaelushClient({ baseUrl: daemon.url });
+    const session = await client.createSession({
+      defaultWorkspace: { id: createWorkspaceId(), path: workspacePath },
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+    });
+    const workspace = session.defaultWorkspace;
+    if (workspace === undefined) throw new Error("test Workspace was not registered");
+    const run = await client.createRun(session.id, {
+      goal: "write a short note",
+      workspace,
+      model: { provider: "fixture", model: "fixture-model" },
+      runtime: { id: "local", kind: "local" },
+      preset: { id: "FULL_ACCESS", expectedVersion: 1 },
+      limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 10_000 },
+    });
+    await client.startRun(run.id);
+
+    let settled = await client.getRun(run.id);
+    for (let attempt = 0; attempt < 80 && !isTerminal(settled.status); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      settled = await client.getRun(run.id);
+    }
+    expect(settled).toMatchObject({
+      status: "COMPLETED",
+      completionContract: "NATURAL_V1",
+      finalResult: {
+        type: "NORMAL_COMPLETION",
+        text: "The requested note is ready.",
+      },
+    });
+    expect(settled.finalResult).not.toHaveProperty("verification");
+    expect(provider.calls).toBe(1);
+
+    const storage = await openCaelushStorage({ path: databasePath });
+    try {
+      expect(await storage.verification.countPlans(run.id)).toBe(0);
+      const finalAnswers = (await storage.messageRecords.listByRun(run.id)).filter(
+        (message) => message.messageType === "ASSISTANT" && message.data.phase === "FINAL_ANSWER",
+      );
+      expect(finalAnswers).toHaveLength(1);
+    } finally {
+      await storage.close();
+    }
+
+    const initialPresentation = await client.getSessionTurnPresentation(session.id, {
+      runId: run.id,
+    });
+    expect(initialPresentation.capabilityVersion).toBe(3);
+    if (initialPresentation.capabilityVersion !== 3) {
+      throw new Error("V3 Turn projection is required");
+    }
+    expect(
+      initialPresentation.turns[0]?.items.filter((item) => item.kind === "VERIFICATION"),
+    ).toHaveLength(0);
+
+    await daemon.close();
+    daemon = await startDaemon({
+      databasePath,
+      port: 0,
+      sseHeartbeatIntervalMs: 0,
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+    });
+    const reopenedClient = new CaelushClient({ baseUrl: daemon.url });
+    const transcript = await reopenedClient.getSessionTranscript(session.id);
+    expect(
+      transcript.items.filter(
+        (item) =>
+          item.runId === run.id && item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER",
+      ),
+    ).toHaveLength(1);
+    await expect(reopenedClient.getRun(run.id)).resolves.toMatchObject({
+      status: "COMPLETED",
+      finalResult: { type: "NORMAL_COMPLETION", text: "The requested note is ready." },
+    });
+  }, 20_000);
+
+  it("executes tools, natural completion, and durable SSE replay through the client", async () => {
     const workspacePath = await mkdtemp(join(tmpdir(), "caelush-production-e2e-"));
     directory = workspacePath;
     await mkdir(join(workspacePath, "src"));
@@ -170,7 +278,7 @@ describe("daemon production composition E2E", () => {
     expect(await readFile(join(workspacePath, "src", "message.txt"), "utf8")).toBe(
       `after\n${payload}`,
     );
-    expect(provider.calls).toBe(4);
+    expect(provider.calls).toBe(3);
     expect(events.map((event) => event.type)).toEqual(
       expect.arrayContaining([
         "run.started",
@@ -179,13 +287,10 @@ describe("daemon production composition E2E", () => {
         "tool.completed",
         "file.read",
         "file.modified",
-        "verification.planned",
-        "verification.check.started",
-        "verification.check.completed",
-        "verification.finalized",
         "run.completed",
       ]),
     );
+    expect(events.some((event) => event.type.startsWith("verification."))).toBe(false);
     // Phase 3D: the production composition drives Tool batches through the frozen
     // `RunExecutionDriver` over the real run-scoped adapter. Nothing here is a placeholder — the
     // placeholder throws, so the Run would have failed before it could complete — and nothing is
@@ -204,7 +309,25 @@ describe("daemon production composition E2E", () => {
         event.type === "tool.requested" ? (event.payload as { toolName?: string }).toolName : "",
       ),
     ).toEqual(["read_file", "", "apply_patch", ""]);
-    expect(settled.finalResult).toMatchObject({ type: "VERIFIED_COMPLETION" });
+    expect(settled).toMatchObject({
+      completionContract: "NATURAL_V1",
+      finalResult: {
+        type: "NORMAL_COMPLETION",
+        text: "The requested task is complete.",
+      },
+    });
+    const finalAssistantCommitIndex = events.findIndex(
+      (event) =>
+        event.type === "conversation.message.committed" &&
+        event.payload.messageType === "ASSISTANT",
+    );
+    const completedStatusIndex = events.findIndex(
+      (event) => event.type === "status.changed" && event.payload.to === "COMPLETED",
+    );
+    const completedEventIndex = events.findIndex((event) => event.type === "run.completed");
+    expect(finalAssistantCommitIndex).toBeGreaterThanOrEqual(0);
+    expect(finalAssistantCommitIndex).toBeLessThan(completedStatusIndex);
+    expect(completedStatusIndex).toBeLessThan(completedEventIndex);
     const usage = await client.getRunContextUsage(run.id);
     expect(usage).not.toBeNull();
     expect(usage).toMatchObject({
@@ -266,9 +389,53 @@ describe("daemon production composition E2E", () => {
       );
       if (modelToolMessage?.role !== "tool") throw new Error("model tool message missing");
       expect(modelToolMessage.content.length).toBeLessThan(artifact?.content.length ?? 0);
+      const durableMessages = await persistedStorage.messageRecords.listByRun(run.id);
+      expect(
+        durableMessages.filter(
+          (message) => message.messageType === "ASSISTANT" && message.data.phase === "FINAL_ANSWER",
+        ),
+      ).toHaveLength(1);
     } finally {
       await persistedStorage.close();
     }
+
+    const restartedDaemon = await startDaemon({
+      databasePath: join(workspacePath, "caelush.db"),
+      port: 0,
+      sseHeartbeatIntervalMs: 0,
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+    });
+    daemon = restartedDaemon;
+    const restartedClient = new CaelushClient({ baseUrl: restartedDaemon.url });
+    await expect(restartedClient.getRun(run.id)).resolves.toMatchObject({
+      status: "COMPLETED",
+      finalResult: { type: "NORMAL_COMPLETION", text: "The requested task is complete." },
+    });
+    const transcript = await restartedClient.getSessionTranscript(session.id);
+    expect(
+      transcript.items.filter(
+        (item) =>
+          item.runId === run.id && item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER",
+      ),
+    ).toHaveLength(1);
+    const presentation = await restartedClient.getSessionTurnPresentation(session.id, {
+      runId: run.id,
+    });
+    expect(presentation).toMatchObject({
+      capabilityVersion: 3,
+      turns: [{ runId: run.id, runStatus: "COMPLETED" }],
+    });
+    const presentationTurn =
+      presentation.capabilityVersion === 3 ? presentation.turns[0] : undefined;
+    expect(presentationTurn?.items.filter((item) => item.kind === "VERIFICATION")).toHaveLength(0);
+    expect(
+      presentationTurn?.items.filter(
+        (item) => item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER",
+      ),
+    ).toHaveLength(1);
   }, 20_000);
 });
 

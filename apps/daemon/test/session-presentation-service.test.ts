@@ -439,13 +439,103 @@ describe("SessionPresentationService", () => {
     expect(summary).toMatchObject({
       kind: "RUN_SUMMARY",
       runStatus: "FAILED",
-      text: "校验未能完成，任务已失败。",
+      text: "校验未通过，Run 状态为失败。",
     });
     expect(response.turns[0]).toMatchObject({ conversationTurnId: turns.forRun(failedRun.id) });
     expect(JSON.stringify(response)).not.toContain("native exception");
     expect(JSON.stringify(response)).not.toContain("credential-value");
     expect(JSON.stringify(response)).not.toContain("unbounded command output");
     expect(JSON.stringify(response)).not.toContain("C:\\\\host");
+  });
+
+  it("keeps a historical VERIFIED_COMPLETION distinguishable in the terminal projection", async () => {
+    const verifiedRun = AgentRunSchema.parse({
+      ...RUN,
+      finalResult: {
+        type: "VERIFIED_COMPLETION",
+        text: "The historical verified answer.",
+        verification: {
+          planId: createVerificationPlanId(),
+          sourceStepId: STEP_ID,
+          planHash: "a".repeat(64),
+          candidateHash: "b".repeat(64),
+          evidenceDigest: "c".repeat(64),
+          freshnessHash: "d".repeat(64),
+          sealHash: "e".repeat(64),
+          checks: { total: 1, passed: 1, skipped: 0, advisoryWarnings: 0 },
+        },
+      },
+    });
+    const service = new SessionPresentationService({
+      sessions: { get: async () => ({ id: SESSION_ID }) as never },
+      runs: { listBySession: async () => [verifiedRun] },
+      messageRecords: { listBySession: async () => [] },
+      codecs,
+      toolInvocations: { listByRun: async () => [] },
+      observations: { listByRun: async () => [] },
+      eventReader: {
+        latestSequence: async () => 0,
+        replay: async () => [],
+      },
+      toolPresentation: {
+        presentInvocation: () => ({ title: "使用工具", summary: "工具调用" }),
+        presentResult: () => ({ title: "使用工具", summary: "工具结果" }),
+        presentShellCommand: () => "执行命令",
+      },
+    });
+
+    const response = await service.getPresentation(SESSION_ID, {});
+    expect(response.turns[0]?.runStatus).toBe("COMPLETED");
+    expect(response.turns[0]?.items.find((item) => item.kind === "RUN_SUMMARY")?.text).toBe(
+      "历史校验已完成",
+    );
+  });
+
+  it("projects Verification infrastructure errors separately from a failed verification verdict", async () => {
+    const failedRun = AgentRunSchema.parse({
+      ...RUN,
+      status: "FAILED",
+      finishedAt: createTimestampMs(Number(NOW) + 10),
+    });
+    const rawError = {
+      code: "INTERNAL_ERROR",
+      message: "sqlite write failed at C:\\private\\caelush.db",
+      retryable: false,
+      phase: "VERIFICATION",
+      details: {
+        reasonCode: "VERIFICATION_EVIDENCE_SIZE_ERROR",
+        absolutePath: "C:\\private\\workspace",
+      },
+    };
+    const service = new SessionPresentationService({
+      sessions: { get: async () => ({ id: SESSION_ID }) as never },
+      runs: { listBySession: async () => [failedRun] },
+      messageRecords: { listBySession: async () => [] },
+      codecs,
+      toolInvocations: { listByRun: async () => [] },
+      observations: { listByRun: async () => [] },
+      eventReader: {
+        latestSequence: async () => 1,
+        replay: async () => [event(1, "error", { error: rawError })],
+      },
+      toolPresentation: {
+        presentInvocation: () => ({ title: "使用工具", summary: "工具调用" }),
+        presentResult: () => ({ title: "使用工具", summary: "工具结果" }),
+        presentShellCommand: () => "执行命令",
+      },
+    });
+
+    const response = await service.getPresentation(SESSION_ID, {});
+    const summary = response.turns[0]!.items.find((item) => item.kind === "RUN_SUMMARY");
+
+    expect(summary).toMatchObject({
+      kind: "RUN_SUMMARY",
+      runStatus: "FAILED",
+      text: "校验证据超出协议限制，无法得出结论；Run 状态为失败。",
+    });
+    expect(JSON.stringify(response)).not.toContain("sqlite write failed");
+    expect(JSON.stringify(response)).not.toContain("C:\\\\private");
+    expect(JSON.stringify(response)).not.toContain("VERIFICATION_EVIDENCE_SIZE_ERROR");
   });
 
   it("keeps colliding local message sequences, summaries and event watermarks inside their Run Turns", async () => {

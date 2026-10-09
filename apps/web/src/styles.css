@@ -1402,16 +1402,6 @@ textarea:disabled {
   color: #a04f49;
 }
 
-.turn-presentation-verification-failed {
-  margin: 0;
-  padding: 8px 10px;
-  border-left: 3px solid #bf6058;
-  background: #fff6f4;
-  color: #a04f49;
-  font-size: 0.8rem;
-  font-weight: 700;
-}
-
 .turn-presentation-final .turn-presentation-item--assistant,
 .turn-presentation-final .turn-presentation-item--run-summary {
   padding: 0 0 0 2px;

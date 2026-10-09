@@ -13,8 +13,10 @@ import {
 } from "@caelush/agent";
 import {
   AssistantMessagePhaseSchema,
+  NormalRunFinalResultSchema,
   SessionTurnPresentationQuerySchema,
   SessionTurnPresentationResponseV3Schema,
+  VerifiedRunFinalResultSchema,
   toolPresentationCategory,
   type AgentRun,
   type AgentErrorCode,
@@ -228,7 +230,7 @@ export class SessionPresentationService {
         createdAt: run.finishedAt ?? run.createdAt,
         kind: "RUN_SUMMARY",
         runStatus: run.status,
-        text: runSummaryText(run.status, records, history.events),
+        text: runSummaryText(run, records, history.events),
       };
       positioned.push({
         item: summary,
@@ -458,40 +460,79 @@ function translateRisk(risk: string): string {
 }
 
 function runSummaryText(
-  status: RunStatus,
+  run: AgentRun,
   records: readonly AgentMessageRecord[],
   events: readonly DurableRunEvent[],
 ): string {
-  if (status === "COMPLETED") {
-    return records.some((record) => record.messageType === "ASSISTANT")
-      ? "任务已完成"
-      : "任务已完成，但未生成可验证的最终答复";
+  if (run.status === "COMPLETED") {
+    if (NormalRunFinalResultSchema.safeParse(run.finalResult).success) return "Agent 执行已结束";
+    if (VerifiedRunFinalResultSchema.safeParse(run.finalResult).success) return "历史校验已完成";
+    const hasFinalAnswer = records.some(
+      (record) =>
+        record.messageType === "ASSISTANT" &&
+        isRecord(record.data) &&
+        record.data.phase === "FINAL_ANSWER",
+    );
+    return hasFinalAnswer ? "任务已完成" : "执行已结束，但没有可展示的最终答复";
   }
-  if (status === "CANCELLED") return "任务已取消";
-  if (status === "TIMEOUT") return "任务因超时结束";
-  if (status === "MAX_STEPS_REACHED") return "任务达到最大步骤数后结束";
-  if (status === "BUDGET_EXCEEDED") return "任务因资源预算耗尽结束";
-  if (status === "FAILED") return safeFailureReason(events);
+  if (run.status === "CANCELLED") return "任务已取消";
+  if (run.status === "TIMEOUT") return "任务因超时结束";
+  if (run.status === "MAX_STEPS_REACHED") return "任务达到最大步骤数后结束";
+  if (run.status === "BUDGET_EXCEEDED") return "任务因资源预算耗尽结束";
+  if (run.status === "FAILED") return safeFailureReason(events);
   return "任务执行失败";
 }
 
 function safeFailureReason(events: readonly DurableRunEvent[]): string {
-  const safeReasonByCode: Partial<Record<AgentErrorCode, string>> = {
-    VERIFICATION_FAILED: "校验未能完成，任务已失败。",
-    COMMAND_FAILED: "检查命令执行失败，任务已失败。",
-    PROCESS_FAILED: "检查进程未能正常运行，任务已失败。",
-    RUNTIME_ERROR: "运行环境异常，任务已失败。",
-    INTERNAL_ERROR: "内部错误导致任务失败。",
+  const verificationInfrastructureReasons: Readonly<Record<string, string>> = {
+    VERIFICATION_COMPLETION_COMMIT_ERROR: "校验结果未能可靠保存，无法得出结论；Run 状态为失败。",
+    REVIEWER_INFRASTRUCTURE_ERROR: "校验服务未能完成检查，无法得出结论；Run 状态为失败。",
+    VERIFICATION_EVIDENCE_ENCODING_ERROR: "校验证据无法可靠编码，无法得出结论；Run 状态为失败。",
+    VERIFICATION_EVIDENCE_SIZE_ERROR: "校验证据超出协议限制，无法得出结论；Run 状态为失败。",
+    VERIFICATION_SETTLEMENT_ERROR: "校验结果未能可靠结算，无法得出结论；Run 状态为失败。",
+    VERIFICATION_INTERRUPTED: "校验流程在完成前中断，无法得出结论；Run 状态为失败。",
   };
   for (const event of [...events].reverse()) {
     if (event.type !== "error") continue;
     const rawError = eventPayload(event)?.error;
     if (!isRecord(rawError)) continue;
     const code = stringValue(rawError.code) as AgentErrorCode | undefined;
-    const reason = code === undefined ? undefined : safeReasonByCode[code];
-    if (reason !== undefined) return reason;
+    const phase = stringValue(rawError.phase);
+    const details = isRecord(rawError.details) ? rawError.details : undefined;
+    const reasonCode = details === undefined ? undefined : stringValue(details.reasonCode);
+
+    if (phase === "VERIFICATION") {
+      if (code === "VERIFICATION_FAILED") return "校验未通过，Run 状态为失败。";
+      if (code === "INTERNAL_ERROR") {
+        return (
+          (reasonCode === undefined ? undefined : verificationInfrastructureReasons[reasonCode]) ??
+          "校验基础设施异常，无法得出可靠结论；Run 状态为失败。"
+        );
+      }
+      if (code === "COMMAND_FAILED" || code === "PROCESS_FAILED") {
+        return "校验命令执行异常，Run 状态为失败。";
+      }
+      return "校验流程异常，Run 状态为失败。";
+    }
+    if (phase === "LLM") return "模型执行异常，Run 状态为失败。";
+    if (phase === "TOOL") {
+      if (code === "PERMISSION_DENIED" || code === "APPROVAL_REJECTED") {
+        return "工具执行被安全或审批策略阻止，Run 状态为失败。";
+      }
+      return "工具执行异常，Run 状态为失败。";
+    }
+    if (phase === "RUNTIME") return "运行环境异常，Run 状态为失败。";
+    if (phase === "INTERNAL") return "Agent 内部执行错误，Run 状态为失败。";
+
+    if (code === "VERIFICATION_FAILED") return "校验未通过，Run 状态为失败。";
+    if (code === "COMMAND_FAILED" || code === "PROCESS_FAILED") {
+      return "命令或进程执行失败，Run 状态为失败。";
+    }
+    if (code === "RUNTIME_ERROR") return "运行环境异常，Run 状态为失败。";
+    if (code === "INTERNAL_ERROR") return "Agent 内部执行错误，Run 状态为失败。";
+    if (code !== undefined) return "Agent 执行异常，Run 状态为失败。";
   }
-  return "任务执行失败";
+  return "Agent 执行失败；未记录可安全展示的具体原因。";
 }
 
 function verificationLifecycleKey(

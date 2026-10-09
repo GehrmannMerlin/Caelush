@@ -102,4 +102,23 @@ describe("projectTurnPresentation", () => {
       true,
     );
   });
+
+  it("does not let a stale matching active Run override a durable terminal Turn", () => {
+    const runId = createRunId();
+    const turn: SessionTurnPresentationTurnV3 = {
+      runId,
+      conversationTurnId: "terminal-turn",
+      runStatus: "COMPLETED",
+      openedAt: 1_000,
+      closedAt: 2_000,
+      highWatermark: 8,
+      items: [],
+    };
+
+    expect(projectTurnPresentation(turn, { id: runId, status: "VERIFYING" }, 9_000)).toMatchObject({
+      runStatus: "COMPLETED",
+      isTerminal: true,
+      isActive: false,
+    });
+  });
 });

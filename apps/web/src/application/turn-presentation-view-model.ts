@@ -41,7 +41,11 @@ export function projectTurnPresentation(
   now: number,
 ): TurnPresentationViewModel {
   const isActive = activeRun?.id === turn.runId && ACTIVE_RUN_STATUSES.has(activeRun.status);
-  const runStatus = activeRun?.id === turn.runId ? activeRun.status : turn.runStatus;
+  const runStatus =
+    isTerminalRunStatus(turn.runStatus) || activeRun?.id !== turn.runId
+      ? turn.runStatus
+      : activeRun.status;
+  const isTerminal = isTerminalRunStatus(runStatus);
   const userItems = turn.items.filter((item) => item.kind === "USER");
   const finalAnswerItems = turn.items.filter(
     (item): item is Extract<TurnPresentationItemV3, { kind: "ASSISTANT" }> =>
@@ -69,8 +73,8 @@ export function projectTurnPresentation(
   return {
     turn,
     runStatus,
-    isActive,
-    isTerminal: isTerminalRunStatus(runStatus),
+    isActive: isActive && !isTerminalRunStatus(turn.runStatus),
+    isTerminal,
     userItems,
     processItems,
     finalAnswerItems,

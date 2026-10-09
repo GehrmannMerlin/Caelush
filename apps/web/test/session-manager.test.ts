@@ -2028,7 +2028,7 @@ describe("WebSessionManager", () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const pendingRun = makeRun({ sessionId: session.id, goal: "finish usage accounting" });
     const runningRun = makeRun({ ...pendingRun, status: "RUNNING" });
-    const completedRun = makeCompletedRun(pendingRun);
+    const completedRun = makeNaturalCompletedRun(pendingRun);
     const partial = makeUsageCoverage(completedRun, 20, 19);
     const reported = makeUsageCoverage(completedRun, 20, 20);
     const timer = new TestTimer();
@@ -2077,6 +2077,42 @@ describe("WebSessionManager", () => {
       },
     );
     expect(client.createRun).toHaveBeenCalledTimes(1);
+    manager.dispose();
+  });
+
+  it("keeps terminal usage PARTIAL after its one bounded retry for Natural Completion", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const pendingRun = makeRun({ sessionId: session.id, goal: "finish usage accounting" });
+    const runningRun = makeRun({ ...pendingRun, status: "RUNNING" });
+    const completedRun = makeNaturalCompletedRun(pendingRun);
+    const partial = makeUsageCoverage(completedRun, 20, 19);
+    const timer = new TestTimer();
+    const client = makeClient({ createSessionResult: session, createRunResult: pendingRun });
+    client.getRun.mockResolvedValue(completedRun);
+    client.listRuns.mockResolvedValue({ items: [completedRun] });
+    client.startRun.mockResolvedValue(actionResponse(runningRun, runningRun.id));
+    client.getRunContextUsage.mockResolvedValue(partial);
+    client.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      options?.onOpen?.();
+      yield lifecycleEvent("run.completed", completedRun);
+    });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo(), timer });
+    manager.beginDraft();
+
+    await expect(manager.submitPrompt("finish usage accounting")).resolves.toBe(true);
+    await waitFor(() => client.getRunContextUsage.mock.calls.length === 1);
+    timer.flush();
+    await waitFor(() => client.getRunContextUsage.mock.calls.length === 2);
+
+    expect(client.getRunContextUsage).toHaveBeenCalledTimes(2);
+    expect(manager.getSnapshot().contextUsage).toEqual(partial);
+    expect(manager.getSnapshot().contextUsage?.promptCache?.metricsV2?.usageCoverage).toMatchObject(
+      {
+        completeCacheUsageCount: 19,
+        missingInvocationRecordCount: 1,
+        status: "PARTIAL",
+      },
+    );
     manager.dispose();
   });
 

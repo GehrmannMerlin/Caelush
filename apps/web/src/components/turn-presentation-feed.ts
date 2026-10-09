@@ -1,4 +1,5 @@
 import { createElement, useEffect, useRef, useState, type ReactElement } from "react";
+import { isTerminalRunStatus } from "@caelush/client";
 import type {
   LiveActivity,
   LiveActivityState,
@@ -198,15 +199,27 @@ export function SessionConversation(props: SessionConversationProps): ReactEleme
  */
 export function TurnPresentation(props: TurnPresentationProps): ReactElement {
   const isCurrentRun = props.activeRun?.id === props.turn.runId;
+  const durableTerminalStatus = isTerminalRunStatus(props.turn.runStatus)
+    ? props.turn.runStatus
+    : undefined;
+  const effectiveRunStatus =
+    durableTerminalStatus ??
+    (isCurrentRun ? props.activeRun?.status : undefined) ??
+    props.turn.runStatus;
   const isActive =
-    props.activeRun !== undefined && isCurrentRun && isRunStatusActive(props.activeRun.status);
+    durableTerminalStatus === undefined &&
+    props.activeRun !== undefined &&
+    isCurrentRun &&
+    isRunStatusActive(props.activeRun.status);
   const liveActivity =
     isActive && props.liveActivity?.runId === props.turn.runId ? props.liveActivity : undefined;
   const timeline =
     isActive && (props.timeline?.runId === undefined || props.timeline.runId === props.turn.runId)
       ? props.timeline
       : undefined;
-  const matchingActiveRun = isCurrentRun ? props.activeRun : undefined;
+  const matchingActiveRun = isCurrentRun
+    ? { id: props.turn.runId, status: effectiveRunStatus }
+    : undefined;
   return createElement(
     "article",
     {
@@ -224,7 +237,7 @@ export function TurnPresentation(props: TurnPresentationProps): ReactElement {
       conversationTurnId: props.turn.conversationTurnId,
       openedAt: Number(props.turn.openedAt),
       ...(props.turn.closedAt === undefined ? {} : { closedAt: Number(props.turn.closedAt) }),
-      runStatus: matchingActiveRun?.status ?? props.turn.runStatus,
+      runStatus: effectiveRunStatus,
       isActive,
       ...(matchingActiveRun === undefined ? {} : { activeRun: matchingActiveRun }),
       ...(liveActivity === undefined ? {} : { liveActivity }),
@@ -603,20 +616,6 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
             className: "turn-presentation-final",
             "aria-label": "最终答复",
           },
-          terminalStates.some(
-            (item) =>
-              item.runStatus === "FAILED" &&
-              finalAnswers.some((answer) => answer.runId === item.runId),
-          )
-            ? createElement(
-                "p",
-                {
-                  className: "turn-presentation-verification-failed",
-                  role: "status",
-                },
-                "最终验证未通过",
-              )
-            : null,
           finalAnswers.map((item) => renderItem(item)),
           verifyingRunId !== undefined &&
             finalAnswers.some((answer) => answer.runId === verifyingRunId)

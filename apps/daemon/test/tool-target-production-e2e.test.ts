@@ -61,7 +61,10 @@ class ScriptedProvider implements ApiAdapter {
    * `finish()` is used with `TOOL_CALLS`, not `STOP`: a model turn that requested tools is a tool-call
    * decision, and a `STOP` finish reason would make the same message a final candidate.
    */
-  constructor(private readonly scripted: readonly AIAdapterEvent[]) {}
+  constructor(
+    private readonly scripted: readonly AIAdapterEvent[],
+    private readonly finalAnswer = "done",
+  ) {}
 
   stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     this.seen.push([...input.request.messages]);
@@ -79,7 +82,7 @@ class ScriptedProvider implements ApiAdapter {
                 payload: { text: JSON.stringify({ verdict: "PASS", summary: "ok" }) },
               },
             ]
-          : [{ type: "text.delta" as const, payload: { text: "done" } }]),
+          : [{ type: "text.delta" as const, payload: { text: this.finalAnswer } }]),
         { type: "adapter.finish", payload: { finishReason: "STOP" } },
       ]);
     }
@@ -128,7 +131,7 @@ async function drive(provider: ApiAdapter, files: Record<string, string>) {
     await new Promise((resolve) => setTimeout(resolve, 25));
     settled = await client.getRun(run.id);
   }
-  return { client, runId: run.id, status: settled.status };
+  return { client, runId: run.id, sessionId: session.id, run: settled, status: settled.status };
 }
 
 function isTerminal(status: string): boolean {
@@ -199,6 +202,49 @@ describe("Phase 4E daemon production Tool E2E", () => {
     expect(result.isError).toBe(false);
     expect(result.content).toContain("caelush-4e-marker");
     expect(result.content).toContain("exit code 0");
+  }, 40_000);
+
+  it("preserves a real failed command observation and naturally completes without claiming it passed", async () => {
+    const provider = new ScriptedProvider(
+      toolCall("call_failing_check", "exec_command", {
+        cmd: 'node -e "process.exitCode=7"',
+      }),
+      "The check failed with exit code 7 and remains unresolved.",
+    );
+    const { client, runId, sessionId, run, status } = await drive(provider, {
+      "README.md": "fixture for a failing command\n",
+    });
+
+    expect(status).toBe("COMPLETED");
+    expect(run).toMatchObject({
+      completionContract: "NATURAL_V1",
+      finalResult: {
+        type: "NORMAL_COMPLETION",
+        text: "The check failed with exit code 7 and remains unresolved.",
+      },
+    });
+    expect(provider.seen).toHaveLength(2);
+    const result = toolResults(provider)[0]!;
+    // A nonzero process exit is an actual check failure, while the Tool invocation itself settled
+    // successfully and therefore remains a non-error Tool result.
+    expect(result).toMatchObject({ toolName: "exec_command", isError: false });
+    expect(result.content).toContain("exit code 7");
+
+    const presentation = await client.getSessionTurnPresentation(sessionId, { runId });
+    expect(presentation.capabilityVersion).toBe(3);
+    if (presentation.capabilityVersion !== 3) throw new Error("V3 Turn projection is required");
+    const commandItem = presentation.turns[0]?.items.find(
+      (item) => item.kind === "TOOL" && item.toolName === "exec_command",
+    );
+    expect(commandItem).toMatchObject({
+      kind: "TOOL",
+      phase: "COMPLETED",
+      summary: "进程已退出（退出码 7）",
+      preview: expect.stringContaining("exit code 7"),
+    });
+    expect(
+      presentation.turns[0]?.items.filter((item) => item.kind === "VERIFICATION"),
+    ).toHaveLength(0);
   }, 40_000);
 
   it("answers an unavailable Tool as safe feedback without a fabricated observation", async () => {

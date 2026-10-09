@@ -400,7 +400,7 @@ describe("SessionConversation V3 rendering", () => {
     const failureIndex = html.indexOf("后续任务失败，文件修改仍已发生。");
     expect(userIndex).toBeGreaterThanOrEqual(0);
     expect(toolIndex).toBeGreaterThan(userIndex);
-    expect(failureIndex).toBeGreaterThan(toolIndex);
+    expect(failureIndex).toBeGreaterThan(userIndex);
     expect(html).toContain("新建");
     expect(html).toContain("+214");
     expect(html).toContain('data-run-status="FAILED"');

@@ -941,10 +941,10 @@ describe("TurnPresentationFeed", () => {
   it("hides failed and cancelled drafts and renders only compact terminal statuses", () => {
     const initial = createInitialLiveActivityState(runId);
     const summaryText: Record<string, string> = {
-      FAILED: "校验未能完成，任务已失败。",
+      FAILED: "Agent 执行失败；未记录可安全展示的具体原因。",
       CANCELLED: "任务已取消",
       TIMEOUT: "任务因超时结束",
-      COMPLETED: "任务已完成，但未生成可验证的最终答复",
+      COMPLETED: "执行已结束，但没有可展示的最终答复",
     };
     const summaries = ["FAILED", "CANCELLED", "TIMEOUT", "COMPLETED"].map((runStatus) => ({
       id: `summary-${runStatus}`,
@@ -991,7 +991,7 @@ describe("TurnPresentationFeed", () => {
     expect(html).not.toContain("failed partial");
     expect(html).not.toContain("cancelled partial");
     expect(html).not.toContain("任务结束报告");
-    expect(html).toContain("校验未能完成，任务已失败。");
+    expect(html).toContain("Agent 执行失败；未记录可安全展示的具体原因。");
     expect(html).toContain("任务已取消");
     expect(html).toContain("任务因超时结束");
   });
@@ -1040,22 +1040,85 @@ describe("TurnPresentationFeed", () => {
     expect(html).toContain("完成摘要之后的答复草稿");
   });
 
-  it("keeps a failed candidate answer and marks verification failure without a summary card", () => {
+  it("keeps a failed candidate answer without inferring verification failure from FAILED", () => {
     const failed = {
       ...presentation(),
       items: presentation().items.map((item) =>
         item.kind === "RUN_SUMMARY"
-          ? { ...item, runStatus: "FAILED" as const, text: "校验未能完成，任务已失败。" }
+          ? {
+              ...item,
+              runStatus: "FAILED" as const,
+              text: "Agent 执行失败；未记录可安全展示的具体原因。",
+            }
           : item,
       ),
     };
     const html = renderToStaticMarkup(<TurnPresentationFeed presentation={failed} />);
 
     expect(html).toContain("检查完成，项目结构正常。");
-    expect(html).toContain("最终验证未通过");
-    expect(html).toContain("校验未能完成，任务已失败。");
+    expect(html).toContain("Agent 执行失败；未记录可安全展示的具体原因。");
+    expect(html).not.toContain("最终验证未通过");
     expect(html).not.toContain("任务结束报告");
     expect(html).not.toContain("turn-presentation-item--run-summary");
+  });
+
+  it("keeps a durable V3 terminal state over a stale VERIFYING Run snapshot", () => {
+    const v3 = {
+      capabilityVersion: 3 as const,
+      turns: [
+        {
+          runId,
+          conversationTurnId: "turn-1",
+          runStatus: "COMPLETED" as const,
+          openedAt: 1,
+          closedAt: 5,
+          highWatermark: 8,
+          items: [
+            {
+              id: "user:natural",
+              runId,
+              conversationTurnId: "turn-1",
+              ordinal: 0,
+              status: "COMPLETED" as const,
+              createdAt: 1,
+              kind: "USER" as const,
+              text: "实现一个小改动",
+            },
+            {
+              id: "assistant:natural-final",
+              runId,
+              conversationTurnId: "turn-1",
+              ordinal: 1,
+              status: "COMPLETED" as const,
+              createdAt: 4,
+              kind: "ASSISTANT" as const,
+              phase: "FINAL_ANSWER" as const,
+              text: "正式自然完成答复",
+            },
+            {
+              id: "summary:natural",
+              runId,
+              conversationTurnId: "turn-1",
+              ordinal: 2,
+              status: "COMPLETED" as const,
+              createdAt: 5,
+              kind: "RUN_SUMMARY" as const,
+              runStatus: "COMPLETED" as const,
+              text: "执行已结束",
+            },
+          ],
+        },
+      ],
+    } satisfies Extract<SessionTurnPresentationResponse, { capabilityVersion: 3 }>;
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed presentation={v3} activeRun={{ id: runId, status: "VERIFYING" }} />,
+    );
+
+    expect(html.match(/正式自然完成答复/gu)).toHaveLength(1);
+    expect(html).toContain('data-run-status="COMPLETED"');
+    expect(html).not.toContain("正在等待校验结果");
+    expect(html).not.toContain("正在等待独立校验");
+    expect(html).not.toContain("任务结束报告");
   });
 
   it("renders durable final answers and live drafts as safe Markdown", () => {
