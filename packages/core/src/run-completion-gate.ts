@@ -335,6 +335,7 @@ function completionError(
         message: "Completion evaluation could not reach a decision.",
         retryable: false,
         phase: "VERIFICATION",
+        details: { reasonCode: safeVerificationReasonCode(reason) },
       },
       retryable: false,
     },
@@ -342,13 +343,16 @@ function completionError(
 }
 
 /**
- * The sanitized error code a failed completion carries.
+ * Completion ERROR means the gate could not establish a verdict, so it is infrastructure.
  *
- * The frozen `AgentError.code` is a closed vocabulary, so an internal reason is projected onto
- * `VERIFICATION_FAILED`. The reason itself never crosses: a durable error is public
- * data, and a ledger or configuration failure may quote a path.
+ * Real verification failures use the REJECT decision and retain `VERIFICATION_FAILED`. Projecting
+ * every ERROR to that code falsely reports storage and reviewer failures as failed tests.
  */
-function completionErrorCode(reason: string): "INTERNAL_ERROR" | "VERIFICATION_FAILED" {
+function completionErrorCode(reason: string): "INTERNAL_ERROR" {
   void reason;
-  return "VERIFICATION_FAILED";
+  return "INTERNAL_ERROR";
+}
+
+function safeVerificationReasonCode(reason: string): string {
+  return /^[A-Z][A-Z0-9_]{0,95}$/.test(reason) ? reason : "VERIFICATION_INFRASTRUCTURE_ERROR";
 }

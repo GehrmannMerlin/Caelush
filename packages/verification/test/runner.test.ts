@@ -193,6 +193,39 @@ describe("storage-free verification runner", () => {
     expect(calls).toContain("poll:");
   });
 
+  it("does not change committed project check truth when observer delivery rejects", async () => {
+    const plan = planFor("TEST");
+    const durable = store();
+    let executionCount = 0;
+    const process: VerificationCommandExecutionPort = {
+      async executeArgv() {
+        executionCount += 1;
+        return {
+          status: "EXITED",
+          output: "ok",
+          stdout: "ok",
+          totalOutputBytes: 2,
+          omittedBytes: 0,
+          exitCode: 0,
+          durationMs: 10,
+        };
+      },
+      async interact() {
+        throw new Error("process polling was not expected");
+      },
+    };
+
+    const result = await new VerificationRunner().run(
+      input(plan, process, durable, {
+        onCommittedEvents: () => Promise.reject(new Error("observer unavailable")),
+      }),
+    );
+
+    expect(result.outcome).toBe("PROJECT_CHECKS_PASSED");
+    expect(executionCount).toBe(1);
+    expect(durable.calls).toEqual([`start:${plan.checks[0]!.id}`, "settle:PASSED"]);
+  });
+
   it("maps unavailable checks and security review to terminal ERROR/SKIPPED without execution", async () => {
     const plan = planFor("TYPECHECK");
     const process = execution();

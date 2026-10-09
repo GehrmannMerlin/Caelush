@@ -41,7 +41,7 @@ export class VerificationRunner {
           check: terminal.check,
           evidence: [terminal.evidence],
         });
-        input.onCommittedEvents?.(settled.events);
+        notifyCommitted(input, settled.events);
         if (terminal.check.status === "SKIPPED") counters.skippedCount += 1;
         else {
           counters.errorCount += 1;
@@ -90,7 +90,7 @@ export class VerificationRunner {
           check: terminal,
           evidence: [evidence],
         });
-        input.onCommittedEvents?.(settled.events);
+        notifyCommitted(input, settled.events);
         counters.errorCount += 1;
         if (check.requirement !== "ADVISORY") {
           blockingCheckId = check.id;
@@ -124,7 +124,7 @@ export class VerificationRunner {
         check: runningCheck,
         discoveryEvidence,
       });
-      input.onCommittedEvents?.(started.events);
+      notifyCommitted(input, started.events);
       counters.executedCount += 1;
 
       let execution: VerificationRuntimeExecResult;
@@ -174,7 +174,7 @@ export class VerificationRunner {
           check: terminal,
           evidence: [evidence],
         });
-        input.onCommittedEvents?.(settled.events);
+        notifyCommitted(input, settled.events);
         if (aborted) return { outcome: "CANCELLED", ...counters };
         counters.errorCount += 1;
         if (check.requirement !== "ADVISORY") {
@@ -214,7 +214,7 @@ export class VerificationRunner {
         check: terminal,
         evidence: [evidence],
       });
-      input.onCommittedEvents?.(settled.events);
+      notifyCommitted(input, settled.events);
       if (passed) counters.passedCount += 1;
       else {
         counters.failedCount += 1;
@@ -235,6 +235,18 @@ export class VerificationRunner {
 
 function timestamp(input: VerificationRunnerInput) {
   return createTimestampMs(input.now());
+}
+
+function notifyCommitted(
+  input: VerificationRunnerInput,
+  events: Parameters<NonNullable<VerificationRunnerInput["onCommittedEvents"]>>[0],
+): void {
+  try {
+    const notification = input.onCommittedEvents?.(events);
+    if (notification !== undefined) void Promise.resolve(notification).catch(() => undefined);
+  } catch {
+    // Storage has committed; replay remains authoritative if live observer delivery fails.
+  }
 }
 
 function labelFor(check: VerificationCheck): string {

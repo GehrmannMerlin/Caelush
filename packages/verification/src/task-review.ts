@@ -7,6 +7,7 @@ import type {
   VerificationEvidence,
   VerificationPlan,
 } from "@caelush/protocol";
+import { parseVerificationEvidence } from "./evidence.js";
 
 export const MAX_TASK_REVIEW_INPUT_BYTES = 96 * 1024;
 export const MAX_TASK_REVIEW_TEXT_BYTES = 32 * 1024;
@@ -104,7 +105,7 @@ export function createTaskAcceptanceEvidence(input: {
       ? {}
       : { repairInstructions: [...input.repairInstructions] }),
   } satisfies Record<string, JsonValue>;
-  return {
+  return parseVerificationEvidence({
     id: input.id,
     planId: input.planId,
     checkId: input.checkId,
@@ -112,7 +113,7 @@ export function createTaskAcceptanceEvidence(input: {
     summary: input.summary,
     details,
     capturedAt: input.capturedAt,
-  };
+  });
 }
 
 export function buildTaskReviewBundle(input: TaskAcceptanceReviewInput): TaskReviewBundle {

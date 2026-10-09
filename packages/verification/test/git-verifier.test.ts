@@ -1,7 +1,9 @@
 import {
+  MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES,
   createVerificationCheckId,
   createVerificationEvidenceId,
   createVerificationPlanId,
+  VerificationEvidenceSchema,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { createGitEvidence, reviewGitChangeset, type GitReviewInput } from "../src/index.js";
@@ -90,5 +92,52 @@ describe("Git changeset verification", () => {
     });
     expect(evidence.kind).toBe("GIT");
     expect(JSON.stringify(evidence.details)).not.toContain("git add");
+    expect(VerificationEvidenceSchema.parse(evidence)).toEqual(evidence);
+  });
+
+  it("summarizes oversized JSON-escaped Git evidence and fails the check closed", () => {
+    const paths = Array.from({ length: 33 }, (_, index) => ({
+      path: "src/" + "nested/".repeat(12) + "file-" + String(index).padStart(2, "0") + ".ts",
+      changeType: "MODIFIED" as const,
+    }));
+    const input: GitReviewInput = {
+      changedFiles: paths,
+      status: {
+        available: true,
+        clean: false,
+        entries: paths.map(({ path }) => ({
+          path,
+          kind: "TRACKED" as const,
+          indexStatus: " ",
+          worktreeStatus: "M",
+        })),
+      },
+      diffs: paths.map(({ path }) => ({
+        path,
+        diff: '\u0000\n"😀'.repeat(600),
+        truncated: false,
+      })),
+    };
+    const result = reviewGitChangeset(input);
+    const evidence = createGitEvidence({
+      id: createVerificationEvidenceId(),
+      planId: createVerificationPlanId(),
+      checkId: createVerificationCheckId(),
+      capturedAt: 1_700_000_000_000 as never,
+      result,
+    });
+    const parsed = VerificationEvidenceSchema.parse(evidence);
+
+    expect(result.status).toBe("ERROR");
+    expect(result.reviewComplete).toBe(false);
+    expect(parsed.details).toMatchObject({
+      evidenceTruncated: true,
+      reviewComplete: false,
+      gitFreshnessHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      attributedPathCount: 33,
+    });
+    expect(Buffer.byteLength(JSON.stringify(parsed.details), "utf8")).toBeLessThanOrEqual(
+      MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES,
+    );
   });
 });

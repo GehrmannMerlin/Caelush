@@ -6,13 +6,14 @@ import {
   createSessionId,
   createStepId,
   type VerificationCheck,
+  type VerificationEvidence,
   type VerificationPlan,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
   VerificationStageRunner,
   type VerificationCheckExecutor,
-  type VerificationExecutionStorePort,
+  type VerificationExecutionRecoveryStorePort,
 } from "../src/index.js";
 
 function planFor(kinds: readonly VerificationCheck["spec"]["kind"][]): VerificationPlan {
@@ -52,6 +53,41 @@ function evidence(check: VerificationCheck) {
     kind: check.spec.kind === "TASK" ? ("TASK" as const) : ("WORKSPACE" as const),
     summary: `${check.spec.kind} evidence`,
     capturedAt: 1_003 as never,
+  };
+}
+
+function recoveryStore(
+  plan: VerificationPlan,
+  settle: (
+    input: Parameters<VerificationExecutionRecoveryStorePort["settleCheck"]>[0],
+  ) => void = () => {},
+) {
+  let current = plan.checks[0]!;
+  const rows: VerificationEvidence[] = [];
+  const settleStatuses: string[] = [];
+  return {
+    rows,
+    settleStatuses,
+    current: () => current,
+    store: {
+      async startCheck(input: Parameters<VerificationExecutionRecoveryStorePort["startCheck"]>[0]) {
+        current = input.check;
+        rows.push(input.discoveryEvidence);
+        return { check: current, events: [] };
+      },
+      async settleCheck(
+        input: Parameters<VerificationExecutionRecoveryStorePort["settleCheck"]>[0],
+      ) {
+        settleStatuses.push(input.check.status);
+        settle(input);
+        current = input.check;
+        rows.push(...input.evidence);
+        return { check: current, events: [] };
+      },
+      async getPlanExecutionSnapshot() {
+        return { plan: { ...plan, checks: [current] }, evidence: [...rows] };
+      },
+    } satisfies VerificationExecutionRecoveryStorePort,
   };
 }
 
@@ -200,5 +236,201 @@ describe("verification stage runner", () => {
     expect(result.outcome).toBe("BLOCKED");
     expect(result.errorCheckIds).toEqual([plan.checks[0]!.id]);
     expect(settled).toEqual(["ERROR"]);
+  });
+
+  it("keeps executor exceptions out of evidence and settles them as infrastructure ERROR", async () => {
+    const plan = planFor(["WORKSPACE"]);
+    const ledger = recoveryStore(plan);
+    const result = await new VerificationStageRunner().run({
+      runId: plan.runId,
+      sessionId: createSessionId(),
+      plan,
+      store: ledger.store,
+      executors: {
+        WORKSPACE: {
+          async execute() {
+            throw new Error("C:\\Users\\private\\api-key=secret");
+          },
+        },
+      },
+      discoveryEvidence: (check) => evidence(check),
+      evidenceIdFactory: createVerificationEvidenceId,
+      now: () => 2_000 as never,
+    });
+
+    expect(result.errorCheckIds).toEqual([plan.checks[0]!.id]);
+    expect(ledger.current().status).toBe("ERROR");
+    expect(ledger.rows.at(-1)?.details).toMatchObject({
+      errorCode: "VERIFICATION_EXECUTOR_ERROR",
+      classification: "INFRASTRUCTURE",
+    });
+    expect(JSON.stringify(ledger.rows.at(-1))).not.toContain("private");
+    expect(JSON.stringify(ledger.rows.at(-1))).not.toContain("secret");
+  });
+
+  it("settles invalid oversized executor evidence as a minimal ERROR before Storage", async () => {
+    const plan = planFor(["WORKSPACE"]);
+    const ledger = recoveryStore(plan);
+    let executionCount = 0;
+    const result = await new VerificationStageRunner().run({
+      runId: plan.runId,
+      sessionId: createSessionId(),
+      plan,
+      store: ledger.store,
+      executors: {
+        WORKSPACE: {
+          async execute(check) {
+            executionCount += 1;
+            return {
+              status: "PASSED",
+              evidence: [{ ...evidence(check), details: { body: "x".repeat(33 * 1024) } }],
+            };
+          },
+        },
+      },
+      discoveryEvidence: (check) => evidence(check),
+      evidenceIdFactory: createVerificationEvidenceId,
+      now: () => 2_000 as never,
+    });
+
+    expect(executionCount).toBe(1);
+    expect(result.outcome).toBe("BLOCKED");
+    expect(result.passedCount).toBe(0);
+    expect(result.errorCheckIds).toEqual([plan.checks[0]!.id]);
+    expect(ledger.current().status).toBe("ERROR");
+    expect(ledger.rows.at(-1)?.details).toMatchObject({
+      errorCode: "VERIFICATION_EVIDENCE_SIZE_ERROR",
+      classification: "INFRASTRUCTURE",
+    });
+  });
+
+  it("settles an unencodable cyclic result as ERROR without submitting it to Storage", async () => {
+    const plan = planFor(["WORKSPACE"]);
+    const ledger = recoveryStore(plan);
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const result = await new VerificationStageRunner().run({
+      runId: plan.runId,
+      sessionId: createSessionId(),
+      plan,
+      store: ledger.store,
+      executors: {
+        WORKSPACE: {
+          async execute(check) {
+            return {
+              status: "PASSED",
+              evidence: [{ ...evidence(check), details: cyclic } as VerificationEvidence],
+            };
+          },
+        },
+      },
+      discoveryEvidence: (check) => evidence(check),
+      evidenceIdFactory: createVerificationEvidenceId,
+      now: () => 2_000 as never,
+    });
+
+    expect(result.outcome).toBe("BLOCKED");
+    expect(result.passedCount).toBe(0);
+    expect(ledger.current().status).toBe("ERROR");
+    expect(ledger.rows.at(-1)?.details).toMatchObject({
+      errorCode: "VERIFICATION_EVIDENCE_ENCODING_ERROR",
+      classification: "INFRASTRUCTURE",
+    });
+  });
+
+  it("performs one bounded ERROR settlement after a durable result write fails", async () => {
+    const plan = planFor(["WORKSPACE"]);
+    const settleCalls: string[] = [];
+    const ledger = recoveryStore(plan, (input) => {
+      settleCalls.push(input.check.status);
+      if (settleCalls.length === 1) throw new Error("sqlite write fault");
+    });
+    let executionCount = 0;
+    const result = await new VerificationStageRunner().run({
+      runId: plan.runId,
+      sessionId: createSessionId(),
+      plan,
+      store: ledger.store,
+      executors: {
+        WORKSPACE: {
+          async execute(check) {
+            executionCount += 1;
+            return { status: "PASSED", evidence: [evidence(check)] };
+          },
+        },
+      },
+      discoveryEvidence: (check) => evidence(check),
+      evidenceIdFactory: createVerificationEvidenceId,
+      now: () => 2_000 as never,
+    });
+
+    expect(executionCount).toBe(1);
+    expect(settleCalls).toEqual(["PASSED", "ERROR"]);
+    expect(result.outcome).toBe("BLOCKED");
+    expect(result.passedCount).toBe(0);
+    expect(result.errorCount).toBe(1);
+    expect(ledger.current().status).toBe("ERROR");
+    expect(ledger.rows.at(-1)?.details).toMatchObject({
+      errorCode: "VERIFICATION_SETTLEMENT_ERROR",
+      classification: "INFRASTRUCTURE",
+    });
+  });
+
+  it("does not retry settlement when committed-event notification rejects", async () => {
+    const plan = planFor(["WORKSPACE"]);
+    const ledger = recoveryStore(plan);
+    let executionCount = 0;
+    const result = await new VerificationStageRunner().run({
+      runId: plan.runId,
+      sessionId: createSessionId(),
+      plan,
+      store: ledger.store,
+      executors: {
+        WORKSPACE: {
+          async execute(check) {
+            executionCount += 1;
+            return { status: "PASSED", evidence: [evidence(check)] };
+          },
+        },
+      },
+      discoveryEvidence: (check) => evidence(check),
+      onCommittedEvents: () => Promise.reject(new Error("observer down")),
+      now: () => 2_000 as never,
+    });
+
+    expect(result.outcome).toBe("PASSED");
+    expect(executionCount).toBe(1);
+    expect(ledger.current().status).toBe("PASSED");
+    expect(ledger.settleStatuses).toEqual(["PASSED"]);
+  });
+
+  it("leaves durable RUNNING truth when both the result and bounded ERROR write fail", async () => {
+    const plan = planFor(["WORKSPACE"]);
+    const settleCalls: string[] = [];
+    const ledger = recoveryStore(plan, (input) => {
+      settleCalls.push(input.check.status);
+      throw new Error("sqlite unavailable");
+    });
+    await expect(
+      new VerificationStageRunner().run({
+        runId: plan.runId,
+        sessionId: createSessionId(),
+        plan,
+        store: ledger.store,
+        executors: {
+          WORKSPACE: {
+            async execute(check) {
+              return { status: "PASSED", evidence: [evidence(check)] };
+            },
+          },
+        },
+        discoveryEvidence: (check) => evidence(check),
+        now: () => 2_000 as never,
+      }),
+    ).rejects.toThrow("Verification check settlement could not be confirmed");
+
+    expect(settleCalls).toEqual(["PASSED", "ERROR"]);
+    expect(ledger.current().status).toBe("RUNNING");
+    expect(ledger.rows).toHaveLength(1);
   });
 });

@@ -1,4 +1,5 @@
 import {
+  MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES,
   createObservationId,
   createRunId,
   createStepId,
@@ -7,13 +8,11 @@ import {
   createVerificationCheckId,
   createVerificationEvidenceId,
   createVerificationPlanId,
+  VerificationEvidenceSchema,
   type ToolObservation,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
-import {
-  createToolObservationEvidence,
-  type VerificationEvidenceSanitizer,
-} from "../src/index.js";
+import { createToolObservationEvidence, type VerificationEvidenceSanitizer } from "../src/index.js";
 
 const sanitizer: VerificationEvidenceSanitizer = {
   redactText(value) {
@@ -23,7 +22,11 @@ const sanitizer: VerificationEvidenceSanitizer = {
     if (Buffer.byteLength(value, "utf8") <= maxBytes) {
       return { text: value, omittedBytes: 0, truncated: false };
     }
-    return { text: value.slice(0, maxBytes), omittedBytes: value.length - maxBytes, truncated: true };
+    return {
+      text: value.slice(0, maxBytes),
+      omittedBytes: value.length - maxBytes,
+      truncated: true,
+    };
   },
 };
 
@@ -102,5 +105,33 @@ describe("tool observation evidence", () => {
     expect(JSON.stringify(evidence)).not.toContain("secret-value");
     expect(JSON.stringify(evidence)).not.toContain("shouldNotBeCopied");
     expect(JSON.stringify(evidence)).not.toContain('"workdir"');
+  });
+
+  it("keeps control-heavy observation evidence within the total JSON byte budget", () => {
+    const source = '\u0000\n"中文😀'.repeat(2_000);
+    const evidence = createToolObservationEvidence({
+      planId: createVerificationPlanId(),
+      checkId: createVerificationCheckId(),
+      candidateHash: "f".repeat(64),
+      capturedAt: createTimestampMs(300),
+      evidenceIdFactory: createVerificationEvidenceId,
+      observations: [
+        { observation: observation({ content: source, createdAt: 200 }), toolName: "exec_command" },
+      ],
+      sanitizer,
+    });
+    const parsed = evidence.map((item) => VerificationEvidenceSchema.parse(item));
+    const content = parsed[0]?.details as {
+      content: string;
+      contentOmittedBytes: number;
+      contentTruncated: boolean;
+    };
+    expect(content.contentTruncated).toBe(true);
+    expect(content.contentOmittedBytes).toBeGreaterThan(0);
+    expect(source.startsWith(content.content)).toBe(true);
+    expect(Array.from(content.content).join("")).toBe(content.content);
+    expect(Buffer.byteLength(JSON.stringify(parsed[0]?.details), "utf8")).toBeLessThanOrEqual(
+      MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES,
+    );
   });
 });

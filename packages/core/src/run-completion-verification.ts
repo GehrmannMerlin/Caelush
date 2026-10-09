@@ -107,7 +107,11 @@ export async function runCompletionVerification(
   // never replay it
   // ```
   if (plan.checks.some((check) => check.status === "RUNNING")) {
-    await settleInterruptedChecks(dependencies, plan);
+    try {
+      await settleInterruptedChecks(dependencies, plan);
+    } catch {
+      return errorOutcome("VERIFICATION_SETTLEMENT_ERROR");
+    }
     const reloaded = await loadPlan(dependencies);
     if (reloaded === null) return errorOutcome("VERIFICATION_PLAN_MISSING");
     return continueVerification(dependencies, observation, reloaded, candidateHash);
@@ -279,9 +283,14 @@ async function ensureProjectChecks(
       evidenceIdFactory: dependencies.evidenceIdFactory ?? createVerificationEvidenceId,
       evidenceSanitizer: sanitizer,
       onCommittedEvents: (events) =>
-        dependencies.notifyCommitted(events as readonly DurableAgentEvent[]),
+        safelyNotifyCommitted(dependencies, events as readonly DurableAgentEvent[]),
     });
   } catch {
+    try {
+      await settleInterruptedChecks(dependencies, plan, "VERIFICATION_SETTLEMENT_ERROR");
+    } catch {
+      return { kind: "STOP", outcome: errorOutcome("VERIFICATION_SETTLEMENT_ERROR") };
+    }
     return { kind: "STOP", outcome: errorOutcome("VERIFICATION_INFRASTRUCTURE_ERROR") };
   }
   if (runnerResult.outcome === "CANCELLED") {
@@ -353,137 +362,152 @@ async function runChangeChecks(
   const changedFiles = state.changedFiles;
   const evidenceId = dependencies.evidenceIdFactory ?? createVerificationEvidenceId;
   let cachedGitStatus: Awaited<ReturnType<typeof git.status>> | undefined;
-  const stage = await new VerificationStageRunner().run({
-    runId: run.id,
-    sessionId: run.sessionId,
-    plan,
-    store,
-    signal,
-    now: () => dependencies.clock.now(),
-    discoveryEvidence: (check, capturedAt) =>
-      VerificationEvidenceSchema.parse({
-        id: evidenceId(),
-        planId: plan.id,
-        checkId: check.id,
-        kind: "DISCOVERY",
-        summary: `${check.spec.kind} verification inspection prepared`,
-        details: { kind: check.spec.kind, purpose: check.spec.purpose },
-        capturedAt,
-      }),
-    onCommittedEvents: (events: readonly { readonly type: string }[]) =>
-      dependencies.notifyCommitted(events as readonly DurableAgentEvent[]),
-    executors: {
-      WORKSPACE: {
-        execute: async (check) => {
-          const facts = await workspace.inspect({ workspace: run.workspace, changedFiles, signal });
-          const result = verifyWorkspaceInspection({ changedFiles, facts });
-          const evidence = createWorkspaceEvidence({
-            id: evidenceId(),
-            planId: plan.id,
-            checkId: check.id,
-            capturedAt: dependencies.clock.now(),
-            result,
-          });
-          return { status: result.status, evidence: [evidence] };
+  let stage: import("@caelush/verification").VerificationStageRunnerResult;
+  try {
+    stage = await new VerificationStageRunner().run({
+      runId: run.id,
+      sessionId: run.sessionId,
+      plan,
+      store,
+      evidenceIdFactory: evidenceId,
+      signal,
+      now: () => dependencies.clock.now(),
+      discoveryEvidence: (check, capturedAt) =>
+        VerificationEvidenceSchema.parse({
+          id: evidenceId(),
+          planId: plan.id,
+          checkId: check.id,
+          kind: "DISCOVERY",
+          summary: `${check.spec.kind} verification inspection prepared`,
+          details: { kind: check.spec.kind, purpose: check.spec.purpose },
+          capturedAt,
+        }),
+      onCommittedEvents: (events: readonly { readonly type: string }[]) =>
+        safelyNotifyCommitted(dependencies, events as readonly DurableAgentEvent[]),
+      executors: {
+        WORKSPACE: {
+          execute: async (check) => {
+            const facts = await workspace.inspect({
+              workspace: run.workspace,
+              changedFiles,
+              signal,
+            });
+            const result = verifyWorkspaceInspection({ changedFiles, facts });
+            const evidence = createWorkspaceEvidence({
+              id: evidenceId(),
+              planId: plan.id,
+              checkId: check.id,
+              capturedAt: dependencies.clock.now(),
+              result,
+            });
+            return { status: result.status, evidence: [evidence] };
+          },
         },
-      },
-      GIT: {
-        preflight: async (check) => {
-          cachedGitStatus = await git.status({ workspace: run.workspace, signal });
-          if (cachedGitStatus.available || check.requirement === "REQUIRED") return undefined;
-          return {
-            status: "SKIPPED" as const,
-            skipReason: "NOT_AVAILABLE" as const,
-            evidence: [
-              createDiscoveryEvidence({
-                id: evidenceId(),
-                planId: plan.id,
-                checkId: check.id,
-                capturedAt: dependencies.clock.now(),
-                resolver: "runtime-git",
-                ecosystem: "git",
-                available: false,
-                reason: "TOOLING_UNAVAILABLE",
-              }),
-            ],
-          };
-        },
-        execute: async (check) => {
-          const status =
-            cachedGitStatus ??
-            (cachedGitStatus = await git.status({ workspace: run.workspace, signal }));
-          const diffs = await collectGitDiffs(git, run, changedFiles, status, signal);
-          const result = reviewGitChangeset({
-            changedFiles,
-            requirement: check.requirement,
-            status,
-            diffs,
-          });
-          const evidence = createGitEvidence({
-            id: evidenceId(),
-            planId: plan.id,
-            checkId: check.id,
-            capturedAt: dependencies.clock.now(),
-            result,
-          });
-          return { status: result.status, evidence: [evidence] };
-        },
-      },
-      TASK: {
-        execute: async (check) => {
-          const priorEvidence =
-            (await recovery.getPlanExecutionSnapshot(plan.id))?.evidence.filter(
-              (item) => item.kind !== "TASK" && !isToolObservationEvidence(item),
-            ) ?? [];
-          const toolObservationEvidence = await projectToolObservationEvidence(
-            dependencies,
-            plan,
-            candidateHash,
-            check,
-          );
-          const bundle = buildTaskReviewBundle({
-            originalGoal: run.goal,
-            candidateText: dependencies.continuation.finalDecision.candidateText,
-            plan,
-            evidence: [...priorEvidence, ...toolObservationEvidence],
-            changedFiles,
-          });
-          const review = await reviewer.review({
-            run,
-            candidateText: dependencies.continuation.finalDecision.candidateText,
-            bundle,
-            signal,
-          });
-          const evidence =
-            review.review === undefined
-              ? taskErrorEvidence(
-                  dependencies,
-                  plan.id,
-                  check.id,
-                  review.errorCode ?? "REVIEWER_ERROR",
-                  review.reviewInputHash,
-                )
-              : createTaskAcceptanceEvidence({
+        GIT: {
+          preflight: async (check) => {
+            cachedGitStatus = await git.status({ workspace: run.workspace, signal });
+            if (cachedGitStatus.available || check.requirement === "REQUIRED") return undefined;
+            return {
+              status: "SKIPPED" as const,
+              skipReason: "NOT_AVAILABLE" as const,
+              evidence: [
+                createDiscoveryEvidence({
                   id: evidenceId(),
                   planId: plan.id,
                   checkId: check.id,
                   capturedAt: dependencies.clock.now(),
-                  reviewInputHash: review.reviewInputHash,
-                  verdict: review.review.verdict,
-                  summary: review.review.summary,
-                  ...(review.review.repairInstructions === undefined
-                    ? {}
-                    : { repairInstructions: review.review.repairInstructions }),
-                  reviewedEvidenceIds: bundle.evidence.map((item) => item.id),
-                });
-          return {
-            status: review.status,
-            evidence: [...toolObservationEvidence, evidence],
-          };
+                  resolver: "runtime-git",
+                  ecosystem: "git",
+                  available: false,
+                  reason: "TOOLING_UNAVAILABLE",
+                }),
+              ],
+            };
+          },
+          execute: async (check) => {
+            const status =
+              cachedGitStatus ??
+              (cachedGitStatus = await git.status({ workspace: run.workspace, signal }));
+            const diffs = await collectGitDiffs(git, run, changedFiles, status, signal);
+            const result = reviewGitChangeset({
+              changedFiles,
+              requirement: check.requirement,
+              status,
+              diffs,
+            });
+            const evidence = createGitEvidence({
+              id: evidenceId(),
+              planId: plan.id,
+              checkId: check.id,
+              capturedAt: dependencies.clock.now(),
+              result,
+            });
+            return { status: result.status, evidence: [evidence] };
+          },
+        },
+        TASK: {
+          execute: async (check) => {
+            const priorEvidence =
+              (await recovery.getPlanExecutionSnapshot(plan.id))?.evidence.filter(
+                (item) => item.kind !== "TASK" && !isToolObservationEvidence(item),
+              ) ?? [];
+            const toolObservationEvidence = await projectToolObservationEvidence(
+              dependencies,
+              plan,
+              candidateHash,
+              check,
+            );
+            const bundle = buildTaskReviewBundle({
+              originalGoal: run.goal,
+              candidateText: dependencies.continuation.finalDecision.candidateText,
+              plan,
+              evidence: [...priorEvidence, ...toolObservationEvidence],
+              changedFiles,
+            });
+            const review = await reviewer.review({
+              run,
+              candidateText: dependencies.continuation.finalDecision.candidateText,
+              bundle,
+              signal,
+            });
+            const evidence =
+              review.review === undefined
+                ? taskErrorEvidence(
+                    dependencies,
+                    plan.id,
+                    check.id,
+                    review.errorCode ?? "REVIEWER_ERROR",
+                    review.reviewInputHash,
+                  )
+                : createTaskAcceptanceEvidence({
+                    id: evidenceId(),
+                    planId: plan.id,
+                    checkId: check.id,
+                    capturedAt: dependencies.clock.now(),
+                    reviewInputHash: review.reviewInputHash,
+                    verdict: review.review.verdict,
+                    summary: review.review.summary,
+                    ...(review.review.repairInstructions === undefined
+                      ? {}
+                      : { repairInstructions: review.review.repairInstructions }),
+                    reviewedEvidenceIds: bundle.evidence.map((item) => item.id),
+                  });
+            return {
+              status: review.status,
+              evidence: [...toolObservationEvidence, evidence],
+            };
+          },
         },
       },
-    },
-  });
+    });
+  } catch {
+    try {
+      await settleInterruptedChecks(dependencies, plan, "VERIFICATION_SETTLEMENT_ERROR");
+    } catch {
+      return { kind: "STOP", outcome: errorOutcome("VERIFICATION_SETTLEMENT_ERROR") };
+    }
+    return { kind: "STOP", outcome: errorOutcome("VERIFICATION_INFRASTRUCTURE_ERROR") };
+  }
   if (stage.outcome === "CANCELLED")
     return { kind: "STOP", outcome: errorOutcome("VERIFICATION_CANCELLED") };
   void candidateHash;
@@ -694,6 +718,11 @@ async function recheckGitFreshness(
     diffs,
   });
   const priorDetails = objectDetails(prior?.details);
+  const priorFreshnessHash = stringValue(priorDetails?.gitFreshnessHash);
+  if (current.status !== "PASSED") return "STALE";
+  if (priorFreshnessHash !== undefined && current.gitFreshnessHash !== undefined) {
+    return current.gitFreshnessHash === priorFreshnessHash ? "FRESH" : "STALE";
+  }
   const currentComparable = {
     attributedPaths: current.attributedPaths,
     unattributedDirtyPaths: current.unattributedDirtyPaths,
@@ -712,7 +741,6 @@ async function recheckGitFreshness(
     truncated: priorDetails?.truncated,
     reviewComplete: priorDetails?.reviewComplete,
   };
-  if (current.status !== "PASSED") return "STALE";
   return JSON.stringify(currentComparable) === JSON.stringify(priorComparable) ? "FRESH" : "STALE";
 }
 
@@ -832,12 +860,12 @@ function rejectDecision(
  * sanitized error therefore ends the Run through Core's canonical failure transition.
  */
 function errorOutcome(reason: string): CompletionVerificationOutcome {
-  void reason;
   const error: AgentError = {
-    code: "VERIFICATION_FAILED",
+    code: "INTERNAL_ERROR",
     message: "Verification could not establish a trustworthy completion result.",
     retryable: false,
     phase: "VERIFICATION",
+    details: { reasonCode: safeVerificationReasonCode(reason) },
   };
   return {
     kind: "ERROR",
@@ -854,11 +882,14 @@ function errorOutcome(reason: string): CompletionVerificationOutcome {
 async function settleInterruptedChecks(
   dependencies: CompletionVerificationContext,
   plan: VerificationPlan,
+  reasonCode = "VERIFICATION_INTERRUPTED",
 ): Promise<void> {
   const recovery = recoveryStore(dependencies);
   if (recovery === undefined) return;
+  const snapshot = await recovery.getPlanExecutionSnapshot(plan.id);
+  if (snapshot === null) return;
   const evidenceId = dependencies.evidenceIdFactory ?? createVerificationEvidenceId;
-  for (const check of plan.checks.filter((item) => item.status === "RUNNING")) {
+  for (const check of snapshot.plan.checks.filter((item) => item.status === "RUNNING")) {
     const committed = await recovery.settleCheck({
       runId: dependencies.run.id,
       sessionId: dependencies.run.sessionId,
@@ -874,13 +905,17 @@ async function settleInterruptedChecks(
           checkId: check.id,
           kind: check.spec.kind === "PROJECT" ? "COMMAND" : check.spec.kind,
           summary: "Verification was interrupted before recovery and was not replayed.",
-          details: { errorCode: "VERIFICATION_INTERRUPTED" },
+          details: { errorCode: reasonCode, classification: "INFRASTRUCTURE" },
           capturedAt: dependencies.clock.now(),
         }),
       ],
     });
-    dependencies.notifyCommitted(committed.events as readonly DurableAgentEvent[]);
+    safelyNotifyCommitted(dependencies, committed.events as readonly DurableAgentEvent[]);
   }
+}
+
+function safeVerificationReasonCode(reason: string): string {
+  return /^[A-Z][A-Z0-9_]{0,95}$/.test(reason) ? reason : "VERIFICATION_INFRASTRUCTURE_ERROR";
 }
 
 async function loadPlan(
@@ -931,6 +966,18 @@ function hasReviewerInfrastructureError(
     const errorCode = stringValue(details?.errorCode);
     return errorCode?.startsWith("REVIEWER_") === true;
   });
+}
+
+function safelyNotifyCommitted(
+  dependencies: CompletionVerificationContext,
+  events: readonly DurableAgentEvent[],
+): void {
+  try {
+    void Promise.resolve(dependencies.notifyCommitted(events)).catch(() => undefined);
+  } catch {
+    // The durable transaction already committed. Replay is authoritative; observer delivery cannot
+    // change the check result or cause the executor to run a second time.
+  }
 }
 
 function objectDetails(value: unknown): Record<string, unknown> | undefined {

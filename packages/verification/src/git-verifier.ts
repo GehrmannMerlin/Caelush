@@ -5,12 +5,14 @@ import type {
   VerificationEvidence,
   VerificationPlan,
 } from "@caelush/protocol";
+import { MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES } from "@caelush/protocol";
 import type {
   VerificationGitDiff,
   VerificationGitStatus,
   VerificationGitStatusEntry,
   VerificationGitPort,
 } from "./contracts.js";
+import { parseVerificationEvidence, serializedJsonBytes } from "./evidence.js";
 
 export interface GitReviewInput {
   readonly changedFiles: readonly FileChangeSummary[];
@@ -33,6 +35,7 @@ export interface GitReviewResult {
   readonly diffSummaries: readonly string[];
   readonly diffExcerpt: string;
   readonly diffHashes: Readonly<Record<string, string>>;
+  readonly gitFreshnessHash?: string;
   readonly noNetDiffPaths: readonly string[];
   readonly truncated: boolean;
   readonly reviewComplete: boolean;
@@ -87,7 +90,7 @@ export function reviewGitChangeset(input: GitReviewInput): GitReviewResult {
       diffExcerpt = appendBounded(diffExcerpt, `=== ${path} ===\n${diff.diff}`);
     truncated ||= diff.truncated;
   }
-  const reviewComplete =
+  const withinExistingBounds =
     changed.length <= MAX_GIT_REVIEW_PATHS &&
     entries.length <= MAX_GIT_REVIEW_PATHS &&
     !truncated &&
@@ -98,7 +101,40 @@ export function reviewGitChangeset(input: GitReviewInput): GitReviewResult {
       diffSummaries,
       diffExcerpt,
     }) <= MAX_GIT_REVIEW_EVIDENCE_BYTES;
+  const evidenceShape = {
+    ...(input.status.branch === undefined ? {} : { branch: input.status.branch }),
+    ...(input.status.detached === undefined ? {} : { detached: input.status.detached }),
+    ...(input.status.ahead === undefined ? {} : { ahead: input.status.ahead }),
+    ...(input.status.behind === undefined ? {} : { behind: input.status.behind }),
+    ...(input.status.clean === undefined ? {} : { clean: input.status.clean }),
+    statusEntryCount: entries.length,
+    attributedPaths,
+    unattributedDirtyPaths,
+    unmergedPaths: sorted(unmergedPaths),
+    diffSummaries: sorted(diffSummaries),
+    diffExcerpt,
+    diffHashes,
+    noNetDiffPaths: sorted(noNetDiffPaths),
+    truncated,
+    reviewComplete: withinExistingBounds,
+    gitFreshnessHash: "0".repeat(64),
+  };
+  const protocolWithinBounds =
+    serializedJsonBytes(evidenceShape) <= MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES;
+  const reviewComplete = withinExistingBounds && protocolWithinBounds;
   const status = unmergedPaths.length > 0 ? "FAILED" : reviewComplete ? "PASSED" : "ERROR";
+  const comparable = {
+    attributedPaths,
+    unattributedDirtyPaths,
+    unmergedPaths: sorted(unmergedPaths),
+    diffHashes,
+    noNetDiffPaths: sorted(noNetDiffPaths),
+    truncated: truncated || !protocolWithinBounds,
+    reviewComplete,
+  };
+  const gitFreshnessHash = createHash("sha256")
+    .update(JSON.stringify(comparable), "utf8")
+    .digest("hex");
   return {
     status,
     ...(input.status.branch === undefined ? {} : { branch: input.status.branch }),
@@ -114,8 +150,9 @@ export function reviewGitChangeset(input: GitReviewInput): GitReviewResult {
     diffExcerpt,
     diffHashes,
     noNetDiffPaths: sorted(noNetDiffPaths),
-    truncated,
+    truncated: truncated || !protocolWithinBounds,
     reviewComplete,
+    gitFreshnessHash,
   };
 }
 
@@ -142,21 +179,37 @@ export function createGitEvidence(input: {
     noNetDiffPaths: [...input.result.noNetDiffPaths],
     truncated: input.result.truncated,
     reviewComplete: input.result.reviewComplete,
+    ...(input.result.gitFreshnessHash === undefined
+      ? {}
+      : { gitFreshnessHash: input.result.gitFreshnessHash }),
   };
-  return {
+  const boundedDetails =
+    serializedJsonBytes(details) <= MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES
+      ? details
+      : compactGitEvidenceDetails(input.result);
+  return parseVerificationEvidence({
     id: input.id,
     planId: input.planId,
     checkId: input.checkId,
     kind: "GIT",
     summary: `Git changeset review ${input.result.status.toLowerCase()}`,
-    details,
+    details: boundedDetails,
     capturedAt: input.capturedAt,
-  };
+  });
 }
 
 export type { VerificationGitPort };
 
 function emptyResult(status: GitReviewResult["status"]): GitReviewResult {
+  const comparable = {
+    attributedPaths: [],
+    unattributedDirtyPaths: [],
+    unmergedPaths: [],
+    diffHashes: {},
+    noNetDiffPaths: [],
+    truncated: false,
+    reviewComplete: status === "SKIPPED",
+  };
   return {
     status,
     statusEntryCount: 0,
@@ -166,9 +219,52 @@ function emptyResult(status: GitReviewResult["status"]): GitReviewResult {
     diffSummaries: [],
     diffExcerpt: "",
     diffHashes: {},
+    gitFreshnessHash: createHash("sha256").update(JSON.stringify(comparable), "utf8").digest("hex"),
     noNetDiffPaths: [],
     truncated: false,
     reviewComplete: status === "SKIPPED",
+  };
+}
+
+function compactGitEvidenceDetails(result: GitReviewResult): JsonObject {
+  const abbreviated = (paths: readonly string[]) =>
+    paths
+      .slice(0, 8)
+      .map((value) =>
+        Buffer.byteLength(value, "utf8") <= 160
+          ? value
+          : value.slice(0, 96) +
+            "...[sha256:" +
+            createHash("sha256").update(value, "utf8").digest("hex") +
+            "]",
+      );
+  const hashJson = (value: unknown) =>
+    createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
+  return {
+    ...(result.branch === undefined ? {} : { branch: result.branch }),
+    ...(result.detached === undefined ? {} : { detached: result.detached }),
+    ...(result.ahead === undefined ? {} : { ahead: result.ahead }),
+    ...(result.behind === undefined ? {} : { behind: result.behind }),
+    ...(result.clean === undefined ? {} : { clean: result.clean }),
+    statusEntryCount: result.statusEntryCount,
+    attributedPathCount: result.attributedPaths.length,
+    attributedPaths: abbreviated(result.attributedPaths),
+    attributedPathsHash: hashJson(result.attributedPaths),
+    unattributedDirtyPathCount: result.unattributedDirtyPaths.length,
+    unattributedDirtyPaths: abbreviated(result.unattributedDirtyPaths),
+    unattributedDirtyPathsHash: hashJson(result.unattributedDirtyPaths),
+    unmergedPathCount: result.unmergedPaths.length,
+    unmergedPaths: abbreviated(result.unmergedPaths),
+    unmergedPathsHash: hashJson(result.unmergedPaths),
+    diffHashCount: Object.keys(result.diffHashes).length,
+    diffHashesHash: hashJson(result.diffHashes),
+    noNetDiffPathCount: result.noNetDiffPaths.length,
+    noNetDiffPaths: abbreviated(result.noNetDiffPaths),
+    noNetDiffPathsHash: hashJson(result.noNetDiffPaths),
+    gitFreshnessHash: result.gitFreshnessHash ?? hashJson({}),
+    truncated: true,
+    reviewComplete: false,
+    evidenceTruncated: true,
   };
 }
 

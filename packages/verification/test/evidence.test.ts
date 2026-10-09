@@ -1,8 +1,10 @@
 import {
+  MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES,
   createTimestampMs,
   createVerificationCheckId,
   createVerificationEvidenceId,
   createVerificationPlanId,
+  VerificationEvidenceSchema,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
@@ -10,6 +12,7 @@ import {
   createDiscoveryEvidence,
   type VerificationEvidenceSanitizer,
 } from "../src/index.js";
+import { serializedJsonBytes } from "../src/evidence.js";
 
 const sanitizer: VerificationEvidenceSanitizer = {
   redactText(value) {
@@ -70,5 +73,56 @@ describe("verification evidence normalization", () => {
       stderr: "[REDACTED] failure",
     });
     expect(JSON.stringify(evidence)).not.toContain("SECRET");
+  });
+
+  it("budgets command evidence after JSON escaping and keeps Unicode valid", () => {
+    const source = '中文😀\u0000\n"'.repeat(2_000);
+    const evidence = createCommandEvidence(
+      {
+        id: createVerificationEvidenceId(),
+        planId: createVerificationPlanId(),
+        checkId: createVerificationCheckId(),
+        capturedAt: createTimestampMs(1_700_000_000_000),
+        label: "project test",
+        candidateHash: "b".repeat(64),
+        exitCode: 0,
+        stdout: source,
+        stderr: source,
+        totalOutputBytes: Buffer.byteLength(source, "utf8") * 2,
+        omittedBytes: 0,
+      },
+      sanitizer,
+    );
+    const parsed = VerificationEvidenceSchema.parse(evidence);
+    const details = parsed.details as {
+      stdout: string;
+      stderr: string;
+      omittedBytes: number;
+      truncated: boolean;
+    };
+    expect(details.truncated).toBe(true);
+    expect(details.omittedBytes).toBeGreaterThan(0);
+    expect(source.startsWith(details.stdout)).toBe(true);
+    expect(source.startsWith(details.stderr)).toBe(true);
+    expect(Array.from(details.stdout).join("")).toBe(details.stdout);
+    expect(Array.from(details.stderr).join("")).toBe(details.stderr);
+    expect(Buffer.byteLength(JSON.stringify(parsed.details), "utf8")).toBeLessThanOrEqual(
+      MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES,
+    );
+  });
+
+  it("classifies cyclic evidence serialization as a bounded infrastructure error", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    try {
+      serializedJsonBytes(cyclic);
+      throw new Error("expected cyclic serialization to fail");
+    } catch (error) {
+      expect(error).toMatchObject({
+        name: "VerificationEvidenceEncodingError",
+        reasonCode: "VERIFICATION_EVIDENCE_ENCODING_ERROR",
+      });
+      expect((error as Error).message).not.toContain("circular");
+    }
   });
 });

@@ -941,6 +941,15 @@ describe("Phase 3E durable verification work", () => {
     expect(result.run.status).toBe("FAILED");
     expect(harness.snapshot().run.status).toBe("FAILED");
     expect(harness.eventTypes().filter((type) => type === "run.failed")).toHaveLength(1);
+    const errorEvent = harness.notifications.find((event) => event.type === "error");
+    expect(errorEvent?.payload).toMatchObject({
+      error: {
+        code: "INTERNAL_ERROR",
+        phase: "VERIFICATION",
+        details: { reasonCode: "VERIFICATION_COMPLETION_COMMIT_ERROR" },
+      },
+    });
+    expect(JSON.stringify(errorEvent?.payload)).not.toContain("completion conflict");
   });
 });
 
@@ -980,6 +989,42 @@ describe("Phase 3E task acceptance review", () => {
     expect(reviewer.bundles).toHaveLength(1);
     expect(harness.verification.started).toHaveLength(2);
     expect(harness.workspace.inspections).toBe(1);
+    const errorEvent = harness.notifications.find((event) => event.type === "error");
+    expect(errorEvent?.payload).toMatchObject({
+      error: {
+        code: "INTERNAL_ERROR",
+        phase: "VERIFICATION",
+        details: { reasonCode: "REVIEWER_INFRASTRUCTURE_ERROR" },
+      },
+    });
+    expect(JSON.stringify(errorEvent?.payload)).not.toContain("reviewer response");
+  });
+
+  it("keeps a real failed review classified as VERIFICATION_FAILED", async () => {
+    const harness = harness3e({
+      script: () => candidateTurn("done"),
+      reviewer: stubReviewer({ status: "FAILED" }),
+      repairPolicy: { maxAutoRepairs: 0, canRepair: () => false },
+    });
+
+    const failed = await harness.controller.start(harness.store.snapshot.run.id);
+    const errorEvent = harness.notifications.find((event) => event.type === "error");
+    const plan = [...harness.verification.plans.values()][0];
+    const taskCheck = plan?.checks.find((check) => check.spec.kind === "TASK");
+
+    expect(failed.run.status).toBe("FAILED");
+    expect(
+      plan === undefined || taskCheck === undefined
+        ? undefined
+        : harness.verification.check(plan.id, taskCheck.id)?.status,
+    ).toBe("FAILED");
+    expect(errorEvent?.payload).toMatchObject({
+      error: {
+        code: "VERIFICATION_FAILED",
+        phase: "VERIFICATION",
+      },
+    });
+    expect(errorEvent?.payload).not.toHaveProperty("error.details.reasonCode");
   });
 
   it("never lets a task review read its own verdict as evidence", async () => {

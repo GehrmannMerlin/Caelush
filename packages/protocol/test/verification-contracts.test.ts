@@ -1,4 +1,5 @@
 import {
+  MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES,
   createRunId,
   createStepId,
   createVerificationPlanId,
@@ -233,6 +234,17 @@ describe("Phase 11A Verification contracts", () => {
         details: { text: "汉".repeat(11_000) },
       }).success,
     ).toBe(false);
+    expect(
+      evidenceSchema.safeParse({
+        ...evidence,
+        details: { escaped: '\\"'.repeat(9_000) },
+      }).success,
+    ).toBe(false);
+    const unicodeDetails = { text: "汉".repeat(10_000) };
+    expect(Buffer.byteLength(JSON.stringify(unicodeDetails), "utf8")).toBeLessThan(
+      MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES,
+    );
+    expect(evidenceSchema.safeParse({ ...evidence, details: unicodeDetails }).success).toBe(true);
   });
 
   it("enforces check timestamp invariants for every lifecycle status", () => {

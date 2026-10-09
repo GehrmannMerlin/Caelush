@@ -317,6 +317,7 @@ export interface VerificationStageRunnerInput {
   readonly sessionId: SessionId;
   readonly plan: VerificationPlan;
   readonly store: VerificationExecutionStorePort;
+  readonly evidenceIdFactory?: () => VerificationEvidence["id"];
   readonly executors: Partial<Record<VerificationCheck["spec"]["kind"], VerificationCheckExecutor>>;
   readonly discoveryEvidence: (
     check: VerificationCheck,
@@ -325,7 +326,9 @@ export interface VerificationStageRunnerInput {
   readonly now: () => number;
   readonly signal?: AbortSignal;
   readonly retryCheckIds?: readonly VerificationCheck["id"][];
-  readonly onCommittedEvents?: (events: readonly VerificationCommittedEvent[]) => void;
+  readonly onCommittedEvents?: (
+    events: readonly VerificationCommittedEvent[],
+  ) => void | Promise<void>;
 }
 
 export interface VerificationStageRunnerResult {
@@ -358,7 +361,9 @@ export interface VerificationRunnerInput {
   readonly evidenceIdFactory: () => VerificationEvidence["id"];
   readonly pollYieldTimeMs?: number;
   readonly evidenceSanitizer: VerificationEvidenceSanitizer;
-  readonly onCommittedEvents?: (events: readonly VerificationCommittedEvent[]) => void;
+  readonly onCommittedEvents?: (
+    events: readonly VerificationCommittedEvent[],
+  ) => void | Promise<void>;
 }
 
 export interface VerificationRunnerResult {

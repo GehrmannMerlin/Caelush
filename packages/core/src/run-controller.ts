@@ -3761,10 +3761,11 @@ export class RunController {
 
     const now = this.dependencies.clock.now();
     const error: AgentError = {
-      code: "VERIFICATION_FAILED",
+      code: "INTERNAL_ERROR",
       message: "Verification could not be finalized.",
       retryable: false,
       phase: "VERIFICATION",
+      details: { reasonCode: "VERIFICATION_COMPLETION_COMMIT_ERROR" },
     };
     const failedRun = markAgentRunFailed(latest.run, now);
     const failedState = markAgentStateFailed(latest.state, error, now);
