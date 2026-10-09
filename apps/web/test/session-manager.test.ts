@@ -81,6 +81,32 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
+  it("clears the previous Run context usage when beginning a New Session draft", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const run = makeCompletedRun(makeRun({ sessionId: session.id }));
+    const usage = makeContextUsage(run, 320);
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [run]]]),
+      contextUsage: usage,
+    });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+    await waitFor(() => manager.getSnapshot().contextUsage?.runId === run.id);
+
+    manager.beginDraft();
+
+    expect(manager.getSnapshot()).toMatchObject({
+      isDraft: true,
+      selectedSession: undefined,
+      selectedSessionId: undefined,
+      contextUsage: null,
+    });
+    manager.dispose();
+  });
+
   it("offers a same-workspace continuity session without copying history or submitting", async () => {
     const oldSession = makeSession({
       defaultWorkspace: workspace,

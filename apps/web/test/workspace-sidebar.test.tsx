@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { createWorkspaceId } from "@caelush/protocol";
-import { WorkspaceSidebar } from "../src/components/workspace-sidebar.js";
+import { WorkspaceSettingsMenu, WorkspaceSidebar } from "../src/components/workspace-sidebar.js";
 
 describe("WorkspaceSidebar", () => {
   it("renders expandable Workspaces with scoped Sessions and forget wording", () => {
@@ -42,6 +42,38 @@ describe("WorkspaceSidebar", () => {
     expect(html).toContain("新建会话");
     expect(html).toContain("从 Caelush 中移除");
     expect(html).toContain("添加工作区");
+  });
+
+  it("keeps the sidebar Settings button as a menu trigger", () => {
+    const html = renderToStaticMarkup(
+      <WorkspaceSidebar
+        workspaces={[]}
+        expandedWorkspaceIds={[]}
+        sessionSummaries={{}}
+        isDraft={false}
+        canNavigate
+        onToggleWorkspace={vi.fn()}
+        onSelectWorkspace={vi.fn()}
+        onNewSession={vi.fn()}
+        onSelectSession={vi.fn()}
+        onAddWorkspace={vi.fn()}
+        onForgetWorkspace={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('aria-haspopup="menu"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("模型与配置");
+  });
+
+  it("offers only model configuration in the Settings menu", () => {
+    const html = renderToStaticMarkup(<WorkspaceSettingsMenu onSelect={vi.fn()} />);
+
+    expect(html).toContain('role="menu"');
+    expect(html).toContain('role="menuitem"');
+    expect(html).toContain("模型与配置");
+    expect(html.match(/role="menuitem"/g)).toHaveLength(1);
   });
 
   it("keeps the workspace path in a hoverable card tooltip and puts removal inside the card", () => {

@@ -10,7 +10,11 @@ import {
   type ReactElement,
 } from "react";
 import type { SessionId, WorkspaceId, WorkspaceRecord, WorkspaceRef } from "@caelush/protocol";
-import { createInitialLiveActivityState, createInitialTimelineState } from "@caelush/client";
+import {
+  canCancelRunStatus,
+  createInitialLiveActivityState,
+  createInitialTimelineState,
+} from "@caelush/client";
 import { PanelLeft } from "lucide-react";
 import {
   bootstrapWebHost,
@@ -378,6 +382,8 @@ function renderWorkspaceApp(input: {
         ? derivePromptTitle(snapshot.selectedSession.title)
         : "选择一个会话";
   const composerInteractionDisabled = shouldDisableComposerInteraction(snapshot);
+  const canCancelActiveRun =
+    snapshot.activeRun !== undefined && canCancelRunStatus(snapshot.activeRun.status);
   const hasWorkspace = selectedWorkspace !== undefined && input.sessionManager !== undefined;
   const workspaceColumnClass =
     hasWorkspace && hasScrollableSessionContent(snapshot)
@@ -500,12 +506,15 @@ function renderWorkspaceApp(input: {
                     (await input.sessionManager?.preparePermissionPreset(selection)) ?? false,
                 }),
                 submission: snapshot.submission,
+                onCancel: canCancelActiveRun
+                  ? async () => (await input.sessionManager?.cancelRun()) ?? false
+                  : undefined,
+                cancelling: snapshot.controlMode === "CANCELLING",
                 error: snapshot.error,
                 contextUsage: snapshot.contextUsage ?? null,
                 onSubmit: async (prompt) =>
                   (await input.sessionManager?.submitPrompt(prompt)) ?? false,
               }),
-              onCancel: async () => (await input.sessionManager?.cancelRun()) ?? false,
               onContinueResource: async () =>
                 (await input.sessionManager?.continueResourceGuard()) ?? false,
               onResolveApproval: async (approvalId, resolution) =>

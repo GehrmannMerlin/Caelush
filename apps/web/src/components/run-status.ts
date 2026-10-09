@@ -65,6 +65,10 @@ export function RunStatusIcon(props: {
   return createElement(Icon, {
     size: props.size ?? 16,
     strokeWidth: 2.15,
+    className:
+      props.status === "RUNNING" || props.status === "VERIFYING"
+        ? "run-status-icon--spinning"
+        : undefined,
     "aria-hidden": true,
     focusable: false,
   });

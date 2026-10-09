@@ -369,6 +369,7 @@ export class WebSessionManager {
       activeRun: undefined,
       timeline: createInitialTimelineState(),
       liveActivity: createInitialLiveActivityState(),
+      contextUsage: null,
       isDraft: true,
       composerEnabled: true,
       submission: "IDLE",

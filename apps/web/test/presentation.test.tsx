@@ -4,7 +4,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { createSessionId, createWorkspaceId, type WorkspaceRef } from "@caelush/protocol";
 import { SessionSidebar, sessionDisplayTitle } from "../src/components/session-sidebar.js";
-import { PromptComposer, shouldSubmitPrompt } from "../src/components/prompt-composer.js";
+import {
+  PromptComposer,
+  PromptSubmitButton,
+  getPromptTextareaSizing,
+  shouldSubmitPrompt,
+} from "../src/components/prompt-composer.js";
+import { RunStatusIcon } from "../src/components/run-status.js";
 import { SettingsSurface } from "../src/components/settings-surface.js";
 import { createInitialTimelineState, type SessionCandidate } from "@caelush/client";
 import type { ProviderView } from "@caelush/protocol";
@@ -46,6 +52,32 @@ describe("Web presentation", () => {
     expect(shouldSubmitPrompt({ key: "Enter", shiftKey: true })).toBe(false);
     expect(shouldSubmitPrompt({ key: "Enter", shiftKey: false, isComposing: true })).toBe(false);
     expect(shouldSubmitPrompt({ key: "Escape", shiftKey: false })).toBe(false);
+  });
+
+  it("grows the prompt textarea up to its available limit, then scrolls within it", () => {
+    expect(getPromptTextareaSizing(40, 96, 288)).toEqual({
+      height: 96,
+      overflowY: "hidden",
+    });
+    expect(getPromptTextareaSizing(168, 96, 288)).toEqual({
+      height: 168,
+      overflowY: "hidden",
+    });
+    expect(getPromptTextareaSizing(480, 96, 288)).toEqual({
+      height: 288,
+      overflowY: "auto",
+    });
+  });
+
+  it("recalculates the prompt height when the responsive viewport limit changes", () => {
+    expect(getPromptTextareaSizing(480, 80, 176)).toEqual({
+      height: 176,
+      overflowY: "auto",
+    });
+    expect(getPromptTextareaSizing(480, 80, 288)).toEqual({
+      height: 288,
+      overflowY: "auto",
+    });
   });
 
   it("renders a real-data session sidebar without product areas from later phases", () => {
@@ -176,6 +208,44 @@ describe("Web presentation", () => {
     expect(html).not.toContain("运行 →");
     expect(html).not.toContain("附件");
     expect(html).not.toContain("@引用");
+  });
+
+  it("replaces the send action with a usable stop action while a Run is active", () => {
+    const onCancel = vi.fn(async () => true);
+    const html = renderToStaticMarkup(
+      <PromptComposer
+        disabled
+        submission="ACTIVE"
+        onCancel={onCancel}
+        onSubmit={vi.fn(async () => true)}
+      />,
+    );
+
+    expect(html).toContain('aria-label="停止任务"');
+    expect(html).toContain('type="button"');
+    expect(html).not.toMatch(/aria-label="停止任务"[^>]*disabled/);
+    expect(html).toContain("lucide-pause");
+  });
+
+  it("routes the pause button click through the existing cancellation callback", () => {
+    const onCancel = vi.fn(async () => true);
+    const button = PromptSubmitButton({
+      disabled: true,
+      submission: "ACTIVE",
+      onCancel,
+    }) as unknown as { props: { onClick?: () => Promise<boolean> | void } };
+
+    void button.props.onClick?.();
+
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("animates only the in-progress Run status icons", () => {
+    const activeStatus = renderToStaticMarkup(<RunStatusIcon status="RUNNING" />);
+    const completedStatus = renderToStaticMarkup(<RunStatusIcon status="COMPLETED" />);
+
+    expect(activeStatus).toContain("run-status-icon--spinning");
+    expect(completedStatus).not.toContain("run-status-icon--spinning");
   });
 
   it("keeps the prompt editable and the model control available before a model is selected", () => {

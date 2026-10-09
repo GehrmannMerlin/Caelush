@@ -1,11 +1,6 @@
 import { createElement, type ReactElement } from "react";
 import type { ClientAgentRun } from "@caelush/protocol";
-import {
-  canCancelRunStatus,
-  type LiveActivityState,
-  type TimelineState,
-  type TranscriptEntry,
-} from "@caelush/client";
+import { type LiveActivityState, type TimelineState, type TranscriptEntry } from "@caelush/client";
 import type { ApprovalResolution, RunId } from "@caelush/protocol";
 import type { ApprovalView } from "@caelush/client";
 import type { SessionTurnPresentationResponse } from "@caelush/protocol";
@@ -32,7 +27,6 @@ export interface SessionWorkspaceProps {
   readonly controlMode?: WebControlMode | undefined;
   readonly approvals?: readonly ApprovalView[] | undefined;
   readonly recoveryRuns?: readonly RecoveryRunView[] | undefined;
-  readonly onCancel?: (() => Promise<boolean> | void) | undefined;
   readonly onContinueResource?: (() => Promise<boolean> | void) | undefined;
   readonly onResolveApproval?:
     | ((approvalId: ApprovalView["id"], resolution: ApprovalResolution) => Promise<boolean> | void)
@@ -197,73 +191,38 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
               liveActivity: props.liveActivity,
               isActive: props.activeRun !== undefined && isActiveRun(props.activeRun.status),
             }),
-      props.activeRun !== undefined &&
-        (props.onCancel !== undefined || props.onContinueResource !== undefined)
+      props.activeRun !== undefined && props.controlMode === "RESOURCE_GUARD"
         ? createElement(
             "div",
-            { className: "run-action-tray", role: "status" },
-            createElement(
-              "span",
-              { className: "run-action-label" },
-              props.controlMode === "CANCELLING"
-                ? "正在取消任务……"
-                : props.controlMode === "RESOURCE_GUARD"
-                  ? "任务需要资源决策"
-                  : "Caelush 正在执行任务……",
-            ),
-            props.controlMode === "CANCELLING"
-              ? createElement(
+            { className: "resource-guard-card", role: "alert" },
+            createElement("span", null, "检测到重复或低进展路径。"),
+            props.timeline.resourceGuard === undefined
+              ? null
+              : createElement(
+                  "div",
+                  { className: "resource-guard-details" },
+                  createElement(
+                    "span",
+                    null,
+                    `已重新规划：${props.timeline.resourceGuard.replanCount} 次`,
+                  ),
+                  createElement(
+                    "span",
+                    null,
+                    `本阶段已请求工具：${props.timeline.resourceGuard.requestedToolCalls} 次`,
+                  ),
+                ),
+            props.onContinueResource === undefined
+              ? null
+              : createElement(
                   "button",
-                  { type: "button", className: "cancel-button", disabled: true },
-                  "正在取消",
-                )
-              : props.controlMode === "RESOURCE_GUARD"
-                ? createElement(
-                    "div",
-                    { className: "resource-guard-card", role: "alert" },
-                    createElement("span", null, "检测到重复或低进展路径。"),
-                    props.timeline.resourceGuard === undefined
-                      ? null
-                      : createElement(
-                          "div",
-                          { className: "resource-guard-details" },
-                          createElement(
-                            "span",
-                            null,
-                            `已重新规划：${props.timeline.resourceGuard.replanCount} 次`,
-                          ),
-                          createElement(
-                            "span",
-                            null,
-                            `本阶段已请求工具：${props.timeline.resourceGuard.requestedToolCalls} 次`,
-                          ),
-                        ),
-                    props.onContinueResource === undefined
-                      ? null
-                      : createElement(
-                          "button",
-                          {
-                            type: "button",
-                            className: "continue-button",
-                            onClick: props.onContinueResource,
-                          },
-                          "继续任务",
-                        ),
-                    props.onCancel === undefined
-                      ? null
-                      : createElement(
-                          "button",
-                          { type: "button", className: "cancel-button", onClick: props.onCancel },
-                          "取消任务",
-                        ),
-                  )
-                : canShowCancel(props.activeRun.status)
-                  ? createElement(
-                      "button",
-                      { type: "button", className: "cancel-button", onClick: props.onCancel },
-                      "取消任务",
-                    )
-                  : null,
+                  {
+                    type: "button",
+                    className: "continue-button",
+                    onClick: props.onContinueResource,
+                  },
+                  "继续任务",
+                ),
           )
         : null,
     ),
@@ -302,10 +261,6 @@ function hasRecoveryControl(props: SessionWorkspaceProps): boolean {
     (props.controlMode === "RECOVERY_PICKER" || props.controlMode === "PENDING_RUN_CONFIRMATION") &&
     (props.recoveryRuns?.length ?? 0) > 0
   );
-}
-
-function canShowCancel(status: Parameters<typeof canCancelRunStatus>[0]): boolean {
-  return canCancelRunStatus(status);
 }
 
 function historyAuthor(kind: TranscriptEntry["kind"]): string {

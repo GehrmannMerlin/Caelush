@@ -1,4 +1,4 @@
-import { createElement, type ReactElement } from "react";
+import { createElement, useEffect, useRef, useState, type ReactElement } from "react";
 import type {
   WorkspaceId,
   WorkspaceRecord,
@@ -13,6 +13,7 @@ import {
   FolderKanban,
   FolderOpen,
   Plus,
+  SlidersHorizontal,
   Settings,
   X,
 } from "lucide-react";
@@ -38,7 +39,61 @@ export interface WorkspaceSidebarProps {
   readonly onOpenSettings?: () => void;
 }
 
+export interface WorkspaceSettingsMenuProps {
+  readonly onSelect: () => void;
+}
+
+export function WorkspaceSettingsMenu(props: WorkspaceSettingsMenuProps): ReactElement {
+  return createElement(
+    "div",
+    {
+      id: "workspace-settings-menu",
+      className: "workspace-settings-menu",
+      role: "menu",
+      "aria-label": "设置选项",
+    },
+    createElement(
+      "button",
+      {
+        type: "button",
+        className: "workspace-settings-menu-item",
+        role: "menuitem",
+        onClick: props.onSelect,
+      },
+      createElement(SlidersHorizontal, { size: 16, strokeWidth: 2, "aria-hidden": true }),
+      createElement("span", null, "模型与配置"),
+    ),
+  );
+}
+
 export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const settingsControlRef = useRef<HTMLDivElement>(null);
+  const settingsButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!settingsMenuOpen) return undefined;
+
+    const closeOnOutsidePointer = (event: PointerEvent): void => {
+      const target = event.target;
+      if (target instanceof Node && !settingsControlRef.current?.contains(target)) {
+        setSettingsMenuOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      setSettingsMenuOpen(false);
+      settingsButtonRef.current?.focus();
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [settingsMenuOpen]);
+
   return createElement(
     "aside",
     {
@@ -84,14 +139,29 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
       "div",
       { className: "workspace-sidebar-footer" },
       createElement(
-        "button",
-        {
-          type: "button",
-          className: "workspace-settings-button",
-          onClick: () => props.onOpenSettings?.(),
-        },
-        createElement(Settings, { size: 16, strokeWidth: 2.1, "aria-hidden": true }),
-        createElement("span", null, "设置"),
+        "div",
+        { className: "workspace-settings-control", ref: settingsControlRef },
+        createElement(
+          "button",
+          {
+            type: "button",
+            className: "workspace-settings-button",
+            ref: settingsButtonRef,
+            onClick: () => setSettingsMenuOpen((open) => !open),
+            "aria-haspopup": "menu",
+            "aria-expanded": settingsMenuOpen,
+          },
+          createElement(Settings, { size: 16, strokeWidth: 2.1, "aria-hidden": true }),
+          createElement("span", null, "设置"),
+        ),
+        settingsMenuOpen
+          ? createElement(WorkspaceSettingsMenu, {
+              onSelect: () => {
+                setSettingsMenuOpen(false);
+                props.onOpenSettings?.();
+              },
+            })
+          : null,
       ),
     ),
   );

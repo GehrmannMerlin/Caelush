@@ -109,7 +109,7 @@ describe("Web control presentation", () => {
     });
   });
 
-  it("shows exactly one cancel control for cancellable statuses and presents cancelling", () => {
+  it("keeps run cancellation out of the conversation footer", () => {
     for (const status of ["RUNNING", "WAITING_APPROVAL", "VERIFYING"] as const) {
       const html = renderToStaticMarkup(
         <SessionWorkspace
@@ -117,14 +117,20 @@ describe("Web control presentation", () => {
           activeRun={{ id: "run-1", status } as never}
           history={[]}
           timeline={createInitialTimelineState()}
-          onCancel={vi.fn(async () => true)}
           composer={
-            <PromptComposer disabled submission="IDLE" onSubmit={vi.fn(async () => true)} />
+            <PromptComposer
+              disabled
+              submission="ACTIVE"
+              onCancel={vi.fn(async () => true)}
+              onSubmit={vi.fn(async () => true)}
+            />
           }
         />,
       );
-      expect((html.match(/取消/g) ?? []).length).toBe(1);
-      expect(html).toContain("取消");
+      expect(html).toContain('aria-label="停止任务"');
+      expect(html).not.toContain("Caelush 正在执行任务");
+      expect(html).not.toContain("取消任务");
+      expect(html).not.toContain('class="run-action-tray"');
     }
 
     const cancellingHtml = renderToStaticMarkup(
@@ -134,18 +140,26 @@ describe("Web control presentation", () => {
         controlMode="CANCELLING"
         history={[]}
         timeline={createInitialTimelineState()}
-        onCancel={vi.fn(async () => true)}
         composer={
-          <PromptComposer disabled submission="ACTIVE" onSubmit={vi.fn(async () => true)} />
+          <PromptComposer
+            disabled
+            submission="ACTIVE"
+            cancelling
+            onCancel={vi.fn(async () => true)}
+            onSubmit={vi.fn(async () => true)}
+          />
         }
       />,
     );
-    expect(cancellingHtml).toContain("正在取消");
-    expect((cancellingHtml.match(/class="cancel-button/g) ?? []).length).toBe(1);
-    expect(cancellingHtml).toContain("disabled");
+    expect(cancellingHtml).toContain('aria-label="正在取消任务"');
+    expect(cancellingHtml).not.toContain("正在取消任务</button>");
+    expect(cancellingHtml).not.toContain('class="run-action-tray"');
+    expect(cancellingHtml).toMatch(
+      /class="prompt-submit-button prompt-submit-button--icon"[^>]*disabled/,
+    );
   });
 
-  it("keeps continue and cancel controls together for Resource Guard", () => {
+  it("keeps Resource Guard continuation available without a separate cancel control", () => {
     const onCancel = vi.fn(async () => true);
     const onContinueResource = vi.fn(async () => true);
     const html = renderToStaticMarkup(
@@ -158,14 +172,22 @@ describe("Web control presentation", () => {
           ...createInitialTimelineState(),
           resourceGuard: { reason: "NO_PROGRESS", replanCount: 2, requestedToolCalls: 17 },
         }}
-        onCancel={onCancel}
         onContinueResource={onContinueResource}
-        composer={<PromptComposer disabled submission="IDLE" onSubmit={vi.fn(async () => true)} />}
+        composer={
+          <PromptComposer
+            disabled
+            submission="ACTIVE"
+            onCancel={onCancel}
+            onSubmit={vi.fn(async () => true)}
+          />
+        }
       />,
     );
 
     expect(html).toContain("继续任务");
-    expect(html).toContain("取消任务");
+    expect(html).toContain('aria-label="停止任务"');
+    expect(html).not.toContain("取消任务");
+    expect(html).not.toContain("Caelush 正在执行任务");
     expect(html).toContain("已重新规划：2 次");
     expect(html).toContain("本阶段已请求工具：17 次");
   });

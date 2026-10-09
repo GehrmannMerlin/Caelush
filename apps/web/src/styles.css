@@ -1853,31 +1853,34 @@ body {
 }
 
 .permission-selector-confirmation {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 12px);
-  z-index: 20;
+  position: fixed;
+  z-index: 1301;
+  top: 50%;
+  right: auto;
+  bottom: auto;
+  left: 50%;
   display: grid;
-  width: min(360px, 76vw);
-  gap: 8px;
-  padding: 16px;
-  border: 1px solid #e4c987;
-  border-radius: 12px;
-  background: #fffdf7;
-  box-shadow: 0 16px 38px rgb(15 42 35 / 18%);
+  width: min(420px, calc(100vw - 32px));
+  gap: 10px;
+  padding: 20px;
+  transform: translate(-50%, -50%);
+  border: 1px solid #d4dce8;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgb(30 50 83 / 20%);
 }
 
 .permission-selector-confirmation h2 {
   margin: 0;
-  color: #6b4f15;
-  font-size: 0.92rem;
+  color: #16243c;
+  font-size: 0.96rem;
 }
 
 .permission-selector-confirmation p {
   margin: 0;
-  color: #5b5140;
-  font-size: 0.76rem;
-  line-height: 1.45;
+  color: #4b5d78;
+  font-size: 0.8rem;
+  line-height: 1.55;
 }
 
 .permission-selector-confirmation-actions {
@@ -1888,20 +1891,43 @@ body {
 }
 
 .permission-selector-confirmation-actions button {
-  min-height: 30px;
-  padding: 5px 9px;
-  border: 1px solid #caa958;
-  border-radius: 7px;
+  min-height: 34px;
+  padding: 6px 11px;
+  border: 1px solid #d4dce8;
+  border-radius: 8px;
   background: #fff;
-  color: #6b4f15;
+  color: #52627a;
   cursor: pointer;
-  font-size: 0.72rem;
+  font-size: 0.76rem;
   font-weight: 750;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
 }
 
 .permission-selector-confirmation-actions button:last-child {
-  background: #8b6416;
+  border-color: #2563eb;
+  background: #2563eb;
   color: #fff;
+}
+
+.permission-selector-confirmation-actions button:hover:not(:disabled) {
+  border-color: #b9c8dd;
+  background: #f5f8ff;
+  color: #16243c;
+}
+
+.permission-selector-confirmation-actions button:last-child:hover:not(:disabled) {
+  border-color: #1d4ed8;
+  background: #1d4ed8;
+  color: #fff;
+}
+
+.permission-selector-confirmation-actions button:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 24%);
+  outline-offset: 2px;
 }
 
 .active-run-permission {
@@ -1923,7 +1949,7 @@ body {
 
   .permission-selector-confirmation {
     right: auto;
-    left: 0;
+    left: 50%;
   }
 }
 
@@ -1932,6 +1958,11 @@ body {
   display: flex;
   margin-top: auto;
   padding: 20px 4px 0;
+}
+
+.workspace-settings-control {
+  position: relative;
+  width: 100%;
 }
 
 .workspace-settings-button {
@@ -1961,6 +1992,74 @@ body {
   background: rgb(255 255 255 / 72%);
   color: var(--web-sidebar-ink);
   outline: none;
+}
+
+.workspace-settings-menu {
+  position: absolute;
+  z-index: 12;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: grid;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid #dce5f2;
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgb(24 47 84 / 16%);
+  animation: workspace-settings-menu-enter 140ms ease-out both;
+}
+
+.workspace-settings-menu-item {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #263650;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 650;
+  text-align: left;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.workspace-settings-menu-item:hover,
+.workspace-settings-menu-item:focus-visible {
+  border-color: #dbe7fb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  outline: none;
+}
+
+.workspace-settings-menu-item svg {
+  flex: 0 0 auto;
+  color: #4775bd;
+}
+
+@keyframes workspace-settings-menu-enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-settings-menu {
+    animation: none;
+  }
 }
 
 .model-picker {
@@ -3161,10 +3260,22 @@ body {
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgb(16 35 27 / 28%);
+  background: rgb(0 0 0 / 16%);
 }
 
 .workspace-dialog {
+  --web-ink-strong: #16243c;
+  --web-ink: #293752;
+  --web-muted: #64748b;
+  --web-subtle: #8a97aa;
+  --web-line: #e6ebf2;
+  --web-line-strong: #d4dce8;
+  --web-surface: #fff;
+  --web-surface-soft: #f7faff;
+  --web-accent: var(--web-blue-600, #2563eb);
+  --web-accent-dark: #1d4ed8;
+  --web-accent-soft: #eff6ff;
+
   display: grid;
   width: min(100%, 480px);
   gap: 10px;
@@ -3172,7 +3283,7 @@ body {
   border: 1px solid var(--web-line-strong);
   border-radius: 16px;
   background: var(--web-surface);
-  box-shadow: 0 24px 70px rgb(22 50 38 / 22%);
+  box-shadow: 0 24px 70px rgb(30 50 83 / 18%);
 }
 
 .workspace-dialog h2,
@@ -3222,7 +3333,8 @@ body {
 .workspace-picker-button:hover:not(:disabled),
 .workspace-picker-button:focus-visible {
   border-color: var(--web-accent);
-  box-shadow: 0 0 0 3px rgb(23 102 78 / 12%);
+  background: #eaf1ff;
+  box-shadow: 0 0 0 3px rgb(37 99 235 / 14%);
 }
 
 .workspace-picker-button:disabled {
@@ -3245,8 +3357,12 @@ body {
 }
 
 .workspace-picker-path {
-  font-size: 0.76rem;
-  line-height: 1.45;
+  color: inherit;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1.55;
 }
 
 .workspace-dialog-error {
@@ -3267,6 +3383,16 @@ body {
   cursor: pointer;
   font-size: 0.76rem;
   font-weight: 700;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.workspace-dialog-actions button:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 24%);
+  outline-offset: 2px;
 }
 
 .workspace-dialog-cancel {
@@ -3275,10 +3401,21 @@ body {
   color: var(--web-muted);
 }
 
+.workspace-dialog-cancel:hover:not(:disabled) {
+  border-color: #b9c8dd;
+  background: var(--web-surface-soft);
+  color: var(--web-ink-strong);
+}
+
 .workspace-dialog-submit {
   border: 1px solid var(--web-accent);
   background: var(--web-accent);
   color: #fff;
+}
+
+.workspace-dialog-submit:hover:not(:disabled) {
+  border-color: #1d4ed8;
+  background: #1d4ed8;
 }
 
 .workspace-dialog-submit:disabled {
@@ -3674,38 +3811,6 @@ body {
   font-size: 0.8rem;
 }
 
-.run-action-tray {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  min-height: 48px;
-  padding: 9px 0;
-  border-top: 1px solid var(--web-line);
-}
-
-.run-action-label {
-  color: var(--web-muted);
-  font-size: 0.76rem;
-}
-
-.cancel-button {
-  min-height: 34px;
-  padding: 7px 12px;
-  border: 1px solid #d49b97;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--web-danger);
-  cursor: pointer;
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
-.cancel-button:hover:not(:disabled),
-.cancel-button:focus-visible {
-  background: var(--web-danger-soft);
-}
-
 .prompt-composer {
   padding-top: 16px;
   border-top: 0;
@@ -3937,14 +4042,12 @@ textarea:focus-visible {
   }
 
   .approval-actions,
-  .run-action-tray,
   .prompt-composer-footer {
     align-items: stretch;
     flex-direction: column;
   }
 
   .approval-action,
-  .cancel-button,
   .prompt-submit-button {
     width: 100%;
   }
@@ -4180,8 +4283,7 @@ body {
   visibility: hidden;
 }
 
-.workspace-card:hover::after,
-.workspace-card:focus-within::after {
+.workspace-card:hover::after {
   opacity: 1;
   transform: translateY(0);
   visibility: visible;
@@ -4361,6 +4463,11 @@ body {
 
 .session-status-icon svg {
   display: block;
+}
+
+.run-status-icon--spinning {
+  animation: web-spin 900ms linear infinite;
+  transform-origin: center;
 }
 
 .workspace-session-item .run-status--running,
@@ -4826,22 +4933,6 @@ body {
   border-color: var(--web-blue-600);
   background: var(--web-blue-100);
   outline: none;
-}
-
-.run-action-tray {
-  display: flex;
-  min-height: 44px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0 0 12px;
-  padding: 8px 0;
-  border-top: 1px solid var(--web-line);
-}
-
-.run-action-label {
-  color: var(--web-muted);
-  font-size: 0.74rem;
 }
 
 .prompt-composer {
@@ -5327,6 +5418,10 @@ body {
 
 .prompt-composer-footer .permission-selector-select {
   width: auto;
+  min-width: 0;
+  padding-right: 9px;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .prompt-composer-footer .model-picker {
@@ -6088,5 +6183,148 @@ body {
 
   .workspace-empty-state--no-workspace .workspace-empty-action {
     margin-top: 18px;
+  }
+}
+
+/* Keep the prompt editor and its existing controls responsive as one surface. */
+.prompt-composer {
+  container-type: inline-size;
+  display: grid;
+  width: min(calc(100% - clamp(1.25rem, 8vw, 6rem)), 54rem);
+  grid-template-columns: minmax(0, 1fr);
+  gap: clamp(0.25rem, 0.7vh, 0.5rem);
+  padding: clamp(0.25rem, 0.45vw, 0.375rem);
+  border: 1px solid var(--web-line-strong);
+  border-radius: 18px;
+  background: var(--web-surface);
+  box-shadow: 0 8px 22px rgb(36 57 92 / 5%);
+}
+
+.prompt-composer:focus-within {
+  border-color: #8eb0f3;
+  box-shadow:
+    0 0 0 3px rgb(37 99 235 / 10%),
+    0 8px 22px rgb(36 57 92 / 5%);
+}
+
+.prompt-input {
+  width: 100%;
+  min-width: 0;
+  min-height: clamp(2.75rem, 5.5dvh, 3rem);
+  max-height: max(5rem, min(42dvh, 18rem));
+  resize: none;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  overflow-wrap: anywhere;
+  padding: clamp(0.15rem, 0.3vw, 0.25rem);
+  border: 0;
+  border-radius: 11px;
+  outline: none;
+  background: transparent;
+  box-shadow: none;
+  font-size: clamp(0.9rem, 1vw, 1rem);
+  line-height: 1.55;
+}
+
+.prompt-input:focus {
+  border-color: transparent;
+  outline: none;
+  box-shadow: none;
+}
+
+.prompt-composer-footer {
+  display: flex;
+  min-width: 0;
+  min-height: 38px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: clamp(0.25rem, 1vw, 0.75rem);
+  margin: 0;
+  padding: 0;
+  pointer-events: auto;
+}
+
+.prompt-composer-context-controls {
+  min-width: 0;
+  flex: 0 1 auto;
+  gap: clamp(0.125rem, 0.5vw, 0.375rem);
+}
+
+.prompt-composer-footer > * {
+  pointer-events: auto;
+}
+
+.prompt-composer-footer .permission-selector {
+  max-width: 100%;
+}
+
+.prompt-composer-footer .permission-selector-select {
+  max-width: min(13rem, calc(100cqw - 8rem));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-composer-footer .prompt-hint {
+  display: block;
+  flex: 0 1 auto;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.prompt-composer-footer .model-picker {
+  min-width: 0;
+  max-width: min(15rem, 36cqw);
+  flex: 0 1 auto;
+}
+
+.prompt-composer-footer .model-picker-trigger {
+  width: 100%;
+  max-width: 100%;
+}
+
+.prompt-composer-footer .prompt-submit-button {
+  flex: 0 0 auto;
+}
+
+@container (max-width: 42rem) {
+  .prompt-composer-footer {
+    display: grid;
+    grid-template-areas:
+      "controls submit"
+      "model model"
+      "hint hint";
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: clamp(0.35rem, 1.5cqw, 0.65rem);
+  }
+
+  .prompt-composer-context-controls {
+    grid-area: controls;
+    max-width: 100%;
+  }
+
+  .prompt-composer-footer .permission-selector-select {
+    max-width: min(13rem, calc(100cqw - 9rem));
+  }
+
+  .prompt-composer-footer .prompt-hint {
+    grid-area: hint;
+    margin: 0;
+    white-space: normal;
+  }
+
+  .prompt-composer-footer .model-picker {
+    grid-area: model;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .prompt-composer-footer .model-picker-trigger {
+    justify-content: flex-start;
+  }
+
+  .prompt-composer-footer .prompt-submit-button {
+    grid-area: submit;
+    justify-self: end;
   }
 }
