@@ -572,4 +572,126 @@ describe("RunController failure and maxSteps boundaries", () => {
     );
     await fixture.storage.close();
   });
+
+  it("serializes cancellation at a committed Tool-result boundary without duplicating the result", async () => {
+    const toolResultCommitted = deferred<void>();
+    const releaseToolResultCommit = deferred<void>();
+    const committedMessageTypes: string[] = [];
+    const fixture = await setup({
+      complete: async () => toolTurn(),
+      execution: (storage) =>
+        new Proxy(storage.execution, {
+          get(target, property) {
+            if (property === "commit") {
+              return async (command: Parameters<RunExecutionStore["commit"]>[0]) => {
+                committedMessageTypes.push(
+                  ...command.messagesToAppend.map((entry) => entry.draft.messageType),
+                );
+                const result = await target.commit(command);
+                if (
+                  command.messagesToAppend.some(
+                    (entry) => entry.draft.messageType === "TOOL_RESULT",
+                  )
+                ) {
+                  toolResultCommitted.resolve();
+                  await releaseToolResultCommit.promise;
+                }
+                return result;
+              };
+            }
+            const value = Reflect.get(target, property, target) as unknown;
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        }),
+    });
+    await fixture.storage.runs.update({ ...fixture.run, completionContract: "NATURAL_V1" });
+
+    const waiting = await fixture.controller.start(fixture.run.id);
+    expect(waiting.status).toBe("WAITING_TOOL_RESULTS");
+    const submission = fixture.controller.submitToolResults(fixture.run.id, [
+      {
+        role: "tool",
+        toolCallId: "call_a",
+        toolName: "read_file",
+        content: "source",
+        isError: false,
+      },
+    ]);
+    await expectSignal(toolResultCommitted.promise, "Tool result commit", committedMessageTypes);
+    const cancellation = fixture.controller.cancel(fixture.run.id);
+    releaseToolResultCommit.resolve();
+    const [submitted, cancelled] = await Promise.all([submission, cancellation]);
+
+    expect(submitted.status).toBe("TERMINAL");
+    expect(cancelled.status).toBe("TERMINAL");
+    expect(fixture.providerCalls()).toBe(1);
+    expect(committedMessageTypes).toContain("TOOL_RESULT");
+    expect((await fixture.storage.runs.get(fixture.run.id))?.status).toBe("CANCELLED");
+    expect(
+      (await fixture.storage.execution.load(fixture.run.id))?.cancellationIntent,
+    ).toMatchObject({
+      cause: "USER_REQUESTED",
+    });
+    const messages = await fixture.storage.messageRecords.listByRun(fixture.run.id);
+    expect(messages.filter((message) => message.messageType === "TOOL_RESULT")).toHaveLength(1);
+    expect(await projectedRunMessages(fixture.storage, fixture.run.id)).toEqual([
+      { role: "user", content: "inspect parser" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "inspect" },
+          {
+            type: "tool-call",
+            toolCallId: "call_a",
+            toolName: "read_file",
+            input: { path: "parser.ts" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "call_a",
+        toolName: "read_file",
+        content: "source",
+        isError: false,
+      },
+    ]);
+    expect(
+      fixture.events.map((event) => event.type).filter((type) => type === "run.cancelled"),
+    ).toHaveLength(1);
+    expect(fixture.events.map((event) => event.type)).not.toContain("run.completed");
+    await fixture.storage.close();
+  });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+async function expectSignal<T>(
+  promise: Promise<T>,
+  name: string,
+  observed: readonly string[],
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timeout = setTimeout(
+          () =>
+            reject(
+              new Error(`${name} did not arrive; committed message types: ${observed.join(",")}`),
+            ),
+          1_000,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}

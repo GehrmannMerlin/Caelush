@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import type { ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelDescriptor, ModelDescriptorSourcePort } from "@caelush/ai";
-import { computeSecurityPolicyDigest, createLLMCallId, createTimestampMs } from "@caelush/protocol";
+import {
+  computeSecurityPolicyDigest,
+  createLLMCallId,
+  createTimestampMs,
+  createToolInvocationId,
+} from "@caelush/protocol";
 import {
   makeRun,
   makeSecurityPolicy,
@@ -16,7 +21,11 @@ import type { CaelushStorage } from "@caelush/storage";
 import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
 import { createReplayProtection, createInjectedReplayKeyProvider } from "@caelush/security";
 import type { AgentMessageRecordDraft, RunEventNotifierPort } from "@caelush/agent";
-import { createPrivateReplayReference } from "@caelush/agent";
+import {
+  createPrivateReplayReference,
+  createRequestedToolInvocation,
+  startToolInvocation,
+} from "@caelush/agent";
 import {
   applyToolEffectsToAgentState,
   createCodingToolSettlementExtensionDecoder,
@@ -297,11 +306,22 @@ describe("DeepSeek private native replay production trajectory", () => {
       counter: { value: 0 },
     });
 
-    const calls = Array.from({ length: 12 }, (_, index) => ({
-      id: `ic-a-call-${index + 1}`,
-      input: { path: `historical-${index + 1}.txt` },
-      rawArguments: JSON.stringify({ path: `historical-${index + 1}.txt` }),
-    }));
+    const calls = Array.from({ length: 12 }, (_, index) => {
+      const id = `ic-a-call-${index + 1}`;
+      if (index === 8) {
+        const input = {
+          cmd: "node -e \"require('node:fs').writeFileSync('possible-side-effect.txt', 'started')\"",
+        };
+        return {
+          id,
+          toolName: "exec_command" as const,
+          input,
+          rawArguments: JSON.stringify(input),
+        };
+      }
+      const input = { path: `historical-${index + 1}.txt` };
+      return { id, toolName: "read_file" as const, input, rawArguments: JSON.stringify(input) };
+    });
     const batches = [calls.slice(0, 2), calls.slice(2, 4), calls.slice(4, 8), calls.slice(8, 12)];
     const interruptedSteps = batches.map((_, index) =>
       makeStep(interruptedRun.id, {
@@ -362,7 +382,7 @@ describe("DeepSeek private native replay production trajectory", () => {
             content: batch.map((call) => ({
               type: "tool-call" as const,
               toolCallId: call.id,
-              toolName: "read_file" as const,
+              toolName: call.toolName,
               input: call.input,
             })),
           },
@@ -398,7 +418,7 @@ describe("DeepSeek private native replay production trajectory", () => {
           reasoning: { state: "PRESENT", content: reasoning },
           toolCalls: batch.map((call) => ({
             id: call.id,
-            name: "read_file",
+            name: call.toolName,
             rawArguments: call.rawArguments,
             argumentMode: "PROVIDER_JSON",
           })),
@@ -417,7 +437,7 @@ describe("DeepSeek private native replay production trajectory", () => {
               {
                 role: "tool",
                 toolCallId: call.id,
-                toolName: "read_file",
+                toolName: call.toolName,
                 content: `existing result ${calls.indexOf(call) + 1}`,
                 isError: false,
               },
@@ -441,6 +461,38 @@ describe("DeepSeek private native replay production trajectory", () => {
       stepWrites: [],
       messagesToAppend: orderedRunRecords.map((draft) => ({ draft })),
       privateReplayWrites,
+      events: [],
+    });
+    await storage.runs.update({
+      ...interruptedRun,
+      status: "RUNNING",
+      startedAt: createTimestampMs(105),
+    });
+    const uncertainCall = calls[8];
+    const uncertainStep = interruptedSteps[3];
+    if (uncertainCall === undefined || uncertainStep === undefined) {
+      throw new Error("the unknown-outcome fixture is incomplete");
+    }
+    const requestedUnknownCall = createRequestedToolInvocation({
+      id: createToolInvocationId(),
+      runId: interruptedRun.id,
+      stepId: uncertainStep.id,
+      externalCallId: uncertainCall.id,
+      toolName: uncertainCall.toolName,
+      args: uncertainCall.input,
+      riskLevel: "CRITICAL",
+      createdAt: createTimestampMs(119),
+    });
+    await storage.toolExecution.commit({
+      sessionId: session.id,
+      invocation: requestedUnknownCall,
+      expectedRevision: null,
+      events: [],
+    });
+    await storage.toolExecution.commit({
+      sessionId: session.id,
+      invocation: startToolInvocation(requestedUnknownCall, createTimestampMs(120)),
+      expectedRevision: 1,
       events: [],
     });
     await storage.runs.update({
@@ -574,15 +626,15 @@ describe("DeepSeek private native replay production trajectory", () => {
       (message) =>
         message["tool_calls"] as {
           readonly id: string;
-          readonly function: { readonly arguments: string };
+          readonly function: { readonly name: string; readonly arguments: string };
         }[],
     );
     expect(providerAssistantBatches.map((message) => message["reasoning_content"])).toEqual(
       reasoningByBatch,
     );
-    expect(providerToolCalls.map((call) => [call.id, call.function.arguments])).toEqual(
-      calls.map((call) => [call.id, call.rawArguments]),
-    );
+    expect(
+      providerToolCalls.map((call) => [call.id, call.function.name, call.function.arguments]),
+    ).toEqual(calls.map((call) => [call.id, call.toolName, call.rawArguments]));
     const providerToolResults = requestMessages.filter((message) => message.role === "tool");
     expect(providerToolResults.map((message) => message["tool_call_id"])).toEqual(
       calls.map((call) => call.id),
@@ -590,9 +642,12 @@ describe("DeepSeek private native replay production trajectory", () => {
     expect(providerToolResults.slice(0, 8).map((message) => message["content"])).toEqual(
       Array.from({ length: 8 }, (_, index) => `existing result ${index + 1}`),
     );
+    expect(providerToolResults[8]?.["content"]).toContain("final outcome is unknown");
+    expect(providerToolResults[8]?.["content"]).toContain("Inspect the current state");
+    expect(providerToolResults[8]?.["content"]).toContain("Do not blindly repeat this action");
     expect(
       providerToolResults
-        .slice(8)
+        .slice(9)
         .every((message) =>
           String(message["content"]).includes(
             "not started because the previous run was interrupted",
@@ -652,12 +707,59 @@ describe("DeepSeek private native replay production trajectory", () => {
     expect(afterReplayEnvelopes.map((row) => row?.envelope_json)).toEqual(
       originalReplayEnvelopes.map((row) => row?.envelope_json),
     );
-    expect(await storage.toolInvocations.listByRun(interruptedRun.id)).toHaveLength(0);
+    const interruptedInvocations = await storage.toolInvocations.listByRun(interruptedRun.id);
+    expect(interruptedInvocations).toHaveLength(1);
+    expect(interruptedInvocations[0]).toMatchObject({
+      status: "RUNNING",
+      externalCallId: "ic-a-call-9",
+      toolName: "exec_command",
+    });
+    expect(
+      (
+        await storage.toolExecution.findByExternalCall(
+          interruptedRun.id,
+          uncertainStep.id,
+          "ic-a-call-9",
+        )
+      )?.observation,
+    ).toBeUndefined();
     expect(
       publicEvents.some((event) =>
         reasoningByBatch.some((reasoning) => JSON.stringify(event).includes(reasoning)),
       ),
     ).toBe(false);
+
+    const isolatedSession = makeSession({
+      workspaceId: workspace.workspace.id,
+      defaultWorkspace: workspaceRef,
+    });
+    const isolatedRun = makeRun(isolatedSession.id, {
+      createdAt: createTimestampMs(400),
+      completionContract: "NATURAL_V1",
+      goal: "Only use this separate Session's history.",
+      workspace: workspaceRef,
+      model: interruptedRun.model,
+      runtime: interruptedRun.runtime,
+      permissionProfile: "FULL_ACCESS",
+      approvalPolicy: "NEVER_ASK",
+    });
+    await storage.sessions.insert(isolatedSession);
+    await storage.runs.insert(isolatedRun);
+    const isolatedUser = createUserMessageAppend(composition.messages, isolatedRun, "GOAL").draft;
+    await storage.messageRecords.append(isolatedRun.id, [isolatedUser]);
+    const isolatedSnapshot = await composition.messages.conversation.loadSnapshot({
+      sessionId: isolatedSession.id,
+      currentRunId: isolatedRun.id,
+    });
+    expect(isolatedSnapshot.turns.map((turn) => turn.runId)).toEqual([isolatedRun.id]);
+    const isolatedWire = JSON.stringify(
+      isolatedSnapshot.turns.flatMap((turn) => turn.messages.map((stored) => stored.message)),
+    );
+    expect(isolatedWire).toContain("Only use this separate Session's history.");
+    expect(isolatedWire).not.toContain("ic-a-call-");
+    expect(isolatedWire).not.toContain("existing result 1");
+    expect(isolatedWire).not.toContain("Do not blindly repeat this action");
+    expect(isolatedWire).not.toContain("Complete the interrupted Tool batch.");
   }, 60_000);
 
   it("captures, atomically stores, restarts, and replays two Tool-turn reasoning histories", async () => {

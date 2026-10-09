@@ -176,8 +176,12 @@ describe("production daemon control-plane E2E", () => {
     });
     expect(resolved.disposition).toBe("SCHEDULED");
     const completed = await waitForRun(client, run.id, "COMPLETED");
-    expect(completed.id).toBe(run.id);
-    expect(provider.calls).toBe(3);
+    expect(completed).toMatchObject({
+      id: run.id,
+      completionContract: "NATURAL_V1",
+      finalResult: { type: "NORMAL_COMPLETION", text: "The approved change is complete." },
+    });
+    expect(provider.calls).toBe(2);
     expect(provider.patchCalls).toBe(1);
     expect(await readFile(join(workspacePath, "README.md"), "utf8")).toBe("after\n");
 
@@ -188,11 +192,10 @@ describe("production daemon control-plane E2E", () => {
         "approval.requested",
         "approval.resolved",
         "file.modified",
-        "verification.planned",
-        "verification.finalized",
         "run.completed",
       ]),
     );
+    expect(eventTypes).not.toContain("verification.planned");
     expect(eventTypes.filter((type) => type === "approval.requested")).toHaveLength(1);
     expect(eventTypes.filter((type) => type === "approval.resolved")).toHaveLength(1);
   }, 20_000);
@@ -259,7 +262,7 @@ describe("production daemon control-plane E2E", () => {
     }
   }, 20_000);
 
-  it("closes and reopens SQLite, then recovers the same Run without duplicate verification", async () => {
+  it("closes and reopens SQLite, then recovers the same Run through Natural Completion once", async () => {
     const workspacePath = await makeWorkspace("caelush-recover-e2e-", "unchanged\n");
     const databasePath = join(workspacePath, "caelush.db");
     const firstProvider = new RetryProvider(true);
@@ -281,15 +284,19 @@ describe("production daemon control-plane E2E", () => {
     expect(recovered.run.id).toBe(run.id);
     expect(recovered.run.sessionId).toBe(session.id);
     const completed = await waitForRun(secondClient, run.id, "COMPLETED");
-    expect(completed.id).toBe(run.id);
+    expect(completed).toMatchObject({
+      id: run.id,
+      completionContract: "NATURAL_V1",
+      finalResult: { type: "NORMAL_COMPLETION", text: "Recovered and completed." },
+    });
     expect({ calls: secondProvider.calls, disposition: recovered.disposition }).toEqual({
-      calls: 2,
+      calls: 1,
       disposition: "SCHEDULED",
     });
 
     const events = await collectUntil(secondClient, run.id, "run.completed");
     const eventTypes = events.map((event) => event.type);
-    expect(eventTypes.filter((type) => type === "verification.planned")).toHaveLength(1);
+    expect(eventTypes.filter((type) => type === "verification.planned")).toHaveLength(0);
     expect(eventTypes.filter((type) => type === "run.completed")).toHaveLength(1);
     expect((await secondClient.getRun(run.id)).sessionId).toBe(session.id);
   }, 20_000);
