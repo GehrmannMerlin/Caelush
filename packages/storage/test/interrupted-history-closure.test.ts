@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   createEventId,
   createObservationId,
@@ -31,10 +34,24 @@ import { makeRun, makeSession, makeStep } from "./support/fixtures.js";
 const turns = createDeterministicConversationTurnIdFactory();
 const projectors = createStandardAgentMessageProjectorRegistry();
 const codecs = createStandardAgentMessageCodecRegistry((type) => projectors.currentVersion(type));
+let restartTestDirectory: string | undefined;
+let restartTestStorage: Awaited<ReturnType<typeof openCaelushStorage>> | undefined;
+
+afterEach(async () => {
+  await restartTestStorage?.close();
+  restartTestStorage = undefined;
+  if (restartTestDirectory !== undefined) {
+    await rm(restartTestDirectory, { recursive: true, force: true });
+    restartTestDirectory = undefined;
+  }
+});
 
 describe("interrupted Tool history closure", () => {
   it("atomically appends one ordered result and metadata event without reopening the Run", async () => {
-    const storage = await openCaelushStorage({ path: ":memory:" });
+    restartTestDirectory = await mkdtemp(join(tmpdir(), "caelush-interrupted-closure-"));
+    const databasePath = join(restartTestDirectory, "closure.db");
+    let storage = await openCaelushStorage({ path: databasePath });
+    restartTestStorage = storage;
     const session = makeSession();
     const run = makeRun(session.id, {
       status: "CANCELLED",
@@ -162,6 +179,10 @@ describe("interrupted Tool history closure", () => {
     };
 
     const first = await storage.execution.commitInterruptedHistoryClosure(command);
+    await storage.close();
+    restartTestStorage = undefined;
+    storage = await openCaelushStorage({ path: databasePath });
+    restartTestStorage = storage;
     const retry = await storage.execution.commitInterruptedHistoryClosure(command);
     const conflictingRetry = {
       ...command,
@@ -194,6 +215,7 @@ describe("interrupted Tool history closure", () => {
     expect(await storage.eventReader.latestSequence(run.id)).toBe(1);
     expect((await storage.runs.get(run.id))?.status).toBe("CANCELLED");
     await storage.close();
+    restartTestStorage = undefined;
   });
 
   it("rebuilds missing model feedback from the real committed Tool observation", async () => {
