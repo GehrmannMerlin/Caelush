@@ -34,9 +34,10 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { scanWorkspace } from "./scan-workspace.mjs";
+import { scanDesktopBoundary, scanWorkspace } from "./scan-workspace.mjs";
 import {
   DEPENDENCY_RULES,
+  DESKTOP_BOUNDARY_POLICY_VERSION,
   findRule,
   PHASE_1A_FINAL_COMMIT,
   PHASE_1A_RULE_SET_VERSION,
@@ -1073,6 +1074,34 @@ export async function runBoundaryCheck(options = {}) {
 
   const scan = await scanWorkspace(root);
   const evaluated = evaluateScan(scan);
+  const desktopBoundary = await scanDesktopBoundary(root);
+
+  if (desktopBoundary.violations.length > 0) {
+    const findings = desktopBoundary.violations.map(
+      (violation) =>
+        `${violation.rule}: ${violation.sourcePath}:${String(violation.line)}:${String(violation.column)} ${violation.specifier}\n  ${violation.detail}`,
+    );
+    return {
+      exitCode: 1,
+      output: [
+        "Desktop architecture boundary FAIL",
+        "",
+        `Desktop policy version: ${String(desktopBoundary.policyVersion)}`,
+        `Desktop source files scanned: ${String(desktopBoundary.sourceFileCount)}`,
+        `Desktop source imports scanned: ${String(desktopBoundary.sourceImportCount)}`,
+        "",
+        findings.join("\n\n"),
+        "",
+        "Allowed Caelush packages: @caelush/protocol, @caelush/client",
+      ].join("\n"),
+      summary: {
+        desktopBoundaryPolicyVersion: desktopBoundary.policyVersion,
+        desktopSourceFiles: desktopBoundary.sourceFileCount,
+        desktopSourceImports: desktopBoundary.sourceImportCount,
+        desktopBoundaryViolations: desktopBoundary.violations.length,
+      },
+    };
+  }
 
   const unknownRules = evaluated.violations
     .filter(
@@ -1324,6 +1353,10 @@ export async function runBoundaryCheck(options = {}) {
     unknownCaelushSpecifiers: scan.unknownCaelushSpecifiers,
     ruleSetVersion: RULE_SET_VERSION,
     ruleCount: DEPENDENCY_RULES.length,
+    desktopBoundaryPolicyVersion: DESKTOP_BOUNDARY_POLICY_VERSION,
+    desktopSourceFiles: desktopBoundary.sourceFileCount,
+    desktopSourceImports: desktopBoundary.sourceImportCount,
+    desktopBoundaryViolations: desktopBoundary.violations.length,
     ruleCountsByKind: ruleCountsByKind(),
     baselineRuleSetVersion: baselineRuleSetVersion ?? null,
     baselineSourceCommit: parsedDocument.baselineSourceCommit ?? null,
@@ -1415,6 +1448,10 @@ export function formatSummary(summary) {
   const lines = [
     `rule set version:          ${String(summary.ruleSetVersion)}`,
     `active rules:              ${String(summary.ruleCount)}`,
+    `desktop policy version:    ${String(summary.desktopBoundaryPolicyVersion ?? "not run")}`,
+    `desktop source files:      ${String(summary.desktopSourceFiles ?? "not run")}`,
+    `desktop source imports:    ${String(summary.desktopSourceImports ?? "not run")}`,
+    `desktop boundary findings: ${String(summary.desktopBoundaryViolations ?? "not run")}`,
     `workspace projects:        ${String(summary.projects)}`,
     `scanned source files:      ${String(summary.sourceFiles)}`,
     `parsed module specifiers:  ${String(summary.sourceImports)}`,

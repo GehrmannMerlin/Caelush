@@ -278,6 +278,26 @@ export const V2_FORBIDDEN_HOST_TO_TARGET = /** @type {Record<string, readonly st
 });
 
 /**
+ * Desktop is deliberately governed by a default-deny host policy rather than
+ * being added to the historical Architecture V2 dependency matrix. Its
+ * approved Caelush entry points are the JSON-safe Protocol and the shared
+ * Daemon client; future additions require a reviewed interface decision.
+ *
+ * @type {readonly string[]}
+ */
+export const DESKTOP_ALLOWED_WORKSPACE_PACKAGES = Object.freeze(["protocol", "client"]);
+
+/** Independent policy version; changing it does not rewrite the V2 debt baseline. */
+export const DESKTOP_BOUNDARY_POLICY_VERSION = 1;
+
+export const DESKTOP_BOUNDARY_RULES = Object.freeze({
+  approvedWorkspaceDependency: "DESKTOP_MUST_USE_APPROVED_WORKSPACE_PACKAGES",
+  approvedWorkspaceImport: "DESKTOP_MUST_USE_APPROVED_WORKSPACE_PACKAGES",
+  publicPackageEntry: "DESKTOP_MUST_USE_PUBLIC_PACKAGE_ENTRY_POINTS",
+  localRelativeImport: "DESKTOP_MUST_NOT_IMPORT_OTHER_PROJECTS_BY_RELATIVE_PATH",
+});
+
+/**
  * Every forbidden host -> target edge, derived from the host restriction list.
  *
  * @returns {{ from: string, to: string }[]}

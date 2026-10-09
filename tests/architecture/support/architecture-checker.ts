@@ -187,6 +187,22 @@ type ScannerImplementation = {
   isScannableSourcePath(relativeFilePath: string, scopeRoot?: string): boolean;
   extractSourceImports(filePath: string, contents: string): SourceImport[];
   scanWorkspace(root: string, options?: { includeTests?: boolean }): Promise<ScanResult>;
+  scanDesktopBoundary(root: string): Promise<DesktopBoundaryScanResult>;
+};
+
+export type DesktopBoundaryScanResult = {
+  policyVersion: number;
+  sourceFileCount: number;
+  sourceImportCount: number;
+  violations: {
+    rule: string;
+    kind: "source-import" | "package-manifest";
+    sourcePath: string;
+    specifier: string;
+    line: number;
+    column: number;
+    detail: string;
+  }[];
 };
 
 type RulesImplementation = {

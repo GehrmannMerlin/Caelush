@@ -19,7 +19,13 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
-import { CAELUSH_SCOPE, MANIFEST_DEPENDENCY_FIELDS } from "./v2-rules.mjs";
+import {
+  CAELUSH_SCOPE,
+  DESKTOP_ALLOWED_WORKSPACE_PACKAGES,
+  DESKTOP_BOUNDARY_POLICY_VERSION,
+  DESKTOP_BOUNDARY_RULES,
+  MANIFEST_DEPENDENCY_FIELDS,
+} from "./v2-rules.mjs";
 
 /** Source extensions the checker parses. */
 export const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
@@ -821,6 +827,176 @@ export async function scanWorkspace(root, options = {}) {
     testSourceImportCount: testScope.sourceImportCount,
     testPrivateImports: testScope.privateImports,
     testCrossWorkspaceRelativeImports: testScope.crossWorkspaceRelativeImports,
+  };
+}
+
+/**
+ * Scan Desktop's source and dependency declarations with the existing TypeScript
+ * AST parser, even before `apps/desktop` is a pnpm workspace project. This keeps
+ * the future host boundary active without requiring a placeholder package.json.
+ *
+ * @param {string} root absolute repository root
+ * @returns {Promise<{
+ *   policyVersion: number,
+ *   sourceFileCount: number,
+ *   sourceImportCount: number,
+ *   violations: {
+ *     rule: string,
+ *     kind: "source-import" | "package-manifest",
+ *     sourcePath: string,
+ *     specifier: string,
+ *     line: number,
+ *     column: number,
+ *     detail: string,
+ *   }[],
+ * }>}
+ */
+export async function scanDesktopBoundary(root) {
+  const repositoryRoot = path.resolve(root);
+  const desktopRoot = path.join(repositoryRoot, "apps", "desktop");
+  const sourceRoot = path.join(desktopRoot, "src");
+  const absoluteFiles = await ((await directoryExists(sourceRoot))
+    ? collectFilesRecursively(sourceRoot)
+    : Promise.resolve([]));
+  const sourceFiles = absoluteFiles
+    .map((absolutePath) => ({
+      absolutePath,
+      relativePath: path.relative(repositoryRoot, absolutePath).split(path.sep).join("/"),
+    }))
+    .filter(({ relativePath }) => isScannableSourcePath(relativePath, "src"))
+    .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+  /** @type {Awaited<ReturnType<typeof scanDesktopBoundary>>["violations"]} */
+  const violations = [];
+  const allowedExports = new Map();
+  let sourceImportCount = 0;
+
+  const readAllowedExports = async (packageIdentity) => {
+    const cached = allowedExports.get(packageIdentity);
+    if (cached !== undefined) return cached;
+    const manifestPath = path.join(repositoryRoot, "packages", packageIdentity, "package.json");
+    let declarations = [];
+    try {
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      if (manifest.exports && typeof manifest.exports === "object") {
+        declarations = Object.entries(manifest.exports).map(([subpath, target]) => ({
+          subpath,
+          target,
+        }));
+      } else if (typeof manifest.main === "string" || typeof manifest.module === "string") {
+        declarations = [{ subpath: ".", target: manifest.main ?? manifest.module }];
+      }
+    } catch {
+      // A missing approved package manifest exposes no consumable subpaths.
+    }
+    allowedExports.set(packageIdentity, declarations);
+    return declarations;
+  };
+
+  const allowedPackageNames = new Set(
+    DESKTOP_ALLOWED_WORKSPACE_PACKAGES.map((identity) => `${CAELUSH_SCOPE}${identity}`),
+  );
+
+  for (const { absolutePath, relativePath } of sourceFiles) {
+    const contents = await readFile(absolutePath, "utf8");
+    const imports = extractSourceImports(absolutePath, contents);
+    sourceImportCount += imports.length;
+    for (const entry of imports) {
+      const split = splitCaelushSpecifier(entry.specifier);
+      if (split !== undefined) {
+        if (!allowedPackageNames.has(split.packageName)) {
+          violations.push({
+            rule: DESKTOP_BOUNDARY_RULES.approvedWorkspaceImport,
+            kind: "source-import",
+            sourcePath: relativePath,
+            specifier: entry.specifier,
+            line: entry.line,
+            column: entry.column,
+            detail: `Desktop may import only ${[...allowedPackageNames].join(" and ")}.`,
+          });
+        } else if (
+          split.subpath !== "." &&
+          !exportsDeclareSubpath(
+            await readAllowedExports(split.packageName.slice(CAELUSH_SCOPE.length)),
+            split.subpath,
+          )
+        ) {
+          violations.push({
+            rule: DESKTOP_BOUNDARY_RULES.publicPackageEntry,
+            kind: "source-import",
+            sourcePath: relativePath,
+            specifier: entry.specifier,
+            line: entry.line,
+            column: entry.column,
+            detail: "Desktop imports must use a declared public package export.",
+          });
+        }
+        continue;
+      }
+
+      if (entry.specifier.startsWith(".")) {
+        const resolved = resolveRelativeSpecifier(absolutePath, entry.specifier);
+        const relativeToDesktop = path.relative(desktopRoot, resolved);
+        if (
+          relativeToDesktop === ".." ||
+          relativeToDesktop.startsWith(`..${path.sep}`) ||
+          path.isAbsolute(relativeToDesktop)
+        ) {
+          violations.push({
+            rule: DESKTOP_BOUNDARY_RULES.localRelativeImport,
+            kind: "source-import",
+            sourcePath: relativePath,
+            specifier: entry.specifier,
+            line: entry.line,
+            column: entry.column,
+            detail: "Desktop source may not reach another application or package by relative path.",
+          });
+        }
+      }
+    }
+  }
+
+  const manifestPath = path.join(desktopRoot, "package.json");
+  let manifestContents;
+  try {
+    manifestContents = await readFile(manifestPath, "utf8");
+  } catch {
+    manifestContents = undefined;
+  }
+  if (manifestContents !== undefined) {
+    const manifest = JSON.parse(manifestContents);
+    for (const field of MANIFEST_DEPENDENCY_FIELDS) {
+      const dependencies = manifest[field];
+      if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies))
+        continue;
+      for (const name of Object.keys(dependencies)) {
+        if (!name.startsWith(CAELUSH_SCOPE) || allowedPackageNames.has(name)) continue;
+        const location = locateInManifest(manifestContents, field, name);
+        violations.push({
+          rule: DESKTOP_BOUNDARY_RULES.approvedWorkspaceDependency,
+          kind: "package-manifest",
+          sourcePath: "apps/desktop/package.json",
+          specifier: name,
+          line: location.line,
+          column: location.column,
+          detail: `Desktop may declare only ${[...allowedPackageNames].join(" and ")} as Caelush dependencies.`,
+        });
+      }
+    }
+  }
+
+  violations.sort(
+    (left, right) =>
+      left.sourcePath.localeCompare(right.sourcePath) ||
+      left.line - right.line ||
+      left.column - right.column ||
+      left.rule.localeCompare(right.rule),
+  );
+
+  return {
+    policyVersion: DESKTOP_BOUNDARY_POLICY_VERSION,
+    sourceFileCount: sourceFiles.length,
+    sourceImportCount,
+    violations,
   };
 }
 
