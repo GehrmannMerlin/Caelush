@@ -30,7 +30,7 @@ flowchart TD
   Client --> Staging
   Daemon --> Staging
   Web --> Staging
-  Node["Node 24 runtime: strategy unverified"] --> Staging
+  Node["POC-selected bundled Node 24 runtime"] --> Staging
   Native["node-pty + Sandbox Runner: target-native artifacts"] --> Staging
   Staging --> Main["Planned Electron Main + Preload"]
   Main --> Installer["Planned Electron Builder + Windows x64 NSIS"]
@@ -108,14 +108,14 @@ has its own Node runtime and ABI. The presence of `node:sqlite` in one runtime
 does not prove that the Electron-bundled version, Daemon child runtime, or
 `node-pty` binary is compatible.
 
-| Concern                          | D0-B evidence                                                                                    | Status / owner                                                                                                               |
-| -------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| Daemon `node:sqlite`             | `packages/storage/src/database.ts` imports `node:sqlite`; release package declares Node 24 range | Runtime choice and migration/backup behavior under packaged host: `UNVERIFIED — D0-C`                                        |
-| `node-pty`                       | Runtime dependency `node-pty@1.1.0`, dynamically imported by PTY adapter                         | Windows x64 build artifact, ABI/N-API compatibility, spawn/close behavior: `UNVERIFIED — D0-C`                               |
-| Rust Sandbox Runner              | Existing Cargo binary and manifest/hash packaging path                                           | Windows MSVC toolchain, x64 target, clean-machine process boundary, packaged path and digest: `UNVERIFIED — D0-C`            |
-| Electron Node vs standalone Node | No Electron package or runtime bundle exists                                                     | Determine whether Daemon uses Electron's runtime or a separately bundled Node 24 executable: `UNVERIFIED — D0-C`             |
-| ASAR and native extraction       | No Electron packaging config exists                                                              | `asarUnpack`, `extraResources`, executable permissions, runtime path resolution and hash checks: D0-C POC, D6 implementation |
-| Authenticode                     | No Desktop installer exists                                                                      | Publisher verification and signed installer update path: D6/D7                                                               |
+| Concern                          | D0-C measured evidence                                                                       | Status / owner                                                                                                               |
+| -------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Daemon `node:sqlite`             | Real packaged Daemon opened SQLite; migration created 32 tables; integrity returned `ok`     | Data recovered after owned-child termination; graceful-close/reopen path remains `BLOCKED — D0-C`                            |
+| `node-pty`                       | `node-pty@1.1.0` passed Windows x64 PTY I/O/cancel/close under bundled Node 24.18.0          | Pass; the same native module loaded under Electron Node 24.21.0 in the bounded embedded-runtime probe                        |
+| Rust Sandbox Runner              | Packaged x64 PE and manifest hash verified; real workspace protocol and restricted child ran | Pass with `PARTIAL` Windows ACL enforcement; clean-host test and reproducible MSVC rebuild remain open                       |
+| Electron Node vs standalone Node | Electron 44.7.0 exposed Node 24.21.0; ESM, `node:sqlite`, and bounded PTY probe passed       | D0-C selects bundled Node 24.18.0 for Daemon; full Daemon-on-Electron-Node execution remains deferred                        |
+| ASAR and native extraction       | No Electron packaging config exists                                                          | `asarUnpack`, `extraResources`, executable permissions, runtime path resolution and hash checks: D0-C POC, D6 implementation |
+| Authenticode                     | No Desktop installer exists                                                                  | Publisher verification and signed installer update path: D6/D7                                                               |
 
 The build host must match target Windows x64 requirements for native artifacts.
 D0-C should verify the actual compiler/toolchain and ABI rather than infer them
@@ -150,3 +150,15 @@ D0-C is a technical feasibility gate, not product functionality. A failing POC
 must produce a concrete runtime/ABI decision before D3/D4/D6 implementation.
 The production resource stage, ASAR layout, NSIS installer, upgrade path,
 Authenticode release, and automatic update remain D6/D7.
+
+## D0-C POC outcome
+
+The D0-C evidence is recorded in
+[`d0-c-windows-feasibility-report.md`](d0-c-windows-feasibility-report.md).
+The selected POC runtime is the separately bundled Node 24.18.0 executable.
+The packaged fixture passed Node startup, PTY, Runner protocol/restricted-child,
+and Web/Daemon/SSE checks. D0-C remains **PARTIAL** because normal Daemon
+shutdown did not acknowledge within the bounded 20-second POC deadline and no
+clean Windows VM or Windows Sandbox was available. The database passed
+integrity and restart-recovery checks, but those facts do not turn the blocked
+graceful-shutdown gate into a pass.
