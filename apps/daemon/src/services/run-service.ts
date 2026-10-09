@@ -131,6 +131,7 @@ export class RunService {
       securityPolicy,
       permissionProfile: securityPolicy.permissionProfile,
       approvalPolicy: securityPolicy.approvalPolicy,
+      completionContract: "NATURAL_V1",
       ...(reasoningLevel === undefined ? {} : { reasoningLevel }),
       status: "PENDING",
       createdAt: this.now(),

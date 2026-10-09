@@ -26,6 +26,30 @@ export const RunStatusSchema = z.enum([
 ]);
 export type RunStatus = z.infer<typeof RunStatusSchema>;
 
+/** Explicit execution contract for Runs created after the natural-completion cutover. */
+export const RunCompletionContractSchema = z.literal("NATURAL_V1");
+export type RunCompletionContract = z.infer<typeof RunCompletionContractSchema>;
+
+/**
+ * A normal execution result. It records the exact final text and the model Step that produced it;
+ * it makes no claim that project tests or independent verification passed.
+ */
+export const NormalRunFinalResultSchema = z
+  .object({
+    type: z.literal("NORMAL_COMPLETION"),
+    text: z
+      .string()
+      .min(1)
+      .max(32_768)
+      .refine(
+        (value) => new TextEncoder().encode(value).byteLength <= 32 * 1024,
+        "normal final text exceeds its byte limit",
+      ),
+    sourceStepId: StepIdSchema,
+  })
+  .strict();
+export type NormalRunFinalResult = z.infer<typeof NormalRunFinalResultSchema>;
+
 export const AgentRunSchema = z
   .object({
     id: RunIdSchema,
@@ -47,6 +71,8 @@ export const AgentRunSchema = z
     startedAt: TimestampMsSchema.optional(),
     finishedAt: TimestampMsSchema.optional(),
     finalResult: JsonValueSchema.optional(),
+    /** Absent on historical Runs, which retain their verification completion contract. */
+    completionContract: RunCompletionContractSchema.optional(),
   })
   .strict();
 export type AgentRun = z.infer<typeof AgentRunSchema>;

@@ -293,6 +293,19 @@ describe("DefaultPublicEventProjector", () => {
     expect(projected?.payload.result).toMatchObject({ nested: { safe: "保留" } });
   });
 
+  it("projects NORMAL_COMPLETION as an execution result without verification claims", () => {
+    const result = {
+      type: "NORMAL_COMPLETION",
+      text: "已完成请求的代码修改。",
+      sourceStepId: createStepId(),
+    };
+    const projected = projector.project(makeEvent("run.completed", { result }));
+
+    expect(projected?.payload.result).toEqual(result);
+    expect(projected?.payload.result).not.toHaveProperty("verification");
+    expect(JSON.stringify(projected)).not.toContain("sealHash");
+  });
+
   it("drops legacy model Tool argument deltas and projects only safe Tool start metadata", () => {
     const rawDelta = projector.project(
       makeEvent(

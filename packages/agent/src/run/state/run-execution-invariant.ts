@@ -1,4 +1,4 @@
-import type { RunStatus } from "@caelush/protocol";
+import { NormalRunFinalResultSchema, type RunStatus } from "@caelush/protocol";
 
 import type { RunExecutionSnapshot } from "../ports/run-execution-store.js";
 import { RunExecutionInvariantError } from "../ports/run-execution-store.js";
@@ -11,9 +11,9 @@ import { RunExecutionInvariantError } from "../ports/run-execution-store.js";
  * for the status that holds it. A snapshot that disagrees with itself is a durable-record
  * corruption, so this throws rather than repairing anything.
  *
- * Deliberately absent: the coding-verification clauses. A `VerificationPlan` and a
- * `VerifiedRunFinalResult` are not general Run concepts, and a host that needs them asserts them
- * in its own compatibility layer instead of widening this contract.
+ * Completion is discriminated by the persisted result contract: `NORMAL_COMPLETION` requires a
+ * `NATURAL_V1` Run and leaves verification `NOT_RUN`; other completed results preserve the legacy
+ * verified-state requirement. This invariant never reads a VerificationPlan or completion seal.
  */
 export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): void {
   const { run, state, activeStep, continuation } = snapshot;
@@ -67,8 +67,30 @@ export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): voi
     if (run.finishedAt === undefined || run.finalResult === undefined) {
       throw new RunExecutionInvariantError("COMPLETED Run needs finishedAt and finalResult");
     }
-    if (state.status !== "COMPLETED" || state.verification !== "PASSED") {
-      throw new RunExecutionInvariantError("COMPLETED Run needs a passed AgentState");
+    if (state.status !== "COMPLETED") {
+      throw new RunExecutionInvariantError("COMPLETED Run needs a completed AgentState");
+    }
+    const resultType =
+      typeof run.finalResult === "object" &&
+      run.finalResult !== null &&
+      !Array.isArray(run.finalResult) &&
+      "type" in run.finalResult
+        ? run.finalResult.type
+        : undefined;
+    if (resultType === "NORMAL_COMPLETION") {
+      if (
+        run.completionContract !== "NATURAL_V1" ||
+        !NormalRunFinalResultSchema.safeParse(run.finalResult).success ||
+        state.verification !== "NOT_RUN"
+      ) {
+        throw new RunExecutionInvariantError(
+          "NORMAL_COMPLETION needs its explicit Run contract and an unmodified verification state",
+        );
+      }
+    } else if (run.completionContract === "NATURAL_V1" || state.verification !== "PASSED") {
+      throw new RunExecutionInvariantError(
+        "a Run without NORMAL_COMPLETION still needs its verified completion state",
+      );
     }
     if (continuation !== undefined) {
       throw new RunExecutionInvariantError("COMPLETED Run cannot retain a continuation");

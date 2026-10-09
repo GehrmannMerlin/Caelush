@@ -19,7 +19,9 @@ import type {
 import type { RunTransitionPlanInput, RunTransitionPlanner } from "./run-transition-planner.js";
 import {
   cancelAgentRun,
+  completeAgentRunNaturally,
   completeAgentRunWithFinalResult,
+  completeAgentStateNaturally,
   completeAgentState,
   failAgentRun,
   markAgentRunBudgetExceeded,
@@ -55,7 +57,7 @@ import { cancelAgentStepState, settleAgentStepState } from "./turn/step-state.js
  * SUSPEND                  no write: only an external resolution moves the Run
  * FINALIZE                 the terminal settlement for CANCELLED / TIMEOUT / MAX_STEPS_REACHED
  * AGENT TOOL_REQUESTS      settle the Step, append, open WAITING_TOOL_RESULTS
- * AGENT FINAL_CANDIDATE    NOT REPRESENTABLE HERE — see below
+ * AGENT FINAL_CANDIDATE    NATURAL_V1 completes; an unmarked legacy Run is refused for Core routing
  * AGENT FAILED (final)     fail the Step, the Run and the AgentState
  * AGENT FAILED (retryable) NOT REPRESENTABLE HERE — no retry policy in the input
  * AGENT CANCELLED          settle the Step only; the termination authority settles the Run
@@ -73,7 +75,7 @@ import { cancelAgentStepState, settleAgentStepState } from "./turn/step-state.js
  *
  * **Fail closed, never fabricate.** A branch marked "not representable" throws rather than
  * inventing the identity it is missing. The frozen input genuinely does not carry a verification
- * plan identifier, a retry schedule, a resource operation reference or verification evidence, and
+ * plan identifier for legacy Runs, a retry schedule, a resource operation reference or verification evidence, and
  * a planner that synthesised any of them would be a second authority over durable state. Those
  * bridges belong to the host layers that own the missing facts — Checkpoints 5, Phase 3D and
  * Phase 3E — and the errors below name the owner.
@@ -230,14 +232,82 @@ function planAgent(
     case "CANCELLED":
       return planAgentCancelled(snapshot, result, settledAt);
     case "FINAL_CANDIDATE":
-      throw compatibilityRequired(
-        "AGENT FINAL_CANDIDATE",
-        "the legacy completion compatibility projection (a verification plan identity) is required before a pure planner can move a Run to VERIFYING",
-        "Checkpoint 5 keeps the legacy FinalCandidate -> Verification bridge; Phase 3E replaces it with the CompletionGate",
-      );
+      return planNaturalCompletion(snapshot, result, settledAt);
     default:
       return assertNeverAgentResult(result);
   }
+}
+
+/** Atomically settle a complete model answer as a normal Run completion. */
+function planNaturalCompletion(
+  snapshot: RunExecutionSnapshot,
+  result: Extract<AgentLoopAdvanceResult, { kind: "FINAL_CANDIDATE" }>,
+  now: TimestampMs,
+): RunExecutionCommit {
+  if (snapshot.run.completionContract !== "NATURAL_V1") {
+    throw new RunExecutionInvariantError(
+      "a legacy Run final candidate must use its persisted VerificationPlan boundary",
+    );
+  }
+  const state = requireState(snapshot, "AGENT FINAL_CANDIDATE");
+  const step = requireActiveStep(snapshot, result.turn.stepId, "AGENT FINAL_CANDIDATE");
+  const decisionTurn = result.decision.modelTurn;
+  const modelTurn = result.modelTurn;
+  const candidateText = result.decision.candidateText;
+  const durableText = modelTurn.assistantMessage.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+  const decisionText = decisionTurn.assistantMessage.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+  if (
+    step.runId !== snapshot.run.id ||
+    result.turn.sequence !== step.sequence ||
+    modelTurn.model.provider !== snapshot.run.model.provider ||
+    modelTurn.model.model !== snapshot.run.model.model ||
+    modelTurn.finishReason !== "STOP" ||
+    decisionTurn.callId !== modelTurn.callId ||
+    decisionTurn.model.provider !== modelTurn.model.provider ||
+    decisionTurn.model.model !== modelTurn.model.model ||
+    decisionTurn.finishReason !== modelTurn.finishReason ||
+    decisionText !== durableText ||
+    decisionTurn.assistantMessage.content.some((part) => part.type !== "text") ||
+    modelTurn.assistantMessage.content.some((part) => part.type !== "text") ||
+    candidateText.trim().length === 0 ||
+    candidateText !== durableText
+  ) {
+    throw new RunExecutionInvariantError(
+      "final candidate identity or text does not match its completed model turn",
+    );
+  }
+
+  const finalResult = {
+    type: "NORMAL_COMPLETION" as const,
+    text: candidateText,
+    sourceStepId: step.id,
+  };
+  const settledState = settleAgentStepState(state, {
+    stepId: step.id,
+    ...(modelTurn.usage === undefined ? {} : { usage: modelTurn.usage }),
+    now,
+  });
+
+  return {
+    ...base(snapshot),
+    run: completeAgentRunNaturally(clearActiveStep(snapshot.run), finalResult, now),
+    state: completeAgentStateNaturally(settledState, now),
+    stepWrites: [
+      {
+        operation: "UPDATE",
+        step: completeAgentStep(step, { finishedAt: now }),
+      },
+    ],
+    messagesToAppend: [],
+    ...clearContinuation(snapshot),
+    events: [],
+  };
 }
 
 /** Open the durable Tool boundary the model asked for. */

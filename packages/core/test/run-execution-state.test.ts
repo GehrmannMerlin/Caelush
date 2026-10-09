@@ -156,6 +156,59 @@ describe("durable Run execution state", () => {
     ).toThrow();
   });
 
+  it("accepts NORMAL_COMPLETION only for a natural-contract Run with verification left untouched", () => {
+    const pending = run();
+    const running = {
+      ...pending,
+      completionContract: "NATURAL_V1" as const,
+      status: "RUNNING" as const,
+      startedAt: createTimestampMs(2),
+    };
+    const sourceStepId = createStepId();
+    const completedRun = AgentRunSchema.parse({
+      ...running,
+      status: "COMPLETED",
+      finishedAt: createTimestampMs(3),
+      finalResult: {
+        type: "NORMAL_COMPLETION",
+        text: "The requested change is complete.",
+        sourceStepId,
+      },
+    });
+    const startedState = startAgentState(
+      createInitialAgentState(pending, createTimestampMs(1)),
+      createTimestampMs(2),
+    );
+    const completedState = {
+      ...startedState,
+      status: "COMPLETED" as const,
+      updatedAt: createTimestampMs(3),
+      verification: "NOT_RUN" as const,
+    };
+
+    expect(() =>
+      assertRunExecutionInvariant({
+        run: completedRun,
+        state: completedState,
+        conversationRecords: [],
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertRunExecutionInvariant({
+        run: { ...completedRun, completionContract: undefined },
+        state: completedState,
+        conversationRecords: [],
+      }),
+    ).toThrow();
+    expect(() =>
+      assertRunExecutionInvariant({
+        run: completedRun,
+        state: { ...completedState, verification: "PASSED" },
+        conversationRecords: [],
+      }),
+    ).toThrow();
+  });
+
   it("requires an approval pointer and forbids accepted results at the approval boundary", () => {
     const pending = run();
     const waitingRun = {

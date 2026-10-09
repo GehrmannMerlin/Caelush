@@ -1,5 +1,14 @@
-import type { AIModelRequest, AIModelTurnResult, JsonObject } from "@caelush/ai";
-import type { AgentTurnRef, ModelTurnExecutionResult } from "@caelush/agent";
+import type {
+  AIModelRequest,
+  AIModelTurnResult,
+  AIPrivateCompletion,
+  JsonObject,
+} from "@caelush/ai";
+import type {
+  AgentTurnRef,
+  ModelTurnExecutionResult,
+  PrivateReplayStorePort,
+} from "@caelush/agent";
 import { createModelToolFeedbackProjector, createToolResultBatchNormalizer } from "@caelush/agent";
 import { toContextObservationProjection } from "../src/agent-tool-batch.js";
 import { createUserMessageAppend } from "../src/run-message-materializer.js";
@@ -99,6 +108,7 @@ function makeRun(overrides: Record<string, unknown> = {}) {
       policyDigest: computeSecurityPolicyDigest(securityPolicy),
     },
     limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 100_000 },
+    completionContract: "NATURAL_V1",
     createdAt: createTimestampMs(1),
     ...overrides,
   });
@@ -312,7 +322,9 @@ function harness(options: {
  * model is still only `toolCallId`, `toolName`, `content` and `isError` — the invocation id and the
  * observation id stay in the Tool Layer.
  */
-function toolCoordinatorFixture(): {
+function toolCoordinatorFixture(
+  options: { readonly content?: string; readonly isError?: boolean } = {},
+): {
   execute(request: {
     readonly calls: readonly {
       readonly externalCallId: string;
@@ -336,8 +348,8 @@ function toolCoordinatorFixture(): {
             stepId: "stp_0195f3a0-0000-7000-8000-000000000001",
             kind: "TOOL",
             toolInvocationId: `tiv_0195f3a0-0000-7000-8000-${String(index + 1).padStart(12, "0")}`,
-            content: "the file body",
-            isError: false,
+            content: options.content ?? "the file body",
+            isError: options.isError ?? false,
             createdAt: 1,
           },
         })),
@@ -369,11 +381,11 @@ const eventTypes = (commit: RunExecutionCommit | undefined): readonly string[] =
   (commit?.events ?? []).map((event) => event.type);
 
 /** A provider script that asks for one Tool on its first turn and answers on the next. */
-function toolThenAnswer(): FakeFrozenModelTurnExecutor {
+function toolThenAnswer(answer = "done"): FakeFrozenModelTurnExecutor {
   let calls = 0;
   return fakeFrozenModelTurnExecutor(async () => {
     calls += 1;
-    if (calls > 1) return turn({ text: "done" });
+    if (calls > 1) return turn({ text: answer });
     return {
       kind: "COMPLETED",
       result: turn({
@@ -491,7 +503,7 @@ describe("production ADVANCE_AGENT settlement", () => {
     await running;
 
     expect(h.notifications.map((event) => event.type)).not.toContain("retry.scheduled");
-    expect(h.store.snapshot.run.status).toBe("FAILED");
+    expect(h.store.snapshot.run.status).toBe("COMPLETED");
     expect(h.store.snapshot.continuation).toBeUndefined();
   });
 
@@ -544,49 +556,167 @@ describe("production ADVANCE_AGENT settlement", () => {
     const types = h.notifications.map((event) => event.type);
     expect(types.filter((type) => type === "llm.started")).toHaveLength(2);
     expect(types.filter((type) => type === "llm.completed")).toHaveLength(2);
-    // The second turn's answer is bound to a real plan, then the missing verification store fails it.
-    expect(result.status).toBe("FAILED");
-    expect(h.store.snapshot.run.status).toBe("FAILED");
-    expect(types).toContain("verification.planned");
-    expect(types).not.toContain("run.completed");
-    expect(types).toContain("run.failed");
+    // The final candidate settles directly under the Run's persisted natural-completion contract.
+    expect(result.status).toBe("TERMINAL");
+    expect(h.store.snapshot.run.status).toBe("COMPLETED");
+    expect(h.store.snapshot.run.finalResult).toMatchObject({
+      type: "NORMAL_COMPLETION",
+      text: "done",
+      sourceStepId: h.allocatedSteps[1],
+    });
+    expect(h.store.snapshot.state?.verification).toBe("NOT_RUN");
+    expect(types).not.toContain("verification.planned");
+    expect(types).toContain("run.completed");
+    expect(types).not.toContain("run.failed");
   });
 
-  it("fails FINAL_CANDIDATE when verification execution is not composed", async () => {
-    const h = harness({ executor: fakeFrozenModelTurnExecutor(async () => turn()) });
+  it("completes execution while preserving a real failed Tool observation in the answer history", async () => {
+    const finalText = "pytest exited with code 1; the remaining failure is documented below.";
+    const h = harness({
+      executor: toolThenAnswer(finalText),
+      extra: {
+        toolTurn: {
+          batches: toolCoordinatorFixture({ content: "pytest: 1 failed", isError: true }),
+          feedback: createModelToolFeedbackProjector({
+            projection: toContextObservationProjection(),
+          }),
+          normalizer: createToolResultBatchNormalizer(),
+        },
+      },
+    });
+
+    const result = await h.controller.start(h.store.snapshot.run.id);
+    const toolResult = h.store.snapshot.conversationRecords.find(
+      (record) => record.messageType === "TOOL_RESULT",
+    );
+
+    expect(result.status).toBe("TERMINAL");
+    expect(h.store.snapshot.run.status).toBe("COMPLETED");
+    expect(h.store.snapshot.run.finalResult).toMatchObject({
+      type: "NORMAL_COMPLETION",
+      text: finalText,
+    });
+    expect(h.store.snapshot.state?.verification).toBe("NOT_RUN");
+    expect(toolResult?.data.projectedContent).toBe("pytest: 1 failed");
+    expect(toolResult?.data.isError).toBe(true);
+    expect(JSON.stringify(h.store.snapshot.run.finalResult)).not.toContain("PASSED");
+  });
+
+  it("naturally completes without consulting the default Verification planner", async () => {
+    let plannerCalls = 0;
+    const h = harness({
+      executor: fakeFrozenModelTurnExecutor(async () => turn()),
+      extra: {
+        verificationPlanner: {
+          plan() {
+            plannerCalls += 1;
+            throw new Error("new Run should not plan forced verification");
+          },
+        },
+      },
+    });
 
     const result = await h.controller.start(h.store.snapshot.run.id);
 
-    expect(result.status).toBe("FAILED");
-    expect(h.store.snapshot.run.status).toBe("FAILED");
-    expect(h.store.snapshot.run.finalResult).toBeUndefined();
-    // The candidate's Step settled exactly once, with the candidate text bound to a real plan.
+    expect(result.status).toBe("TERMINAL");
+    expect(h.store.snapshot.run.status).toBe("COMPLETED");
+    expect(h.store.snapshot.run.finalResult).toMatchObject({
+      type: "NORMAL_COMPLETION",
+      text: "candidate",
+      sourceStepId: h.allocatedSteps[0],
+    });
+    expect(plannerCalls).toBe(0);
+    // The final candidate's Step and Assistant message settle in one normal execution commit.
     expect(h.store.steps.get(h.allocatedSteps[0]!)).toMatchObject({ status: "COMPLETED" });
     expect(h.store.snapshot.state?.usage.steps).toBe(1);
-    const boundary = h.store.commits.find(
-      (commit) =>
-        commit.continuation?.operation === "SET" &&
-        commit.continuation.checkpoint.type === "AWAITING_VERIFICATION",
-    );
-    const continuation =
-      boundary?.continuation?.operation === "SET" ? boundary.continuation.checkpoint : undefined;
-    expect(continuation?.type).toBe("AWAITING_VERIFICATION");
     expect(
-      continuation?.type === "AWAITING_VERIFICATION" ? continuation.sourceStepId : undefined,
-    ).toBe(h.allocatedSteps[0]);
-    expect(
-      continuation?.type === "AWAITING_VERIFICATION"
-        ? continuation.finalDecision.candidateText
-        : undefined,
-    ).toBe("candidate");
+      h.store.snapshot.conversationRecords.filter((record) => record.messageType === "ASSISTANT"),
+    ).toHaveLength(1);
+    expect(h.store.snapshot.continuation).toBeUndefined();
     const types = h.notifications.map((event) => event.type);
-    expect(types).toContain("verification.planned");
-    expect(types).toContain("status.changed");
-    // Completion authority owns the outcome; a missing verifier fails, and never bypasses authority.
-    expect(types).not.toContain("run.completed");
-    expect(types).toContain("run.failed");
+    expect(types).not.toContain("verification.planned");
+    expect(types).not.toContain("verification.finalized");
+    expect(types).toContain("run.completed");
+    const messageIndex = types.indexOf("conversation.message.committed");
+    const statusIndex = types.lastIndexOf("status.changed");
+    const completedIndex = types.indexOf("run.completed");
+    expect(messageIndex).toBeLessThan(statusIndex);
+    expect(statusIndex).toBeLessThan(completedIndex);
     expect(types.filter((type) => type === "llm.completed")).toHaveLength(1);
     expect(types.filter((type) => type === "reasoning.summary")).toHaveLength(1);
+  });
+
+  it("commits final-answer replay state with the natural completion message", async () => {
+    const executor = fakeFrozenModelTurnExecutor(async () => turn({ text: "replay-safe answer" }));
+    const baseExecution = testRunAgentExecution({ executor }).factory;
+    const execution: RunAgentExecutionContextFactory = {
+      async resolve(run) {
+        const resolved = await baseExecution.resolve(run);
+        return {
+          ...resolved,
+          modelTurnExecutor: {
+            async execute(input) {
+              const outcome = await resolved.modelTurnExecutor.execute(input);
+              if (outcome.kind === "COMPLETED") {
+                const modelTurn = outcome.result;
+                const completion: AIPrivateCompletion = {
+                  callId: modelTurn.callId,
+                  providerId: modelTurn.model.provider,
+                  model: modelTurn.model,
+                  api: modelTurn.resolution.api,
+                  completeness: "COMPLETE",
+                  payload: Buffer.from("private replay for final answer"),
+                };
+                input.privateCompletionSink?.(completion);
+              }
+              return outcome;
+            },
+          },
+        };
+      },
+    };
+    const prepared: { readonly runId: string; readonly content: string }[] = [];
+    const privateReplayStore: PrivateReplayStorePort = {
+      async prepare(identity, content) {
+        prepared.push({ runId: identity.runId, content: Buffer.from(content).toString("utf8") });
+        return {
+          identity,
+          envelope: {
+            version: 1,
+            keyId: "fixture",
+            nonce: "fixture-nonce",
+            tag: "fixture-tag",
+            ciphertext: "fixture-ciphertext",
+            contentMac: "fixture-mac",
+          },
+        };
+      },
+      forExecution() {
+        return {
+          async read() {
+            throw new Error("unused");
+          },
+        };
+      },
+    };
+    const h = harness({
+      executor,
+      extra: { agentExecution: execution, privateReplayStore },
+    });
+
+    await h.controller.start(h.store.snapshot.run.id);
+
+    const finalCommit = h.store.commits.at(-1);
+    expect(h.store.snapshot.run.finalResult).toMatchObject({ type: "NORMAL_COMPLETION" });
+    expect(prepared).toHaveLength(1);
+    expect(prepared[0]?.runId).toBe(h.store.snapshot.run.id);
+    expect(prepared[0]?.content).toBe("private replay for final answer");
+    expect(finalCommit?.messagesToAppend).toHaveLength(1);
+    expect(finalCommit?.messagesToAppend[0]?.draft.data).toMatchObject({
+      phase: "FINAL_ANSWER",
+      providerState: { payload: { kind: "caelush.private-replay.v1" } },
+    });
+    expect(finalCommit?.privateReplayWrites).toHaveLength(1);
   });
 
   it("drives one Reason through the driver and the frozen loop, and never through the legacy facade", async () => {
@@ -912,7 +1042,8 @@ describe("production ADVANCE_AGENT settlement", () => {
 
     expect(recovered.status).not.toBe("WAITING_RETRY");
     expect(call.transportIds).toEqual(["default", "backup"]);
-    expect(recovered.status).toBe("FAILED");
+    expect(recovered.status).toBe("TERMINAL");
+    expect(h.store.snapshot.run.status).toBe("COMPLETED");
     expect(h.store.snapshot.continuation).toBeUndefined();
   });
 

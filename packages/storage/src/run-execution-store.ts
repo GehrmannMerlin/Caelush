@@ -20,6 +20,7 @@ import {
   CurrentAgentRunSchema,
   AgentStateSchema,
   AgentStepSchema,
+  NormalRunFinalResultSchema,
   VerificationPlanSchema,
   VerifiedRunFinalResultSchema,
   type AgentState,
@@ -115,6 +116,108 @@ function recordFromDraft(
     audience: draft.audience,
     data: draft.data,
   };
+}
+
+/** Refuse a NORMAL_COMPLETION unless its result, final message, Step and events agree. */
+function assertNormalCompletionCommit(command: RunExecutionCommitView) {
+  const raw = command.run.finalResult;
+  if (
+    typeof raw !== "object" ||
+    raw === null ||
+    Array.isArray(raw) ||
+    raw.type !== "NORMAL_COMPLETION"
+  ) {
+    return undefined;
+  }
+  const result = NormalRunFinalResultSchema.parse(raw);
+  if (
+    command.run.completionContract !== "NATURAL_V1" ||
+    command.run.status !== "COMPLETED" ||
+    command.run.currentStepId !== undefined ||
+    command.state?.status !== "COMPLETED" ||
+    command.state.verification !== "NOT_RUN" ||
+    command.continuation?.operation === "SET"
+  ) {
+    throw new RunExecutionInvariantError("NORMAL_COMPLETION commit is missing its canonical state");
+  }
+
+  const settledSteps = command.stepWrites.filter(
+    (write) => write.step.id === result.sourceStepId && write.step.runId === command.run.id,
+  );
+  if (settledSteps.length !== 1 || settledSteps[0]?.step.status !== "COMPLETED") {
+    throw new RunExecutionInvariantError(
+      "NORMAL_COMPLETION source Step must settle in the same Run transaction",
+    );
+  }
+
+  const finalMessages = command.messagesToAppend
+    .map(({ draft }) => draft)
+    .filter((draft) => draft.messageType === "ASSISTANT" && draft.data.phase === "FINAL_ANSWER");
+  if (
+    command.messagesToAppend.length !== 1 ||
+    finalMessages.length !== 1 ||
+    finalMessages[0]?.sourceStepId !== result.sourceStepId
+  ) {
+    throw new RunExecutionInvariantError(
+      "NORMAL_COMPLETION must append exactly one final Assistant message from its source Step",
+    );
+  }
+
+  const content = finalMessages[0]!.data.content;
+  if (!Array.isArray(content) || content.length === 0) {
+    throw new RunExecutionInvariantError("NORMAL_COMPLETION final Assistant text is missing");
+  }
+  let finalText = "";
+  for (const part of content) {
+    if (typeof part !== "object" || part === null || Array.isArray(part)) {
+      throw new RunExecutionInvariantError("NORMAL_COMPLETION final Assistant content is invalid");
+    }
+    const candidate = part as Record<string, unknown>;
+    if (candidate.type !== "TEXT" || typeof candidate.text !== "string") {
+      throw new RunExecutionInvariantError(
+        "NORMAL_COMPLETION final Assistant content must contain only text",
+      );
+    }
+    finalText += candidate.text;
+  }
+  if (finalText !== result.text) {
+    throw new RunExecutionInvariantError(
+      "NORMAL_COMPLETION text must match its durable final Assistant message",
+    );
+  }
+
+  const messageId = finalMessages[0]!.messageId;
+  const messageEventIndices = command.events.flatMap((event, index) =>
+    event.type === "conversation.message.committed" && event.payload.messageId === messageId
+      ? [index]
+      : [],
+  );
+  const statusEventIndices = command.events.flatMap((event, index) =>
+    event.type === "status.changed" &&
+    event.payload.from === "RUNNING" &&
+    event.payload.to === "COMPLETED"
+      ? [index]
+      : [],
+  );
+  const completedEventIndices = command.events.flatMap((event, index) =>
+    event.type === "run.completed" && isDeepStrictEqual(event.payload.result, result)
+      ? [index]
+      : [],
+  );
+  if (
+    messageEventIndices.length !== 1 ||
+    statusEventIndices.length !== 1 ||
+    completedEventIndices.length !== 1 ||
+    !(
+      messageEventIndices[0]! < statusEventIndices[0]! &&
+      statusEventIndices[0]! < completedEventIndices[0]!
+    )
+  ) {
+    throw new RunExecutionInvariantError(
+      "NORMAL_COMPLETION message and terminal events must describe the same ordered commit",
+    );
+  }
+  return result;
 }
 
 function writeRun(client: CaelushDatabase["client"], run: RunExecutionCommitView["run"]): void {
@@ -262,6 +365,7 @@ export class SqliteRunExecutionStore
   }
 
   async commit(command: RunExecutionCommitView): Promise<RunExecutionCommitResult> {
+    const normalFinalResult = assertNormalCompletionCommit(command);
     const privateReplayWrites = await this.privateReplay.validateWrites(
       command.privateReplayWrites ?? [],
     );
@@ -326,6 +430,31 @@ export class SqliteRunExecutionStore
     const client = this.database.client;
     client.exec("BEGIN IMMEDIATE");
     try {
+      if (normalFinalResult !== undefined) {
+        // Re-read after acquiring SQLite's write lock. Cancellation committed first wins; otherwise
+        // this is the one terminal writer for the persisted natural-completion boundary.
+        const current = await this.load(command.run.id);
+        if (
+          current === null ||
+          current.run.status !== "RUNNING" ||
+          current.run.completionContract !== "NATURAL_V1" ||
+          current.run.sessionId !== command.run.sessionId ||
+          current.run.workspace.id !== command.run.workspace.id ||
+          current.run.workspace.path !== command.run.workspace.path ||
+          current.cancellationIntent !== undefined ||
+          current.activeStep?.id !== normalFinalResult.sourceStepId ||
+          (current.continuation !== undefined &&
+            (command.continuation?.operation !== "CLEAR" ||
+              current.continuation.type !== "WAITING_TOOL_RESULTS" ||
+              current.continuation.waitingApproval !== undefined ||
+              current.continuation.receivedResults === undefined)) ||
+          current.conversationRecords.some(
+            (record) => record.messageType === "ASSISTANT" && record.data.phase === "FINAL_ANSWER",
+          )
+        ) {
+          throw new RunExecutionConflictError("natural completion boundary is stale");
+        }
+      }
       writeRun(client, command.run);
       if (command.state !== undefined)
         writeStateSnapshot(
@@ -408,6 +537,7 @@ export class SqliteRunExecutionStore
       const durablePlan = loadVerificationPlanInTransaction(client, command.verificationPlan.id);
       if (
         current.run.status !== "VERIFYING" ||
+        current.run.completionContract === "NATURAL_V1" ||
         current.continuation?.type !== "AWAITING_VERIFICATION" ||
         current.continuation.verificationPlanId !== command.verificationPlan.id ||
         current.cancellationIntent !== undefined ||
@@ -481,9 +611,13 @@ export class SqliteRunExecutionStore
     );
     const plan = VerificationPlanSchema.parse(command.verificationPlan);
     const parsedRun = CurrentAgentRunSchema.parse(command.run);
-    if (parsedRun.status !== "VERIFYING" || command.state.status !== "VERIFYING") {
+    if (
+      parsedRun.status !== "VERIFYING" ||
+      command.state.status !== "VERIFYING" ||
+      parsedRun.completionContract === "NATURAL_V1"
+    ) {
       throw new RunExecutionInvariantError(
-        "a candidate boundary must settle Run and State to VERIFYING",
+        "a legacy candidate boundary must settle an unmarked Run and State to VERIFYING",
       );
     }
     if (

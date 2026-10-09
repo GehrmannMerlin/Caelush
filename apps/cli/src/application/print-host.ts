@@ -1,5 +1,5 @@
 import type { PublicRunEvent, ClientAgentRun, RunId, RunStatus } from "@caelush/protocol";
-import { VerifiedRunFinalResultSchema } from "@caelush/protocol";
+import { NormalRunFinalResultSchema, VerifiedRunFinalResultSchema } from "@caelush/protocol";
 import {
   CliConversationController,
   MAX_CLI_PROMPT_BYTES,
@@ -247,15 +247,21 @@ function toPrintResult(
   run: ClientAgentRun,
   cancelledByUser: boolean,
 ): PrintResult {
-  const finalResult = VerifiedRunFinalResultSchema.safeParse(run.finalResult);
-  if (run.status === "COMPLETED" && finalResult.success) {
+  const normalResult = NormalRunFinalResultSchema.safeParse(run.finalResult);
+  const verifiedResult = VerifiedRunFinalResultSchema.safeParse(run.finalResult);
+  const finalText = normalResult.success
+    ? normalResult.data.text
+    : verifiedResult.success
+      ? verifiedResult.data.text
+      : undefined;
+  if (run.status === "COMPLETED" && finalText !== undefined) {
     return {
       version,
       sessionId: run.sessionId,
       runId: run.id,
       status: run.status,
       success: true,
-      finalText: finalResult.data.text,
+      finalText,
     };
   }
   if (run.status === "WAITING_APPROVAL") {

@@ -38,6 +38,7 @@ export const RUN_STATUS_TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
     "WAITING_APPROVAL",
     "WAITING_RESOURCE",
     "VERIFYING",
+    "COMPLETED",
     "FAILED",
     "CANCELLED",
     "TIMEOUT",

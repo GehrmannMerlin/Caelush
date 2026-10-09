@@ -130,9 +130,9 @@ export interface RunRepairContextInput {
 /**
  * One host's completion subsystem, behind three questions.
  *
- * A host that composes none of it gets `undefined` from the resolver and the Run Layer behaves exactly
- * as it did: an Agent effect that cannot evaluate completion waits on its durable boundary, and a
- * candidate that cannot be planned fails loudly rather than completing unverified.
+ * A historical unmarked Run that composes none of it gets `undefined` from the resolver and remains
+ * on its durable verification boundary. New `NATURAL_V1` Runs settle final candidates through the
+ * canonical execution planner and do not open this assembly.
  */
 export interface RunCompletionAssembly {
   /** The gate identity every decision from this assembly is attributed to. */

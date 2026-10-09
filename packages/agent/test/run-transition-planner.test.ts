@@ -565,28 +565,106 @@ describe("planner refuses transitions the frozen input cannot express", () => {
     candidate: { type: "FINAL_CANDIDATE", modelTurn: MODEL_TURN, candidateText: "reading" },
   });
 
-  it("refuses AGENT FINAL_CANDIDATE rather than fabricating a verification plan id", () => {
+  it("settles a final candidate as a normal completion without changing verification to PASSED", () => {
+    const finalModelTurn = {
+      ...MODEL_TURN,
+      finishReason: "STOP" as const,
+      assistantMessage: {
+        role: "assistant" as const,
+        content: [{ type: "text" as const, text: "reading" }],
+      },
+    };
     const result: AgentLoopAdvanceResult = {
       kind: "FINAL_CANDIDATE",
       turn: { stepId: STEP_ID, sequence: 2 },
-      modelTurn: { ...MODEL_TURN, finishReason: "STOP" },
+      modelTurn: finalModelTurn,
       messagesToAppend: [ASSISTANT_APPEND],
       context: { report: {} as never, observationPolicy: OBSERVATION_POLICY, recovery: "NONE" },
       decision: {
         type: "FINAL_CANDIDATE",
-        modelTurn: { ...MODEL_TURN, finishReason: "STOP" },
+        modelTurn: finalModelTurn,
         candidateText: "reading",
       },
     };
 
-    const run = () =>
-      plan(activeStepSnapshot(), agentDirective("INITIAL"), { kind: "AGENT", result });
+    const commit = plan(
+      activeStepSnapshot({
+        run: makeRun({ completionContract: "NATURAL_V1", currentStepId: STEP_ID }),
+      }),
+      agentDirective("INITIAL"),
+      {
+        kind: "AGENT",
+        result,
+      },
+    );
 
-    expect(run).toThrow(RunExecutionInvariantError);
-    // The refusal names the gap and the owner, and produces no commit at all.
-    expect(run).toThrow(/verification plan identity/);
-    expect(run).toThrow(/Checkpoint 5/);
-    expect(run).toThrow(/CompletionGate/);
+    expect(commit.run.status).toBe("COMPLETED");
+    expect(commit.run.finalResult).toEqual({
+      type: "NORMAL_COMPLETION",
+      text: "reading",
+      sourceStepId: STEP_ID,
+    });
+    expect(commit.state?.status).toBe("COMPLETED");
+    expect(commit.state?.verification).toBe("NOT_RUN");
+    expect(commit.stepWrites).toHaveLength(1);
+    expect(commit.stepWrites[0]?.step.status).toBe("COMPLETED");
+    expect(commit.continuation).toBeUndefined();
+  });
+
+  it("refuses a final candidate with a mismatched Step or unfinished Tool-call turn", () => {
+    const finalModelTurn = {
+      ...MODEL_TURN,
+      finishReason: "STOP" as const,
+      assistantMessage: {
+        role: "assistant" as const,
+        content: [{ type: "text" as const, text: "reading" }],
+      },
+    };
+    const candidate = (
+      overrides: {
+        readonly sequence?: number;
+        readonly finishReason?: "STOP" | "TOOL_CALLS";
+      } = {},
+    ): AgentLoopAdvanceResult => {
+      const modelTurn = {
+        ...finalModelTurn,
+        ...(overrides.finishReason === undefined ? {} : { finishReason: overrides.finishReason }),
+      };
+      return {
+        kind: "FINAL_CANDIDATE",
+        turn: { stepId: STEP_ID, sequence: overrides.sequence ?? 2 },
+        modelTurn,
+        messagesToAppend: [ASSISTANT_APPEND],
+        context: { report: {} as never, observationPolicy: OBSERVATION_POLICY, recovery: "NONE" },
+        decision: { type: "FINAL_CANDIDATE", modelTurn, candidateText: "reading" },
+      };
+    };
+    const snapshot = activeStepSnapshot({
+      run: makeRun({ completionContract: "NATURAL_V1", currentStepId: STEP_ID }),
+    });
+
+    expect(() =>
+      plan(snapshot, agentDirective("INITIAL"), {
+        kind: "AGENT",
+        result: candidate({ sequence: 3 }),
+      }),
+    ).toThrow(RunExecutionInvariantError);
+    expect(() =>
+      plan(snapshot, agentDirective("INITIAL"), {
+        kind: "AGENT",
+        result: candidate({ finishReason: "TOOL_CALLS" }),
+      }),
+    ).toThrow(RunExecutionInvariantError);
+    expect(() =>
+      plan(
+        {
+          ...snapshot,
+          state: { ...snapshot.state!, verification: "PASSED" },
+        },
+        agentDirective("INITIAL"),
+        { kind: "AGENT", result: candidate() },
+      ),
+    ).toThrow();
   });
 
   it("refuses a retryable AGENT failure rather than inventing a retry schedule", () => {

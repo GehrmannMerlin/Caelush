@@ -74,7 +74,12 @@ describe("run API", () => {
 
     expect(response.statusCode).toBe(201);
     const run = response.json();
-    expect(run).toMatchObject({ sessionId: session.id, goal: runInput.goal, status: "PENDING" });
+    expect(run).toMatchObject({
+      sessionId: session.id,
+      goal: runInput.goal,
+      status: "PENDING",
+      completionContract: "NATURAL_V1",
+    });
     expect(run.id).toMatch(/^run_/);
     expect(run.securityPolicy.preset).toEqual({ id: "WORKSPACE_WRITE", version: 1 });
     await expect(storage?.eventReader.latestSequence(run.id)).resolves.toBe(1);

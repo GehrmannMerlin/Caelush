@@ -291,8 +291,20 @@ export type { RunTimedOutEvent } from "./events/index.js";
 export type { VerificationPlannedEvent } from "./events/verification.js";
 export { AgentSessionSchema } from "./session.js";
 export type { AgentSession } from "./session.js";
-export { AgentRunSchema, CurrentAgentRunSchema, RunStatusSchema } from "./run.js";
-export type { AgentRun, CurrentAgentRun, RunStatus } from "./run.js";
+export {
+  AgentRunSchema,
+  CurrentAgentRunSchema,
+  NormalRunFinalResultSchema,
+  RunCompletionContractSchema,
+  RunStatusSchema,
+} from "./run.js";
+export type {
+  AgentRun,
+  CurrentAgentRun,
+  NormalRunFinalResult,
+  RunCompletionContract,
+  RunStatus,
+} from "./run.js";
 export { RunCancellationCauseSchema, RunCancellationIntentSchema } from "./cancellation.js";
 export type { RunCancellationCause, RunCancellationIntent } from "./cancellation.js";
 export { AgentStepSchema, StepStatusSchema } from "./step.js";

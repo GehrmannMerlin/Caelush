@@ -25,6 +25,7 @@ const FROZEN_TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
     "WAITING_APPROVAL",
     "WAITING_RESOURCE",
     "VERIFYING",
+    "COMPLETED",
     "FAILED",
     "CANCELLED",
     "TIMEOUT",
@@ -90,9 +91,7 @@ describe("canonical Run state machine", () => {
     expect(() => assertRunStatusTransition("COMPLETED", "RUNNING")).toThrow(
       InvalidRunStatusTransitionError,
     );
-    expect(() => assertRunStatusTransition("RUNNING", "COMPLETED")).toThrow(
-      InvalidRunStatusTransitionError,
-    );
+    expect(() => assertRunStatusTransition("RUNNING", "COMPLETED")).not.toThrow();
     expect(() => assertRunStatusTransition("PENDING", "VERIFYING")).toThrow(
       InvalidRunStatusTransitionError,
     );

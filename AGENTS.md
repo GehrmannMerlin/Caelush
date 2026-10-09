@@ -52,8 +52,11 @@ Phase 5D established durable conversation authority for Context and replay.
   Authority. Core is the integration boundary for Context Contributions:
   durable Run mode is passed into the Hook context, validated contributions are
   mapped into Context items, and `SNAPSHOT` artifacts are persisted and
-  integrity-checked before a model turn. A final model answer is a
-  verification candidate, never direct `COMPLETED`.
+  integrity-checked before a model turn. A final model answer is settled by the
+  RunController under the persisted completion contract: new `NATURAL_V1` Runs
+  atomically commit a `NORMAL_COMPLETION` after lifecycle checks, while historical
+  unmarked Runs keep the VerificationPlan and Verified Completion path. Neither
+  candidate writes `COMPLETED` directly.
 - `@caelush/ai` owns the provider-neutral model domain and the single gateway
   model-turn boundary. One gateway invocation is one provider turn. Providers
   do not execute local Tools, generate Caelush call IDs, retry, or expose SDK

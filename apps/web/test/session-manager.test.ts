@@ -210,11 +210,11 @@ describe("WebSessionManager", () => {
       ],
     });
     const runningRun = makeRun({ ...pendingRun, status: "RUNNING" });
-    const completedRun = makeCompletedRun(pendingRun);
+    const completedRun = makeNaturalCompletedRun(pendingRun);
     client.getSessionTranscript.mockResolvedValue({
       items: [
         userTranscript(completedRun, "repair login"),
-        assistantTranscript(completedRun, "verified answer"),
+        assistantTranscript(completedRun, "The requested update is complete."),
       ],
     });
     const calls: string[] = [];
@@ -271,7 +271,7 @@ describe("WebSessionManager", () => {
       composerEnabled: true,
       history: expect.arrayContaining([
         expect.objectContaining({ kind: "USER", text: "repair login" }),
-        expect.objectContaining({ kind: "ASSISTANT", text: "verified answer" }),
+        expect.objectContaining({ kind: "ASSISTANT", text: "The requested update is complete." }),
       ]),
     });
 
@@ -2375,6 +2375,20 @@ function makeCompletedRun(run: ClientAgentRun): ClientAgentRun {
         sealHash: "e".repeat(64),
         checks: { total: 1, passed: 1, skipped: 0, advisoryWarnings: 0 },
       },
+    },
+  });
+}
+
+function makeNaturalCompletedRun(run: ClientAgentRun): ClientAgentRun {
+  return makeRun({
+    ...run,
+    completionContract: "NATURAL_V1",
+    status: "COMPLETED",
+    finishedAt: 3,
+    finalResult: {
+      type: "NORMAL_COMPLETION",
+      text: "The requested update is complete.",
+      sourceStepId: createStepId(),
     },
   });
 }

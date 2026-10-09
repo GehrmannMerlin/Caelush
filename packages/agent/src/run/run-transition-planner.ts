@@ -30,7 +30,8 @@ import type { RunExecutionCommit, RunExecutionSnapshot } from "./ports/run-execu
  * ```text
  * AGENT TOOL_REQUESTS      → settle Step, append, WAITING_TOOL_RESULTS with the request Step,
  *                            the pending decision and the observation policy the turn used
- * AGENT FINAL_CANDIDATE    → settle Step, append, VERIFYING + AWAITING_VERIFICATION. Never COMPLETED
+ * AGENT FINAL_CANDIDATE    → NATURAL_V1 completes with its Step/message; historical Runs use Core's
+ *                            VerificationPlan compatibility boundary
  * AGENT FAILED after commit→ settle the Step as failed and report retry metadata
  * AGENT FAILED before it   → no Step settlement at all: no attempt was durably attempted
  * AGENT CANCELLED          → cancel the Step; the termination authority settles the Run

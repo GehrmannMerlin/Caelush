@@ -4,13 +4,13 @@ import type {
   AgentState,
   AgentStep,
   EventId,
+  JsonValue,
   RunSecurityPolicySnapshotV1,
   RetryExhaustedEvent,
   TransportFallbackSelectedEvent,
   TimestampMs,
   VerificationCheckId,
   VerificationPlan,
-  VerifiedRunFinalResult,
 } from "@caelush/protocol";
 import type { AgentBudgetBlock } from "../loop/ports/model-request-admission.js";
 import type { DurableEventDraft } from "../run/ports/run-execution-store.js";
@@ -179,7 +179,7 @@ export interface RunEventFactory {
   ): DurableEventDraft;
   completed(
     run: AgentRun,
-    result: VerifiedRunFinalResult,
+    result: JsonValue,
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;

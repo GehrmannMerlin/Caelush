@@ -23,6 +23,44 @@ function schema(name: string): {
 }
 
 describe("Phase 11A Verification contracts", () => {
+  it("keeps natural and verified final results as distinct contracts", () => {
+    const sourceStepId = createStepId();
+    const normalResult = {
+      type: "NORMAL_COMPLETION",
+      text: "测试完成；已知 pytest 失败仍未修复。🧪",
+      sourceStepId,
+    };
+    expect(schema("NormalRunFinalResultSchema").parse(normalResult)).toEqual(normalResult);
+    expect(
+      schema("NormalRunFinalResultSchema").safeParse({
+        ...normalResult,
+        verification: { sealHash: "0".repeat(64) },
+      }).success,
+    ).toBe(false);
+    expect(
+      schema("NormalRunFinalResultSchema").safeParse({
+        ...normalResult,
+        text: "中".repeat(16_385),
+      }).success,
+    ).toBe(false);
+
+    const verifiedResult = {
+      type: "VERIFIED_COMPLETION",
+      text: "historical verified result",
+      verification: {
+        planId: createVerificationPlanId(),
+        sourceStepId,
+        planHash: "a".repeat(64),
+        candidateHash: "b".repeat(64),
+        evidenceDigest: "c".repeat(64),
+        freshnessHash: "d".repeat(64),
+        sealHash: "e".repeat(64),
+        checks: { total: 0, passed: 0, skipped: 0, advisoryWarnings: 0 },
+      },
+    };
+    expect(schema("VerifiedRunFinalResultSchema").parse(verifiedResult)).toEqual(verifiedResult);
+  });
+
   it("accepts change-review purposes in the check contract", () => {
     const planId = createVerificationPlanId();
     const check = {

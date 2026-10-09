@@ -1,3 +1,4 @@
+import { NormalRunFinalResultSchema } from "@caelush/protocol";
 import type {
   AgentError,
   EventId,
@@ -144,6 +145,7 @@ export function createRunCommitEventMaterializer(
       const providerTurnState = input.providerTurnState ?? "NOT_STARTED";
       const before = snapshot.run;
       const after = plannedCommit.run;
+      const normalFinalResult = NormalRunFinalResultSchema.safeParse(after.finalResult);
       const drafts: DurableEventDraft[] = [];
       const nextEventId = (): EventId => ownership.eventIds.create();
 
@@ -223,6 +225,17 @@ export function createRunCommitEventMaterializer(
         drafts.push(events.error(before, failure, failed?.id, nextEventId(), now));
       }
 
+      /* A normal result's final message is committed before the lifecycle enters its terminal state. */
+      if (
+        after.status === "COMPLETED" &&
+        normalFinalResult.success &&
+        plannedCommit.messagesToAppend.length > 0
+      ) {
+        for (const { draft } of plannedCommit.messagesToAppend) {
+          drafts.push(events.messageCommitted(after, draft, nextEventId(), now));
+        }
+      }
+
       /* 4. The status the planner decided. Read, never re-derived. */
       const statusChanged = after.status !== before.status;
       if (statusChanged) {
@@ -246,6 +259,8 @@ export function createRunCommitEventMaterializer(
           if (deadline !== undefined) {
             drafts.push(events.timedOut(after, deadline.deadlineAt, nextEventId(), now));
           }
+        } else if (after.status === "COMPLETED" && normalFinalResult.success) {
+          drafts.push(events.completed(after, normalFinalResult.data, nextEventId(), now));
         } else if (after.status === "COMPLETED" && input.completion !== undefined) {
           drafts.push(
             events.completed(after, input.completion.verifiedFinalResult, nextEventId(), now),

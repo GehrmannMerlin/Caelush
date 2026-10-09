@@ -590,7 +590,9 @@ export {
 export {
   assertMonotonicAgentStateTimestamp,
   cancelAgentRun,
+  completeAgentRunNaturally,
   completeAgentRunWithFinalResult,
+  completeAgentStateNaturally,
   completeAgentState,
   failAgentRun,
   markAgentRunBudgetExceeded,

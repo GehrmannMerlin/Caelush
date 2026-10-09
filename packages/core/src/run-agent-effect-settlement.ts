@@ -57,10 +57,12 @@ export interface AgentEffectSettlementInput {
    *
    * It is never optional in the production path: a Driver effect is only ever executed because the
    * coordinator decided on it, so a canonical Agent effect always has one. It stays a parameter
-   * because the router must not be able to invent one, and because a `FINAL_CANDIDATE` is settled by
-   * the verification bridge *instead of* the planner.
+   * because the router must not be able to invent one. A final candidate is routed by the persisted
+   * Run contract: NATURAL_V1 uses the planner; an unmarked historical Run uses the Verification bridge.
    */
   readonly directive: AdvanceAgentDirective;
+  /** Persisted cutover identity; absent Runs retain the historical VerificationPlan contract. */
+  readonly completionContract?: "NATURAL_V1" | undefined;
   /**
    * The Core-private record of what the boundary, the Context Engine and the provider did.
    *
@@ -88,9 +90,11 @@ export function classifyAgentEffectSettlement(
   if (result.kind === "CANCELLED") return { route: "TERMINATION_AUTHORITY" };
 
   if (result.kind === "FINAL_CANDIDATE") {
-    // Completion authority is Phase 3E. Until then the legacy verification bridge owns it, and the
-    // planner's own FINAL_CANDIDATE branch stays fail-closed rather than being used as a fallback.
-    return { route: "VERIFICATION_COMPATIBILITY" };
+    // The durable Run contract selects one authority. New Runs use the canonical normal transition;
+    // historical Runs without the marker keep their VerificationPlan/Seal path.
+    if (input.completionContract !== "NATURAL_V1") {
+      return { route: "VERIFICATION_COMPATIBILITY" };
+    }
   }
 
   if (result.kind === "FAILED" && result.retry?.retryable === true) {

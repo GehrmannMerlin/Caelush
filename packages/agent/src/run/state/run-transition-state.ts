@@ -1,5 +1,17 @@
-import type { AgentError, AgentRun, AgentState, JsonValue, TimestampMs } from "@caelush/protocol";
-import { AgentErrorSchema, AgentRunSchema, AgentStateSchema } from "@caelush/protocol";
+import type {
+  AgentError,
+  AgentRun,
+  AgentState,
+  JsonValue,
+  NormalRunFinalResult,
+  TimestampMs,
+} from "@caelush/protocol";
+import {
+  AgentErrorSchema,
+  AgentRunSchema,
+  AgentStateSchema,
+  NormalRunFinalResultSchema,
+} from "@caelush/protocol";
 
 import { RunExecutionInvariantError } from "../ports/run-execution-store.js";
 import { AgentStepStateError } from "../turn/step-lifecycle.js";
@@ -177,6 +189,20 @@ export function completeAgentState(state: AgentState, now: TimestampMs): AgentSt
   });
 }
 
+/** Complete an ordinary Run while preserving its actual VerificationState. */
+export function completeAgentStateNaturally(state: AgentState, now: TimestampMs): AgentState {
+  assertMonotonicAgentStateTimestamp(state, now);
+  if (
+    state.status !== "RUNNING" ||
+    state.currentStepId !== undefined ||
+    state.verification !== "NOT_RUN"
+  ) {
+    throw new AgentStepStateError("state cannot naturally complete outside a settled RUNNING turn");
+  }
+  assertRunStatusTransition(state.status, "COMPLETED");
+  return AgentStateSchema.parse({ ...state, status: "COMPLETED", updatedAt: now });
+}
+
 /** Refuse a state transition whose timestamp would move backwards. */
 export function assertMonotonicAgentStateTimestamp(state: AgentState, now: TimestampMs): void {
   if (now < state.updatedAt) {
@@ -300,6 +326,33 @@ export function completeAgentRunWithFinalResult(
     status: "COMPLETED",
     finishedAt: now,
     finalResult,
+  });
+}
+
+/** The Run projection of an ordinary natural completion, with no verification claim. */
+export function completeAgentRunNaturally(
+  run: AgentRun,
+  finalResult: NormalRunFinalResult,
+  now: TimestampMs,
+): AgentRun {
+  const parsedResult = NormalRunFinalResultSchema.parse(finalResult);
+  if (run.completionContract !== "NATURAL_V1") {
+    throw new RunExecutionInvariantError("natural completion requires the NATURAL_V1 Run contract");
+  }
+  if (run.currentStepId !== undefined) {
+    throw new RunExecutionInvariantError(
+      "naturally completed AgentRun cannot retain an active Step",
+    );
+  }
+  if (run.status !== "RUNNING") {
+    throw new RunExecutionInvariantError("only RUNNING AgentRuns can naturally complete");
+  }
+  assertRunStatusTransition(run.status, "COMPLETED");
+  return AgentRunSchema.parse({
+    ...run,
+    status: "COMPLETED",
+    finishedAt: now,
+    finalResult: parsedResult,
   });
 }
 

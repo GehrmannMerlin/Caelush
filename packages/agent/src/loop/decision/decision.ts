@@ -76,9 +76,9 @@ export interface AgentToolCallsDecision {
 /**
  * The model produced an answer that may become completion.
  *
- * A final candidate is only a candidate. `FINAL_CANDIDATE` must move the Run toward
- * verification — never directly to `COMPLETED` — and no shape in the agent kernel can
- * express a completion decision in the first place.
+ * A final candidate is only a candidate. The RunController settles it under the Run's persisted
+ * completion contract: new `NATURAL_V1` Runs complete through the canonical lifecycle planner,
+ * while historical unmarked Runs retain the VerificationPlan compatibility boundary.
  */
 export interface AgentFinalCandidateDecision {
   readonly type: "FINAL_CANDIDATE";
@@ -88,8 +88,9 @@ export interface AgentFinalCandidateDecision {
    * assistant message.
    *
    * The assistant message is the durable conversation record; the candidate text is the
-   * value the Completion Authority hashes into `candidateHash`. Keeping it explicit means
-   * no caller ever reconstructs a security-relevant hash by re-rendering a message.
+   * value the legacy Verified Completion Authority hashes into `candidateHash`, or the exact text
+   * persisted by a natural completion. Keeping it explicit means no caller reconstructs it by
+   * re-rendering a message.
    */
   readonly candidateText: string;
 }

@@ -2070,7 +2070,12 @@ export class RunController {
     result: AgentLoopAdvanceResult,
     observation: AgentTurnObservation,
   ): Promise<RunControllerResult> {
-    const route = classifyAgentEffectSettlement({ result, directive, observation });
+    const route = classifyAgentEffectSettlement({
+      result,
+      directive,
+      observation,
+      completionContract: before.run.completionContract,
+    });
 
     // The canonical branch is planned or it fails loudly. A planner error is never caught and turned
     // into a compatibility settlement: that would leave two authorities able to settle one effect,
@@ -2225,6 +2230,17 @@ export class RunController {
           observation,
         )),
       };
+    } else if (result.kind === "FINAL_CANDIDATE") {
+      plannedWithMessages = {
+        ...planned,
+        ...(await this.prepareAssistantMessageCommit(
+          current.run,
+          result.turn.stepId,
+          result.modelTurn,
+          "FINAL_ANSWER",
+          observation,
+        )),
+      };
     }
     const materialized = this.eventMaterializer.materialize({
       snapshot: current,
@@ -2322,7 +2338,7 @@ export class RunController {
   }
 
   /**
-   * Settle a `FINAL_CANDIDATE` through the verification compatibility bridge.
+   * Settle a historical unmarked `FINAL_CANDIDATE` through the verification compatibility bridge.
    *
    * ```text
    * TRANSITIONAL — Phase 3E owns completion authority
@@ -2356,8 +2372,8 @@ export class RunController {
    * return to the Run execution loop           the coordinator decides what runs next
    * ```
    *
-   * This is the whole of what a `FINAL_CANDIDATE` does. It used to continue straight into the
-   * verification workflow; Phase 3E ends that ownership here. Verification is an *effect* now, and the
+   * This is the legacy whole of what a `FINAL_CANDIDATE` does. New `NATURAL_V1` Runs are routed to the
+   * canonical planner before reaching this method. For historical Runs, verification is an *effect* now, and the
    * only authority that decides which effect runs next is the coordinator — so this method commits the
    * boundary and returns, and the loop asks the coordinator again.
    *
@@ -3340,12 +3356,21 @@ export class RunController {
     T extends Pick<RunExecutionCommit, "run" | "messagesToAppend" | "events">,
   >(command: T): T {
     if (command.messagesToAppend.length === 0) return command;
+    const committedMessageIds = new Set(
+      command.events
+        .filter((event) => event.type === "conversation.message.committed")
+        .map((event) => event.payload.messageId),
+    );
+    const missingMessages = command.messagesToAppend.filter(
+      ({ draft }) => !committedMessageIds.has(draft.messageId),
+    );
+    if (missingMessages.length === 0) return command;
     const timestamp = this.dependencies.clock.now();
     return {
       ...command,
       events: [
         ...command.events,
-        ...command.messagesToAppend.map(({ draft }) =>
+        ...missingMessages.map(({ draft }) =>
           this.eventFactory.messageCommitted(command.run, draft, this.nextEventId(), timestamp),
         ),
       ],
