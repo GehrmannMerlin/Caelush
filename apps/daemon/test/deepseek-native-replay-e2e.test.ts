@@ -5,8 +5,13 @@ import { tmpdir } from "node:os";
 import type { ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelDescriptor, ModelDescriptorSourcePort } from "@caelush/ai";
-import { createLLMCallId, createTimestampMs } from "@caelush/protocol";
-import { makeRun, makeSession, makeStep } from "../../../packages/storage/test/support/fixtures.js";
+import { computeSecurityPolicyDigest, createLLMCallId, createTimestampMs } from "@caelush/protocol";
+import {
+  makeRun,
+  makeSecurityPolicy,
+  makeSession,
+  makeStep,
+} from "../../../packages/storage/test/support/fixtures.js";
 import type { CaelushStorage } from "@caelush/storage";
 import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
 import { createReplayProtection, createInjectedReplayKeyProvider } from "@caelush/security";
@@ -476,6 +481,11 @@ describe("DeepSeek private native replay production trajectory", () => {
     );
     expect(originalReplayEnvelopes.every((row) => row !== undefined)).toBe(true);
 
+    const nextSecurityPolicyWithoutDigest = makeSecurityPolicy("FULL_ACCESS", "NEVER_ASK");
+    const nextSecurityPolicyUnsigned = {
+      ...nextSecurityPolicyWithoutDigest,
+      createdAt: new Date(300).toISOString(),
+    };
     const nextRun = makeRun(session.id, {
       createdAt: createTimestampMs(300),
       completionContract: "NATURAL_V1",
@@ -485,6 +495,10 @@ describe("DeepSeek private native replay production trajectory", () => {
       runtime: interruptedRun.runtime,
       permissionProfile: "FULL_ACCESS",
       approvalPolicy: "NEVER_ASK",
+      securityPolicy: {
+        ...nextSecurityPolicyUnsigned,
+        policyDigest: computeSecurityPolicyDigest(nextSecurityPolicyUnsigned),
+      },
       limits: { maxSteps: 8, maxToolCalls: 16, timeoutMs: 60_000 },
     });
     await storage.runs.insert(nextRun);
@@ -527,6 +541,29 @@ describe("DeepSeek private native replay production trajectory", () => {
     expect(provider.requests.length).toBe(1);
 
     const requestMessages = provider.requests[0]?.body["messages"] as Record<string, unknown>[];
+    const runtimeFacts = await composition.securityCapabilityService.getRuntimeFacts();
+    const runASecurityPrompt = composition.runSecurityPromptProjector.project(
+      interruptedRun.securityPolicy!,
+      runtimeFacts,
+    ).text;
+    const runBSecurityPrompt = composition.runSecurityPromptProjector.project(
+      nextRun.securityPolicy!,
+      runtimeFacts,
+    ).text;
+    expect(nextRun.securityPolicy!.createdAt).not.toBe(interruptedRun.securityPolicy!.createdAt);
+    expect(nextRun.securityPolicy!.policyDigest).not.toBe(
+      interruptedRun.securityPolicy!.policyDigest,
+    );
+    expect(runBSecurityPrompt).toBe(runASecurityPrompt);
+    const securitySystemMessage = requestMessages.find(
+      (message) =>
+        message.role === "system" &&
+        typeof message["content"] === "string" &&
+        message["content"].includes("<run_security_policy>"),
+    );
+    expect(securitySystemMessage?.["content"]).toContain(runBSecurityPrompt);
+    expect(securitySystemMessage?.["content"]).toContain("policy_semantic_fingerprint=sha256:");
+    expect(securitySystemMessage?.["content"]).not.toContain("policy_digest=");
     const providerAssistantBatches = requestMessages.filter(
       (message) => message.role === "assistant" && Array.isArray(message["tool_calls"]),
     );

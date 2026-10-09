@@ -55,7 +55,7 @@ class TwoTurnProvider implements ApiAdapter {
 }
 
 describe("daemon Session conversation history E2E", () => {
-  it("gives the second Run the first verified turn without copying its durable rows", async () => {
+  it("gives the second Run the first naturally completed turn without copying durable rows", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-session-history-e2e-"));
     const provider = new TwoTurnProvider();
     daemon = await startDaemon({
@@ -80,7 +80,7 @@ describe("daemon Session conversation history E2E", () => {
     await client.startRun(first.id);
     const firstCompleted = await waitForRun(client, first.id, "COMPLETED");
     expect(firstCompleted.finalResult).toMatchObject({
-      type: "VERIFIED_COMPLETION",
+      type: "NORMAL_COMPLETION",
       text: "first verified answer",
     });
 

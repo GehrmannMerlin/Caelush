@@ -492,6 +492,34 @@ describe("Prompt Surface Context Engine integration", () => {
     expect(value.state.usage.every((usage) => usage.promptSurface !== undefined)).toBe(true);
   });
 
+  it("starts a new epoch for a changed stable prompt and preserves the old surface byte for byte", async () => {
+    const value = fixture();
+    const legacyPromptEngine = value.engine({
+      baseSystemPrompt:
+        "Stable system prompt.\n<run_security_policy>\npolicy_digest=legacy-snapshot-identity\n</run_security_policy>",
+    });
+    await legacyPromptEngine.prepare(
+      request(value.runId, value.sessionId, 1, fullHistory(value.runId, value.sessionId, 2)),
+    );
+    const oldEpochBeforeChange = value.store.inspectEpochs(value.runId)[0];
+    expect(oldEpochBeforeChange).toBeDefined();
+
+    const stablePromptEngine = value.engine({
+      baseSystemPrompt:
+        "Stable system prompt.\n<run_security_policy>\npolicy_semantic_fingerprint=sha256:new-stable-policy\n</run_security_policy>",
+    });
+    await stablePromptEngine.prepare(
+      request(value.runId, value.sessionId, 2, fullHistory(value.runId, value.sessionId, 4)),
+    );
+
+    const epochs = value.store.inspectEpochs(value.runId);
+    expect(epochs).toHaveLength(2);
+    expect(epochs[0]).toEqual(oldEpochBeforeChange);
+    expect(epochs[1]?.resetReason).toBe("STABLE_HEAD_CHANGED");
+    expect(epochs[1]?.epochId).not.toBe(oldEpochBeforeChange?.epochId);
+    expect(value.store.inspect(value.runId)?.records).toHaveLength(1);
+  });
+
   it("resets an unavailable history anchor and fails closed on a corrupt persisted surface", async () => {
     const value = fixture();
     const engine = value.engine();

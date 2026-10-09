@@ -72,7 +72,7 @@ describe("Prompt Surface daemon recovery E2E", () => {
 
     await client.startRun(run.id);
     await waitForRetryBoundary(databasePath, run.id);
-    const beforeRestart = await readSnapshotFacts(databasePath, run.id);
+    const beforeRestart = await readSurfaceFacts(databasePath, run.id);
     expect(beforeRestart).toHaveLength(1);
     expect(firstAdapter.taskRequestCount).toBe(1);
     await daemon.close();
@@ -94,15 +94,16 @@ describe("Prompt Surface daemon recovery E2E", () => {
         recoveredRequest !== undefined &&
         isMessagePrefix(failedRequest.messages, recoveredRequest.messages),
     ).toBe(true);
-    const afterRestart = await readSnapshotFacts(databasePath, run.id);
+    const afterRestart = await readSurfaceFacts(databasePath, run.id);
     expect(afterRestart.length).toBeGreaterThanOrEqual(beforeRestart.length);
     expect(sameSnapshotFacts(beforeRestart, afterRestart.slice(0, beforeRestart.length))).toBe(
       true,
     );
     expect(new Set(afterRestart.map((fact) => fact.step)).size).toBe(afterRestart.length);
     expect(afterRestart.every((fact, index) => fact.ordinal === index + 1)).toBe(true);
-    // This fixture uses an in-process API adapter; it never makes a loopback or Provider HTTP call.
-    expect(firstAdapter.requests.length + recoveredAdapter.requests.length).toBe(3);
+    // New NATURAL_V1 Runs settle without a separate Verification model request. This fixture uses
+    // an in-process API adapter and never makes a loopback or Provider HTTP call.
+    expect(firstAdapter.requests.length + recoveredAdapter.requests.length).toBe(2);
   }, 15_000);
 
   it("fails closed on a corrupted snapshot after the persisted retry restarts", async () => {
@@ -115,7 +116,7 @@ describe("Prompt Surface daemon recovery E2E", () => {
 
     await client.startRun(run.id);
     await waitForRetryBoundary(databasePath, run.id);
-    const persistedFacts = await readSnapshotFacts(databasePath, run.id);
+    const persistedFacts = await readSurfaceFacts(databasePath, run.id);
     expect(persistedFacts).toHaveLength(1);
     await daemon.close();
     daemon = undefined;
@@ -123,7 +124,7 @@ describe("Prompt Surface daemon recovery E2E", () => {
     const raw = new DatabaseSync(databasePath);
     try {
       const corrupted = raw
-        .prepare("UPDATE prompt_surface_snapshots SET content_hash = ? WHERE run_id = ?")
+        .prepare("UPDATE prompt_surface_records SET content_hash = ? WHERE run_id = ?")
         .run("0".repeat(64), run.id);
       expect(corrupted.changes).toBe(1);
     } finally {
@@ -140,7 +141,7 @@ describe("Prompt Surface daemon recovery E2E", () => {
     const verificationDb = new DatabaseSync(databasePath);
     try {
       const count = verificationDb
-        .prepare("SELECT COUNT(*) AS count FROM prompt_surface_snapshots WHERE run_id = ?")
+        .prepare("SELECT COUNT(*) AS count FROM prompt_surface_records WHERE run_id = ?")
         .get(run.id) as { readonly count: number };
       expect(count.count).toBe(1);
     } finally {
@@ -200,7 +201,7 @@ async function waitForRetryBoundary(databasePath: string, runId: RunId): Promise
   throw new Error("The local retry continuation was not durably persisted.");
 }
 
-async function readSnapshotFacts(
+async function readSurfaceFacts(
   databasePath: string,
   runId: RunId,
 ): Promise<readonly { ordinal: number; anchor: number; step: number; hash: string }[]> {
@@ -209,9 +210,18 @@ async function readSnapshotFacts(
     const current = await storage.promptSurface.getCurrent(runId);
     if (current === undefined) return [];
     const surface = await storage.promptSurface.readEpoch(current.runId, current.epochId);
-    return (surface?.snapshots ?? []).map((snapshot) => ({
+    if (surface === undefined) return [];
+    if (surface.records !== undefined) {
+      return surface.records.map((record) => ({
+        ordinal: record.ordinal,
+        anchor: record.anchor.sequence,
+        step: record.sourceStepSequence,
+        hash: record.contentHash,
+      }));
+    }
+    return surface.snapshots.map((snapshot) => ({
       ordinal: snapshot.ordinal,
-      anchor: snapshot.anchorMessageSequence,
+      anchor: snapshot.anchor.sequence,
       step: snapshot.sourceStepSequence,
       hash: snapshot.contentHash,
     }));

@@ -147,6 +147,27 @@ describe("versioned security policy contracts", () => {
     ).toBe(false);
   });
 
+  it("keeps createdAt inside the full snapshot identity and integrity check", () => {
+    const original = {
+      ...snapshotWithoutDigest,
+      policyDigest: computeSecurityPolicyDigest(snapshotWithoutDigest),
+    };
+    const later = {
+      ...snapshotWithoutDigest,
+      createdAt: "2026-10-09T03:04:05.006Z",
+      policyDigest: computeSecurityPolicyDigest({
+        ...snapshotWithoutDigest,
+        createdAt: "2026-10-09T03:04:05.006Z",
+      }),
+    };
+
+    expect(original.policyDigest).not.toBe(later.policyDigest);
+    expect(verifySecurityPolicyDigest(original)).toBe(true);
+    expect(verifySecurityPolicyDigest(later)).toBe(true);
+    expect(verifySecurityPolicyDigest({ ...original, createdAt: later.createdAt })).toBe(false);
+    expect(verifySecurityPolicyDigest({ ...original, approvalPolicy: "NEVER_ASK" })).toBe(false);
+  });
+
   it("keeps capability responses strict and free of host paths", () => {
     const descriptors = [
       descriptor(

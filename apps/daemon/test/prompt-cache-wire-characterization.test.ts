@@ -29,6 +29,8 @@ import {
   createOpenAICompatibleApiAdapter,
   OPENAI_COMPATIBLE_API_ID,
 } from "@caelush/ai/adapters/openai-compatible";
+import { expandPermissionPreset } from "@caelush/security";
+import { RunSecurityPromptProjector } from "../src/services/run-security-prompt-projector.js";
 
 import {
   createControllableProviderServer,
@@ -177,6 +179,7 @@ function preparedContext(workCommentary: string): PreparedAgentContext {
 async function request(
   workCommentary: string,
   priorRuntimeSnapshots: readonly string[] = [],
+  options: { readonly systemHead?: string; readonly currentUserMessage?: string } = {},
 ): Promise<AIModelRequest> {
   const materializer = createContextMaterializer({
     projectors: createStandardAgentMessageProjectorRegistry(),
@@ -188,6 +191,9 @@ async function request(
     signal: new AbortController().signal,
   });
   const messages: readonly AIMessage[] = [
+    ...(options.systemHead === undefined
+      ? []
+      : [{ role: "system" as const, content: options.systemHead }]),
     ...materialized,
     { role: "user", content: "Continue the same task." },
     {
@@ -212,7 +218,10 @@ async function request(
       isError: false,
     },
     ...priorRuntimeSnapshots.map((content) => ({ role: "user" as const, content })),
-    { role: "user", content: runtimeSnapshot(workCommentary) },
+    {
+      role: "user",
+      content: options.currentUserMessage ?? runtimeSnapshot(workCommentary),
+    },
   ];
   const context: PreparedModelContext = {
     messages,
@@ -384,6 +393,130 @@ describe("OpenAI-compatible prompt-cache wire characterization", () => {
       arrayIndex: 0,
       category: "VALUE_CHANGED",
     });
+  });
+
+  it("keeps the cross-run security head stable and identifies the first legitimate user difference", async () => {
+    const server = await createControllableProviderServer((_request, response) => {
+      sendOpenAIText(response, "offline fixture response");
+    });
+
+    try {
+      const modelSource: ModelDescriptorSourcePort & { list(): readonly ModelDescriptor[] } = {
+        id: "prompt-cache-security-continuity",
+        priority: 0,
+        resolve: (ref) =>
+          ref.provider === PROVIDER_ID && ref.model === MODEL_ID ? MODEL : undefined,
+        list: () => [MODEL],
+      };
+      const ai = createAISubsystem({
+        modelSources: [modelSource],
+        providers: [
+          {
+            id: PROVIDER_ID,
+            endpoint: server.endpoint + "/v1",
+            defaultApi: OPENAI_COMPATIBLE_API_ID,
+            allowUnknownModels: false,
+            credentials: {
+              resolve: async () => ({ apiKey: "offline-security-continuity-fixture" }),
+            },
+          },
+        ],
+        adapters: [createOpenAICompatibleApiAdapter()],
+      });
+      const projector = new RunSecurityPromptProjector();
+      const runtimeFacts = {
+        runtimeKind: "local",
+        sandboxProvider: "unrestricted",
+        enforcement: "NONE" as const,
+        ttySupported: false,
+      };
+      const runA = expandPermissionPreset({
+        presetId: "FULL_ACCESS",
+        expectedVersion: 1,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      const runB = expandPermissionPreset({
+        presetId: "FULL_ACCESS",
+        expectedVersion: 1,
+        createdAt: "2026-10-09T03:04:05.006Z",
+      });
+      const runC = expandPermissionPreset({
+        presetId: "VIEW_ONLY",
+        expectedVersion: 1,
+        createdAt: "2026-10-09T03:04:05.006Z",
+      });
+      const headA =
+        "Caelush stable base system prompt\n\n" + projector.project(runA, runtimeFacts).text;
+      const headB =
+        "Caelush stable base system prompt\n\n" + projector.project(runB, runtimeFacts).text;
+      const headC =
+        "Caelush stable base system prompt\n\n" + projector.project(runC, runtimeFacts).text;
+
+      // Run IDs are not inputs to the security projector. These independently issued snapshots
+      // exercise two Run heads with the same policy semantics and a genuinely new user message.
+      await ai.gateway.complete(
+        await request("same work commentary", [], {
+          systemHead: headA,
+          currentUserMessage: "RUN_A_NEW_USER_MESSAGE_SENTINEL",
+        }),
+      );
+      await ai.gateway.complete(
+        await request("same work commentary", [], {
+          systemHead: headB,
+          currentUserMessage: "RUN_B_NEW_USER_MESSAGE_SENTINEL",
+        }),
+      );
+      await ai.gateway.complete(
+        await request("same work commentary", [], {
+          systemHead: headC,
+          currentUserMessage: "RUN_C_NEW_USER_MESSAGE_SENTINEL",
+        }),
+      );
+
+      const bodyA = server.requests[0]?.body;
+      const bodyB = server.requests[1]?.body;
+      const bodyC = server.requests[2]?.body;
+      if (bodyA === undefined || bodyB === undefined || bodyC === undefined) {
+        throw new Error("The local provider fixture did not capture all cross-run requests.");
+      }
+
+      const messagesA = bodyA["messages"] as readonly Record<string, unknown>[];
+      const messagesB = bodyB["messages"] as readonly Record<string, unknown>[];
+      const messagesC = bodyC["messages"] as readonly Record<string, unknown>[];
+      expect(messagesA[0]?.["content"]).toBe(messagesB[0]?.["content"]);
+      expect(messagesA[0]?.["content"]).not.toBe(messagesC[0]?.["content"]);
+      expect(JSON.stringify(bodyA["tools"])).toBe(JSON.stringify(bodyB["tools"]));
+      expect(JSON.stringify(bodyA["tools"])).toBe(JSON.stringify(bodyC["tools"]));
+      expect(JSON.stringify(withoutKeys(bodyA, ["messages"]))).toBe(
+        JSON.stringify(withoutKeys(bodyB, ["messages"])),
+      );
+      expect(JSON.stringify(withoutKeys(bodyA, ["messages"]))).toBe(
+        JSON.stringify(withoutKeys(bodyC, ["messages"])),
+      );
+
+      const samePolicyDifference = firstDifference(bodyA, bodyB);
+      expect(samePolicyDifference).toMatchObject({
+        section: "messages",
+        category: "VALUE_CHANGED",
+      });
+      expect(samePolicyDifference?.path).toBe(`messages[${messagesA.length - 1}].content`);
+      expect(messagesB.slice(0, -1)).toEqual(messagesA.slice(0, -1));
+
+      const changedPolicyDifference = firstDifference(bodyA, bodyC);
+      expect(changedPolicyDifference).toMatchObject({
+        section: "instructions",
+        path: "messages[0].content",
+        arrayIndex: 0,
+        category: "VALUE_CHANGED",
+      });
+      const safeDiagnostics = JSON.stringify([samePolicyDifference, changedPolicyDifference]);
+      expect(safeDiagnostics).not.toContain("RUN_A_NEW_USER_MESSAGE_SENTINEL");
+      expect(safeDiagnostics).not.toContain("RUN_B_NEW_USER_MESSAGE_SENTINEL");
+      expect(safeDiagnostics).not.toContain("RUN_C_NEW_USER_MESSAGE_SENTINEL");
+      expect(safeDiagnostics).not.toContain("policy_digest");
+    } finally {
+      await server.close();
+    }
   });
 
   it("keeps the stable head and prior request prefix while appending the current snapshot", async () => {
