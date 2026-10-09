@@ -357,9 +357,12 @@ describe("Web Session model production lifecycle", () => {
         ? system.content.match(/<run_security_policy>[\s\S]*?<\/run_security_policy>/)?.[0]
         : undefined;
     };
+    expect(securityBlock(requestA)).toBeDefined();
+    expect(securityBlock(requestB)).toBeDefined();
     expect(securityBlock(requestB)).toBe(securityBlock(requestA));
     expect(requestB?.request.model).toEqual(requestA?.request.model);
     expect(requestB?.request.settings).toEqual(requestA?.request.settings);
+    expect(requestA?.request.tools?.length).toBeGreaterThan(0);
     expect(requestB?.request.tools).toEqual(requestA?.request.tools);
     expect(requestB?.request.tools?.map((tool) => tool.name)).toEqual(
       requestA?.request.tools?.map((tool) => tool.name),
