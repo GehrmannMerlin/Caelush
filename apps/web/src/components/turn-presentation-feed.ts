@@ -584,8 +584,12 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
                             activity.effects.map((effect, index) =>
                               createElement(
                                 "li",
-                                { key: `${activity.id}:effect:${index}` },
-                                formatToolEffect(effect),
+                                {
+                                  key: `${activity.id}:effect:${index}`,
+                                  className: "turn-presentation-tool-effect",
+                                  title: formatToolEffect(effect),
+                                },
+                                renderToolEffect(effect),
                               ),
                             ),
                           )
@@ -695,7 +699,7 @@ function renderItem(
                       title: formatToolEffect(effect),
                       className: "turn-presentation-tool-effect",
                     },
-                    formatToolEffect(effect),
+                    renderToolEffect(effect),
                   ),
                 ),
               ),
@@ -790,7 +794,7 @@ function assistantLabel(phase: "COMMENTARY" | "FINAL_ANSWER" | "UNKNOWN"): strin
     case "COMMENTARY":
       return null;
     case "FINAL_ANSWER":
-      return "最终答复";
+      return null;
     case "UNKNOWN":
       return "助手消息";
   }
@@ -875,9 +879,18 @@ function durableToolTitle(
   }
 }
 
-function formatToolEffect(effect: import("@caelush/protocol").ToolPresentationEffect): string {
-  if (effect.type !== "FILE_CHANGE") return "";
-  const change =
+interface ToolEffectPresentation {
+  readonly path: string;
+  readonly changeLabel: string;
+  readonly additions?: number;
+  readonly deletions?: number;
+}
+
+function toolEffectPresentation(
+  effect: import("@caelush/protocol").ToolPresentationEffect,
+): ToolEffectPresentation | undefined {
+  if (effect.type !== "FILE_CHANGE") return undefined;
+  const changeLabel =
     effect.changeType === "CREATED"
       ? "新建"
       : effect.changeType === "MODIFIED"
@@ -889,13 +902,54 @@ function formatToolEffect(effect: import("@caelush/protocol").ToolPresentationEf
     effect.changeType === "MOVED" && effect.fromPath !== undefined
       ? `${effect.fromPath} → ${effect.path}`
       : effect.path;
+  return {
+    path,
+    changeLabel,
+    ...(effect.additions === undefined || effect.additions === 0
+      ? {}
+      : { additions: effect.additions }),
+    ...(effect.deletions === undefined || effect.deletions === 0
+      ? {}
+      : { deletions: effect.deletions }),
+  };
+}
+
+function formatToolEffect(effect: import("@caelush/protocol").ToolPresentationEffect): string {
+  const presentation = toolEffectPresentation(effect);
+  if (presentation === undefined) return "";
   const counts = [
-    effect.additions === undefined || effect.additions === 0 ? undefined : `+${effect.additions}`,
-    effect.deletions === undefined || effect.deletions === 0 ? undefined : `-${effect.deletions}`,
+    presentation.additions === undefined ? undefined : `+${presentation.additions}`,
+    presentation.deletions === undefined ? undefined : `-${presentation.deletions}`,
   ]
     .filter((value): value is string => value !== undefined)
     .join(" ");
-  return `${path}　${change}${counts.length === 0 ? "" : `　${counts}`}`;
+  return `${presentation.path}　${presentation.changeLabel}${counts.length === 0 ? "" : `　${counts}`}`;
+}
+
+function renderToolEffect(
+  effect: import("@caelush/protocol").ToolPresentationEffect,
+): ReactElement | null {
+  const presentation = toolEffectPresentation(effect);
+  if (presentation === undefined) return null;
+  return createElement(
+    "span",
+    { className: "turn-presentation-tool-effect-content" },
+    `${presentation.path}　${presentation.changeLabel}`,
+    presentation.additions === undefined
+      ? null
+      : createElement(
+          "span",
+          { className: "turn-presentation-tool-effect-additions" },
+          `　+${presentation.additions}`,
+        ),
+    presentation.deletions === undefined
+      ? null
+      : createElement(
+          "span",
+          { className: "turn-presentation-tool-effect-deletions" },
+          `${presentation.additions === undefined ? "　" : " "}-${presentation.deletions}`,
+        ),
+  );
 }
 
 function liveActivityStatusLabel(

@@ -115,11 +115,21 @@ export class WebWorkspaceManager {
       const response = await this.options.client.listWorkspaces();
       const workspaces = [...response.items];
       const selectedWorkspaceId = this.chooseWorkspace(workspaces);
+      const availableWorkspaceIds = new Set(workspaces.map((workspace) => workspace.id));
+      const expandedWorkspaceIds = this.snapshot.expandedWorkspaceIds.filter((workspaceId) =>
+        availableWorkspaceIds.has(workspaceId),
+      );
+      if (
+        selectedWorkspaceId !== undefined &&
+        !expandedWorkspaceIds.includes(selectedWorkspaceId)
+      ) {
+        expandedWorkspaceIds.push(selectedWorkspaceId);
+      }
       this.publish({
         status: "READY",
         workspaces,
         selectedWorkspaceId,
-        expandedWorkspaceIds: selectedWorkspaceId === undefined ? [] : [selectedWorkspaceId],
+        expandedWorkspaceIds,
         error: undefined,
       });
       if (selectedWorkspaceId !== undefined) {
@@ -139,9 +149,12 @@ export class WebWorkspaceManager {
     const workspace = this.snapshot.workspaces.find((item) => item.id === workspaceId);
     if (workspace === undefined) return false;
     this.persistSelection(workspace.id);
+    const expandedWorkspaceIds = this.snapshot.expandedWorkspaceIds.includes(workspace.id)
+      ? this.snapshot.expandedWorkspaceIds
+      : [...this.snapshot.expandedWorkspaceIds, workspace.id];
     this.publish({
       selectedWorkspaceId: workspace.id,
-      expandedWorkspaceIds: [workspace.id],
+      expandedWorkspaceIds,
       error: undefined,
     });
     await this.loadWorkspaceSessions(workspace.id);

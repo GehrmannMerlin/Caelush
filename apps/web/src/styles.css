@@ -1185,11 +1185,6 @@ textarea:disabled {
   background: var(--web-surface-soft, #f5f8f6);
 }
 
-.turn-presentation-item--final_answer {
-  border-top: 1px solid #e5edf5;
-  padding-top: 16px;
-}
-
 .turn-presentation-item-label {
   margin: 0 0 3px;
   color: #345d83;
@@ -1388,7 +1383,7 @@ textarea:disabled {
   display: flex;
   flex-direction: column;
   gap: 11px;
-  padding: 4px 2px 12px;
+  padding: 0 2px 12px;
 }
 
 .turn-presentation-terminal-state {
@@ -5655,9 +5650,9 @@ body {
 .workspace-sidebar-brand {
   display: flex;
   width: 100%;
-  min-height: 56px;
+  min-height: 40px;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 0;
   margin: 0 0 24px;
   overflow: hidden;
@@ -5667,23 +5662,22 @@ body {
 
 .workspace-sidebar-logo {
   display: block;
-  width: min(100%, 228px);
+  width: auto;
   max-width: 100%;
-  height: 56px;
+  height: 40px;
   object-fit: contain;
-  object-position: center;
+  object-position: left center;
 }
 
 @media (max-width: 720px) {
   .workspace-sidebar-brand {
-    min-height: 48px;
+    min-height: 36px;
     margin-bottom: 20px;
     padding: 0 8px;
   }
 
   .workspace-sidebar-logo {
-    width: min(100%, 200px);
-    height: 48px;
+    height: 36px;
   }
 }
 
@@ -5778,6 +5772,10 @@ body {
   max-width: 100%;
 }
 
+.turn-presentation-feed {
+  font-family: Arial, "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+}
+
 .turn-presentation-process {
   overflow: visible;
   border: 0;
@@ -5858,10 +5856,29 @@ body {
 }
 
 .turn-presentation-tool-effects li {
+  display: block;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.turn-presentation-tool-effect-content {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turn-presentation-tool-effect-additions {
+  color: #15803d;
+  font-weight: 650;
+}
+
+.turn-presentation-tool-effect-deletions {
+  color: #b42318;
+  font-weight: 650;
 }
 
 /* Fixed approval overlay keeps required decisions available while the session scrolls. */
@@ -6327,4 +6344,78 @@ body {
     grid-area: submit;
     justify-self: end;
   }
+}
+
+/* Sidebar archive actions stay out of the way until the pointer reaches their row. */
+.workspace-card > .workspace-forget-button {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.workspace-card:hover > .workspace-forget-button,
+.workspace-card > .workspace-forget-button:focus-visible {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.workspace-forget-button img,
+.workspace-session-archive-button img {
+  display: block;
+  width: 15px;
+  height: 15px;
+}
+
+.workspace-session-row {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.workspace-session-row .workspace-session-item {
+  width: auto;
+  flex: 1 1 auto;
+  padding-right: 39px;
+}
+
+.workspace-session-archive-button {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  right: 3px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #355b84;
+  cursor: pointer;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.workspace-session-row:hover > .workspace-session-archive-button,
+.workspace-session-archive-button:focus-visible {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.workspace-session-archive-button:hover,
+.workspace-session-archive-button:focus-visible {
+  background: #e5edf7;
+  color: #173b61;
+  outline: none;
 }
