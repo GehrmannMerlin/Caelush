@@ -3,8 +3,8 @@ import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import path from "node:path";
 
 const FILE_MAGIC = Buffer.from("CAELUSH-DPAPI-V1\0", "ascii");
-const MAX_CIPHERTEXT_BYTES = 1_048_576;
-const MAX_CLEAR_BYTES = 768 * 1024;
+const MAX_CIPHERTEXT_BYTES = 5 * 1024 * 1024;
+const MAX_CLEAR_BYTES = 4 * 1024 * 1024;
 const ACCOUNT_KEY_PATTERN = /^[A-Fa-f0-9_-]{32,128}$/;
 
 export interface SafeStoragePort {

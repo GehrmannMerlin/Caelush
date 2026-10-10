@@ -86,6 +86,21 @@ describe("Windows DPAPI file vault adapter", () => {
     );
   });
 
+  it("keeps the existing Vault document intact when an oversized write is rejected", async () => {
+    const file = path.join(await makeRoot(), "vault.bin");
+    const vault = new DpapiVault(file, testStorage, "win32");
+    await vault.initialize();
+    await vault.set(accountA, { value: "existing-account-record" });
+
+    await expect(vault.set(accountA, { value: "x".repeat(5 * 1024 * 1024) })).rejects.toThrow(
+      VaultUnavailableError,
+    );
+
+    const restored = new DpapiVault(file, testStorage, "win32");
+    await restored.initialize();
+    await expect(restored.get(accountA)).resolves.toEqual({ value: "existing-account-record" });
+  });
+
   it("deletes one account without changing another and detects damaged ciphertext", async () => {
     const file = path.join(await makeRoot(), "vault.bin");
     const vault = new DpapiVault(file, testStorage);
