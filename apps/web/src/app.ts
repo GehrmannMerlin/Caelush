@@ -1,5 +1,7 @@
 import {
   createElement,
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -47,6 +49,12 @@ import { ModelPicker } from "./components/model-picker.js";
 import { SettingsSurface } from "./components/settings-surface.js";
 import { PermissionSelector } from "./components/permission-selector.js";
 import { hasTurnPresentationItems } from "./components/turn-presentation-feed.js";
+import { detectDesktopPanelApi, type DesktopPanelApi } from "./host/desktop-panel-api.js";
+
+const DesktopWorkspacePanel = lazy(async () => {
+  const module = await import("./components/desktop-workspace-panel.js");
+  return { default: module.DesktopWorkspacePanel };
+});
 
 const sessionSelectionStore = new SessionSelectionStore();
 const permissionPresetSelectionStore = new PermissionPresetSelectionStore();
@@ -89,6 +97,7 @@ export function WebHostApp(props: {
   const [workspacePickerBusy, setWorkspacePickerBusy] = useState(false);
   const [workspaceActionError, setWorkspaceActionError] = useState<string | undefined>();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [desktopPanelApi, setDesktopPanelApi] = useState<DesktopPanelApi | null>(null);
   const pendingDraftWorkspaceId = useRef<WorkspaceId | undefined>(undefined);
 
   useEffect(() => {
@@ -105,6 +114,22 @@ export function WebHostApp(props: {
       active = false;
     };
   }, [props.client, props.launchContext, props.initialWorkspaceId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || window.caelushDesktop === undefined) return;
+    const api = window.caelushDesktop;
+    let active = true;
+    const unsubscribe = api.workspace.subscribeAvailability((available) => {
+      if (active) setDesktopPanelApi(available ? api : null);
+    });
+    void detectDesktopPanelApi().then((detected) => {
+      if (active) setDesktopPanelApi(detected);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
 
   const workspaceManager = useMemo(() => {
     if (state.bootstrap !== "READY") return undefined;
@@ -315,6 +340,7 @@ export function WebHostApp(props: {
     host: state,
     workspaceState,
     selectedWorkspace,
+    desktopPanelApi,
     sessionManager,
     snapshot: sessionSnapshot,
     sidebarOpen,
@@ -346,6 +372,7 @@ function renderWorkspaceApp(input: {
   readonly host: WebHostState;
   readonly workspaceState: WorkspaceManagerState;
   readonly selectedWorkspace?: WorkspaceRecord | undefined;
+  readonly desktopPanelApi: DesktopPanelApi | null;
   readonly sessionManager?: WebSessionManager | undefined;
   readonly snapshot: WebSessionSnapshot;
   readonly sidebarOpen: boolean;
@@ -422,7 +449,12 @@ function renderWorkspaceApp(input: {
       : null,
     createElement(
       "div",
-      { className: "workspace-frame" },
+      {
+        className:
+          input.desktopPanelApi === null
+            ? "workspace-frame"
+            : "workspace-frame workspace-frame--desktop",
+      },
       createElement(WorkspaceSidebar, {
         workspaces: input.workspaceState.workspaces,
         selectedWorkspaceId: input.workspaceState.selectedWorkspaceId,
@@ -442,7 +474,12 @@ function renderWorkspaceApp(input: {
       }),
       createElement(
         "div",
-        { className: workspaceColumnClass },
+        {
+          className:
+            input.desktopPanelApi === null
+              ? workspaceColumnClass
+              : `${workspaceColumnClass} workspace-column--desktop`,
+        },
         input.workspaceActionError === undefined
           ? null
           : createElement(
@@ -531,6 +568,16 @@ function renderWorkspaceApp(input: {
               onAddWorkspace: input.onAddWorkspace,
             }),
       ),
+      input.desktopPanelApi === null
+        ? null
+        : createElement(
+            Suspense,
+            { fallback: null },
+            createElement(DesktopWorkspacePanel, {
+              api: input.desktopPanelApi,
+              workspaceId: input.workspaceState.selectedWorkspaceId ?? null,
+            }),
+          ),
     ),
     input.workspaceDialogOpen
       ? createElement(WorkspaceDialog, {

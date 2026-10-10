@@ -104,6 +104,14 @@ export type DesktopDaemonLifecycleState = "STARTING" | "READY" | "STOPPING" | "S
 export interface DesktopDaemonResources {
   readonly nodeExecutablePath: string;
   readonly daemonEntryPath: string;
+  readonly userTerminalHelperPath: string;
+}
+
+export interface DesktopDaemonProfileIdentity {
+  readonly userId: string;
+  readonly profileId: string;
+  readonly generationId: string;
+  readonly profile: AccountProfile;
 }
 
 export interface DesktopChildProcess extends EventEmitter {
@@ -294,9 +302,47 @@ export class DesktopDaemonSupervisor {
     return {
       baseUrl: `http://127.0.0.1:${generation.boundPort}`,
       hostToken: generation.hostToken,
+      userId: generation.userId,
+      profileId: generation.profileId,
+      generationId: generation.generationId,
+      profile: generation.profile,
       signal: controller.signal,
       release: leaseState.release,
     };
+  }
+
+  /** Main-only, secret-free identity for binding Desktop panels to the active generation. */
+  getActiveProfileIdentity(): DesktopDaemonProfileIdentity | null {
+    const desired = this.desired;
+    const generation = this.current;
+    if (
+      !this.acceptingRequests ||
+      desired === undefined ||
+      (desired.expiresAt !== undefined && desired.expiresAt <= this.now()) ||
+      generation === undefined ||
+      generation.lifecycleState !== "READY" ||
+      generation.profileId !== desired.profileId
+    ) {
+      return null;
+    }
+    return {
+      userId: generation.userId,
+      profileId: generation.profileId,
+      generationId: generation.generationId,
+      profile: generation.profile,
+    };
+  }
+
+  isActiveProfileIdentity(
+    identity: Pick<DesktopDaemonProfileIdentity, "userId" | "profileId" | "generationId">,
+  ): boolean {
+    const current = this.getActiveProfileIdentity();
+    return (
+      current !== null &&
+      current.userId === identity.userId &&
+      current.profileId === identity.profileId &&
+      current.generationId === identity.generationId
+    );
   }
 
   private async reconcileDesiredAccount(): Promise<void> {

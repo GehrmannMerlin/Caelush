@@ -12,12 +12,14 @@
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:windows:vault": "node scripts/windows-vault-smoke.mjs",
-    "test:windows:d4-2": "node scripts/windows-d4-2-smoke.mjs"
+    "test:windows:d4-2": "node scripts/windows-d4-2-smoke.mjs",
+    "test:windows:d5": "node scripts/windows-d5-smoke.mjs"
   },
   "dependencies": {
     "@caelush/client": "workspace:*",
     "@caelush/protocol": "workspace:*",
     "lucide-react": "1.48.0",
+    "node-pty": "1.1.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "zod": "4.4.3"

@@ -497,10 +497,51 @@ DTO refinements and sender/state validation are D3-A–D3-B work.
 
 The Windows profile root, opaque account directory, independent SQLite,
 system-vault requirements, legacy-import confirmation, and migration backup
-rules remain as frozen in D0-A. The existing
-`ai_provider_credentials.secret_value` stores Provider API Key plaintext in
-SQLite and remains `MIGRATION REQUIRED — D4-C`. No Schema, key store, or
-credential authority runtime change occurs in D0-B.
+rules remain as frozen in D0-A. D4-2 owns the completed Windows DPAPI Vault
+migration and Provider Credential authority. D5 does not change that
+authority.
+
+### D5 desktop panel capability extension
+
+D5 adds methods inside the existing frozen `workspace` and `browser`
+namespaces. This is an additive implementation of the D0-A capability shape;
+it does not authorize these methods from the Login page or an ordinary Web
+host.
+
+| Caller origin              | Allowed namespace and operation                                                                                                                                                                 | Main-side boundary                                                                                                                                                                                                 |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `caelush-login://app`      | Existing account, legacy-import, and limited window operations                                                                                                                                  | Existing login caller policy and Account state checks                                                                                                                                                              |
+| `caelush-app://app/agent/` | `workspace.getAvailability`, `workspace.activate`, `workspace.listEntries`, `workspace.previewText`, `workspace.listEditors`, `workspace.openInEditor`, `workspace.terminal.*`, and `browser.*` | Exact top-level Agent WebContents, authorized Account state, current Profile and ready Daemon generation, strict method schemas, bounded request/response, and opaque Main-owned terminal/Browser lease identities |
+| Browser Guest              | No privileged IPC                                                                                                                                                                               | Its `WebContentsView` has no Caelush Preload and does not share the Main Renderer WebContents                                                                                                                      |
+
+The Agent Workspace binding is Main-owned and stores the selected registered
+`WorkspaceId` together with the current Cloud user, Profile, and Daemon
+generation. For every file operation Main retrieves the registered
+`WorkspaceRecord` through the protected Daemon lease, verifies the canonical
+Workspace root, and validates the relative path. No Renderer-provided root is
+accepted. Directory responses, file previews, path depth, and preview bytes
+are bounded. The file capability is read-only.
+
+The `USER_TERMINAL` namespace is a user-controlled, independent process
+lifecycle. Main launches only the staged Node 24.18.0 runtime and fixed
+`user-terminal-helper.mjs`; the helper loads the pinned `node-pty` ConPTY build
+and starts the fixed Windows PowerShell executable in the Main-verified
+Workspace root. Its bounded private stdio protocol carries no credential or
+Host Token. The session is bound to owner WebContents, Account, Profile,
+Workspace, and generation, and its process tree is closed at Workspace or
+authorization boundaries. It is not an Agent Run, Tool, Verification Step, or
+Completion Authority.
+
+Browser Guest is a Main-owned Electron `WebContentsView` using the active
+Profile's `session.fromPath` directory, with Node integration off, context
+isolation and sandbox on, and no application Preload. Main validates HTTPS
+navigation and guest network requests, denies permissions, downloads, and
+popups, and accepts bounds only inside the right panel. Closing or invalidating
+the owner destroys the Guest view; durable website data remains in that
+Profile's isolated Browser directory.
+
+The public Cloud contract remains unchanged. Workspace files, paths, terminal
+input/output, Browser history, cookies, and page content remain local.
 
 ### Version and update trust
 
@@ -533,17 +574,17 @@ unit tests.
 
 ### Deferred Implementation Map
 
-| Round     | Sole primary responsibility                                        | D0-B status                                                                                                                       |
-| --------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| D0-B      | Version source, protocol detail, Desktop capability, build graph   | Contract and static checks frozen; runtime features deferred                                                                      |
-| D0-C      | Windows Electron/Node/SQLite/PTY/SSE technical POC                 | Must prove clean Windows x64 launch, runtime/native compatibility, SSE and process lifecycle                                      |
-| D1-A–D1-C | Cloud identity/authentication foundation                           | Implement the OpenAPI auth surface in the independent Cloud repository; add contract compatibility tests                          |
-| D2-A–D2-B | Devices, Refresh and offline authorization                         | Implement UUID device/session ownership, token rotation/replay handling, and device-bound signed grants                           |
-| D3-A–D3-B | Electron shell, Preload, login state machine                       | Implement the frozen five Preload namespaces and per-method DTO/sender/state checks                                               |
-| D4-A–D4-D | Profile, Host Token, proxy, Provider Key and legacy data migration | Implement private bootstrap/Host Token/process generation, profile isolation, proxy, Key migration and backup-safe import         |
-| D5-A–D5-C | Right panel, files, terminal, browser and editor                   | Renderer features through the reviewed Main APIs and existing Daemon authority                                                    |
-| D6-A–D6-B | Windows install and upgrade compatibility                          | Implement Desktop Resource Manifest, native resource staging, signed installer and migration-safe upgrades                        |
-| D7-A–D7-C | Cloud release policy and Desktop auto-update                       | Implement signer custody/rotation, policy-manifest-artifact matching, download, integrity, Authenticode and safe install boundary |
-| D8-A–D8-B | Production deployment, security acceptance and stable release      | Deploy Cloud, complete independent security acceptance, and only then claim stable `1.0.0`                                        |
+| Round     | Sole primary responsibility                                        | D0-B status                                                                                                                           |
+| --------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| D0-B      | Version source, protocol detail, Desktop capability, build graph   | Contract and static checks frozen; runtime features deferred                                                                          |
+| D0-C      | Windows Electron/Node/SQLite/PTY/SSE technical POC                 | Must prove clean Windows x64 launch, runtime/native compatibility, SSE and process lifecycle                                          |
+| D1-A–D1-C | Cloud identity/authentication foundation                           | Implement the OpenAPI auth surface in the independent Cloud repository; add contract compatibility tests                              |
+| D2-A–D2-B | Devices, Refresh and offline authorization                         | Implement UUID device/session ownership, token rotation/replay handling, and device-bound signed grants                               |
+| D3-A–D3-B | Electron shell, Preload, login state machine                       | Implement the frozen five Preload namespaces and per-method DTO/sender/state checks                                                   |
+| D4-A–D4-D | Profile, Host Token, proxy, Provider Key and legacy data migration | Implement private bootstrap/Host Token/process generation, profile isolation, proxy, Key migration and backup-safe import             |
+| D5        | Workspace panels, files, user terminal, Browser Guest and editors  | Single-round Desktop-only integration through reviewed Main APIs and existing Daemon authority; see the D5 capability extension above |
+| D6-A–D6-B | Windows install and upgrade compatibility                          | Implement Desktop Resource Manifest, native resource staging, signed installer and migration-safe upgrades                            |
+| D7-A–D7-C | Cloud release policy and Desktop auto-update                       | Implement signer custody/rotation, policy-manifest-artifact matching, download, integrity, Authenticode and safe install boundary     |
+| D8-A–D8-B | Production deployment, security acceptance and stable release      | Deploy Cloud, complete independent security acceptance, and only then claim stable `1.0.0`                                            |
 
 No D0-C or later implementation is performed by this addendum.

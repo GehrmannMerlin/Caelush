@@ -1776,6 +1776,561 @@ body {
   }
 }
 
+/* Desktop-only productivity rail. The regular Web Host keeps its original two-column layout. */
+.workspace-frame--desktop {
+  --desktop-panel-width: 42px;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-frame--desktop .workspace-column--desktop {
+  width: calc(100% - var(--web-sidebar-width) - var(--desktop-panel-width));
+  min-width: 0;
+  height: 100%;
+  flex: 1 1 auto;
+  margin-left: var(--web-sidebar-width);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.desktop-workspace-panel {
+  position: relative;
+  z-index: 8;
+  display: flex;
+  min-width: 42px;
+  height: 100%;
+  min-height: 0;
+  flex: 0 0 auto;
+  flex-direction: column;
+  overflow: visible;
+  border-left: 1px solid #dce5e3;
+  background: #f8faf9;
+  color: #21332f;
+  transition: width 150ms ease-out;
+}
+
+.desktop-workspace-panel.is-collapsed {
+  align-items: center;
+  background: #f1f5f3;
+}
+
+.desktop-panel-heading {
+  display: flex;
+  min-height: 42px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 10px;
+  border-bottom: 1px solid #e2e9e6;
+  color: #243b34;
+  font-size: 0.76rem;
+  letter-spacing: 0.025em;
+}
+
+.desktop-panel-heading strong {
+  overflow: hidden;
+  font-weight: 720;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-panel-toggle,
+.desktop-panel-tab-icon,
+.desktop-icon-button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #50665e;
+  cursor: pointer;
+}
+
+.desktop-panel-toggle:hover,
+.desktop-panel-tab-icon:hover,
+.desktop-icon-button:hover:not(:disabled) {
+  border-color: #d5e3dc;
+  background: #eaf1ed;
+  color: #173f32;
+}
+
+.desktop-panel-toggle:focus-visible,
+.desktop-panel-tab-icon:focus-visible,
+.desktop-icon-button:focus-visible,
+.desktop-panel-tab:focus-visible,
+.desktop-small-button:focus-visible,
+.desktop-editor-button:focus-visible,
+.desktop-tree-row:focus-visible {
+  outline: 2px solid #6ba581;
+  outline-offset: 1px;
+}
+
+.desktop-panel-collapsed-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 8px;
+}
+
+.desktop-panel-tab-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.desktop-panel-resize-grip {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.desktop-panel-resize-grip:hover,
+.desktop-panel-resize-grip:focus-visible {
+  background: rgb(81 143 111 / 24%);
+  outline: none;
+}
+
+.desktop-panel-body {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.desktop-panel-tabs {
+  display: flex;
+  min-height: 40px;
+  flex: 0 0 auto;
+  align-items: stretch;
+  gap: 3px;
+  padding: 5px 7px;
+  border-bottom: 1px solid #e3eae7;
+}
+
+.desktop-panel-tab {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #60756d;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.desktop-panel-tab.is-active {
+  border-color: #d4e3db;
+  background: #e9f1ec;
+  color: #1c513e;
+}
+
+.desktop-panel-tab-content {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.desktop-panel-tab-content[hidden] {
+  display: none;
+}
+
+.desktop-panel-content {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.desktop-panel-empty,
+.desktop-panel-hint {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 16px 12px;
+  color: #778780;
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.desktop-panel-empty strong {
+  color: #354d44;
+  font-size: 0.8rem;
+}
+
+.desktop-panel-error {
+  flex: 0 0 auto;
+  margin: 7px 10px;
+  color: #a73836;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.desktop-files {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.desktop-files-toolbar,
+.desktop-browser-toolbar,
+.desktop-terminal-toolbar {
+  display: flex;
+  min-height: 38px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border-bottom: 1px solid #e5ebe8;
+  background: #fbfcfb;
+}
+
+.desktop-icon-button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.desktop-path-breadcrumb {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: #6c7d75;
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-path-breadcrumb button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #315c49;
+  cursor: pointer;
+  font-size: inherit;
+}
+
+.desktop-editor-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 3px;
+}
+
+.desktop-editor-unavailable {
+  color: #8c9993;
+  font-size: 0.63rem;
+  white-space: nowrap;
+}
+
+.desktop-editor-button,
+.desktop-small-button {
+  display: inline-flex;
+  min-height: 25px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border: 1px solid #d8e3dd;
+  border-radius: 6px;
+  background: #fff;
+  color: #345344;
+  cursor: pointer;
+  font-size: 0.66rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.desktop-editor-button:hover,
+.desktop-small-button:hover:not(:disabled) {
+  background: #eef5f0;
+}
+
+.desktop-small-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.desktop-files-content {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-rows: minmax(110px, 46%) minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.desktop-file-tree {
+  min-height: 0;
+  overflow: auto;
+  border-bottom: 1px solid #e3eae7;
+  padding: 5px 4px 9px;
+  scrollbar-width: thin;
+}
+
+.desktop-tree-level {
+  display: flex;
+  flex-direction: column;
+}
+
+.desktop-tree-row {
+  display: flex;
+  width: 100%;
+  min-height: 26px;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  padding-top: 3px;
+  padding-right: 5px;
+  padding-bottom: 3px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #40574d;
+  cursor: pointer;
+  font-size: 0.72rem;
+  text-align: left;
+}
+
+.desktop-tree-row:hover,
+.desktop-tree-row.is-selected {
+  background: #eaf2ed;
+  color: #1f4c37;
+}
+
+.desktop-tree-row:disabled {
+  color: #9ca9a3;
+  cursor: default;
+}
+
+.desktop-tree-row svg {
+  flex: 0 0 auto;
+  color: #779280;
+}
+
+.desktop-tree-name {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-file-type {
+  flex: 0 0 auto;
+  color: #89978f;
+  font-size: 0.62rem;
+}
+
+.desktop-load-more {
+  display: block;
+  width: calc(100% - 12px);
+  margin: 4px 6px;
+  padding: 5px;
+  border: 1px solid #dce6e0;
+  border-radius: 5px;
+  background: #fff;
+  color: #496452;
+  cursor: pointer;
+  font-size: 0.68rem;
+}
+
+.desktop-file-preview {
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  background: #fdfefd;
+  scrollbar-width: thin;
+}
+
+.desktop-preview-code {
+  margin: 0;
+  color: #293d34;
+  font:
+    0.69rem/1.55 "Cascadia Mono",
+    Consolas,
+    "Courier New",
+    monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  tab-size: 2;
+}
+
+.desktop-terminal {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+  background: #101615;
+}
+
+.desktop-terminal-toolbar {
+  border-bottom-color: #293833;
+  background: #18211e;
+}
+
+.desktop-terminal-cwd {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: #c7d5cd;
+  font:
+    0.68rem "Cascadia Mono",
+    Consolas,
+    monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-terminal-warning {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 7px 9px;
+  background: #2a261b;
+  color: #e6d2a2;
+  font-size: 0.65rem;
+  line-height: 1.5;
+}
+
+.desktop-terminal-screen {
+  min-height: 100px;
+  flex: 1 1 auto;
+  overflow: hidden;
+  padding: 7px;
+}
+
+.desktop-terminal-screen .xterm {
+  height: 100%;
+}
+
+.desktop-terminal-screen .xterm-viewport {
+  scrollbar-width: thin;
+}
+
+.desktop-browser {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+  background: #fff;
+}
+
+.desktop-browser-toolbar {
+  gap: 3px;
+  padding: 5px 6px;
+}
+
+.desktop-browser-address {
+  display: flex;
+  min-width: 0;
+  height: 28px;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border: 1px solid #dce5e1;
+  border-radius: 6px;
+  background: #fff;
+  color: #839189;
+}
+
+.desktop-browser-address input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #374c43;
+  font-size: 0.68rem;
+}
+
+.desktop-browser-spinner {
+  animation: desktop-browser-spin 800ms linear infinite;
+}
+
+@keyframes desktop-browser-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.desktop-browser-viewport {
+  position: relative;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  background: #fff;
+}
+
+.desktop-browser-viewport .desktop-panel-hint {
+  position: absolute;
+  inset: 0;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.desktop-browser-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 12px;
+}
+
+.desktop-browser-viewport .desktop-browser-empty .desktop-panel-hint {
+  position: static;
+  inset: auto;
+  padding: 4px;
+}
+
+@media (max-width: 860px) {
+  .desktop-workspace-panel.is-expanded .desktop-panel-tabs {
+    gap: 1px;
+    padding-right: 4px;
+    padding-left: 4px;
+  }
+
+  .desktop-workspace-panel.is-expanded .desktop-panel-tab {
+    gap: 3px;
+    padding-right: 2px;
+    padding-left: 2px;
+    font-size: 0.65rem;
+  }
+}
+
 .permission-selector {
   position: relative;
   display: inline-flex;
@@ -6422,4 +6977,13 @@ body {
   background: #e5edf7;
   color: #173b61;
   outline: none;
+}
+
+/* Keep the Desktop rail after the shared Web Host shell's final layout reset. */
+.workspace-frame--desktop {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }

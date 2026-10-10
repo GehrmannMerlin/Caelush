@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { AccountProfile } from "../profiles/profile-manager.js";
 
 const APP_ORIGIN = "caelush-app://app";
 const MAX_REQUEST_BODY_BYTES = 1_048_576;
@@ -31,6 +32,10 @@ const HOP_BY_HOP_HEADERS = new Set([
 export interface DesktopDaemonProxyLease {
   readonly baseUrl: string;
   readonly hostToken: string;
+  readonly userId: string;
+  readonly profileId: string;
+  readonly generationId: string;
+  readonly profile: AccountProfile;
   readonly signal: AbortSignal;
   release(): void;
 }

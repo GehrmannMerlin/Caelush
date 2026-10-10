@@ -30,6 +30,34 @@ const channels = {
     browser: "caelush:feature:browser",
     update: "caelush:feature:update",
   },
+  workspace: {
+    availability: "caelush:workspace:get-availability",
+    availabilityState: "caelush:workspace:availability-state",
+    activate: "caelush:workspace:activate",
+    listEntries: "caelush:workspace:list-entries",
+    previewText: "caelush:workspace:preview-text",
+    listEditors: "caelush:workspace:list-editors",
+    openInEditor: "caelush:workspace:open-in-editor",
+    terminalCreate: "caelush:workspace:terminal:create",
+    terminalWrite: "caelush:workspace:terminal:write",
+    terminalResize: "caelush:workspace:terminal:resize",
+    terminalClose: "caelush:workspace:terminal:close",
+    terminalSubscribe: "caelush:workspace:terminal:subscribe",
+    terminalUnsubscribe: "caelush:workspace:terminal:unsubscribe",
+    terminalAcknowledge: "caelush:workspace:terminal:acknowledge",
+    terminalOutput: "caelush:workspace:terminal:output",
+  },
+  browser: {
+    availability: "caelush:browser:get-availability",
+    createLease: "caelush:browser:create-lease",
+    navigate: "caelush:browser:navigate",
+    goBack: "caelush:browser:go-back",
+    goForward: "caelush:browser:go-forward",
+    reload: "caelush:browser:reload",
+    setBounds: "caelush:browser:set-bounds",
+    closeLease: "caelush:browser:close-lease",
+    state: "caelush:browser:state",
+  },
   legacyData: {
     inspect: "caelush:legacy-data:inspect",
     import: "caelush:legacy-data:import",
@@ -194,6 +222,132 @@ const legacyDataApi: DesktopApi["legacyData"] = {
   },
 };
 
+const desktopWorkspaceApi: DesktopApi["workspace"] = {
+  getAvailability: async () =>
+    unwrapIpcResult(await electron.ipcRenderer.invoke(channels.workspace.availability)),
+  subscribeAvailability(listener) {
+    const handler = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      if (
+        value !== null &&
+        typeof value === "object" &&
+        "available" in value &&
+        typeof value.available === "boolean"
+      ) {
+        listener(value.available);
+      }
+    };
+    electron.ipcRenderer.on(channels.workspace.availabilityState, handler);
+    return () => electron.ipcRenderer.removeListener(channels.workspace.availabilityState, handler);
+  },
+  activate: async (input) =>
+    unwrapIpcResult(await electron.ipcRenderer.invoke(channels.workspace.activate, input)),
+  listEntries: async (input) =>
+    unwrapIpcResult(await electron.ipcRenderer.invoke(channels.workspace.listEntries, input)),
+  previewText: async (input) =>
+    unwrapIpcResult(await electron.ipcRenderer.invoke(channels.workspace.previewText, input)),
+  listEditors: async (input) =>
+    unwrapIpcResult(await electron.ipcRenderer.invoke(channels.workspace.listEditors, input)),
+  openInEditor: async (input) =>
+    unwrapIpcResult(await electron.ipcRenderer.invoke(channels.workspace.openInEditor, input)),
+  terminal: Object.freeze({
+    create: async (input) =>
+      unwrapIpcResult(await electron.ipcRenderer.invoke(channels.workspace.terminalCreate, input)),
+    write: async (input) =>
+      unwrapIpcResult(await electron.ipcRenderer.invoke(channels.workspace.terminalWrite, input)),
+    resize: async (input) =>
+      unwrapIpcResult(await electron.ipcRenderer.invoke(channels.workspace.terminalResize, input)),
+    close: async (input) =>
+      unwrapIpcResult(await electron.ipcRenderer.invoke(channels.workspace.terminalClose, input)),
+    acknowledgeOutput: async (input) =>
+      unwrapIpcResult(
+        await electron.ipcRenderer.invoke(channels.workspace.terminalAcknowledge, input),
+      ),
+    async subscribeOutput(terminalId, listener) {
+      if (!/^[A-Za-z0-9_-]{43}$/u.test(terminalId)) {
+        throw new DesktopApiError(
+          "TERMINAL_SESSION_INVALID",
+          "The user terminal session is unavailable.",
+        );
+      }
+      const handler = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        if (isTerminalOutput(value, terminalId)) listener(value);
+      };
+      electron.ipcRenderer.on(channels.workspace.terminalOutput, handler);
+      try {
+        unwrapIpcResult(
+          await electron.ipcRenderer.invoke(channels.workspace.terminalSubscribe, { terminalId }),
+        );
+      } catch (error) {
+        electron.ipcRenderer.removeListener(channels.workspace.terminalOutput, handler);
+        throw error;
+      }
+      return () => {
+        electron.ipcRenderer.removeListener(channels.workspace.terminalOutput, handler);
+        void electron.ipcRenderer
+          .invoke(channels.workspace.terminalUnsubscribe, { terminalId })
+          .catch(() => undefined);
+      };
+    },
+  }),
+};
+
+const desktopBrowserApi: DesktopApi["browser"] = {
+  getAvailability: async () =>
+    unwrapIpcResult(await electron.ipcRenderer.invoke(channels.browser.availability)),
+  createLease: async (input) =>
+    unwrapIpcResult(await electron.ipcRenderer.invoke(channels.browser.createLease, input)),
+  navigate: async (input) =>
+    unwrapIpcResult(await electron.ipcRenderer.invoke(channels.browser.navigate, input)),
+  goBack: async (input) =>
+    unwrapIpcResult(await electron.ipcRenderer.invoke(channels.browser.goBack, input)),
+  goForward: async (input) =>
+    unwrapIpcResult(await electron.ipcRenderer.invoke(channels.browser.goForward, input)),
+  reload: async (input) =>
+    unwrapIpcResult(await electron.ipcRenderer.invoke(channels.browser.reload, input)),
+  setBounds: async (input) =>
+    unwrapIpcResult(await electron.ipcRenderer.invoke(channels.browser.setBounds, input)),
+  closeLease: async (input) =>
+    unwrapIpcResult(await electron.ipcRenderer.invoke(channels.browser.closeLease, input)),
+  subscribeState(listener) {
+    const handler = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      if (isBrowserState(value)) listener(value);
+    };
+    electron.ipcRenderer.on(channels.browser.state, handler);
+    return () => electron.ipcRenderer.removeListener(channels.browser.state, handler);
+  },
+};
+
+function isTerminalOutput(
+  value: unknown,
+  terminalId: string,
+): value is Parameters<Parameters<DesktopApi["workspace"]["terminal"]["subscribeOutput"]>[1]>[0] {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "terminalId" in value &&
+    value.terminalId === terminalId &&
+    (!("data" in value) || typeof value.data === "string") &&
+    (!("errorCode" in value) ||
+      value.errorCode === "TERMINAL_OUTPUT_BACKPRESSURE" ||
+      value.errorCode === "TERMINAL_UNAVAILABLE")
+  );
+}
+
+function isBrowserState(
+  value: unknown,
+): value is Parameters<Parameters<DesktopApi["browser"]["subscribeState"]>[0]>[0] {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "leaseId" in value &&
+    typeof value.leaseId === "string" &&
+    "url" in value &&
+    typeof value.url === "string" &&
+    "loading" in value &&
+    typeof value.loading === "boolean"
+  );
+}
+
 const api: DesktopApi = Object.freeze({
   account: Object.freeze(accountApi),
   window: Object.freeze({
@@ -214,18 +368,8 @@ const api: DesktopApi = Object.freeze({
         await electron.ipcRenderer.invoke(channels.window.getPlatform),
       ),
   }),
-  workspace: Object.freeze({
-    getAvailability: async () =>
-      unwrapIpcResult<Awaited<ReturnType<DesktopApi["workspace"]["getAvailability"]>>>(
-        await electron.ipcRenderer.invoke(channels.feature.workspace),
-      ),
-  }),
-  browser: Object.freeze({
-    getAvailability: async () =>
-      unwrapIpcResult<Awaited<ReturnType<DesktopApi["browser"]["getAvailability"]>>>(
-        await electron.ipcRenderer.invoke(channels.feature.browser),
-      ),
-  }),
+  workspace: Object.freeze(desktopWorkspaceApi),
+  browser: Object.freeze(desktopBrowserApi),
   update: Object.freeze({
     getAvailability: async () =>
       unwrapIpcResult<Awaited<ReturnType<DesktopApi["update"]["getAvailability"]>>>(

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, rm } from "node:fs/promises";
+import { access, copyFile, cp, mkdir, readFile, realpath, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
@@ -10,6 +10,16 @@ const repoRoot = path.resolve(appRoot, "..", "..");
 const stageRoot = path.join(appRoot, ".stage");
 const stageDirectory = path.join(appRoot, ".stage", "daemon");
 const nodeDestination = path.join(stageDirectory, "node.exe");
+const terminalHelperSource = path.join(
+  appRoot,
+  "src",
+  "main",
+  "terminal",
+  "user-terminal-helper.mjs",
+);
+const terminalHelperDestination = path.join(stageDirectory, "user-terminal-helper.mjs");
+const terminalPackageSource = await realpath(path.join(appRoot, "node_modules", "node-pty"));
+const terminalPackageDestination = path.join(stageDirectory, "node_modules", "node-pty");
 const expectedNodeHash = "9a4eb5f1c29c6a2e93852ead46b999e284a6a5ca8bab4d4e241d587d025a52de";
 const excludedAccessSids = ["S-1-1-0", "S-1-5-11", "S-1-5-32-545"];
 
@@ -44,8 +54,35 @@ secureRuntimePath(stageDirectory, currentUserSid, true);
 await rm(nodeDestination, { force: true });
 await copyFile(nodeSource, nodeDestination);
 secureRuntimePath(nodeDestination, currentUserSid, false);
+await rm(terminalPackageDestination, { recursive: true, force: true });
+await mkdir(path.dirname(terminalPackageDestination), { recursive: true });
+await cp(terminalPackageSource, terminalPackageDestination, {
+  recursive: true,
+  filter: (source) => {
+    const relative = path.relative(terminalPackageSource, source);
+    if (relative === "") return true;
+    return (
+      relative === "package.json" ||
+      relative === "lib" ||
+      relative.startsWith(`lib${path.sep}`) ||
+      relative === "prebuilds" ||
+      relative === path.join("prebuilds", "win32-x64") ||
+      relative.startsWith(`${path.join("prebuilds", "win32-x64")}${path.sep}`)
+    );
+  },
+});
+const stagedPtyPackage = JSON.parse(
+  await readFile(path.join(terminalPackageDestination, "package.json"), "utf8"),
+);
+if (stagedPtyPackage.name !== "node-pty" || stagedPtyPackage.version !== "1.1.0") {
+  throw new Error("The staged USER_TERMINAL PTY package did not match the pinned version.");
+}
+await access(path.join(terminalPackageDestination, "prebuilds", "win32-x64", "conpty.node"));
+await copyFile(terminalHelperSource, terminalHelperDestination);
+secureRuntimePath(path.join(stageDirectory, "node_modules"), currentUserSid, true);
+secureRuntimePath(terminalHelperDestination, currentUserSid, false);
 process.stdout.write(
-  `Staged D0-C Node 24.18.0 with current-user ACL and Medium integrity at ${path.relative(repoRoot, nodeDestination)} (${actualHash}).\n`,
+  `Staged D0-C Node 24.18.0 and node-pty 1.1.0 for USER_TERMINAL with current-user ACL at ${path.relative(repoRoot, nodeDestination)} (${actualHash}).\n`,
 );
 
 function readCurrentUserSid() {

@@ -41,6 +41,7 @@ const INFO = {
 const RESOURCES: DesktopDaemonResources = {
   nodeExecutablePath: "C:\\stage\\node.exe",
   daemonEntryPath: "C:\\stage\\desktop-entry.js",
+  userTerminalHelperPath: "C:\\stage\\user-terminal-helper.mjs",
 };
 
 class FakeChild extends EventEmitter implements DesktopChildProcess {

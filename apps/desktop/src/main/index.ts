@@ -18,6 +18,7 @@ import {
 } from "./profiles/profile-manager.js";
 import { resolveDesktopDaemonResources, resolveDesktopWebRoot } from "./daemon/resources.js";
 import { DesktopDaemonSupervisor } from "./daemon/supervisor.js";
+import { DesktopWorkspacePanelController } from "./workspace/panel-controller.js";
 import { createMainWindow } from "./windows/create-window.js";
 import { createRendererTrust } from "./windows/security-policy.js";
 
@@ -52,6 +53,7 @@ if (!singleInstance) {
 } else {
   let mainWindow: BrowserWindow | null = null;
   let disposeIpc: (() => void) | null = null;
+  let desktopPanels: DesktopWorkspacePanelController | null = null;
   let unsubscribeAccount: (() => void) | null = null;
   let safeQuitApproved = false;
   let shutdownInProgress = false;
@@ -133,10 +135,20 @@ if (!singleInstance) {
   }
 
   function publishProjectedAccountState(): void {
+    const profileAvailable = supervisor.getActiveProfileIdentity() !== null;
+    if (!profileAvailable && desktopPanels !== null) {
+      void desktopPanels.closeAll().catch(() => undefined);
+    }
     if (mainWindow === null || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed())
       return;
-    if (!isTrustedCurrentWindow()) return;
-    mainWindow.webContents.send("caelush:account:state", projectAccountState(account.getState()));
+    if (isTrustedCurrentWindow()) {
+      mainWindow.webContents.send("caelush:account:state", projectAccountState(account.getState()));
+    }
+    if (isTrustedAgentWindow()) {
+      mainWindow.webContents.send("caelush:workspace:availability-state", {
+        available: profileAvailable,
+      });
+    }
   }
 
   function isTrustedCurrentWindow(): boolean {
@@ -158,6 +170,7 @@ if (!singleInstance) {
     if (shutdownInProgress) return;
     shutdownInProgress = true;
     try {
+      await desktopPanels?.closeAll();
       await supervisor.closeForApplicationQuit();
     } finally {
       shutdownInProgress = false;
@@ -240,6 +253,37 @@ if (!singleInstance) {
       preloadPath: join(appPath, "dist", "preload", "index.cjs"),
       rendererTrust,
     });
+    desktopPanels = new DesktopWorkspacePanelController({
+      window: mainWindow,
+      supervisor,
+      resourceLayout: {
+        packaged: app.isPackaged,
+        appPath,
+        resourcesPath: process.resourcesPath,
+      },
+      onTerminalOutput: (ownerId, output) => {
+        if (
+          mainWindow === null ||
+          mainWindow.isDestroyed() ||
+          mainWindow.webContents.isDestroyed() ||
+          mainWindow.webContents.id !== ownerId ||
+          !isTrustedAgentWindow()
+        )
+          return;
+        mainWindow.webContents.send("caelush:workspace:terminal:output", output);
+      },
+      onBrowserState: (ownerId, state) => {
+        if (
+          mainWindow === null ||
+          mainWindow.isDestroyed() ||
+          mainWindow.webContents.isDestroyed() ||
+          mainWindow.webContents.id !== ownerId ||
+          !isTrustedAgentWindow()
+        )
+          return;
+        mainWindow.webContents.send("caelush:browser:state", state);
+      },
+    });
     disposeIpc = registerDesktopIpc({
       window: mainWindow,
       controller: account,
@@ -248,9 +292,13 @@ if (!singleInstance) {
       arch: process.arch,
       version: app.getVersion(),
       projectAccountState,
-      beginAccountBoundary: () => supervisor.beginAccountBoundary(),
+      beginAccountBoundary: async () => {
+        await desktopPanels?.closeAll();
+        await supervisor.beginAccountBoundary();
+      },
       synchronizeAccountState: (state) => supervisor.synchronizeAccountState(state),
       legacyImporter,
+      desktopPanels,
     });
     mainWindow.on("close", (event) => {
       if (safeQuitApproved) return;
@@ -264,10 +312,33 @@ if (!singleInstance) {
         .catch(() => showSafeShutdownBlocked());
     });
     mainWindow.on("closed", () => {
+      const closedPanels = desktopPanels;
+      desktopPanels = null;
+      if (closedPanels !== null) {
+        void closedPanels
+          .closeAll()
+          .finally(() => closedPanels.dispose())
+          .catch(() => undefined);
+      }
       disposeIpc?.();
       disposeIpc = null;
       mainWindow = null;
     });
+  }
+
+  function isTrustedAgentWindow(): boolean {
+    if (mainWindow === null || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed())
+      return false;
+    try {
+      const url = new URL(mainWindow.webContents.mainFrame.url);
+      return (
+        url.protocol === "caelush-app:" &&
+        url.hostname === "app" &&
+        (url.pathname === "/agent" || url.pathname.startsWith("/agent/"))
+      );
+    } catch {
+      return false;
+    }
   }
 
   function showSafeShutdownBlocked(): void {

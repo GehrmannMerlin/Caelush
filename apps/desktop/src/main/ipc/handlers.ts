@@ -1,6 +1,7 @@
 import { setImmediate } from "node:timers";
 import { BrowserWindow, ipcMain, type IpcMain, type IpcMainInvokeEvent } from "electron";
 import { z } from "zod";
+import { WorkspaceIdSchema } from "@caelush/protocol";
 import { AccountController, AccountOperationError } from "../account/controller.js";
 import { AccountStateSchema } from "../account/state.js";
 import type { AccountState } from "../account/state.js";
@@ -16,6 +17,7 @@ import {
   OperationSucceededResponseSchema,
 } from "../cloud/schemas.js";
 import { safeErrorForIpc } from "./safe-error.js";
+import { DesktopWorkspacePanelController } from "../workspace/panel-controller.js";
 
 export const IPC_CHANNELS = Object.freeze({
   account: Object.freeze({
@@ -43,6 +45,34 @@ export const IPC_CHANNELS = Object.freeze({
     workspace: "caelush:feature:workspace",
     browser: "caelush:feature:browser",
     update: "caelush:feature:update",
+  }),
+  workspace: Object.freeze({
+    availability: "caelush:workspace:get-availability",
+    availabilityState: "caelush:workspace:availability-state",
+    activate: "caelush:workspace:activate",
+    listEntries: "caelush:workspace:list-entries",
+    previewText: "caelush:workspace:preview-text",
+    listEditors: "caelush:workspace:list-editors",
+    openInEditor: "caelush:workspace:open-in-editor",
+    terminalCreate: "caelush:workspace:terminal:create",
+    terminalWrite: "caelush:workspace:terminal:write",
+    terminalResize: "caelush:workspace:terminal:resize",
+    terminalClose: "caelush:workspace:terminal:close",
+    terminalSubscribe: "caelush:workspace:terminal:subscribe",
+    terminalUnsubscribe: "caelush:workspace:terminal:unsubscribe",
+    terminalAcknowledge: "caelush:workspace:terminal:acknowledge",
+    terminalOutput: "caelush:workspace:terminal:output",
+  }),
+  browser: Object.freeze({
+    availability: "caelush:browser:get-availability",
+    createLease: "caelush:browser:create-lease",
+    navigate: "caelush:browser:navigate",
+    goBack: "caelush:browser:go-back",
+    goForward: "caelush:browser:go-forward",
+    reload: "caelush:browser:reload",
+    setBounds: "caelush:browser:set-bounds",
+    closeLease: "caelush:browser:close-lease",
+    state: "caelush:browser:state",
   }),
   legacyData: Object.freeze({
     inspect: "caelush:legacy-data:inspect",
@@ -88,6 +118,158 @@ const WorkspaceUnavailable = z
 const UpdateUnavailable = z
   .object({ available: z.literal(false), reason: z.literal("D6_UPDATER_PENDING") })
   .strict();
+const PanelAvailability = z.union([
+  z.object({ available: z.literal(true) }).strict(),
+  z
+    .object({
+      available: z.literal(false),
+      reason: z.enum(["ACCOUNT_NOT_AUTHORIZED", "DAEMON_STARTING"]),
+    })
+    .strict(),
+]);
+const WorkspaceIdInput = z.object({ workspaceId: WorkspaceIdSchema }).strict();
+const ActivateWorkspaceInput = z.object({ workspaceId: WorkspaceIdSchema.nullable() }).strict();
+const ListEntriesInput = z
+  .object({
+    workspaceId: WorkspaceIdSchema,
+    relativePath: z.string().max(4096),
+    offset: z.number().int().min(0).max(100_000).default(0),
+    limit: z.number().int().min(1).max(500).default(200),
+  })
+  .strict();
+const PreviewTextInput = z
+  .object({ workspaceId: WorkspaceIdSchema, relativePath: z.string().min(1).max(4096) })
+  .strict();
+const WorkspaceEntryOutput = z
+  .object({
+    name: z.string().max(255),
+    relativePath: z.string().max(4096),
+    kind: z.enum(["FILE", "DIRECTORY", "SYMLINK", "OTHER"]),
+    extension: z.string().max(32),
+    sizeBytes: z.number().int().nonnegative().safe().optional(),
+    modifiedAtMs: z.number().int().safe().optional(),
+    canExpand: z.boolean(),
+    canPreview: z.boolean(),
+  })
+  .strict();
+const DirectoryPageOutput = z
+  .object({
+    workspaceId: WorkspaceIdSchema,
+    relativePath: z.string().max(4096),
+    parentPath: z.string().max(4096).nullable(),
+    items: z.array(WorkspaceEntryOutput).max(500),
+    nextOffset: z.number().int().nonnegative().safe().optional(),
+    hasMore: z.boolean(),
+  })
+  .strict();
+const PreviewOutput = z.union([
+  z
+    .object({
+      supported: z.literal(true),
+      workspaceId: WorkspaceIdSchema,
+      relativePath: z.string().max(4096),
+      name: z.string().max(255),
+      sizeBytes: z.number().int().nonnegative().safe(),
+      modifiedAtMs: z.number().int().safe(),
+      text: z.string().max(1_048_576),
+    })
+    .strict(),
+  z
+    .object({
+      supported: z.literal(false),
+      reason: z.literal("BINARY"),
+      workspaceId: WorkspaceIdSchema,
+      relativePath: z.string().max(4096),
+      name: z.string().max(255),
+      sizeBytes: z.number().int().nonnegative().safe(),
+      modifiedAtMs: z.number().int().safe(),
+    })
+    .strict(),
+]);
+const EditorListOutput = z
+  .array(
+    z
+      .object({ id: z.enum(["vscode", "cursor"]), name: z.enum(["Visual Studio Code", "Cursor"]) })
+      .strict(),
+  )
+  .max(2);
+const OpenEditorInput = z
+  .object({
+    editorId: z.enum(["vscode", "cursor"]),
+    workspaceId: WorkspaceIdSchema,
+    relativeFilePath: z.string().min(1).max(4096).optional(),
+  })
+  .strict();
+const TerminalIdInput = z.object({ terminalId: z.string().regex(/^[A-Za-z0-9_-]{43}$/u) }).strict();
+const TerminalCreateInput = z
+  .object({
+    workspaceId: WorkspaceIdSchema,
+    cols: z.number().int().min(20).max(500),
+    rows: z.number().int().min(5).max(300),
+  })
+  .strict();
+const TerminalWriteInput = TerminalIdInput.extend({ data: z.string().max(16 * 1024) }).strict();
+const TerminalResizeInput = TerminalIdInput.extend({
+  cols: z.number().int().min(20).max(500),
+  rows: z.number().int().min(5).max(300),
+}).strict();
+const TerminalAckInput = TerminalIdInput.extend({
+  bytes: z
+    .number()
+    .int()
+    .min(0)
+    .max(16 * 1024),
+}).strict();
+const TerminalAcceptedOutput = z.object({ accepted: z.literal(true) }).strict();
+const TerminalSessionOutput = z
+  .object({
+    terminalId: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+    workspaceId: WorkspaceIdSchema,
+    cwd: z.string().max(4096),
+    identity: z.literal("USER_TERMINAL"),
+    shell: z.literal("WINDOWS_POWERSHELL"),
+    cols: z.number().int(),
+    rows: z.number().int(),
+  })
+  .strict();
+const TerminalOutputSchema = z
+  .object({
+    terminalId: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+    data: z
+      .string()
+      .max(16 * 1024)
+      .optional(),
+    exitCode: z.number().int().nullable().optional(),
+    signal: z.string().max(32).nullable().optional(),
+    errorCode: z.enum(["TERMINAL_OUTPUT_BACKPRESSURE", "TERMINAL_UNAVAILABLE"]).optional(),
+  })
+  .strict();
+const BrowserBoundsSchema = z
+  .object({
+    x: z.number().int().min(0).max(10000),
+    y: z.number().int().min(0).max(10000),
+    width: z.number().int().min(1).max(10000),
+    height: z.number().int().min(1).max(10000),
+  })
+  .strict();
+const BrowserBoundsInput = BrowserBoundsSchema.nullable();
+const BrowserLeaseInput = z.object({ leaseId: z.string().regex(/^[A-Za-z0-9_-]{43}$/u) }).strict();
+const BrowserCreateInput = z.object({ bounds: BrowserBoundsSchema }).strict();
+const BrowserNavigateInput = BrowserLeaseInput.extend({
+  url: z.string().min(1).max(2048),
+}).strict();
+const BrowserBoundsUpdateInput = BrowserLeaseInput.extend({ bounds: BrowserBoundsInput }).strict();
+const BrowserStateOutput = z
+  .object({
+    leaseId: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+    url: z.string().max(2048),
+    loading: z.boolean(),
+    errorCode: z.enum(["BROWSER_NAVIGATION_FAILED", "BROWSER_GUEST_CRASHED"]).optional(),
+  })
+  .strict();
+const SubscribedOutput = z.object({ subscribed: z.boolean() }).strict();
+const AcknowledgedOutput = z.object({ acknowledged: z.literal(true) }).strict();
+const UpdatedOutput = z.object({ updated: z.literal(true) }).strict();
 const MAX_IPC_INPUT_BYTES = 20 * 1024;
 export const IPC_OPERATION_TIMEOUT_MS = 15_000;
 export const LEGACY_IMPORT_OPERATION_TIMEOUT_MS = 2 * 60 * 60_000;
@@ -192,7 +374,10 @@ export interface RegisterDesktopIpcOptions {
   readonly beginAccountBoundary?: () => Promise<void>;
   readonly synchronizeAccountState?: (state: AccountState) => Promise<void>;
   readonly legacyImporter?: DesktopLegacyDataImporter;
+  readonly desktopPanels?: DesktopWorkspacePanelController;
 }
+
+type IpcCallerPolicy = "LOGIN" | "AGENT" | "LOGIN_OR_AGENT";
 
 export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => void {
   const main = options.ipcMain ?? ipcMain;
@@ -206,6 +391,7 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
     action: (input: TInput, signal: AbortSignal) => Promise<unknown> | unknown,
     allowedStates?: ReadonlySet<string>,
     timeoutMs = IPC_OPERATION_TIMEOUT_MS,
+    callerPolicy: IpcCallerPolicy = "LOGIN",
   ) => {
     main.handle(channel, async (event: IpcMainInvokeEvent, rawInput: unknown) => {
       const abort = new AbortController();
@@ -232,7 +418,7 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
         );
       }, timeoutMs);
       try {
-        assertTrustedCaller(event, options.window, options.rendererTrust);
+        assertTrustedCaller(event, options.window, options.rendererTrust, callerPolicy);
         validateInputSize(rawInput);
         const input = inputSchema.safeParse(rawInput);
         if (!input.success) {
@@ -510,11 +696,237 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
     });
     return { closed: true };
   });
-  register(windowChannels.getPlatform, NoInput, PlatformOutput, () => ({
-    platform: options.platform,
-    arch: options.arch,
-    version: options.version,
-  }));
+  register(
+    windowChannels.getPlatform,
+    NoInput,
+    PlatformOutput,
+    () => ({
+      platform: options.platform,
+      arch: options.arch,
+      version: options.version,
+    }),
+    undefined,
+    IPC_OPERATION_TIMEOUT_MS,
+    "LOGIN_OR_AGENT",
+  );
+
+  if (options.desktopPanels !== undefined) {
+    const panels = options.desktopPanels;
+    const { workspace, browser } = IPC_CHANNELS;
+    register(
+      workspace.availability,
+      NoInput,
+      PanelAvailability,
+      () => panels.getAvailability(),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      workspace.activate,
+      ActivateWorkspaceInput,
+      z.object({ selected: z.literal(true) }).strict(),
+      (input, signal) =>
+        panels.activateWorkspace(options.window.webContents.id, input.workspaceId, signal),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      workspace.listEntries,
+      ListEntriesInput,
+      DirectoryPageOutput,
+      (input, signal) => panels.listEntries(options.window.webContents.id, input, signal),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      workspace.previewText,
+      PreviewTextInput,
+      PreviewOutput,
+      (input, signal) => panels.previewText(options.window.webContents.id, input, signal),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      workspace.listEditors,
+      WorkspaceIdInput,
+      EditorListOutput,
+      (input, signal) =>
+        panels.listEditors(options.window.webContents.id, input.workspaceId, signal),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      workspace.openInEditor,
+      OpenEditorInput,
+      z.object({ opened: z.literal(true), editorId: z.enum(["vscode", "cursor"]) }).strict(),
+      (input, signal) =>
+        panels.openInEditor(
+          options.window.webContents.id,
+          {
+            editorId: input.editorId,
+            workspaceId: input.workspaceId,
+            ...(input.relativeFilePath === undefined
+              ? {}
+              : { relativeFilePath: input.relativeFilePath }),
+          },
+          signal,
+        ),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      workspace.terminalCreate,
+      TerminalCreateInput,
+      TerminalSessionOutput,
+      (input, signal) => panels.createTerminal(options.window.webContents.id, input, signal),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      workspace.terminalWrite,
+      TerminalWriteInput,
+      TerminalAcceptedOutput,
+      (input) => panels.writeTerminal(options.window.webContents.id, input.terminalId, input.data),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      workspace.terminalResize,
+      TerminalResizeInput,
+      TerminalAcceptedOutput,
+      (input) =>
+        panels.resizeTerminal(
+          options.window.webContents.id,
+          input.terminalId,
+          input.cols,
+          input.rows,
+        ),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      workspace.terminalClose,
+      TerminalIdInput,
+      ClosedOutput,
+      (input) => panels.closeTerminal(options.window.webContents.id, input.terminalId),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      workspace.terminalSubscribe,
+      TerminalIdInput,
+      SubscribedOutput,
+      (input) => panels.subscribeTerminal(options.window.webContents.id, input.terminalId),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      workspace.terminalUnsubscribe,
+      TerminalIdInput,
+      SubscribedOutput,
+      (input) => panels.unsubscribeTerminal(options.window.webContents.id, input.terminalId),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      workspace.terminalAcknowledge,
+      TerminalAckInput,
+      AcknowledgedOutput,
+      (input) =>
+        panels.acknowledgeTerminal(options.window.webContents.id, input.terminalId, input.bytes),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+
+    register(
+      browser.availability,
+      NoInput,
+      PanelAvailability,
+      () => panels.getAvailability(),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      browser.createLease,
+      BrowserCreateInput,
+      BrowserStateOutput,
+      (input) => panels.createBrowserLease(options.window.webContents.id, input.bounds),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      browser.navigate,
+      BrowserNavigateInput,
+      BrowserStateOutput,
+      (input, signal) =>
+        panels.navigateBrowser(options.window.webContents.id, input.leaseId, input.url, signal),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      browser.goBack,
+      BrowserLeaseInput,
+      BrowserStateOutput,
+      (input) => panels.goBackBrowser(options.window.webContents.id, input.leaseId),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      browser.goForward,
+      BrowserLeaseInput,
+      BrowserStateOutput,
+      (input) => panels.goForwardBrowser(options.window.webContents.id, input.leaseId),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      browser.reload,
+      BrowserLeaseInput,
+      BrowserStateOutput,
+      (input) => panels.reloadBrowser(options.window.webContents.id, input.leaseId),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      browser.setBounds,
+      BrowserBoundsUpdateInput,
+      UpdatedOutput,
+      (input) =>
+        panels.setBrowserBounds(options.window.webContents.id, input.leaseId, input.bounds),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+    register(
+      browser.closeLease,
+      BrowserLeaseInput,
+      ClosedOutput,
+      (input) => panels.closeBrowserLease(options.window.webContents.id, input.leaseId),
+      AUTHORIZED_STATES,
+      IPC_OPERATION_TIMEOUT_MS,
+      "AGENT",
+    );
+  }
+
   register(feature.workspace, NoInput, WorkspaceUnavailable, () => ({
     available: false,
     reason: "D4_LOCAL_AGENT_PENDING",
@@ -546,6 +958,7 @@ function assertTrustedCaller(
   event: IpcMainInvokeEvent,
   window: BrowserWindow,
   trust: DesktopRendererTrust,
+  policy: IpcCallerPolicy,
 ): void {
   if (
     window.isDestroyed() ||
@@ -554,13 +967,57 @@ function assertTrustedCaller(
     event.sender.isDestroyed() ||
     event.senderFrame === null ||
     event.senderFrame !== event.sender.mainFrame ||
-    !isTrustedUrl(event.senderFrame.url, trust)
+    !isTrustedCallerUrl(event.senderFrame.url, trust, policy)
   ) {
     throw new AccountOperationError(
       "IPC_CALLER_INVALID",
       "The desktop request came from an untrusted frame.",
     );
   }
+}
+
+function isTrustedCallerUrl(
+  source: string,
+  trust: DesktopRendererTrust,
+  policy: IpcCallerPolicy,
+): boolean {
+  if (trust.developmentOrigin !== null) {
+    try {
+      const development = new URL(trust.developmentOrigin);
+      const candidate = new URL(source);
+      if (
+        candidate.origin === development.origin &&
+        candidate.protocol === "http:" &&
+        candidate.hostname === "127.0.0.1" &&
+        candidate.username === "" &&
+        candidate.password === "" &&
+        candidate.search === "" &&
+        candidate.hash === "" &&
+        ["/", "/agent", "/agent/"].includes(candidate.pathname)
+      ) {
+        return policy !== "LOGIN";
+      }
+    } catch {
+      // Continue with the production custom origins.
+    }
+  }
+  let url: URL;
+  try {
+    url = new URL(source);
+  } catch {
+    return false;
+  }
+  const baseValid =
+    url.port === "" && url.username === "" && url.password === "" && url.hash === "";
+  const login = baseValid && url.protocol === "caelush-login:" && url.hostname === "app";
+  const agent =
+    baseValid &&
+    url.protocol === "caelush-app:" &&
+    url.hostname === "app" &&
+    (url.pathname === "/agent" || url.pathname === "/agent/");
+  if (policy === "LOGIN") return login;
+  if (policy === "AGENT") return agent;
+  return login || agent;
 }
 
 function isTrustedUrl(source: string, trust: DesktopRendererTrust): boolean {

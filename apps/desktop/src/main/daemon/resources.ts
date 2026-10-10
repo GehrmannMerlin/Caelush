@@ -1,4 +1,4 @@
-import { access, realpath, stat } from "node:fs/promises";
+import { access, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type { DesktopDaemonResources } from "./supervisor.js";
 
@@ -16,15 +16,20 @@ export async function resolveDesktopDaemonResources(
     ? {
         nodeExecutablePath: path.join(layout.resourcesPath, "daemon", "node.exe"),
         daemonEntryPath: path.join(layout.resourcesPath, "daemon", "desktop-entry.js"),
+        userTerminalHelperPath: path.join(
+          layout.resourcesPath,
+          "daemon",
+          "user-terminal-helper.mjs",
+        ),
       }
     : {
         nodeExecutablePath: path.resolve(layout.appPath, ".stage", "daemon", "node.exe"),
-        daemonEntryPath: path.resolve(
+        daemonEntryPath: path.resolve(layout.appPath, "..", "daemon", "dist", "desktop-entry.js"),
+        userTerminalHelperPath: path.resolve(
           layout.appPath,
-          "..",
+          ".stage",
           "daemon",
-          "dist",
-          "desktop-entry.js",
+          "user-terminal-helper.mjs",
         ),
       };
   for (const filePath of Object.values(paths)) {
@@ -36,6 +41,27 @@ export async function resolveDesktopDaemonResources(
       throw new Error("Desktop Daemon resource path is unsafe.");
     }
   }
+  const ptyManifestPath = path.join(
+    path.dirname(paths.userTerminalHelperPath),
+    "node_modules",
+    "node-pty",
+    "package.json",
+  );
+  let ptyManifest: unknown;
+  try {
+    ptyManifest = JSON.parse(await readFile(ptyManifestPath, "utf8")) as unknown;
+  } catch {
+    throw new Error("The staged USER_TERMINAL runtime is unavailable.");
+  }
+  if (
+    typeof ptyManifest !== "object" ||
+    ptyManifest === null ||
+    !("name" in ptyManifest) ||
+    ptyManifest.name !== "node-pty" ||
+    !("version" in ptyManifest) ||
+    ptyManifest.version !== "1.1.0"
+  )
+    throw new Error("The staged USER_TERMINAL runtime version is invalid.");
   return Object.freeze(paths);
 }
 

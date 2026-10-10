@@ -14,6 +14,8 @@ function fixture(
     readonly beginAccountBoundary?: () => Promise<void>;
     readonly synchronizeAccountState?: () => Promise<void>;
     readonly projectAccountState?: (state: never) => never;
+    readonly desktopPanels?: unknown;
+    readonly developmentOrigin?: string | null;
   } = {},
 ) {
   const handlers = new Map<string, (event: unknown, input: unknown) => Promise<unknown>>();
@@ -82,7 +84,7 @@ function fixture(
     ipcMain: ipcMain as never,
     window: window as never,
     controller: controller as never,
-    rendererTrust: { developmentOrigin: null },
+    rendererTrust: { developmentOrigin: options.developmentOrigin ?? null },
     platform: "win32",
     arch: "x64",
     version: "0.1.0",
@@ -98,6 +100,9 @@ function fixture(
     ...(options.projectAccountState === undefined
       ? {}
       : { projectAccountState: options.projectAccountState as never }),
+    ...(options.desktopPanels === undefined
+      ? {}
+      : { desktopPanels: options.desktopPanels as never }),
   });
   const event = () => ({ sender, senderFrame: frame });
   return {
@@ -179,6 +184,113 @@ describe("Desktop IPC security boundary", () => {
     )) as { ok: boolean; error?: { code: string } };
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("IPC_CALLER_INVALID");
+    test.dispose();
+  });
+
+  it("keeps Login-only IPC closed to the localhost development Agent host", async () => {
+    const desktopPanels = { getAvailability: vi.fn(() => ({ available: true as const })) };
+    const test = fixture({
+      userId: "8d5cc9cb-f70d-4f5f-9d95-69c8e8eb8857",
+      desktopPanels,
+      developmentOrigin: "http://127.0.0.1:5173",
+    });
+    test.frame.url = "http://127.0.0.1:5173/";
+
+    const account = await test.handlers.get(IPC_CHANNELS.account.getState)?.(
+      test.event(),
+      undefined,
+    );
+    const workspace = await test.handlers.get(IPC_CHANNELS.workspace.availability)?.(
+      test.event(),
+      undefined,
+    );
+
+    expect(account).toMatchObject({ ok: false, error: { code: "IPC_CALLER_INVALID" } });
+    expect(workspace).toEqual({ ok: true, value: { available: true } });
+    expect(desktopPanels.getAvailability).toHaveBeenCalledOnce();
+    test.dispose();
+  });
+
+  it("gives only the Agent origin the registered Workspace panel surface", async () => {
+    const desktopPanels = {
+      getAvailability: vi.fn(() => ({ available: true as const })),
+      listEntries: vi.fn(async () => ({
+        workspaceId: "550e8400-e29b-41d4-a716-446655440000",
+        relativePath: "",
+        parentPath: null,
+        items: [],
+        hasMore: false,
+      })),
+    };
+    const test = fixture({
+      userId: "8d5cc9cb-f70d-4f5f-9d95-69c8e8eb8857",
+      desktopPanels,
+    });
+    const availability = test.handlers.get(IPC_CHANNELS.workspace.availability);
+    expect(availability).toBeDefined();
+
+    test.frame.url = "caelush-login://app/";
+    const loginResult = (await availability?.(test.event(), undefined)) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+    expect(loginResult.ok).toBe(false);
+    expect(loginResult.error?.code).toBe("IPC_CALLER_INVALID");
+
+    test.frame.url = "caelush-app://app/agent/";
+    const agentResult = (await availability?.(test.event(), undefined)) as {
+      ok: boolean;
+      value?: { available: boolean };
+    };
+    expect(agentResult).toEqual({ ok: true, value: { available: true } });
+
+    const listEntries = test.handlers.get(IPC_CHANNELS.workspace.listEntries);
+    const pathInjection = (await listEntries?.(test.event(), {
+      workspaceId: "550e8400-e29b-41d4-a716-446655440000",
+      relativePath: "",
+      workspaceRoot: "C:\\Users\\person",
+    })) as { ok: boolean; error?: { code: string } };
+    expect(pathInjection.ok).toBe(false);
+    expect(pathInjection.error?.code).toBe("IPC_INPUT_INVALID");
+    expect(desktopPanels.listEntries).not.toHaveBeenCalled();
+
+    const badAgentPath = test.handlers.get(IPC_CHANNELS.workspace.availability);
+    test.frame.url = "caelush-app://app/login/";
+    const rejected = (await badAgentPath?.(test.event(), undefined)) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+    expect(rejected.ok).toBe(false);
+    expect(rejected.error?.code).toBe("IPC_CALLER_INVALID");
+    test.dispose();
+  });
+
+  it("returns the local USER_TERMINAL write and resize acknowledgements", async () => {
+    const desktopPanels = {
+      writeTerminal: vi.fn(() => ({ accepted: true as const })),
+      resizeTerminal: vi.fn(() => ({ accepted: true as const })),
+    };
+    const test = fixture({
+      userId: "8d5cc9cb-f70d-4f5f-9d95-69c8e8eb8857",
+      desktopPanels,
+    });
+    test.frame.url = "caelush-app://app/agent/";
+    const input = { terminalId: "A".repeat(43) };
+
+    const write = await test.handlers.get(IPC_CHANNELS.workspace.terminalWrite)?.(test.event(), {
+      ...input,
+      data: "Write-Output 'D5'",
+    });
+    const resize = await test.handlers.get(IPC_CHANNELS.workspace.terminalResize)?.(test.event(), {
+      ...input,
+      cols: 104,
+      rows: 31,
+    });
+
+    expect(write).toEqual({ ok: true, value: { accepted: true } });
+    expect(resize).toEqual({ ok: true, value: { accepted: true } });
+    expect(desktopPanels.writeTerminal).toHaveBeenCalledOnce();
+    expect(desktopPanels.resizeTerminal).toHaveBeenCalledOnce();
     test.dispose();
   });
 
