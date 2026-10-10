@@ -2,7 +2,9 @@ import { createAIError, type ProviderCredentials } from "@caelush/ai";
 import type { ProviderCredentialRepository, ProviderCredentialStatus } from "@caelush/storage";
 
 export interface RuntimeProviderCredentialAuthorityOptions {
-  readonly repository: ProviderCredentialRepository;
+  readonly repository: Omit<ProviderCredentialRepository, "resolve"> & {
+    resolve(providerId: string, signal?: AbortSignal): Promise<string | undefined>;
+  };
   /** A snapshot of process environment values; values are read on every resolve. */
   readonly environment?: Readonly<Record<string, string | undefined>>;
   /** Compatibility input for the existing programmatic startup-provider seam. */
@@ -84,7 +86,22 @@ export function createRuntimeProviderCredentialAuthority(
       const environmentValue = environmentOrStartupCredential(providerId);
       if (environmentValue !== undefined) return { apiKey: environmentValue };
 
-      const local = await options.repository.resolve(providerId);
+      let local: string | undefined;
+      try {
+        local = await options.repository.resolve(providerId, signal);
+      } catch (error) {
+        if (signal.aborted) {
+          throw createAIError("AI_ABORTED", "The provider credential resolution was cancelled.", {
+            providerId,
+          });
+        }
+        throw error;
+      }
+      if (signal.aborted) {
+        throw createAIError("AI_ABORTED", "The provider credential resolution was cancelled.", {
+          providerId,
+        });
+      }
       if (local === undefined) {
         throw createAIError("AI_AUTHENTICATION", "No credential is configured for this provider.", {
           providerId,

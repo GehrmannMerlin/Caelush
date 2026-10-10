@@ -41,6 +41,7 @@ import { SessionTranscriptService } from "./services/session-transcript-service.
 import { SessionPresentationService } from "./services/session-presentation-service.js";
 import { AIConfigurationService } from "./services/ai-configuration-service.js";
 import type { DaemonModelProviderConfig } from "./providers/model-canonicalizer.js";
+import type { RuntimeProviderCredentialAuthority } from "./providers/credential-authority.js";
 import type { WebStaticHostOptions } from "./web/static-host.js";
 import type { SubscriberQueuePolicy } from "./events/subscriber-queue.js";
 import { DefaultPublicEventProjector } from "./events/public-event-projector.js";
@@ -234,6 +235,8 @@ export interface DaemonOptions {
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
   readonly environment?: Readonly<Record<string, string | undefined>>;
+  /** Private Desktop authority injection; standard hosts keep the SQLite/environment adapter. */
+  readonly credentialAuthority?: RuntimeProviderCredentialAuthority;
   /** Finite Gateway watchdog overrides; omitted values retain production defaults. */
   readonly providerStreamPolicy?: Partial<ProviderStreamPolicy>;
   readonly providerBindings?: readonly AIProviderBinding[];
@@ -452,6 +455,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       runtime,
       ...(options.providers === undefined ? {} : { providers: options.providers }),
       ...(options.defaultModel === undefined ? {} : { defaultModel: options.defaultModel }),
+      ...(options.credentialAuthority === undefined
+        ? {}
+        : { credentialAuthority: options.credentialAuthority }),
       ...(options.environment === undefined ? {} : { environment: options.environment }),
       ...(options.providerBindings === undefined
         ? {}

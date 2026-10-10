@@ -4,6 +4,7 @@ import { z } from "zod";
 import { DaemonInfoSchema } from "@caelush/protocol";
 import { startDaemon, type DaemonHandle } from "./daemon.js";
 import { readProviderConfiguration, readProviderStreamPolicy } from "./config.js";
+import { createDesktopCredentialAuthority } from "./providers/desktop-credential-rpc.js";
 import { createNativeWorkspaceDirectoryPicker } from "./workspaces/workspace-picker.js";
 import { DAEMON_VERSION } from "./version.js";
 
@@ -58,6 +59,7 @@ type StopMessage = z.infer<typeof StopMessageSchema>;
 let bootstrapConsumed = false;
 let bootstrapGeneration: string | undefined;
 let daemon: DaemonHandle | undefined;
+let disposeCredentialAuthority: (() => void) | undefined;
 let starting: Promise<void> | undefined;
 let stopping: Promise<void> | undefined;
 let stopRequested = false;
@@ -164,7 +166,12 @@ async function startFromBootstrap(
     const verifiedProfileRoot = await verifyProfileBinding(profileRootDirectory, message.profileId);
     failureCode = "DAEMON_START_FAILED";
     const databasePath = path.join(verifiedProfileRoot, "caelush.db");
-    const environment = process.env;
+    const environment = desktopProviderEnvironment(process.env);
+    const credentialRpc = createDesktopCredentialAuthority({
+      generationId: message.generationId,
+      profileId: message.profileId,
+    });
+    disposeCredentialAuthority = credentialRpc.dispose;
     const hostTokenBytes = Buffer.from(hostToken, "base64url");
     if (hostTokenBytes.byteLength !== 32 || hostTokenBytes.toString("base64url") !== hostToken) {
       throw new Error("token");
@@ -176,6 +183,7 @@ async function startFromBootstrap(
       port: 0,
       environment,
       ...readProviderConfiguration(environment),
+      credentialAuthority: credentialRpc.authority,
       providerStreamPolicy: readProviderStreamPolicy(environment),
       workspacePicker: createNativeWorkspaceDirectoryPicker(),
       desktopHost: {
@@ -223,8 +231,21 @@ async function startFromBootstrap(
   } catch {
     if (daemon !== undefined) await daemon.close().catch(() => undefined);
     daemon = undefined;
+    disposeCredentialAuthority?.();
+    disposeCredentialAuthority = undefined;
     await failStartup(message.generationId, failureCode);
   }
+}
+
+function desktopProviderEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const environment = { ...source };
+  for (const key of Object.keys(environment)) {
+    if (/(?:API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|AUTH_TOKEN|SECRET|PASSWORD)/iu.test(key)) {
+      delete environment[key];
+      delete process.env[key];
+    }
+  }
+  return environment;
 }
 
 async function verifyProfileBinding(
@@ -291,6 +312,8 @@ async function closeAndExit(message?: StopMessage): Promise<void> {
   stopping = (async () => {
     if (starting !== undefined && daemon === undefined) await starting.catch(() => undefined);
     if (daemon === undefined) {
+      disposeCredentialAuthority?.();
+      disposeCredentialAuthority = undefined;
       if (message !== undefined) {
         await send({
           type: "DAEMON_CLOSED",
@@ -310,6 +333,8 @@ async function closeAndExit(message?: StopMessage): Promise<void> {
         generationId: bootstrapGeneration,
       });
       daemon = undefined;
+      disposeCredentialAuthority?.();
+      disposeCredentialAuthority = undefined;
       process.disconnect?.();
       setImmediate(() => process.exit(0));
     } catch {

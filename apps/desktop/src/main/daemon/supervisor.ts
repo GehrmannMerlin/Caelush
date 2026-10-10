@@ -5,14 +5,18 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { z } from "zod";
 import { evaluateDesktopDaemonCompatibility, type DesktopDaemonCapability } from "@caelush/client";
-import {
-  DaemonInfoSchema,
-  HealthResponseSchema,
-  type DaemonInfo,
-} from "@caelush/protocol";
+import { DaemonInfoSchema, HealthResponseSchema, type DaemonInfo } from "@caelush/protocol";
 import type { AccountState } from "../account/state.js";
-import { profileIdForUser, type AccountProfile, type ProfileManager } from "../profiles/profile-manager.js";
+import {
+  profileIdForUser,
+  type AccountProfile,
+  type ProfileManager,
+} from "../profiles/profile-manager.js";
 import type { DesktopDaemonProxyLease } from "../protocol/local-proxy.js";
+import {
+  MainCredentialRpcServer,
+  type MainCredentialVaultPort,
+} from "../credentials/credential-rpc.js";
 
 export const DESKTOP_DAEMON_STARTUP_TIMEOUT_MS = 10_000;
 export const DESKTOP_DAEMON_SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -81,9 +85,7 @@ const StopBlockedMessageSchema = z
 type ReadyMessage = z.infer<typeof ReadyMessageSchema>;
 
 export type DesktopDaemonFailureKind =
-  | "DAEMON_UNAVAILABLE"
-  | "PROTOCOL_INCOMPATIBLE"
-  | "SAFE_SHUTDOWN_PENDING";
+  "DAEMON_UNAVAILABLE" | "PROTOCOL_INCOMPATIBLE" | "SAFE_SHUTDOWN_PENDING";
 
 export class DesktopDaemonSupervisorError extends Error {
   constructor(
@@ -96,11 +98,7 @@ export class DesktopDaemonSupervisorError extends Error {
   }
 }
 
-export type DesktopDaemonLifecycleState =
-  | "STARTING"
-  | "READY"
-  | "STOPPING"
-  | "STOP_BLOCKED";
+export type DesktopDaemonLifecycleState = "STARTING" | "READY" | "STOPPING" | "STOP_BLOCKED";
 
 export interface DesktopDaemonResources {
   readonly nodeExecutablePath: string;
@@ -121,6 +119,8 @@ export interface DesktopChildProcess extends EventEmitter {
 
 export interface DesktopDaemonSupervisorOptions {
   readonly profileManager: Pick<ProfileManager, "selectForUser">;
+  /** Electron Main's DPAPI credential authority. No Daemon-side fallback is used in Desktop mode. */
+  readonly credentialVault: MainCredentialVaultPort;
   readonly resolveResources: () => Promise<DesktopDaemonResources>;
   readonly productVersion: string;
   readonly processEnvironment?: NodeJS.ProcessEnv;
@@ -153,6 +153,7 @@ interface ChildExit {
 }
 
 interface ManagedGeneration {
+  readonly userId: string;
   readonly profileId: string;
   readonly generationId: string;
   readonly child: DesktopChildProcess;
@@ -166,6 +167,8 @@ interface ManagedGeneration {
   readonly abortController: AbortController;
   readonly logSink: ChildLogSink;
   readonly exitPromise: Promise<ChildExit>;
+  credentialRpcServer?: MainCredentialRpcServer;
+  credentialRpcListener?: (message: unknown) => void;
   boundPort?: number;
   lifecycleState: DesktopDaemonLifecycleState;
   exit?: ChildExit;
@@ -347,7 +350,7 @@ export class DesktopDaemonSupervisor {
     if (!this.isDesiredAccountCurrent(desired)) return;
 
     try {
-      await this.startGeneration(profile);
+      await this.startGeneration(profile, desired.userId);
     } catch (error) {
       this.lastFailure = failureKindFor(error);
       this.options.onStateChange?.();
@@ -363,7 +366,7 @@ export class DesktopDaemonSupervisor {
     this.options.onStateChange?.();
   }
 
-  private async startGeneration(profile: AccountProfile): Promise<void> {
+  private async startGeneration(profile: AccountProfile, userId: string): Promise<void> {
     const resources = await this.options.resolveResources();
     const generationId = randomUUID();
     let bootstrapSecret = randomBytes(32).toString("base64url");
@@ -386,6 +389,7 @@ export class DesktopDaemonSupervisor {
     const logSink = new ChildLogSink(profile.logsDirectory, [bootstrapSecret, hostToken]);
     const exitPromise = waitForExit(child);
     const generation: ManagedGeneration = {
+      userId,
       profileId: profile.profileId,
       generationId,
       child,
@@ -403,10 +407,27 @@ export class DesktopDaemonSupervisor {
       exitObserved: false,
     };
     this.current = generation;
+    generation.credentialRpcServer = new MainCredentialRpcServer({
+      identity: {
+        generationId,
+        profileId: profile.profileId,
+        childPid,
+        cloudUserId: userId,
+      },
+      isCurrentGeneration: () =>
+        this.current === generation && !generation.abortController.signal.aborted,
+      credentials: this.options.credentialVault,
+      send: (response) => sendChildMessage(child, response),
+    });
+    generation.credentialRpcListener = (message) => {
+      void generation.credentialRpcServer?.handle(message);
+    };
+    child.on("message", generation.credentialRpcListener);
     this.attachChildLogging(generation);
     child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
       generation.exit = { code, signal };
       generation.exitObserved = true;
+      this.disposeCredentialRpc(generation);
       void generation.logSink.close();
       this.onChildExit(generation, code, signal);
     });
@@ -578,6 +599,8 @@ export class DesktopDaemonSupervisor {
       );
     }
 
+    this.disposeCredentialRpc(generation);
+
     const stopMessage = {
       type: "STOP_DESKTOP_DAEMON",
       ipcProtocolVersion: 1,
@@ -656,6 +679,7 @@ export class DesktopDaemonSupervisor {
   private async cleanupFailedStartup(generation: ManagedGeneration): Promise<void> {
     this.acceptingRequests = false;
     generation.abortController.abort();
+    this.disposeCredentialRpc(generation);
     if (this.current === generation) this.current = undefined;
     if (!generation.exitObserved) {
       try {
@@ -707,6 +731,7 @@ export class DesktopDaemonSupervisor {
     _code: number | null,
     _signal: NodeJS.Signals | null,
   ): void {
+    this.disposeCredentialRpc(generation);
     if (this.current !== generation || generation.lifecycleState === "STOPPING") return;
     const wasReady = generation.lifecycleState === "READY";
     this.current = undefined;
@@ -730,9 +755,19 @@ export class DesktopDaemonSupervisor {
   private onUnexpectedChildError(generation: ManagedGeneration): void {
     if (this.current !== generation || generation.lifecycleState === "STOPPING") return;
     generation.abortController.abort();
+    this.disposeCredentialRpc(generation);
     this.acceptingRequests = false;
     this.lastFailure = "DAEMON_UNAVAILABLE";
     this.options.onStateChange?.();
+  }
+
+  private disposeCredentialRpc(generation: ManagedGeneration): void {
+    if (generation.credentialRpcListener !== undefined) {
+      generation.child.removeListener("message", generation.credentialRpcListener);
+      delete generation.credentialRpcListener;
+    }
+    generation.credentialRpcServer?.dispose();
+    delete generation.credentialRpcServer;
   }
 
   private freezeProxyAccess(): void {
@@ -842,11 +877,17 @@ function childEnvironment(
     "CAELUSH_CLOUD_REFRESH_TOKEN",
     "CAELUSH_ACCESS_TOKEN",
     "CAELUSH_REFRESH_TOKEN",
+    "CAELUSH_PROVIDER_API_KEY",
     "CAELUSH_DEVICE_PRIVATE_KEY",
     "ELECTRON_RUN_AS_NODE",
     "NODE_OPTIONS",
   ]) {
     delete environment[key];
+  }
+  for (const key of Object.keys(environment)) {
+    if (/(?:API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|AUTH_TOKEN|SECRET|PASSWORD)/iu.test(key)) {
+      delete environment[key];
+    }
   }
   return environment;
 }
@@ -897,7 +938,16 @@ function waitForChildMessage(child: DesktopChildProcess, timeoutMs: number): Mes
     cleanup();
     rejectPromise(error);
   };
-  const onMessage = (message: unknown) => resolve(message);
+  const onMessage = (message: unknown) => {
+    if (
+      isRecord(message) &&
+      typeof message.type === "string" &&
+      message.type.startsWith("CREDENTIAL_")
+    ) {
+      return;
+    }
+    resolve(message);
+  };
   const onExit = () => reject(new Error("child exited before response"));
   const onError = () => reject(new Error("child process failed"));
   timer = setTimeout(() => reject(new Error("private IPC response timed out")), timeoutMs);
@@ -905,6 +955,10 @@ function waitForChildMessage(child: DesktopChildProcess, timeoutMs: number): Mes
   child.once("exit", onExit);
   child.once("error", onError);
   return { promise, cancel: () => reject(new Error("private IPC wait cancelled")) };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 async function sendChildMessage(child: DesktopChildProcess, message: unknown): Promise<void> {

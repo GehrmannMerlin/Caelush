@@ -10,6 +10,7 @@ import {
   type DesktopDaemonResources,
 } from "../../src/main/daemon/supervisor.js";
 import { profileIdForUser } from "../../src/main/profiles/profile-manager.js";
+import type { MainCredentialVaultPort } from "../../src/main/credentials/credential-rpc.js";
 
 const CAPABILITIES = {
   runExecution: true,
@@ -138,15 +139,34 @@ function createAuthorizedState(userId = "8d5cc9cb-f70d-4f5f-9d95-69c8e8eb8857"):
   };
 }
 
-function createSupervisor(options: {
-  readonly child?: FakeChild;
-  readonly startupTimeoutMs?: number;
-  readonly proxyDrainTimeoutMs?: number;
-  readonly profileSelections?: string[];
-  readonly onSpawn?: (environment: NodeJS.ProcessEnv) => void;
-} = {}) {
+function createSupervisor(
+  options: {
+    readonly child?: FakeChild;
+    readonly startupTimeoutMs?: number;
+    readonly proxyDrainTimeoutMs?: number;
+    readonly profileSelections?: string[];
+    readonly credentialVault?: MainCredentialVaultPort;
+    readonly onSpawn?: (environment: NodeJS.ProcessEnv) => void;
+  } = {},
+) {
   const child = options.child ?? new FakeChild();
   const profileSelections = options.profileSelections ?? [];
+  const credentialVault: MainCredentialVaultPort = options.credentialVault ?? {
+    describe: async (_userId, _profileId, providerId) => ({
+      providerId,
+      configured: false,
+      source: "NONE",
+      writable: true,
+    }),
+    resolve: async () => undefined,
+    set: async (_userId, _profileId, providerId) => ({
+      providerId,
+      configured: true,
+      source: "LOCAL",
+      writable: true,
+    }),
+    unset: async () => undefined,
+  };
   const supervisor = new DesktopDaemonSupervisor({
     profileManager: {
       async selectForUser(userId) {
@@ -166,6 +186,7 @@ function createSupervisor(options: {
         };
       },
     },
+    credentialVault,
     resolveResources: async () => RESOURCES,
     productVersion: "0.1.0",
     processEnvironment: {
@@ -221,8 +242,8 @@ describe("DesktopDaemonSupervisor", () => {
     expect(setup.profileSelections).toEqual([state.account?.userId]);
     expect(childEnvironment).toMatchObject({
       CAELUSH_HOME: path.join(tmpdir(), profileIdForUser(state.account?.userId ?? "")),
-      CAELUSH_PROVIDER_API_KEY: "provider-secret",
     });
+    expect(childEnvironment).not.toHaveProperty("CAELUSH_PROVIDER_API_KEY");
     expect(childEnvironment).not.toHaveProperty("CAELUSH_HOST_TOKEN");
     expect(childEnvironment).not.toHaveProperty("CAELUSH_CLOUD_ACCESS_TOKEN");
     const start = setup.child.sent[0];
@@ -242,11 +263,62 @@ describe("DesktopDaemonSupervisor", () => {
     expect(setup.supervisor.acquireProxyLease(new AbortController().signal)).toBeNull();
   });
 
+  it("routes credential RPC through Main with the generation's User and Profile binding", async () => {
+    const state = createAuthorizedState();
+    const resolveCalls: Array<readonly [string, string, string]> = [];
+    const credentialVault: MainCredentialVaultPort = {
+      describe: async (_userId, _profileId, providerId) => ({
+        providerId,
+        configured: true,
+        source: "LOCAL",
+        writable: true,
+      }),
+      resolve: async (userId, profileId, providerId) => {
+        resolveCalls.push([userId, profileId, providerId]);
+        return "fixture-provider-secret";
+      },
+      set: async (_userId, _profileId, providerId) => ({
+        providerId,
+        configured: true,
+        source: "LOCAL",
+        writable: true,
+      }),
+      unset: async () => undefined,
+    };
+    const setup = createSupervisor({ credentialVault });
+    await setup.supervisor.synchronizeAccountState(state);
+    const start = setup.child.sent[0];
+    if (!isRecord(start)) throw new Error("missing startup message");
+    const boundProfileId = profileIdForUser(state.account?.userId ?? "");
+
+    setup.child.emit("message", {
+      type: "CREDENTIAL_RESOLVE",
+      requestId: "b224fcb7-f36a-457b-a71e-e72416b24a59",
+      generationId: start.generationId,
+      profileId: boundProfileId,
+      childPid: setup.child.pid,
+      providerId: "deepseek",
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(setup.child.sent).toContainEqual({
+      type: "CREDENTIAL_RESPONSE",
+      requestId: "b224fcb7-f36a-457b-a71e-e72416b24a59",
+      generationId: start.generationId,
+      profileId: boundProfileId,
+      result: { kind: "RESOLVE", secretValue: "fixture-provider-secret" },
+    });
+    expect(resolveCalls).toEqual([[state.account?.userId, boundProfileId, "deepseek"]]);
+    await setup.supervisor.beginAccountBoundary();
+  });
+
   it("rejects a READY message that does not match the OS Child PID", async () => {
     const child = new FakeChild();
     child.startBehavior = "bad-pid";
     const setup = createSupervisor({ child });
-    await expect(setup.supervisor.synchronizeAccountState(createAuthorizedState())).rejects.toMatchObject({
+    await expect(
+      setup.supervisor.synchronizeAccountState(createAuthorizedState()),
+    ).rejects.toMatchObject({
       code: "DAEMON_READY_INVALID",
       failureKind: "PROTOCOL_INCOMPATIBLE",
     });
@@ -258,11 +330,15 @@ describe("DesktopDaemonSupervisor", () => {
     const child = new FakeChild();
     child.startBehavior = "silent";
     const setup = createSupervisor({ child, startupTimeoutMs: 20 });
-    await expect(setup.supervisor.synchronizeAccountState(createAuthorizedState())).rejects.toMatchObject({
+    await expect(
+      setup.supervisor.synchronizeAccountState(createAuthorizedState()),
+    ).rejects.toMatchObject({
       code: "DAEMON_START_TIMEOUT",
     });
     expect(setup.supervisor.acquireProxyLease(new AbortController().signal)).toBeNull();
-    expect(child.sent.some((item) => isRecord(item) && item.type === "STOP_DESKTOP_DAEMON")).toBe(true);
+    expect(child.sent.some((item) => isRecord(item) && item.type === "STOP_DESKTOP_DAEMON")).toBe(
+      true,
+    );
     expect(child.exitCode).toBe(0);
   });
 
@@ -276,7 +352,9 @@ describe("DesktopDaemonSupervisor", () => {
     expect(lease?.signal.aborted).toBe(true);
     lease?.release();
     await stopping;
-    expect(setup.child.sent.some((item) => isRecord(item) && item.type === "STOP_DESKTOP_DAEMON")).toBe(true);
+    expect(
+      setup.child.sent.some((item) => isRecord(item) && item.type === "STOP_DESKTOP_DAEMON"),
+    ).toBe(true);
     expect(setup.child.exitCode).toBe(0);
   });
 

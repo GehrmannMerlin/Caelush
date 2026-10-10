@@ -4,6 +4,7 @@ import { AccountController } from "./account/controller.js";
 import type { AccountState } from "./account/state.js";
 import { CloudAccountClient } from "./cloud/client.js";
 import { DpapiVault } from "./credentials/vault.js";
+import { ProviderCredentialVault } from "./credentials/provider-credential-vault.js";
 import { BUILD_CONFIGURATION, trustedOfflineKeys } from "./build-config.js";
 import { registerDesktopIpc } from "./ipc/handlers.js";
 import { registerAppProtocol } from "./protocol/app-protocol.js";
@@ -65,6 +66,7 @@ if (!singleInstance) {
     cloud,
     trustedOfflinePublicKeys: trustedOfflineKeys(),
   });
+  const providerCredentialVault = new ProviderCredentialVault(vault);
   const localAppDataDirectory = process.env.LOCALAPPDATA;
   const profileManager = localAppDataDirectory
     ? new ProfileManager({
@@ -82,6 +84,7 @@ if (!singleInstance) {
       };
   const supervisor = new DesktopDaemonSupervisor({
     profileManager,
+    credentialVault: providerCredentialVault,
     resolveResources: () =>
       resolveDesktopDaemonResources({
         packaged: app.isPackaged,
