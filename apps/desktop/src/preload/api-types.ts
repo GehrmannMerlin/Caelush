@@ -4,6 +4,11 @@ import type {
   DeviceRevocationResponse,
   OperationSucceededResponse,
 } from "../main/cloud/schemas.js";
+import type {
+  LegacyDataImportResult,
+  LegacyDataImportSummary,
+  LegacyImportProgress,
+} from "../shared/legacy-data-contract.js";
 
 export interface DesktopApi {
   readonly account: {
@@ -60,6 +65,15 @@ export interface DesktopApi {
       readonly available: false;
       readonly reason: "D6_UPDATER_PENDING";
     }>;
+  };
+  readonly legacyData: {
+    inspect(): Promise<LegacyDataImportSummary>;
+    import(input: {
+      readonly candidateId: string;
+      readonly confirmed: true;
+    }): Promise<LegacyDataImportResult>;
+    resume(): Promise<LegacyDataImportResult>;
+    subscribeProgress(listener: (progress: LegacyImportProgress) => void): () => void;
   };
 }
 

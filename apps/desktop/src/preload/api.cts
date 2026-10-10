@@ -1,6 +1,7 @@
 import electron = require("electron");
 import type { AccountState } from "../main/account/state.js";
 import type { DesktopApi } from "./api-types.js";
+import type { LegacyImportProgress } from "../shared/legacy-data-contract.js";
 
 const channels = {
   account: {
@@ -28,6 +29,12 @@ const channels = {
     workspace: "caelush:feature:workspace",
     browser: "caelush:feature:browser",
     update: "caelush:feature:update",
+  },
+  legacyData: {
+    inspect: "caelush:legacy-data:inspect",
+    import: "caelush:legacy-data:import",
+    resume: "caelush:legacy-data:resume",
+    progress: "caelush:legacy-data:progress",
   },
 } as const;
 
@@ -147,6 +154,46 @@ const accountApi: DesktopApi["account"] = {
       ),
 };
 
+const legacyDataApi: DesktopApi["legacyData"] = {
+  inspect: async () =>
+    unwrapIpcResult<Awaited<ReturnType<DesktopApi["legacyData"]["inspect"]>>>(
+      await electron.ipcRenderer.invoke(channels.legacyData.inspect),
+    ),
+  import: (input) =>
+    electron.ipcRenderer
+      .invoke(channels.legacyData.import, input)
+      .then((result) =>
+        unwrapIpcResult<Awaited<ReturnType<DesktopApi["legacyData"]["import"]>>>(result),
+      ),
+  resume: async () =>
+    unwrapIpcResult<Awaited<ReturnType<DesktopApi["legacyData"]["resume"]>>>(
+      await electron.ipcRenderer.invoke(channels.legacyData.resume),
+    ),
+  subscribeProgress(listener) {
+    const allowed = new Set<LegacyImportProgress>([
+      "BACKUP_VERIFIED",
+      "IMPORT_STAGED",
+      "DESTINATION_VERIFIED",
+      "CREDENTIALS_SECURED",
+      "COMMITTED",
+      "RECOVERY_REQUIRED",
+    ]);
+    const handler = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      if (
+        value !== null &&
+        typeof value === "object" &&
+        "progress" in value &&
+        typeof value.progress === "string" &&
+        allowed.has(value.progress as LegacyImportProgress)
+      ) {
+        listener(value.progress as LegacyImportProgress);
+      }
+    };
+    electron.ipcRenderer.on(channels.legacyData.progress, handler);
+    return () => electron.ipcRenderer.removeListener(channels.legacyData.progress, handler);
+  },
+};
+
 const api: DesktopApi = Object.freeze({
   account: Object.freeze(accountApi),
   window: Object.freeze({
@@ -185,6 +232,7 @@ const api: DesktopApi = Object.freeze({
         await electron.ipcRenderer.invoke(channels.feature.update),
       ),
   }),
+  legacyData: Object.freeze(legacyDataApi),
 });
 
 electron.contextBridge.exposeInMainWorld("caelushDesktop", api);

@@ -155,11 +155,36 @@ describe("Main-owned Desktop Daemon proxy", () => {
     expect(headers.get("x-caelush-host-token")).toBe(HOST_TOKEN);
     expect(headers.has("authorization")).toBe(false);
     expect(headers.has("cookie")).toBe(false);
+    expect(receivedInit?.body).toBeInstanceOf(Uint8Array);
     expect(await new Response(receivedInit?.body).text()).toBe('{"cursor":true}');
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: { code: "INVALID_EVENT_CURSOR" } });
     expect(response.headers.has("connection")).toBe(false);
     expect(setup.release).toHaveBeenCalledOnce();
+  });
+
+  it("caps buffered request bodies before forwarding them to the Daemon", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response("ok"));
+    const release = vi.fn();
+    const proxy = new DesktopLocalProxy({
+      acquireLease: () => ({
+        baseUrl: "http://127.0.0.1:43219",
+        hostToken: HOST_TOKEN,
+        signal: new AbortController().signal,
+        release,
+      }),
+      fetcher,
+      maxRequestBodyBytes: 4,
+    });
+
+    const response = await proxy.handle(
+      rendererRequest({ method: "POST", body: "12345", headers: { "content-type": "text/plain" } }),
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ error: { code: "REQUEST_TOO_LARGE" } });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("streams SSE chunks, forwards both cursors unchanged, and aborts on subscriber close", async () => {

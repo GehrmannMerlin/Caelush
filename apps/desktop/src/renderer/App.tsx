@@ -23,6 +23,10 @@ import {
   X,
 } from "lucide-react";
 import type { AccountState, SafeDevice } from "../main/account/state.js";
+import type {
+  LegacyDataImportSummary,
+  LegacyImportProgress,
+} from "../shared/legacy-data-contract.js";
 
 type AuthScreen = "login" | "register" | "verify" | "forgot" | "reset";
 type AccountScreen = "home" | "devices" | "security";
@@ -47,6 +51,14 @@ export function DesktopApp() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [devices, setDevices] = useState<readonly SafeDevice[]>([]);
   const [platformLabel, setPlatformLabel] = useState("Windows · Desktop");
+  const [legacySummary, setLegacySummary] = useState<LegacyDataImportSummary | null>(null);
+  const [legacyDismissed, setLegacyDismissed] = useState(false);
+  const [legacyBusy, setLegacyBusy] = useState(false);
+  const [legacyProgress, setLegacyProgress] = useState<LegacyImportProgress | null>(null);
+  const [legacyMessage, setLegacyMessage] = useState<{
+    readonly tone: "info" | "error";
+    readonly message: string;
+  } | null>(null);
 
   const authenticated =
     accountState.status === "AUTHENTICATED_ONLINE" || accountState.status === "AUTHORIZED_OFFLINE";
@@ -112,6 +124,32 @@ export function DesktopApp() {
       active = false;
     };
   }, [online, screen]);
+
+  useEffect(() => {
+    if (!authenticated || accountState.account?.userId === undefined) {
+      setLegacySummary(null);
+      setLegacyProgress(null);
+      setLegacyMessage(null);
+      return;
+    }
+    let active = true;
+    setLegacyDismissed(false);
+    const unsubscribe = window.caelushDesktop.legacyData.subscribeProgress((progress) => {
+      if (active) setLegacyProgress(progress);
+    });
+    void window.caelushDesktop.legacyData
+      .inspect()
+      .then((summary) => {
+        if (active) setLegacySummary(summary);
+      })
+      .catch((error: unknown) => {
+        if (active) setLegacyMessage({ tone: "error", message: errorMessage(error) });
+      });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [authenticated, accountState.account?.userId]);
 
   async function submit(event: FormEvent<HTMLFormElement>, operation: () => Promise<unknown>) {
     event.preventDefault();
@@ -235,6 +273,52 @@ export function DesktopApp() {
     }
   }
 
+  async function importLegacyData(candidateId: string) {
+    setLegacyBusy(true);
+    setLegacyProgress(null);
+    setLegacyMessage(null);
+    try {
+      await window.caelushDesktop.legacyData.import({ candidateId, confirmed: true });
+      setLegacyMessage({
+        tone: "info",
+        message:
+          "Local data import completed. The protected backup is verified and the original source remains in place.",
+      });
+      setLegacySummary(await window.caelushDesktop.legacyData.inspect());
+    } catch (error) {
+      setLegacyMessage({ tone: "error", message: errorMessage(error) });
+      await window.caelushDesktop.legacyData
+        .inspect()
+        .then(setLegacySummary)
+        .catch(() => undefined);
+    } finally {
+      setLegacyBusy(false);
+    }
+  }
+
+  async function resumeLegacyImport() {
+    setLegacyBusy(true);
+    setLegacyProgress(null);
+    setLegacyMessage(null);
+    try {
+      await window.caelushDesktop.legacyData.resume();
+      setLegacyMessage({
+        tone: "info",
+        message:
+          "Protected recovery completed. The destination Profile passed verification and the original source remains in place.",
+      });
+      setLegacySummary(await window.caelushDesktop.legacyData.inspect());
+    } catch (error) {
+      setLegacyMessage({ tone: "error", message: errorMessage(error) });
+      await window.caelushDesktop.legacyData
+        .inspect()
+        .then(setLegacySummary)
+        .catch(() => undefined);
+    } finally {
+      setLegacyBusy(false);
+    }
+  }
+
   const apiError = feedback ?? accountState.lastError?.message ?? null;
   const authenticatedScreen =
     authenticated && !reconnectingOffline ? (
@@ -255,6 +339,14 @@ export function DesktopApp() {
           setScreen("login");
         }}
         onChangePassword={(event) => void changePassword(event)}
+        legacySummary={legacySummary}
+        legacyDismissed={legacyDismissed}
+        legacyBusy={legacyBusy}
+        legacyProgress={legacyProgress}
+        legacyMessage={legacyMessage}
+        onDismissLegacy={() => setLegacyDismissed(true)}
+        onImportLegacy={(candidateId) => void importLegacyData(candidateId)}
+        onResumeLegacy={() => void resumeLegacyImport()}
         currentPassword={currentPassword}
         newPassword={newPassword}
         setCurrentPassword={setCurrentPassword}
@@ -620,6 +712,14 @@ function AccountHome(props: {
   onReconnect(): void;
   onRevoke(device: SafeDevice): void;
   onChangePassword(event: FormEvent<HTMLFormElement>): void;
+  legacySummary: LegacyDataImportSummary | null;
+  legacyDismissed: boolean;
+  legacyBusy: boolean;
+  legacyProgress: LegacyImportProgress | null;
+  legacyMessage: { readonly tone: "info" | "error"; readonly message: string } | null;
+  onDismissLegacy(): void;
+  onImportLegacy(candidateId: string): void;
+  onResumeLegacy(): void;
   currentPassword: string;
   newPassword: string;
   setCurrentPassword(value: string): void;
@@ -705,6 +805,14 @@ function AccountHome(props: {
             onReconnect={props.onReconnect}
             onOpenAgent={props.onOpenAgent}
             busy={props.busy}
+            legacySummary={props.legacySummary}
+            legacyDismissed={props.legacyDismissed}
+            legacyBusy={props.legacyBusy}
+            legacyProgress={props.legacyProgress}
+            legacyMessage={props.legacyMessage}
+            onDismissLegacy={props.onDismissLegacy}
+            onImportLegacy={props.onImportLegacy}
+            onResumeLegacy={props.onResumeLegacy}
           />
         )}
         {props.activeView === "devices" && (
@@ -740,6 +848,14 @@ function Overview(props: {
   onReconnect(): void;
   onOpenAgent(): void;
   busy: boolean;
+  legacySummary: LegacyDataImportSummary | null;
+  legacyDismissed: boolean;
+  legacyBusy: boolean;
+  legacyProgress: LegacyImportProgress | null;
+  legacyMessage: { readonly tone: "info" | "error"; readonly message: string } | null;
+  onDismissLegacy(): void;
+  onImportLegacy(candidateId: string): void;
+  onResumeLegacy(): void;
 }) {
   const { state } = props;
   const offline = state.status === "AUTHORIZED_OFFLINE";
@@ -866,6 +982,16 @@ function Overview(props: {
           </button>
         </section>
       </div>
+      <LegacyImportPanel
+        summary={props.legacySummary}
+        dismissed={props.legacyDismissed}
+        busy={props.legacyBusy}
+        progress={props.legacyProgress}
+        message={props.legacyMessage}
+        onDismiss={props.onDismissLegacy}
+        onImport={props.onImportLegacy}
+        onResume={props.onResumeLegacy}
+      />
       <section className="agent-pending">
         <div className="pending-mark">
           <MonitorCog size={20} />
@@ -895,6 +1021,220 @@ function Overview(props: {
       </section>
     </>
   );
+}
+
+function LegacyImportPanel(props: {
+  summary: LegacyDataImportSummary | null;
+  dismissed: boolean;
+  busy: boolean;
+  progress: LegacyImportProgress | null;
+  message: { readonly tone: "info" | "error"; readonly message: string } | null;
+  onDismiss(): void;
+  onImport(candidateId: string): void;
+  onResume(): void;
+}) {
+  const [reviewCandidateId, setReviewCandidateId] = useState<string | null>(null);
+  const [reviewDismissed, setReviewDismissed] = useState(false);
+  const summary = props.summary;
+  if (
+    summary === null ||
+    (summary.sources.length === 0 && !summary.pendingRecovery) ||
+    (props.dismissed && props.message === null)
+  ) {
+    return null;
+  }
+  const candidate = summary.sources.find(
+    (source) => source.candidateId === reviewCandidateId && source.importable,
+  );
+  const showReview = candidate !== undefined && !reviewDismissed && !summary.pendingRecovery;
+  return (
+    <section className={`legacy-import-panel ${summary.pendingRecovery ? "is-recovery" : ""}`}>
+      <div className="legacy-import-heading">
+        <div className="legacy-import-icon">
+          <ShieldCheck size={18} />
+        </div>
+        <div>
+          <p className="eyebrow">LOCAL DATA</p>
+          <h3>
+            {summary.pendingRecovery ? "Local import recovery needed" : "Legacy Caelush data"}
+          </h3>
+        </div>
+      </div>
+      {summary.pendingRecovery ? (
+        <p className="legacy-import-copy">
+          A previous import has not been committed. The Profile must pass protected recovery and a
+          local Agent start before completion. Your legacy source is kept.
+        </p>
+      ) : (
+        <p className="legacy-import-copy">
+          A previous Caelush data folder is available on this Windows user profile. Review its
+          contents before adding them to this account.
+        </p>
+      )}
+      {summary.sources.map((source) => (
+        <div className="legacy-source" key={source.candidateId}>
+          <div className="legacy-source-title">
+            <b>{source.sourceLabel}</b>
+            <span>{formatBytes(source.estimatedBytes)}</span>
+          </div>
+          <div className="legacy-count-grid">
+            <LegacyCount label="Workspaces" value={source.workspaces} />
+            <LegacyCount label="Sessions" value={source.sessions} />
+            <LegacyCount label="Runs" value={source.runs} />
+            <LegacyCount label="Messages" value={source.messages} />
+            <LegacyCount label="Durable events" value={source.durableEvents} />
+            <LegacyCount label="Context checkpoints" value={source.contextCheckpoints} />
+            <LegacyCount label="Tool records" value={source.toolExecutions} />
+            <LegacyCount label="Provider credentials" value={source.providerCredentials} />
+            <LegacyCount label="Model selections" value={source.modelSelections} />
+            <LegacyCount label="Private Replay files" value={source.privateReplayFiles} />
+          </div>
+          {!summary.pendingRecovery && !source.importable && source.reason && (
+            <p className="legacy-block-reason">{legacyBlockReason(source.reason)}</p>
+          )}
+          {source.importable && !summary.pendingRecovery && !showReview && (
+            <div className="legacy-import-actions">
+              <button
+                type="button"
+                className="secondary-button compact"
+                disabled={props.busy}
+                onClick={() => {
+                  setReviewCandidateId(source.candidateId);
+                  setReviewDismissed(false);
+                }}
+              >
+                Review import <ArrowRight size={14} />
+              </button>
+              <button
+                type="button"
+                className="text-button"
+                disabled={props.busy}
+                onClick={props.onDismiss}
+              >
+                Not now
+              </button>
+            </div>
+          )}
+          {showReview && candidate?.candidateId === source.candidateId && (
+            <div className="legacy-confirmation">
+              <b>Import into this account’s local Profile?</b>
+              <p>
+                The data will stay on this PC and will not be uploaded to Cloud. Caelush creates and
+                verifies a protected backup first. The source folder stays in place, and other Cloud
+                accounts will not automatically share this data.
+              </p>
+              <div className="legacy-import-actions">
+                <button
+                  type="button"
+                  className="primary-button compact-primary"
+                  disabled={props.busy}
+                  onClick={() => props.onImport(source.candidateId)}
+                >
+                  {props.busy ? (
+                    <LoaderCircle size={15} className="spin" />
+                  ) : (
+                    <ShieldCheck size={15} />
+                  )}
+                  Import into this account
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button compact"
+                  disabled={props.busy}
+                  onClick={() => {
+                    setReviewCandidateId(null);
+                    setReviewDismissed(true);
+                  }}
+                >
+                  Not now
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+      {summary.pendingRecovery && (
+        <div className="legacy-confirmation">
+          <b>
+            {summary.recoveryState === "DESTINATION_VERIFIED"
+              ? "The destination passed checks; the local Agent needs a verified start"
+              : summary.recoveryState === "RECOVERY_BLOCKED"
+                ? "Recovery is waiting for a protected retry"
+                : "A verified import backup is available"}
+          </b>
+          <p>
+            Resume checks the backup against this account Profile, continues credential protection,
+            and verifies the destination before the local Agent starts.
+          </p>
+          <button
+            type="button"
+            className="primary-button compact-primary"
+            disabled={props.busy}
+            onClick={props.onResume}
+          >
+            {props.busy ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}
+            Resume protected recovery
+          </button>
+        </div>
+      )}
+      {props.progress &&
+        props.progress !== "COMMITTED" &&
+        props.progress !== "RECOVERY_REQUIRED" && (
+          <div className="legacy-progress" role="status">
+            <LoaderCircle size={14} className="spin" /> {legacyProgressLabel(props.progress)}
+          </div>
+        )}
+      {props.message && <MessageBox message={props.message.message} tone={props.message.tone} />}
+    </section>
+  );
+}
+
+function LegacyCount(props: { label: string; value: number }) {
+  return (
+    <div className="legacy-count">
+      <b>{new Intl.NumberFormat().format(props.value)}</b>
+      <span>{props.label}</span>
+    </div>
+  );
+}
+
+function legacyProgressLabel(progress: LegacyImportProgress): string {
+  switch (progress) {
+    case "BACKUP_VERIFIED":
+      return "Protected backup verified";
+    case "IMPORT_STAGED":
+      return "Import prepared";
+    case "DESTINATION_VERIFIED":
+      return "Profile data restored and checked";
+    case "CREDENTIALS_SECURED":
+      return "Provider credentials secured";
+    case "COMMITTED":
+      return "Import complete";
+    case "RECOVERY_REQUIRED":
+      return "Protected recovery is required";
+  }
+}
+
+function legacyBlockReason(
+  reason: NonNullable<LegacyDataImportSummary["sources"][number]["reason"]>,
+): string {
+  switch (reason) {
+    case "SOURCE_UNREADABLE":
+      return "This source could not be read safely.";
+    case "UNSUPPORTED_SCHEMA":
+      return "This data format is not supported by the safe importer.";
+    case "TARGET_NOT_EMPTY":
+      return "This account Profile already contains data. Import is disabled to protect it.";
+    case "NO_IMPORTABLE_DATA":
+      return "No local Agent records or replay files were found.";
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 function agentStatusTitle(reason: AccountState["agentEntry"]["reason"]): string {

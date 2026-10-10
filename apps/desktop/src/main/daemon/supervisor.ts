@@ -17,6 +17,7 @@ import {
   MainCredentialRpcServer,
   type MainCredentialVaultPort,
 } from "../credentials/credential-rpc.js";
+import type { ProviderCredentialMigrationResult } from "../migration/provider-credential-migration.js";
 
 export const DESKTOP_DAEMON_STARTUP_TIMEOUT_MS = 10_000;
 export const DESKTOP_DAEMON_SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -121,6 +122,10 @@ export interface DesktopDaemonSupervisorOptions {
   readonly profileManager: Pick<ProfileManager, "selectForUser">;
   /** Electron Main's DPAPI credential authority. No Daemon-side fallback is used in Desktop mode. */
   readonly credentialVault: MainCredentialVaultPort;
+  /** Must finish before a Desktop generation can open its Profile database. */
+  readonly credentialMigrator: {
+    run(profile: AccountProfile, cloudUserId: string): Promise<ProviderCredentialMigrationResult>;
+  };
   readonly resolveResources: () => Promise<DesktopDaemonResources>;
   readonly productVersion: string;
   readonly processEnvironment?: NodeJS.ProcessEnv;
@@ -367,6 +372,14 @@ export class DesktopDaemonSupervisor {
   }
 
   private async startGeneration(profile: AccountProfile, userId: string): Promise<void> {
+    try {
+      await this.options.credentialMigrator.run(profile, userId);
+    } catch {
+      throw new DesktopDaemonSupervisorError(
+        "CREDENTIAL_MIGRATION_REQUIRED",
+        "Local Provider credentials need secure recovery before the Agent can start.",
+      );
+    }
     const resources = await this.options.resolveResources();
     const generationId = randomUUID();
     let bootstrapSecret = randomBytes(32).toString("base64url");

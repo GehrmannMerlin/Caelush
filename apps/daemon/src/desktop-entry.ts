@@ -111,6 +111,12 @@ async function handleMessage(message: unknown): Promise<void> {
     return;
   }
 
+  // Credential responses share the trusted Child IPC channel but belong to the
+  // injected Runtime credential authority, not to the Daemon lifecycle protocol.
+  // Let its correlated listener consume them without treating them as a malformed
+  // STOP message and shutting down the generation during a model call.
+  if (isRecord(message) && message.type === "CREDENTIAL_RESPONSE") return;
+
   const parsed = StopMessageSchema.safeParse(message);
   if (!parsed.success || parsed.data.generationId !== bootstrapGeneration) {
     await send({

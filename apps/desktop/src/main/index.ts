@@ -5,6 +5,8 @@ import type { AccountState } from "./account/state.js";
 import { CloudAccountClient } from "./cloud/client.js";
 import { DpapiVault } from "./credentials/vault.js";
 import { ProviderCredentialVault } from "./credentials/provider-credential-vault.js";
+import { DesktopProviderCredentialMigrator } from "./migration/provider-credential-migration.js";
+import { DesktopLegacyDataImporter } from "./migration/legacy-data-import.js";
 import { BUILD_CONFIGURATION, trustedOfflineKeys } from "./build-config.js";
 import { registerDesktopIpc } from "./ipc/handlers.js";
 import { registerAppProtocol } from "./protocol/app-protocol.js";
@@ -67,6 +69,10 @@ if (!singleInstance) {
     trustedOfflinePublicKeys: trustedOfflineKeys(),
   });
   const providerCredentialVault = new ProviderCredentialVault(vault);
+  const providerCredentialMigrator = new DesktopProviderCredentialMigrator({
+    vault,
+    credentials: providerCredentialVault,
+  });
   const localAppDataDirectory = process.env.LOCALAPPDATA;
   const profileManager = localAppDataDirectory
     ? new ProfileManager({
@@ -82,9 +88,28 @@ if (!singleInstance) {
           );
         },
       };
+  const legacyImporter = new DesktopLegacyDataImporter({
+    profileManager,
+    vault,
+    credentialMigrator: providerCredentialMigrator,
+    assertAuthorized: (cloudUserId) => {
+      const state = account.getState();
+      if (
+        (state.status !== "AUTHENTICATED_ONLINE" && state.status !== "AUTHORIZED_OFFLINE") ||
+        state.account?.userId !== cloudUserId
+      ) {
+        throw new Error("The active account changed during local data import.");
+      }
+    },
+    onProgress: (progress) => {
+      if (mainWindow === null || mainWindow.isDestroyed() || !isTrustedCurrentWindow()) return;
+      mainWindow.webContents.send("caelush:legacy-data:progress", { progress });
+    },
+  });
   const supervisor = new DesktopDaemonSupervisor({
     profileManager,
     credentialVault: providerCredentialVault,
+    credentialMigrator: providerCredentialMigrator,
     resolveResources: () =>
       resolveDesktopDaemonResources({
         packaged: app.isPackaged,
@@ -225,6 +250,7 @@ if (!singleInstance) {
       projectAccountState,
       beginAccountBoundary: () => supervisor.beginAccountBoundary(),
       synchronizeAccountState: (state) => supervisor.synchronizeAccountState(state),
+      legacyImporter,
     });
     mainWindow.on("close", (event) => {
       if (safeQuitApproved) return;

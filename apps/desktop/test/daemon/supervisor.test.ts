@@ -187,6 +187,9 @@ function createSupervisor(
       },
     },
     credentialVault,
+    credentialMigrator: {
+      run: async () => ({ state: "NO_CREDENTIALS", credentialCount: 0 }),
+    },
     resolveResources: async () => RESOURCES,
     productVersion: "0.1.0",
     processEnvironment: {

@@ -4,6 +4,11 @@ import { z } from "zod";
 import { AccountController, AccountOperationError } from "../account/controller.js";
 import { AccountStateSchema } from "../account/state.js";
 import type { AccountState } from "../account/state.js";
+import type { DesktopLegacyDataImporter } from "../migration/legacy-data-import.js";
+import type {
+  LegacyDataImportResult,
+  LegacyDataImportSummary,
+} from "../../shared/legacy-data-contract.js";
 import {
   AcceptedResponseSchema,
   DeviceRevocationResponseSchema,
@@ -38,6 +43,12 @@ export const IPC_CHANNELS = Object.freeze({
     workspace: "caelush:feature:workspace",
     browser: "caelush:feature:browser",
     update: "caelush:feature:update",
+  }),
+  legacyData: Object.freeze({
+    inspect: "caelush:legacy-data:inspect",
+    import: "caelush:legacy-data:import",
+    resume: "caelush:legacy-data:resume",
+    progress: "caelush:legacy-data:progress",
   }),
 });
 
@@ -79,6 +90,7 @@ const UpdateUnavailable = z
   .strict();
 const MAX_IPC_INPUT_BYTES = 20 * 1024;
 export const IPC_OPERATION_TIMEOUT_MS = 15_000;
+export const LEGACY_IMPORT_OPERATION_TIMEOUT_MS = 2 * 60 * 60_000;
 const PRE_AUTHENTICATED_STATES = new Set([
   "LOGIN_REQUIRED",
   "SESSION_EXPIRED",
@@ -96,6 +108,73 @@ const LOGOUT_STATES = new Set([
   "DEVICE_REVOKED",
   "ERROR",
 ]);
+const AUTHORIZED_STATES = new Set(["AUTHENTICATED_ONLINE", "AUTHORIZED_OFFLINE"]);
+const LegacyDataSourceSummarySchema = z
+  .object({
+    candidateId: z.uuid(),
+    sourceLabel: z.enum(["Default Caelush data", "Custom CAELUSH_HOME"]),
+    sourceKind: z.enum(["DEFAULT_HOME", "CUSTOM_HOME"]),
+    importable: z.boolean(),
+    reason: z
+      .enum(["SOURCE_UNREADABLE", "UNSUPPORTED_SCHEMA", "TARGET_NOT_EMPTY", "NO_IMPORTABLE_DATA"])
+      .optional(),
+    workspaces: z.number().int().nonnegative().safe(),
+    sessions: z.number().int().nonnegative().safe(),
+    runs: z.number().int().nonnegative().safe(),
+    messages: z.number().int().nonnegative().safe(),
+    durableEvents: z.number().int().nonnegative().safe(),
+    contextCheckpoints: z.number().int().nonnegative().safe(),
+    toolExecutions: z.number().int().nonnegative().safe(),
+    providerCredentials: z.number().int().nonnegative().safe(),
+    modelSelections: z.number().int().nonnegative().safe(),
+    privateReplayFiles: z.number().int().nonnegative().safe(),
+    estimatedBytes: z.number().int().nonnegative().safe(),
+  })
+  .strict();
+const LegacyImportSummarySchema = z
+  .object({
+    sources: z.array(LegacyDataSourceSummarySchema).max(2),
+    pendingRecovery: z.boolean(),
+    recoveryState: z.enum(["IMPORT_STAGED", "DESTINATION_VERIFIED", "RECOVERY_BLOCKED"]).optional(),
+  })
+  .strict();
+const LegacyImportInput = z.object({ candidateId: z.uuid(), confirmed: z.literal(true) }).strict();
+const LegacyImportProgressSchema = z
+  .object({
+    progress: z.enum([
+      "BACKUP_VERIFIED",
+      "IMPORT_STAGED",
+      "DESTINATION_VERIFIED",
+      "CREDENTIALS_SECURED",
+      "COMMITTED",
+      "RECOVERY_REQUIRED",
+    ]),
+  })
+  .strict();
+const LegacyImportCountsSchema = z
+  .object({
+    workspaces: z.number().int().nonnegative().safe(),
+    sessions: z.number().int().nonnegative().safe(),
+    runs: z.number().int().nonnegative().safe(),
+    messages: z.number().int().nonnegative().safe(),
+    durableEvents: z.number().int().nonnegative().safe(),
+    contextCheckpoints: z.number().int().nonnegative().safe(),
+    toolExecutions: z.number().int().nonnegative().safe(),
+    providerCredentials: z.number().int().nonnegative().safe(),
+    modelSelections: z.number().int().nonnegative().safe(),
+    privateReplayFiles: z.number().int().nonnegative().safe(),
+    estimatedBytes: z.number().int().nonnegative().safe(),
+  })
+  .strict();
+const LegacyImportResultSchema = z
+  .object({
+    state: z.literal("COMMITTED"),
+    profileId: z.string().regex(/^u_[0-9a-f]{64}$/u),
+    backupId: z.uuid(),
+    credentialCount: z.number().int().nonnegative().safe(),
+    imported: LegacyImportCountsSchema,
+  })
+  .strict();
 
 export interface DesktopRendererTrust {
   readonly developmentOrigin: string | null;
@@ -112,6 +191,7 @@ export interface RegisterDesktopIpcOptions {
   readonly projectAccountState?: (state: AccountState) => AccountState;
   readonly beginAccountBoundary?: () => Promise<void>;
   readonly synchronizeAccountState?: (state: AccountState) => Promise<void>;
+  readonly legacyImporter?: DesktopLegacyDataImporter;
 }
 
 export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => void {
@@ -125,6 +205,7 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
     outputSchema: z.ZodType<TOutput>,
     action: (input: TInput, signal: AbortSignal) => Promise<unknown> | unknown,
     allowedStates?: ReadonlySet<string>,
+    timeoutMs = IPC_OPERATION_TIMEOUT_MS,
   ) => {
     main.handle(channel, async (event: IpcMainInvokeEvent, rawInput: unknown) => {
       const abort = new AbortController();
@@ -149,7 +230,7 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
         rejectInterrupted(
           new AccountOperationError("IPC_TIMEOUT", "The desktop request timed out."),
         );
-      }, IPC_OPERATION_TIMEOUT_MS);
+      }, timeoutMs);
       try {
         assertTrustedCaller(event, options.window, options.rendererTrust);
         validateInputSize(rawInput);
@@ -198,6 +279,76 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
   const getProjectedState = () => {
     const state = options.controller.getState();
     return options.projectAccountState?.(state) ?? state;
+  };
+  const currentAuthorizedUserId = () => {
+    const state = options.controller.getState();
+    if (!AUTHORIZED_STATES.has(state.status) || state.account?.userId === undefined) {
+      throw new AccountOperationError(
+        "ACCOUNT_STATE_INVALID",
+        "This account operation is not available in the current state.",
+      );
+    }
+    return state.account.userId;
+  };
+  let legacyOperationTail: Promise<void> = Promise.resolve();
+  const runLegacyOperation = async <TPrepared, TResult>(
+    action: (userId: string) => Promise<TPrepared>,
+    finalize: (userId: string, prepared: TPrepared) => Promise<TResult>,
+  ): Promise<TResult> => {
+    const previous = legacyOperationTail;
+    let release!: () => void;
+    legacyOperationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      if (options.legacyImporter === undefined || options.beginAccountBoundary === undefined) {
+        throw new AccountOperationError(
+          "LEGACY_IMPORT_UNAVAILABLE",
+          "Legacy local data import is unavailable.",
+        );
+      }
+      const userId = currentAuthorizedUserId();
+      await options.beginAccountBoundary();
+      try {
+        if (currentAuthorizedUserId() !== userId) {
+          throw new AccountOperationError(
+            "ACCOUNT_STATE_INVALID",
+            "The active account changed before local data import could start.",
+          );
+        }
+        const prepared = await action(userId);
+        const currentState = options.controller.getState();
+        if (
+          currentState.account?.userId !== userId ||
+          !AUTHORIZED_STATES.has(currentState.status)
+        ) {
+          throw new AccountOperationError(
+            "ACCOUNT_STATE_INVALID",
+            "The active account changed during local data import.",
+          );
+        }
+        if (options.synchronizeAccountState === undefined) {
+          throw new AccountOperationError(
+            "LEGACY_IMPORT_UNAVAILABLE",
+            "Legacy local data import is unavailable.",
+          );
+        }
+        await options.synchronizeAccountState(currentState);
+        const projected = options.projectAccountState?.(currentState) ?? currentState;
+        if (!projected.agentEntry.available) {
+          throw new AccountOperationError(
+            "LEGACY_IMPORT_RECOVERY_REQUIRED",
+            "The imported Profile did not pass local Agent startup verification. Protected recovery is available.",
+          );
+        }
+        return await finalize(userId, prepared);
+      } finally {
+        await synchronizeCurrentState();
+      }
+    } finally {
+      release();
+    }
   };
   const synchronizeCurrentState = async () => {
     try {
@@ -304,6 +455,45 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
     },
     new Set(["AUTHENTICATED_ONLINE"]),
   );
+
+  if (options.legacyImporter !== undefined) {
+    const { legacyData } = IPC_CHANNELS;
+    register(
+      legacyData.inspect,
+      NoInput,
+      LegacyImportSummarySchema,
+      async () => {
+        const userId = currentAuthorizedUserId();
+        return options.legacyImporter!.inspect(userId);
+      },
+      AUTHORIZED_STATES,
+    );
+    register(
+      legacyData.import,
+      LegacyImportInput,
+      LegacyImportResultSchema,
+      (input) =>
+        runLegacyOperation(
+          (userId) =>
+            options.legacyImporter!.stageImport(userId, input.candidateId, input.confirmed),
+          (userId, prepared) => options.legacyImporter!.commitImport(userId, prepared),
+        ),
+      AUTHORIZED_STATES,
+      LEGACY_IMPORT_OPERATION_TIMEOUT_MS,
+    );
+    register(
+      legacyData.resume,
+      NoInput,
+      LegacyImportResultSchema,
+      () =>
+        runLegacyOperation(
+          (userId) => options.legacyImporter!.stageResumeImport(userId),
+          (userId, prepared) => options.legacyImporter!.commitImport(userId, prepared),
+        ),
+      AUTHORIZED_STATES,
+      LEGACY_IMPORT_OPERATION_TIMEOUT_MS,
+    );
+  }
 
   register(windowChannels.minimize, NoInput, MinimizedOutput, () => {
     options.window.minimize();

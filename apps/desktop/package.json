@@ -11,7 +11,8 @@
     "start": "pnpm run build && node scripts/start.mjs",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
-    "test:windows:vault": "node scripts/windows-vault-smoke.mjs"
+    "test:windows:vault": "node scripts/windows-vault-smoke.mjs",
+    "test:windows:d4-2": "node scripts/windows-d4-2-smoke.mjs"
   },
   "dependencies": {
     "@caelush/client": "workspace:*",

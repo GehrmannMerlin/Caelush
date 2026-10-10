@@ -88,17 +88,31 @@ export class DesktopLocalProxy {
 
     const target = new URL(parsedUrl.pathname + parsedUrl.search, lease.baseUrl);
     const headers = createUpstreamHeaders(request.headers, lease);
-    const body =
-      request.body === null || request.method === "GET" || request.method === "HEAD"
-        ? undefined
-        : limitBody(request.body, this.maxRequestBodyBytes);
-    const init = {
+    let body: Uint8Array<ArrayBuffer> | undefined;
+    if (request.body !== null && request.method !== "GET" && request.method !== "HEAD") {
+      try {
+        body = await readLimitedBody(request.body, this.maxRequestBodyBytes, [
+          request.signal,
+          lease.signal,
+        ]);
+      } catch (error) {
+        lease.release();
+        if (error instanceof RequestBodyTooLargeError) {
+          return proxyError(413, "REQUEST_TOO_LARGE", "The local API request is too large.");
+        }
+        if (request.signal.aborted) {
+          return proxyError(499, "REQUEST_CANCELLED", "The request was cancelled.");
+        }
+        return proxyError(503, "LOCAL_AGENT_UNAVAILABLE", "The local Agent is unavailable.");
+      }
+    }
+    const init: RequestInit = {
       method: request.method,
       headers,
-      ...(body === undefined ? {} : { body, duplex: "half" as const }),
+      ...(body === undefined ? {} : { body }),
       redirect: "manual" as const,
       signal: lease.signal,
-    } as RequestInit & { readonly duplex?: "half" };
+    };
 
     let upstream: Response;
     try {
@@ -277,20 +291,45 @@ function projectSafeRedirect(value: string, ownedBaseUrl: string): string | null
   }
 }
 
-function limitBody(
+async function readLimitedBody(
   body: ReadableStream<Uint8Array>,
   maximumBytes: number,
-): ReadableStream<Uint8Array> {
+  signals: readonly AbortSignal[],
+): Promise<Uint8Array<ArrayBuffer>> {
+  const reader = body.getReader();
+  const cancel = () => {
+    void reader.cancel().catch(() => undefined);
+  };
+  for (const signal of signals) {
+    if (signal.aborted) cancel();
+    else signal.addEventListener("abort", cancel, { once: true });
+  }
+
   let receivedBytes = 0;
-  return body.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        receivedBytes += chunk.byteLength;
-        if (receivedBytes > maximumBytes) throw new RequestBodyTooLargeError();
-        controller.enqueue(chunk);
-      },
-    }),
-  );
+  const chunks: Buffer[] = [];
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      receivedBytes += next.value.byteLength;
+      if (receivedBytes > maximumBytes) throw new RequestBodyTooLargeError();
+      chunks.push(Buffer.from(next.value));
+    }
+    if (signals.some((signal) => signal.aborted)) throw new RequestBodyAbortedError();
+    const output = new Uint8Array(new ArrayBuffer(receivedBytes));
+    let offset = 0;
+    for (const chunk of chunks) {
+      output.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return output;
+  } catch (error) {
+    cancel();
+    throw error;
+  } finally {
+    for (const signal of signals) signal.removeEventListener("abort", cancel);
+    reader.releaseLock();
+  }
 }
 
 function forwardResponseBody(
@@ -343,6 +382,7 @@ function forwardResponseBody(
 }
 
 class RequestBodyTooLargeError extends Error {}
+class RequestBodyAbortedError extends Error {}
 
 function proxyError(status: number, code: string, message: string): Response {
   return new Response(JSON.stringify({ error: { code, message, requestId: randomUUID() } }), {
