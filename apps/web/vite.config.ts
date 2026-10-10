@@ -2,11 +2,16 @@ import { defineConfig, loadEnv } from "vite";
 
 export default defineConfig(({ mode }) => {
   const environment = loadEnv(mode, process.cwd(), "");
+  const desktopBuild = mode === "desktop";
   return {
+    base: desktopBuild ? "/agent/" : "/",
+    ...(desktopBuild
+      ? { build: { outDir: "dist/desktop", emptyOutDir: true, sourcemap: false } }
+      : {}),
     plugins: [
       {
         name: "caelush-web-development-bootstrap",
-        apply: "serve",
+        apply: desktopBuild ? "build" : "serve",
         transformIndexHtml(html) {
           return html.replace("__CAELUSH_BOOTSTRAP__", "{}");
         },

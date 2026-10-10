@@ -1981,6 +1981,10 @@ body {
     border-color 150ms ease;
 }
 
+.workspace-account-link {
+  text-decoration: none;
+}
+
 .workspace-settings-button:hover,
 .workspace-settings-button:focus-visible {
   border-color: var(--web-sidebar-line);

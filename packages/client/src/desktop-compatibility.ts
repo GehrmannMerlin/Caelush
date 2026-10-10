@@ -12,13 +12,8 @@ export const DESKTOP_HOST_CAPABILITIES = Object.freeze([
 export type DesktopHostCapability = (typeof DESKTOP_HOST_CAPABILITIES)[number];
 export type DesktopDaemonCapability = keyof DaemonCapabilities;
 
-/**
- * D0-B deliberately has no implemented Desktop security capabilities. A Daemon declaration alone
- * is never sufficient to enable a capability; the Desktop release must first implement and review
- * the corresponding host-side enforcement in a later round.
- */
 export const IMPLEMENTED_DESKTOP_HOST_CAPABILITIES: readonly DesktopHostCapability[] =
-  Object.freeze([]);
+  Object.freeze([...DESKTOP_HOST_CAPABILITIES]);
 
 export type DesktopCompatibilityErrorCode =
   | "DAEMON_INFO_INVALID"

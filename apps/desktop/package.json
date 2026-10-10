@@ -5,15 +5,17 @@
   "type": "module",
   "main": "dist/main/index.js",
   "scripts": {
-    "build": "pnpm run typecheck && node scripts/build-main.mjs && vite build",
+    "build": "node scripts/build-local-agent.mjs && pnpm run typecheck && node scripts/build-main.mjs && vite build",
     "build:main": "node scripts/build-main.mjs",
-    "dev": "pnpm run typecheck && node scripts/build-main.mjs && node scripts/dev.mjs",
+    "dev": "node scripts/build-local-agent.mjs && pnpm run typecheck && node scripts/build-main.mjs && node scripts/dev.mjs",
     "start": "pnpm run build && node scripts/start.mjs",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:windows:vault": "node scripts/windows-vault-smoke.mjs"
   },
   "dependencies": {
+    "@caelush/client": "workspace:*",
+    "@caelush/protocol": "workspace:*",
     "lucide-react": "1.48.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",

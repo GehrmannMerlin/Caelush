@@ -21,9 +21,10 @@ describe("Electron window security policy", () => {
     });
   });
 
-  it("allows only the app protocol or the exact loopback development origin", () => {
+  it("allows only the login and Agent app origins or the exact loopback development origin", () => {
     const packaged = createRendererTrust(true, "http://127.0.0.1:5173/");
-    expect(isLocalRendererUrl("caelush-app://app/", packaged)).toBe(true);
+    expect(isLocalRendererUrl("caelush-login://app/", packaged)).toBe(true);
+    expect(isLocalRendererUrl("caelush-app://app/agent/", packaged)).toBe(true);
     expect(isLocalRendererUrl("caelush-app://app:9443/", packaged)).toBe(false);
     expect(isLocalRendererUrl("caelush-app://app@attacker.example/", packaged)).toBe(false);
     expect(isLocalRendererUrl("https://attacker.example/", packaged)).toBe(false);

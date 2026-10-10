@@ -252,6 +252,29 @@ describe("CaelushClient", () => {
     }
   });
 
+  it("supports the trusted same-origin Desktop app scheme for Main-proxied requests", async () => {
+    const client = new CaelushClient({
+      baseUrl: "caelush-app://app",
+      fetch: async (input) => {
+        expect(String(input)).toBe("caelush-app://app/api/v1/health");
+        return new Response(
+          JSON.stringify({
+            service: "caelush-daemon",
+            status: "ready",
+            apiVersion: "v1",
+            protocolVersion: 1,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+
+    await expect(client.getHealth()).resolves.toMatchObject({ status: "ready" });
+    expect(() => new CaelushClient({ baseUrl: "caelush-app://other" })).toThrow(
+      CaelushClientProtocolError,
+    );
+  });
+
   it("loads the safe Context Usage projection from the daemon", async () => {
     const runId = createRunId();
     const client = new CaelushClient({

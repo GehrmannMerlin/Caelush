@@ -94,21 +94,37 @@ describe("Desktop Daemon compatibility evaluator", () => {
     });
   });
 
-  it("does not trust a Daemon declaration for an unimplemented Desktop security capability", () => {
+  it("accepts Desktop security capabilities only when the trusted host requires them", () => {
     const daemonClaimsCapability = {
       ...daemonInfo,
-      capabilities: { ...daemonInfo.capabilities, desktopHostAuthV1: true },
+      capabilities: {
+        ...daemonInfo.capabilities,
+        desktopHostAuthV1: true,
+        desktopProfileBindingV1: true,
+        desktopLocalProxyV1: true,
+      },
     };
     const result = evaluateDesktopDaemonCompatibility(
       daemonClaimsCapability,
-      requirements({ requiredCapabilities: ["desktopHostAuthV1"] }),
+      requirements({
+        requiredCapabilities: [
+          "desktopHostAuthV1",
+          "desktopProfileBindingV1",
+          "desktopLocalProxyV1",
+        ],
+      }),
     );
     expect(result).toMatchObject({
-      status: "INCOMPATIBLE",
-      canEnterWorkspace: false,
-      code: "DESKTOP_CAPABILITY_NOT_IMPLEMENTED",
-      missingCapabilities: ["desktopHostAuthV1"],
+      status: "COMPATIBLE",
+      canEnterWorkspace: true,
     });
+
+    const { desktopLocalProxyV1: _omitted, ...withoutProxy } = daemonClaimsCapability.capabilities;
+    const missing = evaluateDesktopDaemonCompatibility(
+      { ...daemonClaimsCapability, capabilities: withoutProxy },
+      requirements({ requiredCapabilities: ["desktopLocalProxyV1"] }),
+    );
+    expect(missing).toMatchObject({ status: "INCOMPATIBLE", code: "DAEMON_CAPABILITY_MISSING" });
   });
 
   it("returns a safe invalid-info result for strict-schema violations", () => {

@@ -3,6 +3,7 @@ import { BrowserWindow, ipcMain, type IpcMain, type IpcMainInvokeEvent } from "e
 import { z } from "zod";
 import { AccountController, AccountOperationError } from "../account/controller.js";
 import { AccountStateSchema } from "../account/state.js";
+import type { AccountState } from "../account/state.js";
 import {
   AcceptedResponseSchema,
   DeviceRevocationResponseSchema,
@@ -108,6 +109,9 @@ export interface RegisterDesktopIpcOptions {
   readonly platform: string;
   readonly arch: string;
   readonly version: string;
+  readonly projectAccountState?: (state: AccountState) => AccountState;
+  readonly beginAccountBoundary?: () => Promise<void>;
+  readonly synchronizeAccountState?: (state: AccountState) => Promise<void>;
 }
 
 export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => void {
@@ -191,7 +195,18 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
     registered.push(channel);
   };
 
-  register(account.getState, NoInput, AccountStateSchema, () => options.controller.getState());
+  const getProjectedState = () => {
+    const state = options.controller.getState();
+    return options.projectAccountState?.(state) ?? state;
+  };
+  const synchronizeCurrentState = async () => {
+    try {
+      await options.synchronizeAccountState?.(options.controller.getState());
+    } catch {
+      // Daemon startup state is exposed as a bounded agentEntry projection.
+    }
+  };
+  register(account.getState, NoInput, AccountStateSchema, getProjectedState);
   register(
     account.register,
     RegisterInput,
@@ -205,6 +220,7 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
     ConnectedOutput,
     async (input, signal) => {
       await options.controller.login(input, signal);
+      await synchronizeCurrentState();
       return { connected: true };
     },
     PRE_AUTHENTICATED_STATES,
@@ -213,7 +229,10 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
     account.logout,
     NoInput,
     LogoutOutput,
-    (_input, signal) => options.controller.logout(signal),
+    async (_input, signal) => {
+      await options.beginAccountBoundary?.();
+      return options.controller.logout(signal);
+    },
     LOGOUT_STATES,
   );
   register(
@@ -257,7 +276,8 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
     AccountStateSchema,
     async (_input, signal) => {
       await options.controller.refreshNow(signal);
-      return options.controller.getState();
+      await synchronizeCurrentState();
+      return getProjectedState();
     },
     new Set([
       "AUTHENTICATED_ONLINE",
@@ -277,7 +297,11 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
     account.revokeDevice,
     RevokeDeviceInput,
     DeviceRevocationResponseSchema,
-    (input, signal) => options.controller.revokeDevice(input.deviceId, signal),
+    async (input, signal) => {
+      const result = await options.controller.revokeDevice(input.deviceId, signal);
+      await synchronizeCurrentState();
+      return result;
+    },
     new Set(["AUTHENTICATED_ONLINE"]),
   );
 
@@ -317,7 +341,8 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
   const unsubscribe = options.controller.subscribe((state) => {
     if (options.window.isDestroyed() || options.window.webContents.isDestroyed()) return;
     if (!isTrustedUrl(options.window.webContents.mainFrame.url, options.rendererTrust)) return;
-    const safeState = AccountStateSchema.safeParse(state);
+    const projected = options.projectAccountState?.(state) ?? state;
+    const safeState = AccountStateSchema.safeParse(projected);
     if (safeState.success) options.window.webContents.send(account.state, safeState.data);
   });
 
@@ -352,7 +377,7 @@ function isTrustedUrl(source: string, trust: DesktopRendererTrust): boolean {
   try {
     const url = new URL(source);
     if (
-      url.protocol === "caelush-app:" &&
+      url.protocol === "caelush-login:" &&
       url.hostname === "app" &&
       url.port === "" &&
       url.username === "" &&

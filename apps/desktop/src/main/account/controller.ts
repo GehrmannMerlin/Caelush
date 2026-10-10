@@ -107,6 +107,52 @@ export class AccountController {
     return structuredClone(this.state);
   }
 
+  getOnlineSessionExpiresAt(): Date | undefined {
+    const expiry = this.onlineSession?.accessExpiresAt;
+    return expiry === undefined ? undefined : new Date(expiry);
+  }
+
+  expireOnlineSession(): void {
+    if (
+      this.state.status !== "AUTHENTICATED_ONLINE" ||
+      this.onlineSession === undefined ||
+      this.onlineSession.accessExpiresAt.getTime() > this.now().getTime()
+    ) {
+      return;
+    }
+    this.clearOnlineSession();
+    this.setState({
+      ...this.state,
+      status: "SESSION_EXPIRED",
+      lastError: {
+        code: "SESSION_EXPIRED",
+        message: "The Cloud session expired. Refresh account authorization to continue.",
+      },
+      notice: null,
+    });
+  }
+
+  expireOfflineGrant(): void {
+    if (
+      this.state.status !== "AUTHORIZED_OFFLINE" ||
+      this.state.offlineGrant === undefined ||
+      this.state.offlineGrant === null ||
+      Date.parse(this.state.offlineGrant.expiresAt) > this.now().getTime()
+    ) {
+      return;
+    }
+    this.clearOnlineSession();
+    this.setState({
+      ...this.state,
+      status: "OFFLINE_GRANT_EXPIRED",
+      lastError: {
+        code: "OFFLINE_GRANT_EXPIRED",
+        message: "The offline authorization expired. Connect to Cloud to continue.",
+      },
+      notice: null,
+    });
+  }
+
   subscribe(listener: (state: AccountState) => void): () => void {
     this.listeners.add(listener);
     listener(this.getState());
@@ -580,7 +626,7 @@ export class AccountController {
         acceptedGrant === null && auth.offlineGrant !== null
           ? "Connected online. The returned offline authorization could not be verified and was discarded."
           : null,
-      agentEntry: { available: false, reason: "LOCAL_AGENT_INTEGRATION_PENDING" },
+      agentEntry: { available: false, reason: "ACCOUNT_NOT_AUTHORIZED" },
     });
   }
 
@@ -671,7 +717,7 @@ export class AccountController {
         ),
         lastError: null,
         notice: "Offline authorization is active. It expires at the time shown above.",
-        agentEntry: { available: false, reason: "LOCAL_AGENT_INTEGRATION_PENDING" },
+        agentEntry: { available: false, reason: "ACCOUNT_NOT_AUTHORIZED" },
       });
     } catch (error) {
       const expired = error instanceof OfflineGrantError && error.code === "GRANT_EXPIRED";
@@ -742,7 +788,7 @@ export class AccountController {
       offlineGrant: null,
       lastError: error,
       notice: null,
-      agentEntry: { available: false, reason: "LOCAL_AGENT_INTEGRATION_PENDING" },
+      agentEntry: { available: false, reason: "ACCOUNT_NOT_AUTHORIZED" },
     };
   }
 

@@ -73,6 +73,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
   const settingsControlRef = useRef<HTMLDivElement>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const archivedSessionIds = new Set(archivedSessions.map((record) => record.sessionId));
+  const isDesktopHost = globalThis.location?.protocol === "caelush-app:";
 
   const archiveSession = (sessionId: SessionId): void => {
     setArchivedSessions(sessionArchiveStore.archive(sessionId));
@@ -147,6 +148,16 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
     createElement(
       "div",
       { className: "workspace-sidebar-footer" },
+      isDesktopHost
+        ? createElement(
+            "a",
+            {
+              className: "workspace-settings-button workspace-account-link",
+              href: "caelush-login://app/",
+            },
+            createElement("span", null, "Desktop account"),
+          )
+        : null,
       createElement(
         "div",
         { className: "workspace-settings-control", ref: settingsControlRef },

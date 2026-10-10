@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 .vite/
+apps/desktop/.stage/
 .turbo/
 .worktrees/
 release-artifacts/

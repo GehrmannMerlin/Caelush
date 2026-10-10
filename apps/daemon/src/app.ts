@@ -10,7 +10,10 @@ import type { SessionRepository, RunRepository, WorkspaceRepository } from "@cae
 import type { DaemonConfig } from "./config.js";
 import type { DaemonModelCanonicalizer } from "./providers/model-canonicalizer.js";
 import { registerErrorHandling } from "./transport/error-handler.js";
-import { assertLoopbackRequest } from "./transport/local-request-guard.js";
+import {
+  assertLoopbackRequest,
+  type DesktopHostRequestBinding,
+} from "./transport/local-request-guard.js";
 import { registerHealthRoute } from "./routes/health.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
 import { SessionService } from "./services/session-service.js";
@@ -51,6 +54,8 @@ export interface DaemonDependencies {
   readonly transcript?: SessionTranscriptService;
   readonly presentation?: SessionPresentationService;
   readonly logger?: boolean;
+  /** Present only when a private Desktop child bootstrap established this generation binding. */
+  readonly desktopHost?: DesktopHostRequestBinding;
   readonly web?: WebStaticHostOptions;
   readonly aiConfiguration?: AIConfigurationService;
   readonly securityCapabilityService?: SecurityCapabilityService;
@@ -61,7 +66,9 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   app.register(fastifySSE, { heartbeatInterval: dependencies.config.sseHeartbeatIntervalMs });
-  app.addHook("onRequest", async (request) => assertLoopbackRequest(request));
+  app.addHook("onRequest", async (request) =>
+    assertLoopbackRequest(request, dependencies.desktopHost),
+  );
   registerErrorHandling(app);
   registerHealthRoute(app);
   if (dependencies.info !== undefined) registerInfoRoute(app, dependencies.info);

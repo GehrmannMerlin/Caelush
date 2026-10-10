@@ -848,8 +848,19 @@ function normalizeBaseUrl(value: string): URL {
   } catch {
     throw new CaelushClientProtocolError("Client base URL is invalid.");
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new CaelushClientProtocolError("Client base URL must use HTTP or HTTPS.");
+  const trustedDesktopOrigin =
+    url.protocol === "caelush-app:" &&
+    url.hostname === "app" &&
+    url.username === "" &&
+    url.password === "" &&
+    url.port === "" &&
+    (url.pathname === "" || url.pathname === "/") &&
+    url.search === "" &&
+    url.hash === "";
+  if (url.protocol !== "http:" && url.protocol !== "https:" && !trustedDesktopOrigin) {
+    throw new CaelushClientProtocolError(
+      "Client base URL must use HTTP, HTTPS, or the trusted Desktop app origin.",
+    );
   }
   if (!url.pathname.endsWith("/")) url.pathname += "/";
   return url;

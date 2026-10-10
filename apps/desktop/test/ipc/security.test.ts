@@ -12,7 +12,7 @@ function fixture() {
     ),
     removeHandler: vi.fn((channel: string) => handlers.delete(channel)),
   };
-  const frame = { url: "caelush-app://app/" };
+  const frame = { url: "caelush-login://app/" };
   const sender = {
     mainFrame: frame,
     isDestroyed: () => false,
@@ -119,7 +119,7 @@ describe("Desktop IPC security boundary", () => {
 
   it("rejects a privileged custom-protocol origin with an unexpected port", async () => {
     const test = fixture();
-    test.frame.url = "caelush-app://app:9443/";
+    test.frame.url = "caelush-login://app:9443/";
     const result = (await test.handlers.get("caelush:account:get-state")?.(
       test.event(),
       undefined,
@@ -127,6 +127,18 @@ describe("Desktop IPC security boundary", () => {
       ok: boolean;
       error?: { code: string };
     };
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("IPC_CALLER_INVALID");
+    test.dispose();
+  });
+
+  it("does not expose Desktop account IPC to the Agent origin", async () => {
+    const test = fixture();
+    test.frame.url = "caelush-app://app/agent/";
+    const result = (await test.handlers.get("caelush:account:get-state")?.(
+      test.event(),
+      undefined,
+    )) as { ok: boolean; error?: { code: string } };
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("IPC_CALLER_INVALID");
     test.dispose();

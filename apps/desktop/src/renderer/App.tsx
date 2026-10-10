@@ -31,7 +31,7 @@ const initialState: AccountState = {
   status: "INITIALIZING",
   lastError: null,
   notice: null,
-  agentEntry: { available: false, reason: "LOCAL_AGENT_INTEGRATION_PENDING" },
+  agentEntry: { available: false, reason: "ACCOUNT_NOT_AUTHORIZED" },
 };
 
 export function DesktopApp() {
@@ -246,6 +246,7 @@ export function DesktopApp() {
         feedback={apiError}
         onNavigate={setScreen}
         onLogout={() => void signOut()}
+        onOpenAgent={() => window.location.assign("caelush-app://app/agent/")}
         onRefresh={() => void refreshAccount()}
         onRevoke={(device) => void revokeDevice(device)}
         onReconnect={() => {
@@ -614,6 +615,7 @@ function AccountHome(props: {
   feedback: string | null;
   onNavigate(screen: AccountScreen): void;
   onLogout(): void;
+  onOpenAgent(): void;
   onRefresh(): void;
   onReconnect(): void;
   onRevoke(device: SafeDevice): void;
@@ -701,6 +703,7 @@ function AccountHome(props: {
             onNavigate={props.onNavigate}
             onRefresh={props.onRefresh}
             onReconnect={props.onReconnect}
+            onOpenAgent={props.onOpenAgent}
             busy={props.busy}
           />
         )}
@@ -735,6 +738,7 @@ function Overview(props: {
   onNavigate(screen: AccountScreen): void;
   onRefresh(): void;
   onReconnect(): void;
+  onOpenAgent(): void;
   busy: boolean;
 }) {
   const { state } = props;
@@ -868,16 +872,61 @@ function Overview(props: {
         </div>
         <div className="pending-copy">
           <p className="eyebrow">LOCAL AGENT</p>
-          <h3>Local Agent integration pending</h3>
-          <p>
-            The protected local service is not connected in this version. Your account is ready;
-            workspace access will appear after the local service is integrated.
-          </p>
+          <h3>
+            {state.agentEntry.available
+              ? "Your local Agent is ready"
+              : agentStatusTitle(state.agentEntry.reason)}
+          </h3>
+          <p>{agentStatusDescription(state.agentEntry.reason)}</p>
         </div>
-        <span className="pending-status">NOT CONNECTED</span>
+        {state.agentEntry.available ? (
+          <button
+            type="button"
+            className="primary-button compact-primary"
+            onClick={props.onOpenAgent}
+          >
+            Open Agent <ArrowRight size={15} />
+          </button>
+        ) : (
+          <span className="pending-status">
+            {state.agentEntry.reason === "DAEMON_STARTING" ? "STARTING" : "UNAVAILABLE"}
+          </span>
+        )}
       </section>
     </>
   );
+}
+
+function agentStatusTitle(reason: AccountState["agentEntry"]["reason"]): string {
+  switch (reason) {
+    case "DAEMON_STARTING":
+      return "Starting your local Agent";
+    case "PROTOCOL_INCOMPATIBLE":
+      return "Desktop and local Agent versions differ";
+    case "SAFE_SHUTDOWN_PENDING":
+      return "The local Agent is finishing a safe shutdown";
+    case "DAEMON_UNAVAILABLE":
+      return "The local Agent is unavailable";
+    case "ACCOUNT_NOT_AUTHORIZED":
+    case undefined:
+      return "Local Agent unavailable";
+  }
+}
+
+function agentStatusDescription(reason: AccountState["agentEntry"]["reason"]): string {
+  switch (reason) {
+    case "DAEMON_STARTING":
+      return "Your account Profile is being prepared and checked before workspace access opens.";
+    case "PROTOCOL_INCOMPATIBLE":
+      return "Workspace access is disabled until Desktop and its managed Daemon pass the compatibility checks.";
+    case "SAFE_SHUTDOWN_PENDING":
+      return "A local operation is reaching a safe checkpoint. Profile switching remains paused.";
+    case "DAEMON_UNAVAILABLE":
+      return "The managed local service did not pass startup verification. Retry by signing in again or restarting Desktop.";
+    case "ACCOUNT_NOT_AUTHORIZED":
+    case undefined:
+      return "Sign in or restore a valid offline authorization to open your local workspace.";
+  }
 }
 
 function DeviceManager(props: {

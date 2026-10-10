@@ -52,7 +52,18 @@ export const AccountStateSchema = z
       .nullable(),
     notice: z.string().max(512).nullable(),
     agentEntry: z
-      .object({ available: z.literal(false), reason: z.literal("LOCAL_AGENT_INTEGRATION_PENDING") })
+      .object({
+        available: z.boolean(),
+        reason: z
+          .enum([
+            "ACCOUNT_NOT_AUTHORIZED",
+            "DAEMON_STARTING",
+            "DAEMON_UNAVAILABLE",
+            "PROTOCOL_INCOMPATIBLE",
+            "SAFE_SHUTDOWN_PENDING",
+          ])
+          .optional(),
+      })
       .strict(),
   })
   .strict();
@@ -67,6 +78,6 @@ export function createInitialAccountState(status: AccountStatus = "INITIALIZING"
     status,
     lastError: null,
     notice: null,
-    agentEntry: { available: false, reason: "LOCAL_AGENT_INTEGRATION_PENDING" },
+    agentEntry: { available: false, reason: "ACCOUNT_NOT_AUTHORIZED" },
   };
 }

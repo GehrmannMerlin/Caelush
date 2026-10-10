@@ -31,7 +31,7 @@ export function isLocalRendererUrl(destination: string, trust: DesktopRendererTr
   try {
     const url = new URL(destination);
     if (
-      url.protocol === "caelush-app:" &&
+      (url.protocol === "caelush-app:" || url.protocol === "caelush-login:") &&
       url.hostname === "app" &&
       url.port === "" &&
       url.username === "" &&

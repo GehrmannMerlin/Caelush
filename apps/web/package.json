@@ -11,6 +11,7 @@
   },
   "scripts": {
     "build": "vite build",
+    "build:desktop": "vite build --mode desktop",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

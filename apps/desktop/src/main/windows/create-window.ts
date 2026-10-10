@@ -47,7 +47,7 @@ export function createMainWindow(options: CreateWindowOptions): BrowserWindow {
   if (options.rendererTrust.developmentOrigin !== null) {
     void window.loadURL(options.rendererTrust.developmentOrigin);
   } else {
-    void window.loadURL("caelush-app://app/");
+    void window.loadURL("caelush-login://app/");
   }
   return window;
 }

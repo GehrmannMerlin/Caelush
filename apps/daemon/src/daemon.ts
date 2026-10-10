@@ -6,7 +6,7 @@ import type {
   ToolFeedbackContributionBudget,
   ToolFeedbackContributionRegistration,
 } from "@caelush/coding-agent";
-import type { ClientModelSelection } from "@caelush/protocol";
+import { DaemonInfoSchema, type ClientModelSelection } from "@caelush/protocol";
 import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
 import { createReplayProtection, type ReplayKeyProvider } from "@caelush/security";
 import { LocalRuntime, type ProcessSandboxProvider } from "@caelush/runtime";
@@ -57,6 +57,11 @@ import {
   type WorkspaceBackfillSummary,
 } from "./workspaces/workspace-backfill.js";
 import { createHostReplayKeyProvider } from "./replay/replay-key-provider.js";
+import {
+  assertDesktopDaemonHostBinding,
+  DESKTOP_HOST_CAPABILITY_NAMES,
+  type DesktopDaemonHostBinding,
+} from "./desktop-host.js";
 
 const internalShutdownObserverKey = Symbol.for("caelush.daemon.internal-shutdown-observer.v1");
 
@@ -217,6 +222,8 @@ export interface DaemonOptions {
   /** Persistent trusted-host secret injection; never accepted over HTTP or placed in config JSON. */
   readonly replayKeyProvider?: ReplayKeyProvider;
   readonly databasePath: string;
+  /** Private Desktop child bootstrap only; ordinary CLI/Web starts leave this unset. */
+  readonly desktopHost?: DesktopDaemonHostBinding;
   readonly host?: string;
   readonly port?: number;
   /** Finite managed-shutdown drain deadline; primarily injectable for lifecycle tests. */
@@ -296,6 +303,15 @@ function resolveConfig(options: DaemonOptions): DaemonConfig {
 
 export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle> {
   const config = resolveConfig(options);
+  if (options.desktopHost !== undefined) {
+    assertDesktopDaemonHostBinding({
+      binding: options.desktopHost,
+      databasePath: options.databasePath,
+      configuredHome: (options.environment ?? process.env).CAELUSH_HOME,
+      host: config.host,
+      port: config.port,
+    });
+  }
   const shutdownObserver = internalShutdownObserver(options);
   const shutdownTimeoutMs = options.shutdownTimeoutMs ?? 15_000;
   if (!Number.isSafeInteger(shutdownTimeoutMs) || shutdownTimeoutMs <= 0) {
@@ -507,7 +523,19 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       activeStreams,
       config,
       execution: composition,
-      info: composition.info,
+      info:
+        options.desktopHost === undefined
+          ? composition.info
+          : DaemonInfoSchema.parse({
+              ...composition.info,
+              capabilities: {
+                ...composition.info.capabilities,
+                ...Object.fromEntries(DESKTOP_HOST_CAPABILITY_NAMES.map((name) => [name, true])),
+              },
+            }),
+      ...(options.desktopHost === undefined
+        ? {}
+        : { desktopHost: { hostToken: options.desktopHost.hostToken } }),
       modelCanonicalizer: composition.modelCanonicalizer,
       aiConfiguration,
       securityCapabilityService: composition.securityCapabilityService,
