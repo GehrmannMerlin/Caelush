@@ -7,6 +7,7 @@ import { isValidSemVer } from "./contracts/semver.mjs";
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REQUIRED_PACKAGES = new Set([
   "@caelush/daemon",
+  "@caelush/desktop",
   "@caelush/launcher",
   "@caelush/web",
   "@caelush/protocol",

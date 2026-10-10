@@ -106,7 +106,7 @@ export const V2_TARGET_PACKAGES = [
 ];
 
 /** Architecture V2 host applications. */
-export const V2_HOST_APPS = ["daemon", "cli", "web", "launcher"];
+export const V2_HOST_APPS = ["daemon", "cli", "web", "launcher", "desktop"];
 
 /**
  * Packages that exist today and that Architecture V2 does not keep.

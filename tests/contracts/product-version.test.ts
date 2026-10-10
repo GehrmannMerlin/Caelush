@@ -7,6 +7,7 @@ import { auditProductVersions } from "../../scripts/check-product-version.mjs";
 const roots: string[] = [];
 const packageFiles = [
   ["apps/daemon/package.json", "@caelush/daemon"],
+  ["apps/desktop/package.json", "@caelush/desktop"],
   ["apps/launcher/package.json", "@caelush/launcher"],
   ["apps/web/package.json", "@caelush/web"],
   ["packages/protocol/package.json", "@caelush/protocol"],

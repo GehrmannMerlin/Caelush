@@ -46,7 +46,7 @@ export const retiredLegacyToolPackage = {
   name: "@caelush/tools",
 } as const;
 
-export const appNames = ["daemon", "cli", "web", "launcher"] as const;
+export const appNames = ["daemon", "cli", "web", "launcher", "desktop"] as const;
 
 export type WorkspaceManifest = {
   name?: unknown;
