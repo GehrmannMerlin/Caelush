@@ -58,6 +58,161 @@ import {
 } from "./workspaces/workspace-backfill.js";
 import { createHostReplayKeyProvider } from "./replay/replay-key-provider.js";
 
+const internalShutdownObserverKey = Symbol.for("caelush.daemon.internal-shutdown-observer.v1");
+
+type ShutdownDiagnosticPhase =
+  | "beginDrain"
+  | "checkpointActive"
+  | "drainWithin"
+  | "abortSSE"
+  | "appClose"
+  | "compositionDispose"
+  | "storageClose";
+
+type ShutdownDiagnosticValue = string | number | boolean;
+
+interface ShutdownDiagnosticObservation {
+  readonly phase: ShutdownDiagnosticPhase;
+  readonly state: "STARTED" | "COMPLETED" | "FAILED" | "SNAPSHOT";
+  readonly elapsedMs?: number;
+  readonly [key: string]: ShutdownDiagnosticValue | undefined;
+}
+
+type ShutdownDiagnosticObserver = (observation: ShutdownDiagnosticObservation) => void;
+
+interface ObservedHttpSocket {
+  readonly destroyed: boolean;
+  readonly pending: boolean;
+  readonly readable: boolean;
+  readonly writable: boolean;
+  readonly bytesRead: number;
+  readonly bytesWritten: number;
+  once(event: "close", listener: () => void): void;
+}
+
+function summarizeObservedSockets(
+  sockets: ReadonlySet<ObservedHttpSocket>,
+): Readonly<Record<string, number>> {
+  let openSocketCount = 0;
+  let pendingSocketCount = 0;
+  let readableSocketCount = 0;
+  let writableSocketCount = 0;
+  let bytesReadTotal = 0;
+  let bytesWrittenTotal = 0;
+  for (const socket of sockets) {
+    if (socket.destroyed) continue;
+    openSocketCount += 1;
+    if (socket.pending) pendingSocketCount += 1;
+    if (socket.readable) readableSocketCount += 1;
+    if (socket.writable) writableSocketCount += 1;
+    bytesReadTotal += socket.bytesRead;
+    bytesWrittenTotal += socket.bytesWritten;
+  }
+  return {
+    openSocketCount,
+    pendingSocketCount,
+    readableSocketCount,
+    writableSocketCount,
+    bytesReadTotal,
+    bytesWrittenTotal,
+  };
+}
+
+function internalShutdownObserver(options: DaemonOptions): ShutdownDiagnosticObserver | undefined {
+  const observer = (options as DaemonOptions & { readonly [key: symbol]: unknown })[
+    internalShutdownObserverKey
+  ];
+  return typeof observer === "function" ? (observer as ShutdownDiagnosticObserver) : undefined;
+}
+
+function reportShutdownDiagnostic(
+  observer: ShutdownDiagnosticObserver | undefined,
+  observation: ShutdownDiagnosticObservation,
+): void {
+  if (observer === undefined) return;
+  try {
+    observer(Object.freeze(observation));
+  } catch {
+    // Internal diagnostics must never change the shutdown result.
+  }
+}
+
+function observeSyncShutdownPhase(
+  observer: ShutdownDiagnosticObserver | undefined,
+  phase: ShutdownDiagnosticPhase,
+  operation: () => void,
+  details: Readonly<Record<string, ShutdownDiagnosticValue>> = {},
+): void {
+  if (observer === undefined) {
+    operation();
+    return;
+  }
+  const startedAt = Date.now();
+  reportShutdownDiagnostic(observer, { phase, state: "STARTED", ...details });
+  try {
+    operation();
+    reportShutdownDiagnostic(observer, {
+      phase,
+      state: "COMPLETED",
+      elapsedMs: Math.max(0, Date.now() - startedAt),
+      ...details,
+    });
+  } catch (error) {
+    reportShutdownDiagnostic(observer, {
+      phase,
+      state: "FAILED",
+      elapsedMs: Math.max(0, Date.now() - startedAt),
+      ...details,
+    });
+    throw error;
+  }
+}
+
+function observeAsyncShutdownPhase<T>(
+  observer: ShutdownDiagnosticObserver | undefined,
+  phase: ShutdownDiagnosticPhase,
+  operation: () => Promise<T>,
+  details: Readonly<Record<string, ShutdownDiagnosticValue>> = {},
+  resultDetails?: (result: T) => Readonly<Record<string, ShutdownDiagnosticValue>>,
+): Promise<T> {
+  if (observer === undefined) return operation();
+  const startedAt = Date.now();
+  reportShutdownDiagnostic(observer, { phase, state: "STARTED", ...details });
+  let result: Promise<T>;
+  try {
+    result = operation();
+  } catch (error) {
+    reportShutdownDiagnostic(observer, {
+      phase,
+      state: "FAILED",
+      elapsedMs: Math.max(0, Date.now() - startedAt),
+      ...details,
+    });
+    return Promise.reject(error);
+  }
+  return result.then(
+    (value) => {
+      reportShutdownDiagnostic(observer, {
+        phase,
+        state: "COMPLETED",
+        elapsedMs: Math.max(0, Date.now() - startedAt),
+        ...details,
+        ...resultDetails?.(value),
+      });
+      return value;
+    },
+    (error: unknown) => {
+      reportShutdownDiagnostic(observer, {
+        phase,
+        state: "FAILED",
+        elapsedMs: Math.max(0, Date.now() - startedAt),
+        ...details,
+      });
+      throw error;
+    },
+  );
+}
+
 export interface DaemonOptions {
   /** Persistent trusted-host secret injection; never accepted over HTTP or placed in config JSON. */
   readonly replayKeyProvider?: ReplayKeyProvider;
@@ -141,6 +296,7 @@ function resolveConfig(options: DaemonOptions): DaemonConfig {
 
 export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle> {
   const config = resolveConfig(options);
+  const shutdownObserver = internalShutdownObserver(options);
   const shutdownTimeoutMs = options.shutdownTimeoutMs ?? 15_000;
   if (!Number.isSafeInteger(shutdownTimeoutMs) || shutdownTimeoutMs <= 0) {
     throw new RangeError("Daemon shutdownTimeoutMs must be a finite positive safe integer.");
@@ -382,6 +538,43 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     throw error;
   }
 
+  let activeHttpRequestCount = 0;
+  const observedSockets =
+    shutdownObserver === undefined ? undefined : new Set<ObservedHttpSocket>();
+  const socketConnectionListener =
+    observedSockets === undefined
+      ? undefined
+      : (socket: ObservedHttpSocket) => {
+          observedSockets.add(socket);
+          socket.once("close", () => observedSockets.delete(socket));
+        };
+  if (socketConnectionListener !== undefined) {
+    app.server.on("connection", socketConnectionListener);
+  }
+  const activeRequestListener =
+    shutdownObserver === undefined
+      ? undefined
+      : (
+          _request: unknown,
+          response: {
+            once(event: "finish" | "close", listener: () => void): void;
+            removeListener(event: "finish" | "close", listener: () => void): void;
+          },
+        ) => {
+          activeHttpRequestCount += 1;
+          let settled = false;
+          const settle = () => {
+            if (settled) return;
+            settled = true;
+            activeHttpRequestCount = Math.max(0, activeHttpRequestCount - 1);
+            response.removeListener("finish", settle);
+            response.removeListener("close", settle);
+          };
+          response.once("finish", settle);
+          response.once("close", settle);
+        };
+  if (activeRequestListener !== undefined) app.server.on("request", activeRequestListener);
+
   try {
     await app.listen({ host: config.host, port: config.port });
   } catch (error) {
@@ -436,23 +629,98 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     close: () => {
       if (closePromise === undefined) {
         closePromise = (async () => {
-          composition.supervisor.beginDrain();
-          const checkpoints = await composition.supervisor.checkpointActive();
+          observeSyncShutdownPhase(shutdownObserver, "beginDrain", () =>
+            composition.supervisor.beginDrain(),
+          );
+          const checkpointDetails =
+            shutdownObserver === undefined
+              ? {}
+              : { activeRunCount: composition.supervisor.activeRunIds().length };
+          const checkpoints = await observeAsyncShutdownPhase(
+            shutdownObserver,
+            "checkpointActive",
+            () => composition.supervisor.checkpointActive(),
+            checkpointDetails,
+            (result) => ({
+              unsafeCheckpointCount: result.filter(
+                ({ result: checkpoint }) => checkpoint === "UNSAFE_IN_FLIGHT",
+              ).length,
+            }),
+          );
           if (checkpoints.some(({ result }) => result === "UNSAFE_IN_FLIGHT")) {
             throw new Error(
               "Daemon shutdown is waiting for an in-flight Tool or verification effect to reach a safe boundary; storage remains open.",
             );
           }
-          if (!(await composition.supervisor.drainWithin(shutdownTimeoutMs))) {
+          const drainDetails =
+            shutdownObserver === undefined
+              ? {}
+              : { activeRunCount: composition.supervisor.activeRunIds().length };
+          const drained = await observeAsyncShutdownPhase(
+            shutdownObserver,
+            "drainWithin",
+            () => composition.supervisor.drainWithin(shutdownTimeoutMs),
+            drainDetails,
+            (completed) => ({ outcome: completed ? "DRAINED" : "TIMED_OUT" }),
+          );
+          if (!drained) {
             throw new Error(
               "Daemon shutdown drain timed out; active execution and storage remain available for a later retry.",
             );
           }
           // Core has committed and notified every managed checkpoint before public streams close.
-          for (const controller of activeStreams) controller.abort();
-          await app.close();
-          await composition.dispose();
-          await storage.close();
+          observeSyncShutdownPhase(
+            shutdownObserver,
+            "abortSSE",
+            () => {
+              for (const controller of activeStreams) controller.abort();
+            },
+            { controllerCount: activeStreams.size },
+          );
+          const appCloseActiveRequestCount = activeHttpRequestCount;
+          await observeAsyncShutdownPhase(
+            shutdownObserver,
+            "appClose",
+            () => {
+              if (shutdownObserver !== undefined) {
+                try {
+                  app.server.getConnections((error, count) => {
+                    reportShutdownDiagnostic(shutdownObserver, {
+                      phase: "appClose",
+                      state: "SNAPSHOT",
+                      activeHttpRequestCount: appCloseActiveRequestCount,
+                      activeConnectionCount: error === null ? count : -1,
+                      ...(observedSockets === undefined
+                        ? {}
+                        : summarizeObservedSockets(observedSockets)),
+                    });
+                  });
+                } catch {
+                  reportShutdownDiagnostic(shutdownObserver, {
+                    phase: "appClose",
+                    state: "SNAPSHOT",
+                    activeHttpRequestCount: appCloseActiveRequestCount,
+                    activeConnectionCount: -1,
+                    ...(observedSockets === undefined
+                      ? {}
+                      : summarizeObservedSockets(observedSockets)),
+                  });
+                }
+              }
+              return app.close();
+            },
+            { activeHttpRequestCount: appCloseActiveRequestCount },
+          );
+          if (activeRequestListener !== undefined) {
+            app.server.removeListener("request", activeRequestListener);
+          }
+          if (socketConnectionListener !== undefined) {
+            app.server.removeListener("connection", socketConnectionListener);
+          }
+          await observeAsyncShutdownPhase(shutdownObserver, "compositionDispose", () =>
+            composition.dispose(),
+          );
+          await observeAsyncShutdownPhase(shutdownObserver, "storageClose", () => storage.close());
         })().catch((error: unknown) => {
           // Do not leave a cached rejected close promise: callers may retry after an unsafe effect
           // reaches a durable boundary. No underlying storage is closed on these paths.

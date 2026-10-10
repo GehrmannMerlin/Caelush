@@ -5,6 +5,7 @@ const { existsSync } = require("node:fs");
 const { mkdir, readFile, rm } = require("node:fs/promises");
 const { join, resolve } = require("node:path");
 const { pathToFileURL } = require("node:url");
+const { sendIpcAndWaitForMessage } = require("./poc-ipc.cjs");
 
 const STARTUP_TIMEOUT_MS = 10_000;
 const NORMAL_SHUTDOWN_TIMEOUT_MS = 20_000;
@@ -16,6 +17,15 @@ const PTY_SCRIPT = join(__dirname, "pty-smoke.mjs");
 const ELECTRON_NODE_PROBE = join(__dirname, "poc-electron-node-probe.mjs");
 const SANDBOX_SCRIPT = join(__dirname, "sandbox-smoke.mjs");
 const SQLITE_SCRIPT = join(__dirname, "sqlite-check.mjs");
+const SHUTDOWN_PHASES = new Set([
+  "beginDrain",
+  "checkpointActive",
+  "drainWithin",
+  "abortSSE",
+  "appClose",
+  "compositionDispose",
+  "storageClose",
+]);
 const SYSTEM_ROOT = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
 const SYSTEM_PATH = join(SYSTEM_ROOT, "System32");
 const EVIDENCE_FILE = process.env.CAELUSH_POC_EVIDENCE_FILE;
@@ -57,7 +67,8 @@ app.whenReady().then(async () => {
       throw new PocError("DEVELOPMENT_TOOL_FOUND_ON_SANITIZED_PATH");
     }
     evidence.artifacts = {
-      productArchiveSha256: process.env.CAELUSH_POC_BUNDLE_SHA256 ?? null,
+      productArchiveSha256: process.env.CAELUSH_POC_BUNDLE_SHA256 || null,
+      productSource: process.env.CAELUSH_POC_PRODUCT_SOURCE ?? "UNKNOWN",
       nodeArchiveSha256: process.env.CAELUSH_POC_NODE_ARCHIVE_SHA256 ?? null,
       electronArchiveSha256: process.env.CAELUSH_POC_ELECTRON_ARCHIVE_SHA256 ?? null,
       electronExecutableSha256: await hashFile(process.execPath),
@@ -113,6 +124,7 @@ app.whenReady().then(async () => {
     evidence.sse = vertical.sse;
     evidence.sqlite = vertical.sqlite;
     evidence.lifecycle = vertical.lifecycle;
+    evidence.shutdownExperiments = await runShutdownIsolationScenarios(dataRoot, env, vertical);
     evidence.gates.G2 = { status: vertical.sqlite.status, evidence: vertical.sqlite };
     evidence.gates.G5 = {
       status: "PASS",
@@ -124,15 +136,20 @@ app.whenReady().then(async () => {
       },
     };
     const failureInjections = await runFailureInjections(dataRoot, env);
+    const shutdownExperimentsPassed = Object.values(evidence.shutdownExperiments).every(
+      (scenario) => scenario.status === "PASS",
+    );
     evidence.gates.G6 = {
-      status:
-        vertical.lifecycle.gracefulShutdown === "PASS" && failureInjections.status === "PASS"
-          ? "PASS"
-          : "BLOCKED",
+      status: shutdownExperimentsPassed && failureInjections.status === "PASS" ? "PASS" : "BLOCKED",
       evidence: {
         failureInjections,
-        gracefulShutdown: vertical.lifecycle.gracefulShutdown,
-        shutdownProgressMs: vertical.lifecycle.shutdownProgressMs,
+        shutdownExperiments: evidence.shutdownExperiments,
+        startupIpcVerified: vertical.lifecycle.startupIpcVerified,
+        generationVerified: vertical.lifecycle.generationVerified,
+        shutdownRequestSent: vertical.lifecycle.shutdownRequestSent,
+        closedAcknowledged: vertical.lifecycle.closedAcknowledged,
+        normalChildExit: vertical.lifecycle.normalChildExit,
+        orphanChildCount: vertical.lifecycle.orphanChildCount,
       },
     };
     evidence.gates.G7 = {
@@ -195,6 +212,7 @@ function createEvidence() {
     sse: {},
     sqlite: {},
     lifecycle: {},
+    shutdownExperiments: {},
     gates: {
       G1: { status: "BLOCKED" },
       G2: { status: "BLOCKED" },
@@ -315,6 +333,11 @@ async function runDaemonVertical(dataRoot, env, evidence) {
 
   const firstGeneration = randomUUID();
   let daemon = await startDaemonChild({ databasePath, dataRoot, env, generation: firstGeneration });
+  const firstStartupIpc = {
+    startupIpcVerified: daemon.startupIpcVerified === true,
+    generationVerified: daemon.generationVerified === true,
+    pidVerified: daemon.pidVerified === true,
+  };
   const firstChildPid = daemon.child.pid;
   const firstClient = await createClient(daemon.ready.port);
   const health = await firstClient.getHealth();
@@ -477,17 +500,35 @@ async function runDaemonVertical(dataRoot, env, evidence) {
 
   let gracefulShutdown = "PASS";
   let shutdownProgressMs = [];
+  let repeatedShutdownSharedAttempt = false;
   try {
-    await stopDaemonChild(daemon);
+    const firstShutdown = stopDaemonChild(daemon);
+    const repeatedShutdown = stopDaemonChild(daemon);
+    repeatedShutdownSharedAttempt = firstShutdown === repeatedShutdown;
+    await Promise.all([firstShutdown, repeatedShutdown]);
   } catch (error) {
-    if (error?.code !== "SHUTDOWN_TIMEOUT") throw error;
+    if (
+      ![
+        "SHUTDOWN_TIMEOUT",
+        "DAEMON_SHUTDOWN_FAILED",
+        "CHILD_EXIT_BEFORE_SHUTDOWN_ACK",
+        "CHILD_EXIT_TIMEOUT",
+        "CHILD_EXIT_AFTER_CLOSED_NOT_NORMAL",
+      ].includes(error?.code)
+    ) {
+      throw error;
+    }
     gracefulShutdown = "BLOCKED";
+    daemon.shutdownFailureCode = error.code;
     try {
       shutdownProgressMs = JSON.parse(error.detail ?? "[]");
     } catch {
       shutdownProgressMs = [];
     }
   }
+  const shutdownEvidence = shutdownAttemptEvidence(daemon);
+  shutdownEvidence.repeatedShutdownSharedAttempt = repeatedShutdownSharedAttempt;
+  await closeMainWindow();
   daemon = undefined;
   const sqlite = await runJsonProcess(
     NODE_EXECUTABLE,
@@ -524,13 +565,25 @@ async function runDaemonVertical(dataRoot, env, evidence) {
     throw new PocError("SQLITE_RESTART_RECOVERY_FAILED");
   }
   evidence.sqlite.restartRecovery = true;
-  await sendIpc(daemon.child, { type: "SHUTDOWN", generation: firstGeneration });
-  const rejectedStale = await waitForMessage(daemon.child, 3000, "STALE_GENERATION_ACCEPTED");
+  const rejectedStale = await sendIpcAndWaitForMessage(
+    daemon.child,
+    { type: "SHUTDOWN", generation: firstGeneration },
+    3000,
+    "STALE_GENERATION_ACCEPTED",
+    "STALE_GENERATION_TIMEOUT",
+    (message) => message?.type === "CONTROL_REJECTED",
+  );
   if (rejectedStale.type !== "CONTROL_REJECTED" || rejectedStale.code !== "GENERATION_MISMATCH") {
     throw new PocError("STALE_GENERATION_CONTROL_ACCEPTED");
   }
-  await sendIpc(daemon.child, { type: "PING", generation: secondGeneration });
-  const acceptedCurrent = await waitForMessage(daemon.child, 3000, "CURRENT_GENERATION_REJECTED");
+  const acceptedCurrent = await sendIpcAndWaitForMessage(
+    daemon.child,
+    { type: "PING", generation: secondGeneration },
+    3000,
+    "CURRENT_GENERATION_REJECTED",
+    "CURRENT_GENERATION_TIMEOUT",
+    (message) => ["PONG", "CONTROL_REJECTED"].includes(message?.type),
+  );
   if (acceptedCurrent.type !== "PONG" || acceptedCurrent.generation !== secondGeneration) {
     throw new PocError("CURRENT_GENERATION_CONTROL_FAILED");
   }
@@ -568,6 +621,11 @@ async function runDaemonVertical(dataRoot, env, evidence) {
   };
   const lifecycleEvidence = {
     childOwnedByElectronMain: true,
+    ...firstStartupIpc,
+    shutdownRequestSent: shutdownEvidence.requestSent,
+    closedAcknowledged:
+      shutdownEvidence.responseReceived && shutdownEvidence.responseType === "CLOSED",
+    normalChildExit: shutdownEvidence.normalChildExit,
     childPidValidatedAgainstIpcReport: true,
     portLearnedOnlyFromPrivateIpc: true,
     bootstrapSecretInArgvEnvOrUrl: false,
@@ -576,6 +634,7 @@ async function runDaemonVertical(dataRoot, env, evidence) {
     normalShutdownBounded: true,
     gracefulShutdown,
     shutdownProgressMs,
+    shutdown: shutdownEvidence,
     orphanChildCount: activeChildren.size,
   };
   evidence.daemon = daemonEvidence;
@@ -591,7 +650,378 @@ async function runDaemonVertical(dataRoot, env, evidence) {
     },
     sqlite: sqliteEvidence,
     lifecycle: lifecycleEvidence,
+    shutdown: shutdownEvidence,
   };
+}
+
+async function runShutdownIsolationScenarios(dataRoot, env, vertical) {
+  const results = {};
+  results.A = await runShutdownIsolationCase({
+    name: "A_IDLE_NO_WINDOW",
+    dataRoot,
+    env,
+  });
+  results.B = await runShutdownIsolationCase({
+    name: "B_IDLE_RENDERER_OPEN",
+    dataRoot,
+    env,
+    openWindow: true,
+  });
+  results.C = await runShutdownIsolationCase({
+    name: "C_FIXTURE_RUN_RENDERER_CLOSED",
+    dataRoot,
+    env,
+    openWindow: true,
+    completeFixtureRun: true,
+    closeWindowBeforeShutdown: true,
+    verifySqliteRecovery: true,
+  });
+  results.D = await runShutdownIsolationCase({
+    name: "D_FIXTURE_RUN_RENDERER_OPEN",
+    dataRoot,
+    env,
+    openWindow: true,
+    completeFixtureRun: true,
+  });
+  results.E = await runShutdownIsolationCase({
+    name: "E_ACTIVE_SSE_SUBSCRIPTION",
+    dataRoot,
+    env,
+    activeSse: true,
+  });
+  results.F = await runShutdownIsolationCase({
+    name: "F_FIXTURE_RUN_NO_WINDOW",
+    dataRoot,
+    env,
+    completeFixtureRun: true,
+  });
+  results.G = await runShutdownIsolationCase({
+    name: "G_FIXTURE_RUN_CONNECTION_CLOSE",
+    dataRoot,
+    env,
+    completeFixtureRun: true,
+    connectionClose: true,
+  });
+  results.H = await runShutdownIsolationCase({
+    name: "H_WINDOW_CLOSED_BEFORE_FIXTURE_RUN",
+    dataRoot,
+    env,
+    openWindow: true,
+    closeWindowBeforeFixtureRun: true,
+    completeFixtureRun: true,
+  });
+  return results;
+}
+
+async function runShutdownIsolationCase(options) {
+  const caseRoot = join(options.dataRoot, "shutdown-cases", options.name);
+  const profileRoot = join(caseRoot, "profile");
+  const workspaceRoot = join(caseRoot, "workspace");
+  const databasePath = join(profileRoot, "caelush.db");
+  await mkdir(profileRoot, { recursive: true });
+  await mkdir(workspaceRoot, { recursive: true });
+
+  const daemon = await startDaemonChild({
+    databasePath,
+    dataRoot: caseRoot,
+    env: options.env,
+    generation: randomUUID(),
+  });
+  let browserWindowOpened = false;
+  let browserClosedBeforeShutdown = false;
+  let fixtureRunCompleted = false;
+  let fixtureRunFailureCode;
+  let fixtureSessionId;
+  let fixtureRunId;
+  let activeSseController;
+  let activeSseIterator;
+  let activeSseFirstRead;
+  let activeSseClosed;
+  let activeSseOpen = false;
+  let shutdownFailureCode;
+  let stuckPhaseAtTimeout;
+
+  try {
+    const client = await createClient(daemon.ready.port, {
+      connectionClose: options.connectionClose === true,
+    });
+    if (options.openWindow) {
+      await verifyAndLoadWeb(daemon.url);
+      browserWindowOpened = true;
+    }
+
+    if (options.closeWindowBeforeFixtureRun && browserWindowOpened) {
+      await closeMainWindow();
+      browserClosedBeforeShutdown = true;
+    }
+
+    if (options.completeFixtureRun) {
+      try {
+        const fixture = await createFixtureRun(client, workspaceRoot, true);
+        fixtureRunCompleted = fixture.run.status === "COMPLETED";
+        fixtureSessionId = fixture.session.id;
+        fixtureRunId = fixture.run.id;
+      } catch (error) {
+        fixtureRunFailureCode = typeof error?.code === "string" ? error.code : "FIXTURE_RUN_FAILED";
+      }
+    }
+
+    if (options.activeSse) {
+      const fixture = await createFixtureRun(client, workspaceRoot, false);
+      activeSseController = new AbortController();
+      let signalOpened;
+      const opened = new Promise((resolvePromise) => (signalOpened = resolvePromise));
+      activeSseIterator = client
+        .watchRunEvents(fixture.run.id, {
+          afterSequence: 0,
+          signal: activeSseController.signal,
+          onOpen: signalOpened,
+        })
+        [Symbol.asyncIterator]();
+      activeSseFirstRead = activeSseIterator.next();
+      await withTimeout(opened, 5000, "SSE_OPEN_TIMEOUT");
+      activeSseOpen = true;
+    }
+
+    if (options.closeWindowBeforeShutdown && browserWindowOpened) {
+      await closeMainWindow();
+      browserClosedBeforeShutdown = true;
+    }
+
+    try {
+      await stopDaemonChild(daemon);
+    } catch (error) {
+      if (!isShutdownFailure(error?.code)) throw error;
+      shutdownFailureCode = error.code;
+      stuckPhaseAtTimeout = shutdownAttemptEvidence(daemon).stuckPhase;
+    }
+
+    if (options.activeSse && daemon.shutdownResponseType === "CLOSED") {
+      try {
+        await drainAbortedIterator(activeSseIterator, 1000, activeSseFirstRead);
+        activeSseClosed = true;
+      } catch {
+        activeSseClosed = false;
+      }
+    }
+  } finally {
+    if (activeSseController !== undefined) activeSseController.abort();
+    if (activeSseFirstRead !== undefined) {
+      await withTimeout(
+        activeSseFirstRead.catch(() => undefined),
+        1000,
+        "SSE_CLEANUP_TIMEOUT",
+      ).catch(() => undefined);
+    }
+    if (browserWindowOpened && !browserClosedBeforeShutdown) {
+      await closeMainWindow().catch(() => undefined);
+    }
+    if (!daemon.exited) await killOwnedChild(daemon).catch(() => undefined);
+  }
+
+  const shutdown = shutdownAttemptEvidence(daemon);
+  const completed = shutdownFailureCode === undefined && shutdown.normalChildExit;
+  let sqliteEvidence;
+  if (options.verifySqliteRecovery) {
+    let integrity;
+    let sqliteFailureCode;
+    if (completed) {
+      try {
+        integrity = await runJsonProcess(
+          NODE_EXECUTABLE,
+          [SQLITE_SCRIPT, databasePath],
+          options.env,
+          5000,
+          "SQLITE_INTEGRITY_CHECK_FAILED",
+        );
+      } catch (error) {
+        sqliteFailureCode = typeof error?.code === "string" ? error.code : "SQLITE_CHECK_FAILED";
+      }
+    }
+
+    let sessionAndRunRecoveredAfterRestart = false;
+    if (
+      completed &&
+      integrity?.integrity === "ok" &&
+      fixtureSessionId !== undefined &&
+      fixtureRunId !== undefined
+    ) {
+      const restarted = await startDaemonChild({
+        databasePath,
+        dataRoot: caseRoot,
+        env: options.env,
+        generation: randomUUID(),
+      });
+      try {
+        const restartedClient = await createClient(restarted.ready.port, {
+          connectionClose: options.connectionClose === true,
+        });
+        const [session, run, transcript] = await Promise.all([
+          restartedClient.getSession(fixtureSessionId),
+          restartedClient.getRun(fixtureRunId),
+          restartedClient.getSessionTranscript(fixtureSessionId),
+        ]);
+        sessionAndRunRecoveredAfterRestart =
+          session.id === fixtureSessionId &&
+          run.id === fixtureRunId &&
+          run.status === "COMPLETED" &&
+          transcript.items.some((item) => item.runId === fixtureRunId && item.kind === "ASSISTANT");
+        await stopDaemonChild(restarted);
+      } finally {
+        if (!restarted.exited) await killOwnedChild(restarted).catch(() => undefined);
+      }
+    }
+
+    const g2Passed =
+      completed &&
+      shutdown.responseReceived &&
+      shutdown.responseType === "CLOSED" &&
+      shutdown.phases.some(
+        (observation) => observation.phase === "storageClose" && observation.state === "COMPLETED",
+      ) &&
+      integrity?.integrity === "ok" &&
+      integrity.tables > 0 &&
+      sessionAndRunRecoveredAfterRestart;
+    sqliteEvidence = {
+      status: g2Passed ? "PASS" : "BLOCKED",
+      shutdownRequestSent: shutdown.requestSent,
+      daemonCloseFulfilled: shutdown.phases.some(
+        (observation) => observation.phase === "storageClose" && observation.state === "COMPLETED",
+      ),
+      closedAcknowledged: shutdown.responseReceived && shutdown.responseType === "CLOSED",
+      childExitedNormally: shutdown.normalChildExit,
+      databaseReopened: integrity?.integrity === "ok",
+      integrityCheck: integrity?.integrity ?? "NOT_RUN",
+      tableCount: integrity?.tables ?? 0,
+      sessionAndRunRecoveredAfterRestart,
+      ...(sqliteFailureCode === undefined ? {} : { sqliteFailureCode }),
+    };
+  }
+
+  return {
+    name: options.name,
+    status:
+      completed &&
+      (!options.completeFixtureRun || fixtureRunCompleted) &&
+      (!options.activeSse || (activeSseOpen && activeSseClosed))
+        ? "PASS"
+        : "BLOCKED",
+    browserWindowOpened,
+    browserWindowOpenAtShutdown: browserWindowOpened && !browserClosedBeforeShutdown,
+    browserClosedBeforeShutdown,
+    fixtureRunRequested: Boolean(options.completeFixtureRun),
+    fixtureRunCompleted,
+    ...(fixtureRunFailureCode === undefined ? {} : { fixtureRunFailureCode }),
+    activeSseOpened: activeSseOpen,
+    ...(options.activeSse ? { activeSseIteratorClosed: activeSseClosed === true } : {}),
+    shutdownFailureCode: shutdownFailureCode ?? null,
+    stuckPhaseAtTimeout: stuckPhaseAtTimeout ?? null,
+    ...shutdown,
+    ...(sqliteEvidence === undefined ? {} : { sqlite: sqliteEvidence }),
+  };
+}
+
+async function createFixtureRun(client, workspaceRoot, start) {
+  const { createWorkspaceId } = await importProductPackage("protocol");
+  const requestedWorkspace = { id: createWorkspaceId(), path: workspaceRoot };
+  const session = await client.createSession({
+    defaultWorkspace: requestedWorkspace,
+    defaultModel: { provider: "fixture", model: "fixture-model" },
+  });
+  const workspace = session.defaultWorkspace ?? requestedWorkspace;
+  const run = await client.createRun(session.id, {
+    goal: "complete the local Windows shutdown fixture",
+    workspace,
+    model: { provider: "fixture", model: "fixture-model" },
+    runtime: { id: "local", kind: "local" },
+    preset: { id: "FULL_ACCESS", expectedVersion: 1 },
+    limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 10_000 },
+  });
+  if (!start) return { session, run };
+  await client.startRun(run.id);
+  const settled = await waitForRun(client, run.id, 10_000);
+  if (
+    settled.status !== "COMPLETED" ||
+    settled.finalResult?.type !== "NORMAL_COMPLETION" ||
+    settled.finalResult.text !== "Windows POC fixture completed."
+  ) {
+    throw new PocError("FIXTURE_RUN_NOT_COMPLETED");
+  }
+  return { session, run: settled };
+}
+
+function isShutdownFailure(code) {
+  return [
+    "SHUTDOWN_TIMEOUT",
+    "DAEMON_SHUTDOWN_FAILED",
+    "CHILD_EXIT_BEFORE_SHUTDOWN_ACK",
+    "CHILD_EXIT_TIMEOUT",
+    "CHILD_EXIT_AFTER_CLOSED_NOT_NORMAL",
+    "INVALID_SHUTDOWN_ACK",
+  ].includes(code);
+}
+
+function shutdownAttemptEvidence(handle) {
+  const activePhases = new Set();
+  let lastCompletedPhase = null;
+  let lastPhase = null;
+  let activeRunCount = null;
+  for (const observation of handle.shutdownPhases) {
+    lastPhase = observation.phase;
+    if (observation.phase === "checkpointActive" && observation.state === "STARTED") {
+      activeRunCount = observation.activeRunCount;
+    }
+    if (observation.state === "STARTED") activePhases.add(observation.phase);
+    if (observation.state === "COMPLETED" || observation.state === "FAILED") {
+      activePhases.delete(observation.phase);
+      if (observation.state === "COMPLETED") lastCompletedPhase = observation.phase;
+    }
+  }
+  return {
+    requestAttempted: Boolean(handle.shutdownRequestAttempted),
+    requestSent: Boolean(handle.shutdownRequestSent),
+    responseReceived: Boolean(handle.shutdownResponseReceived),
+    responseType: handle.shutdownResponseType,
+    childIpcSendResults:
+      handle.shutdownIpcSends.length > 0
+        ? handle.shutdownIpcSends
+        : handle.shutdownResponseReceived
+          ? [{ messageType: handle.shutdownResponseType, result: "ACKNOWLEDGED_BY_MAIN" }]
+          : [],
+    phases: handle.shutdownPhases,
+    activeRunCount,
+    lastPhase,
+    lastCompletedPhase,
+    stuckPhase: [...activePhases].at(-1) ?? null,
+    childExited: handle.exited,
+    childExitCode: handle.exitCode,
+    childExitSignal: handle.exitSignal,
+    normalChildExit: handle.exited && handle.exitCode === 0 && handle.exitSignal === null,
+    orphanChildCount: activeChildren.size,
+  };
+}
+
+async function closeMainWindow() {
+  const window = mainWindow;
+  mainWindow = undefined;
+  if (window === undefined || window.isDestroyed()) return;
+  await new Promise((resolvePromise, rejectPromise) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      window.removeListener("closed", onClosed);
+    };
+    const onClosed = () => {
+      cleanup();
+      resolvePromise();
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      rejectPromise(new PocError("ELECTRON_WINDOW_CLOSE_TIMEOUT"));
+    }, 5000);
+    window.once("closed", onClosed);
+    window.close();
+    if (window.isDestroyed()) onClosed();
+  });
 }
 
 async function verifyAndLoadWeb(baseUrl) {
@@ -605,10 +1035,25 @@ async function verifyAndLoadWeb(baseUrl) {
     fetch(new URL(script, baseUrl)),
     fetch(new URL(stylesheet, baseUrl)),
   ]);
-  if (!scriptResponse.ok || !styleResponse.ok) throw new PocError("WEB_ASSET_HTTP_FAILED");
+  const [scriptBody, styleBody] = await Promise.all([
+    scriptResponse.arrayBuffer(),
+    styleResponse.arrayBuffer(),
+  ]);
+  if (
+    !scriptResponse.ok ||
+    !styleResponse.ok ||
+    scriptBody.byteLength === 0 ||
+    styleBody.byteLength === 0
+  ) {
+    throw new PocError("WEB_ASSET_HTTP_FAILED");
+  }
   mainWindow = new BrowserWindow({
     show: false,
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
   });
   await withTimeout(mainWindow.loadURL(baseUrl), 15_000, "ELECTRON_RENDERER_LOAD_TIMEOUT");
   return {
@@ -625,9 +1070,19 @@ async function verifyAndLoadWeb(baseUrl) {
   };
 }
 
-async function createClient(port) {
+async function createClient(port, options = {}) {
   const { CaelushClient } = await importProductPackage("client");
-  return new CaelushClient({ baseUrl: `http://127.0.0.1:${port}` });
+  const fetcher = options.connectionClose
+    ? (input, init = {}) => {
+        const headers = new Headers(init.headers);
+        headers.set("connection", "close");
+        return fetch(input, { ...init, headers });
+      }
+    : undefined;
+  return new CaelushClient({
+    baseUrl: `http://127.0.0.1:${port}`,
+    ...(fetcher === undefined ? {} : { fetch: fetcher }),
+  });
 }
 
 async function importProductPackage(name) {
@@ -653,9 +1108,33 @@ async function startDaemonChild({
     serialization: "json",
     windowsHide: true,
   });
-  const state = { child, generation, exited: false, exitCode: null, shutdownProgress: [] };
+  const state = {
+    child,
+    generation,
+    exited: false,
+    exitCode: null,
+    exitSignal: null,
+    shutdownProgress: [],
+    shutdownPhases: [],
+    shutdownIpcSends: [],
+    shutdownResponseReceived: false,
+    shutdownResponseType: null,
+  };
   activeChildren.add(state);
-  child.stdout?.on("data", () => undefined);
+  let stdoutRemainder = "";
+  child.stdout?.on("data", (chunk) => {
+    stdoutRemainder = (stdoutRemainder + chunk.toString("utf8")).slice(-512);
+    const lastNewline = stdoutRemainder.lastIndexOf("\n");
+    if (lastNewline < 0) return;
+    const lines = stdoutRemainder.slice(0, lastNewline).split(/\r?\n/);
+    stdoutRemainder = stdoutRemainder.slice(lastNewline + 1);
+    for (const line of lines) {
+      const match = /^POC_SHUTDOWN_IPC=(CLOSED|ERROR):(SENT|FAILED)$/.exec(line);
+      if (match && state.shutdownIpcSends.length < 4) {
+        state.shutdownIpcSends.push({ messageType: match[1], result: match[2] });
+      }
+    }
+  });
   child.stderr?.on("data", () => undefined);
   child.on("message", (message) => {
     if (
@@ -664,37 +1143,85 @@ async function startDaemonChild({
       message.generation === generation &&
       Number.isSafeInteger(message.elapsedMs)
     ) {
-      state.shutdownProgress.push(message.elapsedMs);
+      if (state.shutdownProgress.length < 32) state.shutdownProgress.push(message.elapsedMs);
+    }
+    if (
+      message &&
+      message.type === "SHUTDOWN_PHASE" &&
+      message.generation === generation &&
+      SHUTDOWN_PHASES.has(message.phase) &&
+      ["STARTED", "COMPLETED", "FAILED", "SNAPSHOT"].includes(message.state)
+    ) {
+      const observation = { phase: message.phase, state: message.state };
+      for (const key of [
+        "elapsedMs",
+        "activeRunCount",
+        "unsafeCheckpointCount",
+        "activeHttpRequestCount",
+        "activeConnectionCount",
+        "openSocketCount",
+        "pendingSocketCount",
+        "readableSocketCount",
+        "writableSocketCount",
+        "bytesReadTotal",
+        "bytesWrittenTotal",
+        "outcome",
+        "controllerCount",
+      ]) {
+        if (
+          Number.isSafeInteger(message[key]) ||
+          (key === "outcome" && ["DRAINED", "TIMED_OUT"].includes(message[key]))
+        ) {
+          observation[key] = message[key];
+        }
+      }
+      if (state.shutdownPhases.length < 32) state.shutdownPhases.push(observation);
     }
   });
-  child.once("exit", (code) => {
+  child.once("exit", (code, signal) => {
     state.exited = true;
     state.exitCode = code;
+    state.exitSignal = signal;
     activeChildren.delete(state);
   });
   child.once("error", () => {
     state.exited = true;
+    state.exitSignal = "ERROR";
     activeChildren.delete(state);
   });
   try {
     if (fault === "invalid-bootstrap") {
-      await sendIpc(child, {
-        type: "START",
-        protocolVersion: 900,
-        generation,
-        databasePath,
-        productRoot: PRODUCT_ROOT,
-      });
+      state.startupResponse = await sendIpcAndWaitForMessage(
+        child,
+        {
+          type: "START",
+          protocolVersion: 900,
+          generation,
+          databasePath,
+          productRoot: PRODUCT_ROOT,
+        },
+        timeoutMs,
+        "CHILD_EXIT_BEFORE_READY",
+        "STARTUP_TIMEOUT",
+        (message) => ["READY", "ERROR", "BOOTSTRAP_REJECTED"].includes(message?.type),
+      );
     } else {
       const bootstrapSecret = randomBytes(32).toString("hex");
-      await sendIpc(child, {
-        type: "START",
-        protocolVersion: 1,
-        generation,
-        bootstrapSecret,
-        databasePath,
-        productRoot: PRODUCT_ROOT,
-      });
+      const startupResponse = await sendIpcAndWaitForMessage(
+        child,
+        {
+          type: "START",
+          protocolVersion: 1,
+          generation,
+          bootstrapSecret,
+          databasePath,
+          productRoot: PRODUCT_ROOT,
+        },
+        timeoutMs,
+        "CHILD_EXIT_BEFORE_READY",
+        "STARTUP_TIMEOUT",
+        (message) => ["READY", "ERROR", "BOOTSTRAP_REJECTED"].includes(message?.type),
+      );
       if (child.spawnargs.join(" ").includes(bootstrapSecret))
         throw new PocError("BOOTSTRAP_SECRET_IN_ARGV");
       if (
@@ -705,16 +1232,22 @@ async function startDaemonChild({
         throw new PocError("BOOTSTRAP_SECRET_IN_ENV");
       }
       state.bootstrapSecret = bootstrapSecret;
+      state.startupResponse = startupResponse;
     }
-    const response = await waitForMessage(child, timeoutMs, "CHILD_EXIT_BEFORE_READY");
+    const response = state.startupResponse;
     if (response.type === "BOOTSTRAP_REJECTED") {
       throw new PocError("INVALID_BOOTSTRAP_MESSAGE");
     }
     if (response.type === "ERROR") throw new PocError(response.code || "CHILD_START_FAILED");
     if (response.type !== "READY") throw new PocError("INVALID_STARTUP_RESPONSE");
+    state.startupRequestSent = true;
+    state.generationVerified = response.generation === generation;
+    state.pidVerified = response.pid === child.pid;
+    state.startupResponseType = response.type;
     if (response.generation !== generation || response.pid !== child.pid) {
       throw new PocError("GENERATION_MISMATCH");
     }
+    state.startupIpcVerified = true;
     state.ready = response;
     state.url = `http://127.0.0.1:${response.port}`;
     if (state.bootstrapSecret && state.url.includes(state.bootstrapSecret)) {
@@ -729,28 +1262,56 @@ async function startDaemonChild({
   }
 }
 
-async function stopDaemonChild(handle, timeoutMs = NORMAL_SHUTDOWN_TIMEOUT_MS) {
-  if (!handle || handle.exited) return;
-  await sendIpc(handle.child, { type: "SHUTDOWN", generation: handle.generation });
-  try {
-    const response = await waitForMessage(
-      handle.child,
-      timeoutMs,
-      "CHILD_EXIT_BEFORE_SHUTDOWN_ACK",
-      "SHUTDOWN_TIMEOUT",
-      (message) => message?.type === "CLOSED" || message?.type === "ERROR",
-    );
-    if (response.type !== "CLOSED" || response.generation !== handle.generation) {
-      throw new PocError("INVALID_SHUTDOWN_ACK");
+function stopDaemonChild(handle, timeoutMs = NORMAL_SHUTDOWN_TIMEOUT_MS) {
+  if (!handle || handle.exited) return Promise.resolve();
+  if (handle.shutdownPromise !== undefined) return handle.shutdownPromise;
+
+  const attempt = (async () => {
+    try {
+      handle.shutdownRequestAttempted = true;
+      const response = await sendIpcAndWaitForMessage(
+        handle.child,
+        { type: "SHUTDOWN", generation: handle.generation },
+        timeoutMs,
+        "CHILD_EXIT_BEFORE_SHUTDOWN_ACK",
+        "SHUTDOWN_TIMEOUT",
+        (message) => message?.type === "CLOSED" || message?.type === "ERROR",
+        () => {
+          handle.shutdownRequestSent = true;
+        },
+      );
+      handle.shutdownRequestSent = true;
+      handle.shutdownResponseReceived = true;
+      handle.shutdownResponseType = response.type;
+      if (response.generation !== handle.generation) {
+        throw new PocError("INVALID_SHUTDOWN_ACK");
+      }
+      if (response.type === "ERROR") {
+        handle.shutdownFailureCode = "DAEMON_SHUTDOWN_FAILED";
+        throw new PocError("DAEMON_SHUTDOWN_FAILED");
+      }
+      if (response.type !== "CLOSED") throw new PocError("INVALID_SHUTDOWN_ACK");
+
+      const exitCode = await waitForChildExit(handle, timeoutMs);
+      handle.shutdownExitCode = exitCode;
+      handle.shutdownExitSignal = handle.exitSignal;
+      if (exitCode !== 0 || !handle.exited) {
+        throw new PocError("CHILD_EXIT_AFTER_CLOSED_NOT_NORMAL");
+      }
+    } catch (error) {
+      await killOwnedChild(handle).catch(() => undefined);
+      if (error?.code === "SHUTDOWN_TIMEOUT") {
+        throw new PocError("SHUTDOWN_TIMEOUT", JSON.stringify(handle.shutdownProgress));
+      }
+      throw error;
     }
-    await waitForChildExit(handle, timeoutMs);
-  } catch (error) {
-    await killOwnedChild(handle).catch(() => undefined);
-    if (error?.code === "SHUTDOWN_TIMEOUT") {
-      throw new PocError("SHUTDOWN_TIMEOUT", JSON.stringify(handle.shutdownProgress));
-    }
+  })();
+
+  handle.shutdownPromise = attempt.catch((error) => {
+    handle.shutdownPromise = undefined;
     throw error;
-  }
+  });
+  return handle.shutdownPromise;
 }
 
 async function runFailureInjections(dataRoot, env) {
@@ -925,30 +1486,18 @@ function strictlyIncreasing(values) {
   return values.every((value, index) => index === 0 || value > values[index - 1]);
 }
 
-function waitForMessage(
-  child,
-  timeoutMs,
-  exitCode,
-  timeoutCode = timeoutErrorCode(exitCode),
-  acceptMessage = () => true,
-) {
-  if (child.exitCode !== null || child.signalCode !== null)
-    return Promise.reject(new PocError(exitCode));
-  return new Promise((resolvePromise, rejectPromise) => {
+async function waitForChildExit(handle, timeoutMs) {
+  if (handle.exited) return handle.exitCode;
+  const child = handle.child;
+  await new Promise((resolvePromise, rejectPromise) => {
     const cleanup = () => {
       clearTimeout(timer);
-      child.removeListener("message", onMessage);
       child.removeListener("exit", onExit);
       child.removeListener("error", onError);
     };
-    const onMessage = (message) => {
-      if (!acceptMessage(message)) return;
+    const onExit = (code) => {
       cleanup();
-      resolvePromise(message);
-    };
-    const onExit = () => {
-      cleanup();
-      rejectPromise(new PocError(exitCode));
+      resolvePromise(code);
     };
     const onError = () => {
       cleanup();
@@ -956,37 +1505,11 @@ function waitForMessage(
     };
     const timer = setTimeout(() => {
       cleanup();
-      rejectPromise(new PocError(timeoutCode));
+      rejectPromise(new PocError("CHILD_EXIT_TIMEOUT"));
     }, timeoutMs);
-    child.once("message", onMessage);
     child.once("exit", onExit);
     child.once("error", onError);
   });
-}
-
-function timeoutErrorCode(exitCode) {
-  if (exitCode === "CHILD_EXIT_BEFORE_READY") return "STARTUP_TIMEOUT";
-  if (exitCode === "CHILD_EXIT_BEFORE_SHUTDOWN_ACK") return "CHILD_EXIT_BEFORE_SHUTDOWN_ACK";
-  return exitCode;
-}
-
-function sendIpc(child, message) {
-  if (!child.connected || child.exitCode !== null) throw new PocError("CHILD_CHANNEL_CLOSED");
-  return new Promise((resolvePromise, rejectPromise) => {
-    child.send(message, (error) => {
-      if (error) rejectPromise(new PocError("PRIVATE_IPC_SEND_FAILED"));
-      else resolvePromise();
-    });
-  });
-}
-
-async function waitForChildExit(handle, timeoutMs) {
-  if (handle.exited) return handle.exitCode;
-  await withTimeout(
-    new Promise((resolvePromise) => handle.child.once("exit", (code) => resolvePromise(code))),
-    timeoutMs,
-    "CHILD_EXIT_TIMEOUT",
-  );
   return handle.exitCode;
 }
 

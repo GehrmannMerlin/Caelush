@@ -42,12 +42,19 @@ async function handleMessage(message) {
     try {
       await daemon.close();
       clearInterval(progressTimer);
-      await send({ type: "CLOSED", generation });
-      process.disconnect();
-      setImmediate(() => process.exit(0));
+      const result = await send({ type: "CLOSED", generation });
+      await writeShutdownIpcStatus("CLOSED", result);
+      if (result === "SENT") {
+        process.disconnect();
+        setImmediate(() => process.exit(0));
+      } else {
+        process.exitCode = 1;
+        process.disconnect();
+      }
     } catch {
       clearInterval(progressTimer);
-      await send({ type: "ERROR", code: "DAEMON_SHUTDOWN_FAILED", generation });
+      const result = await send({ type: "ERROR", code: "DAEMON_SHUTDOWN_FAILED", generation });
+      await writeShutdownIpcStatus("ERROR", result);
       process.exitCode = 1;
       process.disconnect();
     }
@@ -158,7 +165,7 @@ async function handleStart(message) {
 
 async function makeDaemon(startDaemon, productRoot, databasePath) {
   const fixture = createFixture();
-  return startDaemon({
+  const options = {
     databasePath,
     host: "127.0.0.1",
     port: 0,
@@ -169,7 +176,13 @@ async function makeDaemon(startDaemon, productRoot, databasePath) {
     adapterOverrides: [fixture.adapter],
     defaultModel: { provider: "fixture", model: "fixture-model" },
     web: { buildRoot: join(productRoot, "web") },
+  };
+  Object.defineProperty(options, Symbol.for("caelush.daemon.internal-shutdown-observer.v1"), {
+    value: (observation) => {
+      void send({ type: "SHUTDOWN_PHASE", generation, ...observation });
+    },
   });
+  return startDaemon(options);
 }
 
 function createFixture() {
@@ -233,6 +246,22 @@ function isRecord(value) {
 }
 
 function send(message) {
-  if (typeof process.send !== "function" || !process.connected) return Promise.resolve();
-  return new Promise((resolve) => process.send(message, () => resolve()));
+  if (typeof process.send !== "function" || !process.connected) return Promise.resolve("FAILED");
+  return new Promise((resolve) => {
+    try {
+      process.send(message, (error) => resolve(error ? "FAILED" : "SENT"));
+    } catch {
+      resolve("FAILED");
+    }
+  });
+}
+
+function writeShutdownIpcStatus(type, result) {
+  return new Promise((resolve) => {
+    try {
+      process.stdout.write(`POC_SHUTDOWN_IPC=${type}:${result}\n`, () => resolve());
+    } catch {
+      resolve();
+    }
+  });
 }

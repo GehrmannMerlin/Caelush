@@ -150,7 +150,8 @@ describe("daemon lifecycle", () => {
     }
 
     expect(settled.status).toBe("COMPLETED");
-    expect(secondProvider.calls).toBeGreaterThanOrEqual(2);
+    expect(settled.finalResult?.type).toBe("NORMAL_COMPLETION");
+    expect(secondProvider.calls).toBe(1);
     await second.close();
 
     const finalInspection = await openCaelushStorage({ path: databasePath });
@@ -159,7 +160,9 @@ describe("daemon lifecycle", () => {
       throughSequence: await finalInspection.eventReader.latestSequence(run.id),
       limit: 100,
     });
-    expect(events.map((event) => event.type).filter((type) => type === "retry.started")).toHaveLength(1);
+    expect(
+      events.map((event) => event.type).filter((type) => type === "retry.started"),
+    ).toHaveLength(1);
     expect(events.map((event) => event.type)).toContain("run.completed");
     await finalInspection.close();
   }, 20_000);
@@ -168,6 +171,50 @@ describe("daemon lifecycle", () => {
     await expect(
       startDaemon({ databasePath: ":memory:", shutdownTimeoutMs: Number.POSITIVE_INFINITY }),
     ).rejects.toThrow("shutdownTimeoutMs must be a finite positive safe integer");
+  });
+
+  it("reports bounded internal shutdown phase observations", async () => {
+    const databasePath = await makeDatabasePath("shutdown-observer");
+    const observations: Array<Record<string, unknown>> = [];
+    const options = { databasePath, port: 0 };
+    Object.defineProperty(options, Symbol.for("caelush.daemon.internal-shutdown-observer.v1"), {
+      value: (observation: Record<string, unknown>) => observations.push(observation),
+    });
+
+    const handle = await startDaemon(options);
+    handles.push(handle);
+    await handle.close();
+
+    const phases = [
+      "beginDrain",
+      "checkpointActive",
+      "drainWithin",
+      "abortSSE",
+      "appClose",
+      "compositionDispose",
+      "storageClose",
+    ];
+    expect(
+      observations.filter(({ state }) => state === "STARTED").map(({ phase }) => phase),
+    ).toEqual(phases);
+    expect(
+      observations.filter(({ state }) => state === "COMPLETED").map(({ phase }) => phase),
+    ).toEqual(phases);
+    for (const observation of observations) {
+      expect(
+        observation.elapsedMs === undefined || Number.isSafeInteger(observation.elapsedMs),
+      ).toBe(true);
+      expect(observation).not.toHaveProperty("runId");
+      expect(observation).not.toHaveProperty("sessionId");
+      expect(observation).not.toHaveProperty("path");
+    }
+    expect(observations.find(({ phase }) => phase === "checkpointActive")).toMatchObject({
+      state: "STARTED",
+      activeRunCount: 0,
+    });
+    expect(
+      observations.find(({ phase, state }) => phase === "appClose" && state === "STARTED"),
+    ).toMatchObject({ activeHttpRequestCount: 0 });
   });
 
   it("starts on an ephemeral port and closes idempotently with active SSE", async () => {

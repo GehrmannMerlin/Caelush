@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$BundlePath,
+  [Parameter(Mandatory = $false)][ValidateNotNullOrEmpty()][string]$BundlePath,
+  [Parameter(Mandatory = $false)][ValidateNotNullOrEmpty()][string]$ReuseProductRoot,
   [switch]$KeepStage
 )
 
@@ -42,9 +43,14 @@ function Resolve-VerifiedDownload {
     throw
   }
 }
-$BundlePath = [IO.Path]::GetFullPath($BundlePath)
-if (!(Test-Path -LiteralPath $BundlePath -PathType Leaf)) {
-  throw "Portable Caelush release archive not found: $BundlePath. Build the existing portable release as a separate build prerequisite; this POC does not invoke or modify the Release Builder."
+if ([string]::IsNullOrWhiteSpace($BundlePath) -and [string]::IsNullOrWhiteSpace($ReuseProductRoot)) {
+  throw "Pass either -BundlePath or -ReuseProductRoot."
+}
+if (![string]::IsNullOrWhiteSpace($BundlePath)) {
+  $BundlePath = [IO.Path]::GetFullPath($BundlePath)
+  if (!(Test-Path -LiteralPath $BundlePath -PathType Leaf)) {
+    throw "Portable Caelush release archive not found: $BundlePath. Build the existing portable release as a separate build prerequisite; this POC does not invoke or modify the Release Builder."
+  }
 }
 
 $nodeArchive = Join-Path $cacheRoot "node-v$nodeVersion-win-x64.zip"
@@ -56,14 +62,36 @@ $appRoot = Join-Path $electronRoot "resources/app"
 $pocDataRoot = Join-Path $stageRoot "test-data"
 $evidencePath = Join-Path $evidenceDirectory ("windows-poc-" + (Get-Date -Format "yyyyMMdd-HHmmss") + "-" + [guid]::NewGuid().ToString("N") + ".json")
 $originalEnvironment = @{}
-foreach ($name in @("PATH", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "electron_config_cache", "CAELUSH_POC_GIT_PATH", "CAELUSH_POC_EVIDENCE_FILE", "CAELUSH_POC_BUNDLE_SHA256", "CAELUSH_POC_NODE_ARCHIVE_SHA256", "CAELUSH_POC_ELECTRON_ARCHIVE_SHA256")) {
+foreach ($name in @("PATH", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "electron_config_cache", "CAELUSH_POC_GIT_PATH", "CAELUSH_POC_EVIDENCE_FILE", "CAELUSH_POC_BUNDLE_SHA256", "CAELUSH_POC_PRODUCT_SOURCE", "CAELUSH_POC_NODE_ARCHIVE_SHA256", "CAELUSH_POC_ELECTRON_ARCHIVE_SHA256")) {
   $originalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
 }
 
 New-Item -ItemType Directory -Path $cacheRoot, $electronCache, $stageRoot, $productRoot, $runtimeRoot, $electronRoot, $appRoot, $pocDataRoot, $evidenceDirectory -Force | Out-Null
 
 try {
-  $bundleDigest = (Get-FileHash -LiteralPath $BundlePath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $bundleDigest = $null
+  $productSource = "PORTABLE_ARCHIVE"
+  if (![string]::IsNullOrWhiteSpace($BundlePath)) {
+    $BundlePath = [IO.Path]::GetFullPath($BundlePath)
+    $bundleDigest = (Get-FileHash -LiteralPath $BundlePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    & (Join-Path $env:SystemRoot "System32/tar.exe") -xzf $BundlePath -C $productRoot
+    if ($LASTEXITCODE -ne 0) { throw "Portable Caelush release extraction failed with exit code $LASTEXITCODE." }
+  }
+  else {
+    $ReuseProductRoot = [IO.Path]::GetFullPath($ReuseProductRoot)
+    if (!(Test-Path -LiteralPath $ReuseProductRoot -PathType Container)) {
+      throw "Reusable staged product directory not found: $ReuseProductRoot."
+    }
+    if ([IO.Path]::GetFullPath($ReuseProductRoot).TrimEnd([IO.Path]::DirectorySeparatorChar) -eq $productRoot.TrimEnd([IO.Path]::DirectorySeparatorChar)) {
+      throw "ReuseProductRoot must be outside the newly created POC stage."
+    }
+    Get-ChildItem -LiteralPath $ReuseProductRoot -Force | ForEach-Object {
+      Copy-Item -LiteralPath $_.FullName -Destination $productRoot -Recurse -Force
+    }
+    $productSource = "REUSED_VERIFIED_PRODUCT_TREE"
+  }
+  $env:CAELUSH_POC_BUNDLE_SHA256 = $bundleDigest
+  $env:CAELUSH_POC_PRODUCT_SOURCE = $productSource
   Resolve-VerifiedDownload `
     -Path $nodeArchive `
     -Uri "https://nodejs.org/dist/v$nodeVersion/node-v$nodeVersion-win-x64.zip" `
@@ -103,8 +131,6 @@ try {
   if (!(Test-Path -LiteralPath $nodeExeSource -PathType Leaf)) { throw "Node $nodeVersion executable is missing from the official archive." }
   Copy-Item -LiteralPath $nodeExeSource -Destination (Join-Path $runtimeRoot "node.exe")
 
-  & (Join-Path $env:SystemRoot "System32/tar.exe") -xzf $BundlePath -C $productRoot
-  if ($LASTEXITCODE -ne 0) { throw "Portable Caelush release extraction failed with exit code $LASTEXITCODE." }
   $releaseManifestPath = Join-Path $productRoot "manifest.json"
   $releaseManifest = Get-Content -LiteralPath $releaseManifestPath -Raw | ConvertFrom-Json
   if ($releaseManifest.version -ne "0.1.0" -or $releaseManifest.platform -ne "windows" -or $releaseManifest.arch -ne "x64") {
@@ -124,6 +150,7 @@ try {
   Copy-Item -Path (Join-Path $electronDist "*") -Destination $electronRoot -Recurse -Force
   Copy-Item -LiteralPath (Join-Path $scriptRoot "poc-main.cjs") -Destination $appRoot
   Copy-Item -LiteralPath (Join-Path $scriptRoot "poc-child.mjs") -Destination $appRoot
+  Copy-Item -LiteralPath (Join-Path $scriptRoot "poc-ipc.cjs") -Destination $appRoot
   Copy-Item -LiteralPath (Join-Path $scriptRoot "pty-smoke.mjs") -Destination $appRoot
   Copy-Item -LiteralPath (Join-Path $scriptRoot "poc-electron-node-probe.mjs") -Destination $appRoot
   Copy-Item -LiteralPath (Join-Path $scriptRoot "sandbox-smoke.mjs") -Destination $appRoot

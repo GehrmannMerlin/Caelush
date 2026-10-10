@@ -223,3 +223,103 @@ No D1-D8 business feature was started in D0-C.
 D0-C Gate: FAIL
 D1-A Ready: YES (Cloud identity work can proceed independently against the D0-B public contract; Desktop work remains gated on the D0-C blockers.)
 ```
+
+## Shutdown Remediation — 2026-10-10
+
+This section records the remediation run from baseline
+`0e9db7508d032cf8a8ed8205c07af0e42387de77`. The historical D0-C gate table and
+its PARTIAL/blocked evidence above remain unchanged. The remediation evidence
+is stored outside the repository at
+`%TEMP%\caelush-d0c-cache\evidence\windows-poc-20261010-112837-d67b41f780ab4e8b96770c8e705e8a10.json`.
+The run reused the verified staged product tree and cached Electron `44.7.0`
+and Node `24.18.0` resources.
+
+### Root Cause Analysis
+
+#### Observed Symptom
+
+The earlier Windows POC completed a Fixture Run, then timed out while awaiting
+the daemon child's `CLOSED` acknowledgement. The child had entered `app.close()`;
+`checkpointActive`, `drainWithin`, and SSE Abort had completed. The main process
+received no shutdown response before the POC's 20-second bound.
+
+#### Reproduction
+
+The instrumented original path reproduced the block in C and D. C closed its
+BrowserWindow before daemon shutdown; D kept it open. A, B, and E completed.
+F completed a Fixture Run without opening a BrowserWindow. G completed the same
+Run with `Connection: close`. Additional checks showed that a window closed
+before the Run could still reproduce the block while the POC's JS/CSS probe
+responses were not fully consumed. With the corrected asset read, A–H all
+completed, including B with an idle BrowserWindow still open and D with a
+completed Run and BrowserWindow still open at shutdown.
+
+#### Actual Stuck Phase
+
+The failing runs stopped inside Fastify `app.close()`, before
+`composition.dispose()` and `storage.close()`. At the stuck boundary,
+`activeRunCount` was `0`, checkpoint unsafe count was `0`, drain outcome was
+`DRAINED`, and active HTTP response count was `0`; open TCP connections remained.
+The final vertical run observed six connections at `appClose` start and
+completed that phase in `3995 ms`.
+
+#### Root Cause
+
+The POC helper `verifyAndLoadWeb()` in
+`scripts/poc/windows-desktop/poc-main.cjs` fetched the packaged JavaScript and
+stylesheet to check their status, then returned without reading either
+`Response` body. Those unconsumed Node `fetch` responses retained client
+connections in the Electron Main Undici pool. Fastify waited for the resulting
+connections during `app.close()`. The BrowserWindow comparison showed that
+Renderer liveness alone did not cause the block: after the asset response fix,
+both idle and completed-Run cases shut down while the BrowserWindow remained
+open.
+
+The IPC handshake also had a separate POC race: `stopDaemonChild()` sent
+`SHUTDOWN` before installing its response listener. The same unsafe ordering
+was removed from START, PING, and generation-control waits by using a helper
+that installs response, send-error, timeout, and exit listeners before sending.
+
+#### Minimal Fix
+
+`verifyAndLoadWeb()` now reads both packaged asset response bodies to completion
+before checking they are non-empty. The POC IPC wait helper registers its
+listeners before calling `sendIpc()` and removes them on response, send failure,
+timeout, or child exit. The Daemon production close sequence and Agent, Context,
+Prompt Cache, Native Replay, RunController, Tool execution, SSE, and Storage
+semantics were not changed. The internal shutdown observer adds only bounded
+phase timings and aggregate socket/request counts for diagnosis.
+
+#### Regression Evidence
+
+- The final POC passed gates G2, G6, and G8. The overall POC result remains
+  PARTIAL because G7 remains BLOCKED.
+- G2 evidence: shutdown requested; `daemon.close()` fulfilled; `CLOSED`
+  acknowledged; child exit code `0`; SQLite reopened; 32 tables;
+  `integrity_check = ok`; Session, Run, and assistant Transcript recovered.
+- G6 evidence: Startup IPC and generation verified; shutdown request sent;
+  `CLOSED` acknowledged; exit code `0`; stale generation rejected; duplicate
+  close shared one attempt; all six injected timeout/exit/protocol cases passed;
+  orphan child count `0`.
+- Isolation cases A–H all passed. C completed a Fixture Run, closed the window,
+  and then shut down. D completed a Fixture Run and shut down with the
+  BrowserWindow still open. E aborted an active SSE subscription and closed
+  normally. `app.close()` completed in 2–5 ms for A–H; the vertical shutdown
+  completed it in `3995 ms`.
+- `pnpm --filter @caelush/daemon exec vitest run test/shutdown.test.ts`: 6
+  passed. `pnpm --filter @caelush/daemon exec vitest run
+test/daemon-production-e2e.test.ts -t "naturally completes a plain task and
+reads the single final answer after daemon restart"`: 1 passed.
+- `node --test scripts/poc/windows-desktop/poc-ipc.test.cjs`: 4 passed.
+  `pnpm --filter @caelush/daemon typecheck`, targeted Prettier, POC syntax, and
+  `git diff --check` passed. The architecture CI check was not run; this round
+  changed no package boundary.
+
+#### Remaining Risks
+
+G7 Clean Host remains BLOCKED because no clean Windows VM or Windows Sandbox was
+available; it was not rerun. The remediation POC reuses a staged product tree,
+so this round does not establish a fresh release archive hash. The Windows
+restricted-token provider still reports `PARTIAL` enforcement, and formal
+Electron packaging, Host Token authentication, and signed distribution remain
+deferred as documented above. D0-C remains PARTIAL and is not COMPLETE.
