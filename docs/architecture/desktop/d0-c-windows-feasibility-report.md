@@ -260,8 +260,32 @@ The failing runs stopped inside Fastify `app.close()`, before
 `composition.dispose()` and `storage.close()`. At the stuck boundary,
 `activeRunCount` was `0`, checkpoint unsafe count was `0`, drain outcome was
 `DRAINED`, and active HTTP response count was `0`; open TCP connections remained.
-The final vertical run observed six connections at `appClose` start and
-completed that phase in `3995 ms`.
+The original vertical run's phase observations were:
+
+| Phase                   | Result before fix                                                                                          |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `beginDrain`            | Completed in `0 ms`                                                                                        |
+| `checkpointActive`      | Completed in `0 ms`; active Runs `0`, unsafe checkpoints `0`                                               |
+| `drainWithin`           | Completed in `0 ms`; `DRAINED`                                                                             |
+| `abortSSE`              | Completed in `0 ms`; controllers `0`                                                                       |
+| `appClose`              | Started, never completed within the POC's 20-second bound; active HTTP responses `0`, open connections `7` |
+| `composition.dispose()` | Not reached                                                                                                |
+| `storage.close()`       | Not reached                                                                                                |
+
+The main process had sent the shutdown request, but received no `CLOSED` or
+`ERROR`; the child had emitted neither shutdown IPC result. After the POC bound
+expired, its failure cleanup terminated the child: `childExitCode` was `null`,
+`childExitSignal` was `SIGTERM`, and the final orphan count was `0`. This was not
+a graceful exit.
+
+In the final vertical run after the fix, `beginDrain` completed in `1 ms`,
+`checkpointActive` in `0 ms`, `drainWithin` in `0 ms` with `DRAINED`, and
+`abortSSE` in `0 ms`. `appClose` observed six connections and zero active HTTP
+responses, then completed in `3995 ms`; `composition.dispose()` completed in
+`0 ms` and `storage.close()` in `5 ms`. The child sent `CLOSED` successfully,
+the main process acknowledged it, the child exited with code `0`, and there
+were no orphan children. In isolation cases A–H, `appClose` completed in
+`2–5 ms`.
 
 #### Root Cause
 
