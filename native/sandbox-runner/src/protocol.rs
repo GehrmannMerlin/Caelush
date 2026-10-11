@@ -1,3 +1,4 @@
+#[cfg(not(windows))]
 use std::io::{self, Write};
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -59,6 +60,7 @@ pub fn workspace_prepared(
     )
 }
 
+#[cfg(not(windows))]
 pub fn write_control(mut control: impl Write, message: &str) -> io::Result<()> {
     control.write_all(message.as_bytes())?;
     control.flush()

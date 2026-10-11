@@ -42,7 +42,9 @@ fn main() {
     match execute(&config) {
         Ok(code) => exit(code),
         Err(code) => {
-            let _ = write_error(&config, &code);
+            if code != "CONTROL_WRITE_FAILED" {
+                let _ = write_error(&config, &code);
+            }
             exit(1);
         }
     }

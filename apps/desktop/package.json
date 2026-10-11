@@ -13,21 +13,23 @@
     "test": "vitest run --config vitest.config.ts",
     "test:windows:vault": "node scripts/windows-vault-smoke.mjs",
     "test:windows:d4-2": "node scripts/windows-d4-2-smoke.mjs",
-    "test:windows:d5": "node scripts/windows-d5-smoke.mjs"
+    "test:windows:d5": "node scripts/windows-d5-smoke.mjs",
+    "package:win": "node scripts/package-windows.mjs",
+    "package:win:dir": "node scripts/package-windows.mjs --dir",
+    "test:windows:d6": "node scripts/windows-d6-smoke.mjs"
   },
-  "dependencies": {
+  "devDependencies": {
     "@caelush/client": "workspace:*",
     "@caelush/protocol": "workspace:*",
     "lucide-react": "1.48.0",
     "node-pty": "1.1.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "zod": "4.4.3"
-  },
-  "devDependencies": {
+    "zod": "4.4.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.3",
     "electron": "44.7.0",
+    "electron-builder": "26.17.0",
     "esbuild": "0.25.10",
     "typescript": "6.0.3",
     "vite": "8.2.2",

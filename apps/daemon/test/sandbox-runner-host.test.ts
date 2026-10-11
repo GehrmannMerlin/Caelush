@@ -85,6 +85,27 @@ describe("resolveSandboxRunnerArtifact", () => {
     expect(availableArtifact(resolution).manifestPath).toBe(packaged.manifestPath);
   });
 
+  it("preserves the legacy Portable release layout", async () => {
+    const bundleRoot = join(root, "portable-bundle");
+    const daemonEntryPath = await writePortableDaemonEntry(bundleRoot);
+    const packaged = await writeRunnerBundle(join(bundleRoot, SANDBOX_RUNNER_DIRECTORY_NAME), {
+      executableName: "caelush-sandbox-runner.exe",
+      platform: "windows",
+      arch: "x64",
+    });
+
+    const resolution = await resolve({
+      environment: {},
+      daemonEntryPath,
+      platform: "win32",
+      arch: "x64",
+    });
+
+    expect(resolution.available).toBe(true);
+    expect(availableArtifact(resolution).runnerPath).toBe(packaged.runnerPath);
+    expect(availableArtifact(resolution).manifestPath).toBe(packaged.manifestPath);
+  });
+
   it("stays unavailable in a source checkout that has no packaged runner", async () => {
     const daemonEntryPath = join(root, "apps", "daemon", "dist", "main.js");
     await mkdir(join(root, "apps", "daemon", "dist"), { recursive: true });
@@ -228,12 +249,21 @@ function availableArtifact(resolution: SandboxRunnerResolution) {
 }
 
 function daemonEntryPathFor(bundleRoot: string): string {
-  return join(bundleRoot, "node_modules", "@caelush", "daemon", "dist", "main.js");
+  return join(bundleRoot, "daemon", "runtime", "dist", "desktop-entry.js");
 }
 
 async function writeDaemonEntry(bundleRoot: string): Promise<string> {
   const daemonEntryPath = daemonEntryPathFor(bundleRoot);
-  await mkdir(join(bundleRoot, "node_modules", "@caelush", "daemon", "dist"), { recursive: true });
+  await mkdir(join(bundleRoot, "daemon", "runtime", "dist"), { recursive: true });
+  await writeFile(daemonEntryPath, "", "utf8");
+  return daemonEntryPath;
+}
+
+async function writePortableDaemonEntry(bundleRoot: string): Promise<string> {
+  const daemonEntryPath = join(bundleRoot, "node_modules", "@caelush", "daemon", "dist", "main.js");
+  await mkdir(join(bundleRoot, "node_modules", "@caelush", "daemon", "dist"), {
+    recursive: true,
+  });
   await writeFile(daemonEntryPath, "", "utf8");
   return daemonEntryPath;
 }

@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { app, BrowserWindow, dialog, protocol, safeStorage, session } from "electron";
 import { AccountController } from "./account/controller.js";
 import type { AccountState } from "./account/state.js";
@@ -16,11 +16,27 @@ import {
   ProfileManagerError,
   WindowsProfilePermissions,
 } from "./profiles/profile-manager.js";
-import { resolveDesktopDaemonResources, resolveDesktopWebRoot } from "./daemon/resources.js";
+import {
+  resolveDesktopDaemonResources,
+  resolveDesktopWebRoot,
+  verifyPackagedDesktopResources,
+} from "./daemon/resources.js";
 import { DesktopDaemonSupervisor } from "./daemon/supervisor.js";
 import { DesktopWorkspacePanelController } from "./workspace/panel-controller.js";
 import { createMainWindow } from "./windows/create-window.js";
 import { createRendererTrust } from "./windows/security-policy.js";
+
+logD6Startup("MAIN_MODULE", {
+  electronVersion: process.versions.electron ?? "unknown",
+  executablePath: process.execPath,
+  cwd: process.cwd(),
+  resourcesPath: process.resourcesPath,
+  appPath: app.getAppPath(),
+  packaged: app.isPackaged,
+});
+process.on("uncaughtExceptionMonitor", (error) => {
+  logD6Startup("UNCAUGHT_EXCEPTION", { name: error.name });
+});
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -169,9 +185,16 @@ if (!singleInstance) {
   async function closeManagedDaemon(): Promise<void> {
     if (shutdownInProgress) return;
     shutdownInProgress = true;
+    logD6Startup("DAEMON_GRACEFUL_CLOSE_STARTED");
     try {
       await desktopPanels?.closeAll();
-      await supervisor.closeForApplicationQuit();
+      const daemonExitCode = await supervisor.closeForApplicationQuit();
+      logD6Startup("DAEMON_GRACEFUL_CLOSE_COMPLETED", { daemonExitCode });
+    } catch (error) {
+      logD6Startup("DAEMON_GRACEFUL_CLOSE_FAILED", {
+        errorName: error instanceof Error ? error.name : "unknown",
+      });
+      throw error;
     } finally {
       shutdownInProgress = false;
     }
@@ -184,7 +207,29 @@ if (!singleInstance) {
     }
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    logD6Startup("APP_WHEN_READY", { userDataPath: app.getPath("userData") });
+    if (app.isPackaged) {
+      try {
+        const verified = await verifyPackagedDesktopResources(
+          {
+            packaged: true,
+            appPath: app.getAppPath(),
+            resourcesPath: process.resourcesPath,
+          },
+          (stage) => logD6Startup("RESOURCE_VERIFY", { stage }),
+        );
+        logD6Startup("MANIFEST_VERIFIED", { verifiedFileCount: verified.verifiedFileCount });
+      } catch (error) {
+        logD6Startup("MANIFEST_REJECT", { reason: safeResourceVerificationFailure(error) });
+        dialog.showErrorBox(
+          "Caelush resources could not be verified",
+          "The installed Caelush files are incomplete or do not match this application version. Repair or reinstall Caelush before continuing.",
+        );
+        app.quit();
+        return;
+      }
+    }
     const appPath = app.getAppPath();
     registerAppProtocol({
       rendererRoot: join(appPath, "dist", "renderer"),
@@ -199,6 +244,7 @@ if (!singleInstance) {
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) =>
       callback(false),
     );
+    logD6Startup("APP_PROTOCOL_REGISTERED");
     unsubscribeAccount = account.subscribe((state) => {
       void supervisor
         .synchronizeAccountState(state)
@@ -206,13 +252,23 @@ if (!singleInstance) {
         .finally(publishProjectedAccountState);
     });
     openMainWindow();
-    void account.initialize().then(async () => {
-      try {
-        await supervisor.synchronizeAccountState(account.getState());
-      } catch {
+    logD6Startup("ACCOUNT_INITIALIZATION_STARTED");
+    void account
+      .initialize()
+      .then(async () => {
+        logD6Startup("ACCOUNT_INITIALIZATION_COMPLETED");
+        try {
+          await supervisor.synchronizeAccountState(account.getState());
+        } catch {
+          publishProjectedAccountState();
+        }
+      })
+      .catch((error: unknown) => {
+        logD6Startup("ACCOUNT_INITIALIZATION_FAILED", {
+          errorName: error instanceof Error ? error.name : "unknown",
+        });
         publishProjectedAccountState();
-      }
-    });
+      });
   });
 
   app.on("activate", () => {
@@ -253,6 +309,24 @@ if (!singleInstance) {
       preloadPath: join(appPath, "dist", "preload", "index.cjs"),
       rendererTrust,
     });
+    logD6Startup("BROWSER_WINDOW_CREATED", { url: mainWindow.webContents.getURL() });
+    mainWindow.webContents.on("dom-ready", () => logD6Startup("RENDERER_DOM_READY"));
+    mainWindow.webContents.on("did-finish-load", () =>
+      logD6Startup("RENDERER_LOAD_FINISHED", { url: mainWindow?.webContents.getURL() ?? "" }),
+    );
+    mainWindow.webContents.on("did-fail-load", (_event, code, description, validatedUrl) =>
+      logD6Startup("RENDERER_LOAD_FAILED", {
+        code,
+        description: description.slice(0, 120),
+        url: validatedUrl.slice(0, 240),
+      }),
+    );
+    mainWindow.webContents.on("render-process-gone", (_event, details) =>
+      logD6Startup("RENDERER_PROCESS_GONE", {
+        reason: details.reason,
+        exitCode: details.exitCode,
+      }),
+    );
     desktopPanels = new DesktopWorkspacePanelController({
       window: mainWindow,
       supervisor,
@@ -365,4 +439,31 @@ if (!singleInstance) {
       }
     }
   }
+}
+
+function logD6Startup(stage: string, details: Readonly<Record<string, unknown>> = {}): void {
+  if (process.env.CAELUSH_D6_DIAGNOSTICS !== "1") return;
+  const safeDetails = Object.fromEntries(
+    Object.entries(details).map(([key, value]) => [
+      key,
+      typeof value === "string" ? value.replace(/[\r\n]+/gu, " ").slice(0, 256) : value,
+    ]),
+  );
+  process.stderr.write(`D6_MAIN_STAGE=${JSON.stringify({ stage, ...safeDetails })}\n`);
+}
+
+function safeResourceVerificationFailure(error: unknown): string {
+  if (error instanceof Error && /^DESKTOP_[A-Z0-9_]+(?::[A-Za-z0-9._/-]+)?$/u.test(error.message)) {
+    return error.message.slice(0, 160);
+  }
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = error.code;
+    if (typeof code === "string" && ["ENOENT", "EACCES", "EPERM", "EBUSY"].includes(code)) {
+      const errorPath =
+        "path" in error && typeof error.path === "string" ? basename(error.path) : "";
+      const safeName = /^[A-Za-z0-9._-]{1,80}$/u.test(errorPath) ? `:${errorPath}` : "";
+      return `OS_${code}${safeName}`;
+    }
+  }
+  return "UNCLASSIFIED";
 }

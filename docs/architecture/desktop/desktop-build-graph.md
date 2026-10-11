@@ -3,11 +3,13 @@
 - **Round:** Caelush Desktop & Cloud — D0-B
 - **First target:** Windows x64
 - **Current repository Node requirement:** Node.js `>=24.0.0 <25.0.0`
-- **Desktop installer status:** not implemented
+- **Desktop installer status:** D6 source implementation is described in
+  [Windows Installer and Packaged Desktop Runtime](windows-installer-runtime.md).
+  The graph and POC evidence below preserve the D0-B audit baseline.
 
-## Current build graph
+## D0-B build graph baseline
 
-The current dependency direction remains a DAG: low-level Protocol is used by
+The D0-B dependency direction remained a DAG: low-level Protocol was used by
 Client and app hosts; `apps/daemon` composes Agent/Core/AI/Runtime/Storage and
 the other runtime packages; Web consumes the public Client/Protocol; Launcher
 starts the existing Daemon entry. No Desktop package, Electron shell, or

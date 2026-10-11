@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { once } from "node:events";
@@ -20,19 +21,25 @@ const installedExecutable = require("electron");
 const electronPackage = JSON.parse(
   await readFile(require.resolve("electron/package.json"), "utf8"),
 );
-const testRoot = await mkdtemp(path.join(tmpdir(), "caelush-d5-electron-"));
-const harnessRoot = path.join(testRoot, "harness");
-const runtimeRoot = path.join(testRoot, "runtime");
+const requestedTestRoot = process.env.CAELUSH_D6_TEST_ROOT;
+const testRoot = requestedTestRoot
+  ? path.resolve(requestedTestRoot)
+  : await mkdtemp(path.join(tmpdir(), "caelush-d5-electron-"));
+const ownsTestRoot = requestedTestRoot === undefined;
+const harnessRoot = await mkdtemp(path.join(testRoot, "d5-harness-"));
+const runtimeRoot = path.resolve(
+  process.env.CAELUSH_D6_ELECTRON_RUNTIME_ROOT ?? path.join(testRoot, "runtime"),
+);
 const userDataRoot = path.join(testRoot, "electron-user-data");
 const localAppDataRoot = path.join(testRoot, "local-app-data");
 let runtime;
 
 try {
   await Promise.all([
-    mkdir(harnessRoot),
-    mkdir(runtimeRoot),
-    mkdir(userDataRoot),
-    mkdir(localAppDataRoot),
+    mkdir(harnessRoot, { recursive: true }),
+    mkdir(runtimeRoot, { recursive: true }),
+    mkdir(userDataRoot, { recursive: true }),
+    mkdir(localAppDataRoot, { recursive: true }),
   ]);
   const mainBundle = path.join(harnessRoot, "main.cjs");
   await build({
@@ -48,6 +55,7 @@ try {
       __CAELUSH_BUILD_CONFIG__: JSON.stringify(
         JSON.stringify({
           production: false,
+          channel: "dev",
           cloudOrigin: "http://127.0.0.1:8000",
           offlinePublicKeys: {},
           externalHttpsHosts: ["github.com", "www.caelush.com"],
@@ -59,11 +67,21 @@ try {
     path.join(harnessRoot, "package.json"),
     JSON.stringify({ name: "caelush-d5-fixture", version: "0.1.0", main: "main.cjs" }),
   );
-  runtime = await stageElectronRuntime(
-    path.dirname(installedExecutable),
-    runtimeRoot,
-    electronPackage.version,
-  );
+  if (process.env.CAELUSH_D6_USE_ELECTRON_RUNTIME === "1") {
+    const executableBytes = await readFile(installedExecutable);
+    runtime = {
+      executablePath: installedExecutable,
+      executableSha256: createHash("sha256").update(executableBytes).digest("hex"),
+      fileCount: 0,
+      cleanup: async () => undefined,
+    };
+  } else {
+    runtime = await stageElectronRuntime(
+      path.dirname(installedExecutable),
+      runtimeRoot,
+      electronPackage.version,
+    );
+  }
   assert.match(runtime.executableSha256, /^[a-f0-9]{64}$/u);
 
   const child = spawn(runtime.executablePath, [`--user-data-dir=${userDataRoot}`, harnessRoot], {
@@ -71,7 +89,13 @@ try {
     env: {
       ...process.env,
       CAELUSH_D5_TEST_ROOT: testRoot,
-      CAELUSH_D5_DESKTOP_APP_ROOT: appRoot,
+      CAELUSH_D5_DESKTOP_APP_ROOT:
+        process.env.CAELUSH_D6_RESOURCE_ROOT === undefined
+          ? appRoot
+          : path.join(process.env.CAELUSH_D6_RESOURCE_ROOT, "app.asar"),
+      ...(process.env.CAELUSH_D6_RESOURCE_ROOT === undefined
+        ? {}
+        : { CAELUSH_D6_RESOURCE_ROOT: process.env.CAELUSH_D6_RESOURCE_ROOT }),
       LOCALAPPDATA: localAppDataRoot,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -109,20 +133,28 @@ try {
     const [code, signal] = await once(child, "exit");
     child.stdout?.destroy();
     child.stderr?.destroy();
-    const marker = await readFile(path.join(testRoot, "d5-smoke.marker"), "utf8").catch(() => "");
-    if (code !== 0 || !marker.includes("D5_WINDOWS_ELECTRON_SMOKE=PASS")) {
+    const markerPath = path.join(testRoot, "d5-smoke.marker");
+    const marker = await readFile(markerPath, "utf8").catch(() => "");
+    if (code !== 0 || !marker.includes("D5_MAIN_RUNTIME_CHECKS=PASS")) {
       throw new Error(
         `D5 Windows Electron smoke failed (${code ?? signal}).\n${marker.trim()}\n${childOutput.trim()}`,
       );
     }
+    await appendFile(markerPath, "D5_WINDOWS_ELECTRON_SMOKE=PASS\n", "utf8");
     process.stdout.write(
-      `Windows Electron D5 smoke passed (Electron ${electronPackage.version}, ${runtime.fileCount} runtime files, SHA-256 ${runtime.executableSha256}).\n${marker}`,
+      `Windows Electron D5 smoke passed (Electron ${electronPackage.version}, ${runtime.fileCount} runtime files, SHA-256 ${runtime.executableSha256}, exit code ${code}).\n${marker}D5_WINDOWS_ELECTRON_SMOKE=PASS\n`,
     );
   } finally {
     clearTimeout(timeout);
   }
 } finally {
   await runtime?.cleanup();
+  if (ownsTestRoot) {
+    await cleanupOwnedTestRoot();
+  }
+}
+
+async function cleanupOwnedTestRoot() {
   try {
     await rm(testRoot, { recursive: true, force: true });
   } catch (error) {

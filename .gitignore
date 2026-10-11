@@ -3,6 +3,7 @@ dist/
 coverage/
 .vite/
 apps/desktop/.stage/
+apps/desktop/.build-resources/
 .turbo/
 .worktrees/
 release-artifacts/

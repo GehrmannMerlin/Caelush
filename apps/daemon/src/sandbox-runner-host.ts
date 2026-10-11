@@ -24,13 +24,17 @@ export const SANDBOX_RUNNER_PATH_ENVIRONMENT_KEY = "CAELUSH_SANDBOX_RUNNER_PATH"
 export const SANDBOX_RUNNER_MANIFEST_ENVIRONMENT_KEY = "CAELUSH_SANDBOX_RUNNER_MANIFEST";
 
 /**
- * `<bundle>/node_modules/@caelush/daemon/dist/main.js` -> `<bundle>`.
- *
- * A packaged bundle is the only place this layout exists; a source checkout resolves to a
- * different root that has no `sandbox-runner/` directory, so development hosts stay
- * explicitly unavailable instead of silently satisfying the packaged-artifact check.
+ * Only the two shipped bundle entry layouts are accepted. Arbitrary parent traversal is
+ * intentionally not a discovery strategy.
  */
-const PACKAGED_BUNDLE_PARENT_HOPS = ["..", "..", "..", ".."] as const;
+const DESKTOP_DAEMON_ENTRY_SUFFIX = ["daemon", "runtime", "dist", "desktop-entry.js"] as const;
+const PORTABLE_DAEMON_ENTRY_SUFFIX = [
+  "node_modules",
+  "@caelush",
+  "daemon",
+  "dist",
+  "main.js",
+] as const;
 
 export interface SandboxRunnerResolutionInput {
   readonly environment: Readonly<Record<string, string | undefined>>;
@@ -94,14 +98,33 @@ function sandboxRunnerCandidate(
         manifestOverride ?? join(dirname(override), DEFAULT_SANDBOX_RUNNER_MANIFEST_FILENAME),
     };
   }
-  const packagedDirectory = join(
-    resolve(dirname(daemonEntryPath), ...PACKAGED_BUNDLE_PARENT_HOPS),
-    SANDBOX_RUNNER_DIRECTORY_NAME,
-  );
+  const bundleRoot = packagedBundleRoot(daemonEntryPath);
+  if (bundleRoot === undefined) return undefined;
+  const packagedDirectory = join(bundleRoot, SANDBOX_RUNNER_DIRECTORY_NAME);
   return {
     runnerPath: join(packagedDirectory, defaultSandboxRunnerExecutableName(targetPlatform)),
     manifestPath: join(packagedDirectory, DEFAULT_SANDBOX_RUNNER_MANIFEST_FILENAME),
   };
+}
+
+function packagedBundleRoot(daemonEntryPath: string): string | undefined {
+  const segments = resolve(daemonEntryPath)
+    .split(/[\\/]+/u)
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.toLowerCase());
+  if (hasSuffix(segments, DESKTOP_DAEMON_ENTRY_SUFFIX)) {
+    return resolve(dirname(daemonEntryPath), "..", "..", "..");
+  }
+  if (hasSuffix(segments, PORTABLE_DAEMON_ENTRY_SUFFIX)) {
+    return resolve(dirname(daemonEntryPath), "..", "..", "..", "..");
+  }
+  return undefined;
+}
+
+function hasSuffix(segments: readonly string[], suffix: readonly string[]): boolean {
+  if (segments.length < suffix.length) return false;
+  const start = segments.length - suffix.length;
+  return suffix.every((segment, index) => segments[start + index] === segment.toLowerCase());
 }
 
 function environmentValue(

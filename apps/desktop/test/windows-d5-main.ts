@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync, randomUUID, sign, type KeyObject } from "node:crypto";
+import {
+  createPrivateKey,
+  createPublicKey,
+  generateKeyPairSync,
+  randomUUID,
+  sign,
+  type KeyObject,
+} from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
@@ -26,7 +33,10 @@ import { ProviderCredentialVault } from "../src/main/credentials/provider-creden
 import { DesktopLegacyDataImporter } from "../src/main/migration/legacy-data-import.js";
 import { DesktopProviderCredentialMigrator } from "../src/main/migration/provider-credential-migration.js";
 import { DesktopDaemonSupervisor } from "../src/main/daemon/supervisor.js";
-import { resolveDesktopDaemonResources } from "../src/main/daemon/resources.js";
+import {
+  resolveDesktopDaemonResources,
+  resolveDesktopWebRoot,
+} from "../src/main/daemon/resources.js";
 import { DesktopLocalProxy } from "../src/main/protocol/local-proxy.js";
 import { registerAppProtocol } from "../src/main/protocol/app-protocol.js";
 import { AccountController, type CloudAccountPort } from "../src/main/account/controller.js";
@@ -40,6 +50,7 @@ import { DesktopWorkspacePanelController } from "../src/main/workspace/panel-con
 import { registerDesktopIpc } from "../src/main/ipc/handlers.js";
 import { createMainWindow } from "../src/main/windows/create-window.js";
 import type { AccountState } from "../src/main/account/state.js";
+import { assertSuccessfulShutdown } from "../scripts/windows-d6-acceptance-helpers.mjs";
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -60,12 +71,15 @@ protocol.registerSchemesAsPrivileged([
 
 const testRoot = requiredEnvironment("CAELUSH_D5_TEST_ROOT");
 const desktopRoot = requiredEnvironment("CAELUSH_D5_DESKTOP_APP_ROOT");
+const packagedResourceRoot = process.env.CAELUSH_D6_RESOURCE_ROOT;
+const packagedResourceLayout = packagedResourceRoot !== undefined;
 const localAppDataRoot = requiredEnvironment("LOCALAPPDATA");
 const markerPath = path.join(testRoot, "d5-smoke.marker");
 const workspaceAPath = path.join(testRoot, "workspace-account-a");
 const workspaceA2Path = path.join(testRoot, "workspace-account-a-secondary");
 const workspaceBPath = path.join(testRoot, "workspace-account-b");
 const outsidePath = path.join(testRoot, "outside-workspace");
+const preserveWorkspaces = process.env.CAELUSH_D6_KEEP_WORKSPACES === "1";
 const userA = randomUUID();
 const userB = randomUUID();
 const emailA = "d5-a@example.invalid";
@@ -125,19 +139,23 @@ app.whenReady().then(async () => {
         (await safeStorage.decryptStringAsync(Buffer.from(value))).result,
     });
     await vault.initialize();
-    const trustedKeyPair = generateKeyPairSync("ed25519");
-    const trustedSpki = trustedKeyPair.publicKey.export({ format: "der", type: "spki" });
+    const fixtureSigning = await loadFixtureSigningMaterial();
+    const trustedSpki = fixtureSigning.publicKey.export({ format: "der", type: "spki" });
     const trustedRawKey = Buffer.from(trustedSpki).subarray(-32);
     await seedOfflineAccount(vault, {
       email: emailA,
       userId: userA,
       deviceId: randomUUID(),
-      signingKey: trustedKeyPair.privateKey,
+      signingKey: fixtureSigning.privateKey,
+      offlineKeyId: fixtureSigning.keyId,
     });
     account = new AccountController({
       vault,
-      cloud: createFixtureCloud(trustedKeyPair.privateKey) as CloudAccountPort,
-      trustedOfflinePublicKeys: { d5_fixture_key: trustedRawKey },
+      cloud: createFixtureCloud(
+        fixtureSigning.privateKey,
+        fixtureSigning.keyId,
+      ) as CloudAccountPort,
+      trustedOfflinePublicKeys: { [fixtureSigning.keyId]: trustedRawKey },
     });
     await account.initialize();
     assert.equal(account.getState().status, "AUTHORIZED_OFFLINE");
@@ -172,9 +190,9 @@ app.whenReady().then(async () => {
       credentialMigrator,
       resolveResources: () =>
         resolveDesktopDaemonResources({
-          packaged: false,
+          packaged: packagedResourceLayout,
           appPath: desktopRoot,
-          resourcesPath: process.resourcesPath,
+          resourcesPath: packagedResourceRoot ?? process.resourcesPath,
         }),
       productVersion: "0.1.0",
       processEnvironment: process.env,
@@ -192,6 +210,11 @@ app.whenReady().then(async () => {
     assert.equal(JSON.stringify(connected.value).includes(providerKey), false);
     const workspaceA = await createWorkspace(proxy, workspaceAPath, "D5 Account A Workspace");
     const workspaceA2 = await createWorkspace(proxy, workspaceA2Path, "D5 Account A Secondary");
+    await writeFile(
+      path.join(testRoot, "d5-account-a-workspace.json"),
+      `${JSON.stringify({ workspaceId: workspaceA.id, rootPath: workspaceAPath, userId: userA })}\n`,
+      "utf8",
+    );
     recordMarker("OFFLINE_GRANT_DAEMON_PROVIDER_WORKSPACES=PASS");
 
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) =>
@@ -199,7 +222,11 @@ app.whenReady().then(async () => {
     );
     registerAppProtocol({
       rendererRoot: path.join(desktopRoot, "dist", "renderer"),
-      agentRoot: path.resolve(desktopRoot, "..", "web", "dist", "desktop"),
+      agentRoot: resolveDesktopWebRoot({
+        packaged: packagedResourceLayout,
+        appPath: desktopRoot,
+        resourcesPath: packagedResourceRoot ?? process.resourcesPath,
+      }),
       localProxy: proxy,
       isAgentAvailable: () => supervisor!.getAgentEntry(account!.getState()).available,
     });
@@ -232,9 +259,9 @@ app.whenReady().then(async () => {
       window: mainWindow,
       supervisor,
       resourceLayout: {
-        packaged: false,
+        packaged: packagedResourceLayout,
         appPath: desktopRoot,
-        resourcesPath: process.resourcesPath,
+        resourcesPath: packagedResourceRoot ?? process.resourcesPath,
       },
       onTerminalOutput: (ownerId, output) => {
         if (output.data !== undefined) {
@@ -508,6 +535,11 @@ app.whenReady().then(async () => {
     );
     const workspaceAProfile = await profileManager.selectForUser(userA);
     const runCountsBeforeTerminal = readRunCounts(workspaceAProfile.databasePath);
+    const completedRun = readLatestCompletedRun(workspaceAProfile.databasePath);
+    assert.equal(completedRun.status, "COMPLETED");
+    assert.ok(completedRun.eventSequences.length > 1);
+    await verifyRunEventReplay(proxy, completedRun.id, completedRun.eventSequences);
+    recordMarker("RUN_COMPLETED_SSE_DISCONNECT_REPLAY=PASS");
     assert.ok(chatCalls.length >= 1);
     recordMarker("REAL_AGENT_UI_RUN_SSE_PANEL_TOGGLE=PASS");
 
@@ -841,13 +873,94 @@ app.whenReady().then(async () => {
     );
     assert.notEqual(revokedBrowserResult, "unexpected");
 
-    await createWorkspace(proxy, workspaceBPath, "D5 Account B Workspace");
+    const workspaceB = await createWorkspace(proxy, workspaceBPath, "D5 Account B Workspace");
+    await localApi(proxy, `/api/v1/ai/providers/${providerId}/connect`, {
+      method: "POST",
+      body: { apiKey: providerKey },
+    });
+    await writeFile(
+      path.join(testRoot, "d5-installed-profile-fixture.json"),
+      `${JSON.stringify({
+        workspaceId: workspaceB.id,
+        workspaceRoot: workspaceBPath,
+        workspaceName: "D5 Account B Workspace",
+        userId: userB,
+      })}\n`,
+      "utf8",
+    );
     await mainWindow.loadURL("caelush-app://app/agent/");
     await waitForRenderer(
       mainWindow.webContents,
       "document.querySelector('[aria-label=\"展开桌面面板\"]') !== null",
       "Agent UI after Account switch",
     );
+    await waitForRenderer(
+      mainWindow.webContents,
+      `[...document.querySelectorAll('.workspace-list-button')].some(button=>button.textContent?.includes('D5 Account B Workspace'))`,
+      "Account B workspace in Agent UI",
+    );
+    await clickByText(mainWindow.webContents, ".workspace-list-button", "D5 Account B Workspace");
+    await waitForRenderer(
+      mainWindow.webContents,
+      "document.querySelector('.workspace-list-item--selected .workspace-new-session-button') !== null",
+      "Account B workspace session controls",
+    );
+    await click(
+      mainWindow.webContents,
+      ".workspace-list-item--selected .workspace-new-session-button",
+    );
+    await waitForRenderer(
+      mainWindow.webContents,
+      "document.querySelector('textarea[aria-label=\"任务输入\"]') !== null",
+      "Account B Agent composer",
+    );
+    const accountBFullAccess = await execute(
+      mainWindow.webContents,
+      `(()=>{const select=document.querySelector('select[aria-label="选择权限"]');return Boolean([...select?.options??[]].some(option=>option.value==='FULL_ACCESS'&&!option.disabled))})()`,
+    );
+    assert.equal(accountBFullAccess, true);
+    await execute(
+      mainWindow.webContents,
+      `(()=>{const select=document.querySelector('select[aria-label="选择权限"]');if(!select)throw new Error('Permission selector missing');select.value='FULL_ACCESS';select.dispatchEvent(new Event('change',{bubbles:true}));return true})()`,
+    );
+    await waitForRenderer(
+      mainWindow.webContents,
+      "[...document.querySelectorAll('[role=dialog] button')].some(button=>button.textContent?.includes('确认使用完全权限'))",
+      "Account B Full Access confirmation",
+    );
+    await clickByText(mainWindow.webContents, "[role=dialog] button", "确认使用完全权限");
+    await waitForRenderer(
+      mainWindow.webContents,
+      "document.querySelector('select[aria-label=\"选择权限\"]')?.value==='FULL_ACCESS'",
+      "Account B confirmed fixture permission",
+    );
+    await setTextArea(mainWindow.webContents, "D6 Installed Session Persistence Fixture");
+    await click(mainWindow.webContents, 'button[aria-label="发送任务"]');
+    await waitForRenderer(
+      mainWindow.webContents,
+      "document.querySelector('.active-run-status') !== null",
+      "Account B fixture Run status",
+    );
+    await waitForRenderer(
+      mainWindow.webContents,
+      "document.body.innerText.includes('The local D5 Electron fixture run completed.')",
+      "Account B completed fixture Run",
+      90_000,
+    );
+    const workspaceBProfile = await profileManager.selectForUser(userB);
+    const installedRunFixture = readLatestCompletedRun(workspaceBProfile.databasePath);
+    assert.equal(installedRunFixture.status, "COMPLETED");
+    await writeFile(
+      path.join(testRoot, "d5-installed-run-fixture.json"),
+      `${JSON.stringify({
+        workspaceId: workspaceB.id,
+        sessionId: installedRunFixture.sessionId,
+        runId: installedRunFixture.id,
+        status: installedRunFixture.status,
+      })}\n`,
+      "utf8",
+    );
+    recordMarker("ACCOUNT_B_PROFILE_COMPLETED_RUN=PASS");
     await click(mainWindow.webContents, 'button[aria-label="展开桌面面板"]');
     await waitForRenderer(
       mainWindow.webContents,
@@ -884,8 +997,29 @@ app.whenReady().then(async () => {
     assert.deepEqual(countsAfterDesktopActions, runCountsBeforeTerminal);
     recordMarker("ACCOUNT_PROFILE_GENERATION_REVOKE_AND_BROWSER_COOKIE_ISOLATION=PASS");
 
+    assert.ok(supervisor !== undefined, "The test Daemon supervisor was never created.");
+    assert.notEqual(supervisor.getActiveProfileIdentity(), null);
+    assert.ok(fixture !== undefined, "The scripted Provider fixture was never started.");
+    disposeIpc?.();
+    disposeIpc = undefined;
+    await panels?.closeAll();
+    panels?.dispose();
+    panels = undefined;
+    const supervisedDaemon = supervisor;
+    await supervisedDaemon.closeForApplicationQuit();
+    supervisor = undefined;
+    await closeServer(fixture);
+    fixture = undefined;
+    const countsAfterDaemonExit = readRunCounts(workspaceAProfile.databasePath);
+    assert.deepEqual(countsAfterDaemonExit, countsAfterDesktopActions);
+    assertSuccessfulShutdown({
+      closeCompleted: true,
+      daemonExitCode: 0,
+      persistenceVerified: true,
+    });
     recordMarker("DAEMON_GRACEFUL_SHUTDOWN=PASS");
-    recordMarker("D5_WINDOWS_ELECTRON_SMOKE=PASS");
+    recordMarker("DAEMON_CHILD_EXIT_AND_SQLITE_PERSISTENCE=PASS");
+    recordMarker("D5_MAIN_RUNTIME_CHECKS=PASS");
   } catch (error) {
     recordMarker(`D5_FAILURE_STAGE=${failureStage}`);
     const errorDetail =
@@ -895,17 +1029,57 @@ app.whenReady().then(async () => {
     recordMarker(`D5_FAILURE=${errorDetail.replace(/[\r\n]+/gu, " ").slice(0, 1600)}`);
     process.exitCode = 1;
   } finally {
-    await appendFile(markerPath, `${markerLines.join("\n")}\n`, "utf8").catch(() => undefined);
-    disposeIpc?.();
-    await panels?.closeAll().catch(() => undefined);
-    panels?.dispose();
-    await supervisor?.closeForApplicationQuit().catch(() => undefined);
+    const cleanupFailures: string[] = [];
+    try {
+      disposeIpc?.();
+      disposeIpc = undefined;
+    } catch (error) {
+      cleanupFailures.push(`IPC:${safeMarkerError(error)}`);
+    }
+    try {
+      await panels?.closeAll();
+    } catch (error) {
+      cleanupFailures.push(`PANELS:${safeMarkerError(error)}`);
+    }
+    try {
+      panels?.dispose();
+      panels = undefined;
+    } catch (error) {
+      cleanupFailures.push(`PANEL_DISPOSE:${safeMarkerError(error)}`);
+    }
+    try {
+      await supervisor?.closeForApplicationQuit();
+      supervisor = undefined;
+    } catch (error) {
+      cleanupFailures.push(`DAEMON:${safeMarkerError(error)}`);
+    }
     if (mainWindow !== undefined && !mainWindow.isDestroyed()) mainWindow.destroy();
-    if (fixture !== undefined) await closeServer(fixture);
-    await rm(workspaceAPath, { recursive: true, force: true }).catch(() => undefined);
-    await rm(workspaceA2Path, { recursive: true, force: true }).catch(() => undefined);
-    await rm(workspaceBPath, { recursive: true, force: true }).catch(() => undefined);
+    if (fixture !== undefined) {
+      try {
+        await closeServer(fixture);
+        fixture = undefined;
+      } catch (error) {
+        cleanupFailures.push(`FIXTURE:${safeMarkerError(error)}`);
+      }
+    }
+    for (const failure of cleanupFailures) {
+      process.exitCode = 1;
+      recordMarker(`D5_CLEANUP_FAILURE=${failure}`);
+    }
+    if (!preserveWorkspaces) {
+      await rm(workspaceAPath, { recursive: true, force: true }).catch(() => undefined);
+      await rm(workspaceA2Path, { recursive: true, force: true }).catch(() => undefined);
+      await rm(workspaceBPath, { recursive: true, force: true }).catch(() => undefined);
+    } else {
+      recordMarker("D5_WORKSPACES_RETAINED_FOR_INSTALLED_MAIN=PASS");
+    }
     await rm(outsidePath, { recursive: true, force: true }).catch(() => undefined);
+    try {
+      await appendFile(markerPath, `${markerLines.join("\n")}\n`, "utf8");
+    } catch (error) {
+      process.exitCode = 1;
+      process.stderr.write(`D5_MARKER_WRITE_FAILURE=${safeMarkerError(error)}\n`);
+    }
     app.quit();
   }
 });
@@ -917,11 +1091,17 @@ async function seedOfflineAccount(
     readonly userId: string;
     readonly deviceId: string;
     readonly signingKey: KeyObject;
+    readonly offlineKeyId: string;
   },
 ): Promise<void> {
   const now = new Date().toISOString();
   const identity = generateDeviceIdentity();
-  const offlineGrant = createSignedGrant(input.signingKey, input.userId, input.deviceId);
+  const offlineGrant = createSignedGrant(
+    input.signingKey,
+    input.offlineKeyId,
+    input.userId,
+    input.deviceId,
+  );
   const record: StoredAccountRecord = {
     schemaVersion: 1,
     normalizedEmail: input.email,
@@ -948,13 +1128,13 @@ async function seedOfflineAccount(
   await writeActiveAccount(selectedVault, key);
 }
 
-function createFixtureCloud(signingKey: KeyObject): Record<string, unknown> {
+function createFixtureCloud(signingKey: KeyObject, offlineKeyId: string): Record<string, unknown> {
   return {
     login: async (input: { readonly email: string }) => {
       const now = new Date();
       const userIdForLogin = userB;
       const deviceId = randomUUID();
-      return {
+      const result = {
         requestId: randomUUID(),
         sessionId: randomUUID(),
         account: {
@@ -980,13 +1160,46 @@ function createFixtureCloud(signingKey: KeyObject): Record<string, unknown> {
           refreshExpiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60_000).toISOString(),
           refreshAbsoluteExpiresAt: new Date(now.getTime() + 90 * 24 * 60 * 60_000).toISOString(),
         },
-        offlineGrant: createSignedGrant(signingKey, userIdForLogin, deviceId),
+        offlineGrant: createSignedGrant(signingKey, offlineKeyId, userIdForLogin, deviceId),
       };
+      await writeFile(
+        path.join(testRoot, "d5-cloud-account.json"),
+        `${JSON.stringify({
+          userId: userIdForLogin,
+          deviceId,
+          email: result.account.email,
+          deviceLabel: result.device.label,
+        })}\n`,
+        "utf8",
+      );
+      return result;
     },
   };
 }
 
-function createSignedGrant(signingKey: KeyObject, userId: string, deviceId: string) {
+async function loadFixtureSigningMaterial(): Promise<{
+  readonly privateKey: KeyObject;
+  readonly publicKey: KeyObject;
+  readonly keyId: string;
+}> {
+  const privateKeyPath = process.env.CAELUSH_D6_TEST_SIGNING_KEY_PATH;
+  const configuredKeyId = process.env.CAELUSH_D6_TEST_OFFLINE_KEY_ID;
+  if ((privateKeyPath === undefined) !== (configuredKeyId === undefined)) {
+    throw new Error("D6_INTERNAL_TEST_SIGNING_CONFIGURATION_INVALID");
+  }
+  if (privateKeyPath !== undefined && configuredKeyId !== undefined) {
+    const privateKey = createPrivateKey(await readFile(privateKeyPath));
+    return {
+      privateKey,
+      publicKey: createPublicKey(privateKey),
+      keyId: configuredKeyId,
+    };
+  }
+  const keyPair = generateKeyPairSync("ed25519");
+  return { ...keyPair, keyId: "d5_fixture_key" };
+}
+
+function createSignedGrant(signingKey: KeyObject, keyId: string, userId: string, deviceId: string) {
   const issuedAt = new Date();
   const payload = {
     schemaVersion: 1,
@@ -996,7 +1209,7 @@ function createSignedGrant(signingKey: KeyObject, userId: string, deviceId: stri
     issuedAt: issuedAt.toISOString(),
     expiresAt: new Date(issuedAt.getTime() + 7 * 24 * 60 * 60_000).toISOString(),
     entitlements: [{ code: "CAELUSH_DESKTOP_BASIC", enabled: true }],
-    keyId: "d5_fixture_key",
+    keyId,
   } as const;
   return {
     envelopeVersion: 1,
@@ -1190,6 +1403,113 @@ function readRunCounts(databasePath: string): {
   }
 }
 
+function readLatestCompletedRun(databasePath: string): {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly status: string;
+  readonly eventSequences: readonly number[];
+} {
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const run = database
+      .prepare(
+        "SELECT id, session_id, status FROM agent_runs WHERE status = 'COMPLETED' ORDER BY created_at_ms DESC LIMIT 1",
+      )
+      .get() as { id: string; session_id: string; status: string } | undefined;
+    assert.ok(run, "The scripted fixture Run did not settle to COMPLETED.");
+    const rows = database
+      .prepare(
+        "SELECT aggregate_sequence FROM agent_events WHERE run_id = ? ORDER BY aggregate_sequence ASC",
+      )
+      .all(run.id) as { aggregate_sequence: number }[];
+    return {
+      id: run.id,
+      sessionId: run.session_id,
+      status: run.status,
+      eventSequences: rows.map((row) => Number(row.aggregate_sequence)),
+    };
+  } finally {
+    database.close();
+  }
+}
+
+async function verifyRunEventReplay(
+  proxy: DesktopLocalProxy,
+  runId: string,
+  eventSequences: readonly number[],
+): Promise<void> {
+  const first = await openRunEventStream(proxy, runId, undefined);
+  let firstSequence: number;
+  try {
+    firstSequence = (await first.nextEvent()).sequence;
+  } finally {
+    await first.close();
+  }
+  assert.equal(firstSequence, eventSequences[0]);
+
+  const reconnected = await openRunEventStream(proxy, runId, firstSequence);
+  try {
+    const replayed = await reconnected.nextEvent();
+    assert.ok(replayed.sequence > firstSequence);
+    assert.ok(eventSequences.includes(replayed.sequence));
+  } finally {
+    await reconnected.close();
+  }
+}
+
+async function openRunEventStream(
+  proxy: DesktopLocalProxy,
+  runId: string,
+  lastEventId: number | undefined,
+): Promise<{
+  readonly nextEvent: () => Promise<{ readonly sequence: number; readonly data: string }>;
+  readonly close: () => Promise<void>;
+}> {
+  const controller = new AbortController();
+  const headers = new Headers();
+  if (lastEventId !== undefined) headers.set("last-event-id", String(lastEventId));
+  const request = {
+    url: `caelush-app://app/api/v1/runs/${encodeURIComponent(runId)}/events`,
+    method: "GET",
+    headers,
+    body: null,
+    signal: controller.signal,
+    referrer: "",
+    initiatorOrigin: "caelush-app://app",
+  } as Request;
+  const response = await proxy.handle(request);
+  assert.equal(response.status, 200, "The local Run event stream did not open.");
+  assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/iu);
+  assert.ok(response.body);
+  const reader = response.body.getReader();
+  let pending = "";
+  return {
+    nextEvent: async () => {
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        const separator = pending.indexOf("\n\n");
+        if (separator >= 0) {
+          const block = pending.slice(0, separator).replace(/\r/gu, "");
+          pending = pending.slice(separator + 2);
+          const sequenceLine = block.split("\n").find((line) => line.startsWith("id:"));
+          if (sequenceLine === undefined) continue;
+          const sequence = Number(sequenceLine.slice(3).trim());
+          assert.ok(Number.isSafeInteger(sequence) && sequence > 0);
+          return { sequence, data: block };
+        }
+        const next = await reader.read();
+        if (next.done) break;
+        pending += new TextDecoder().decode(next.value, { stream: true });
+      }
+      throw new Error("The replay stream did not return a durable event in time.");
+    },
+    close: async () => {
+      controller.abort();
+      await reader.cancel().catch(() => undefined);
+    },
+  };
+}
+
 async function setTextArea(contents: WebContents, text: string): Promise<void> {
   await execute(
     contents,
@@ -1288,6 +1608,7 @@ async function waitForRenderer(
     ).catch(() => "renderer-unavailable");
     throw new Error(
       `${error instanceof Error ? error.message : "Renderer wait failed."} ${String(details)}`,
+      { cause: error },
     );
   }
 }
@@ -1330,6 +1651,11 @@ function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
   return new Promise((resolve, reject) =>
     server.close((error) => (error ? reject(error) : resolve())),
   );
+}
+
+function safeMarkerError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "Unknown cleanup error.";
+  return message.replace(/[\r\n]+/gu, " ").slice(0, 512);
 }
 
 function requiredEnvironment(name: string): string {

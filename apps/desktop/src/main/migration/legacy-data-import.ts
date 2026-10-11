@@ -226,7 +226,12 @@ export class DesktopLegacyDataImporter {
         updatedAtMs: this.now(),
       });
       this.options.onProgress?.("IMPORT_STAGED");
-      await backups.restore(backup.backupId);
+      // Main may have started a schema-only Daemon database for this fresh Profile. Recheck
+      // emptiness after staging so only that initialized database can be replaced.
+      if (!(await isProfileEmpty(profile))) {
+        throw new DesktopLegacyDataImportError("LEGACY_IMPORT_TARGET_NOT_EMPTY");
+      }
+      await backups.restore(backup.backupId, { replaceExistingDatabase: true });
       this.options.onProgress?.("DESTINATION_VERIFIED");
       this.options.assertAuthorized?.(cloudUserId);
       const migration = await this.options.credentialMigrator.run(profile, cloudUserId, {

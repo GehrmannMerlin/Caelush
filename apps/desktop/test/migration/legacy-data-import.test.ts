@@ -92,6 +92,12 @@ describe("DesktopLegacyDataImporter", () => {
     );
     const originalHash = await hash(databasePath);
 
+    // The production Main may have initialized the new Profile's SQLite schema before import.
+    const initializedTarget = await profiles.selectForUser(userId);
+    const emptyTargetDatabase = new DatabaseSync(initializedTarget.databasePath);
+    emptyTargetDatabase.exec("CREATE TABLE initialized_empty_schema(value TEXT);");
+    emptyTargetDatabase.close();
+
     const scan = await importer.inspect(userId);
     expect(scan.sources).toHaveLength(1);
     const candidate = scan.sources[0];
@@ -117,6 +123,20 @@ describe("DesktopLegacyDataImporter", () => {
     await expect(importer.import(userId, candidate.candidateId, false)).rejects.toMatchObject({
       code: "LEGACY_IMPORT_CONFIRMATION_REQUIRED",
     });
+    const populatedTargetDatabase = new DatabaseSync(initializedTarget.databasePath);
+    populatedTargetDatabase
+      .prepare("INSERT INTO initialized_empty_schema VALUES (?)")
+      .run("existing-user-data");
+    await expect(importer.import(userId, candidate.candidateId, true)).rejects.toMatchObject({
+      code: "LEGACY_IMPORT_TARGET_NOT_EMPTY",
+    });
+    expect(
+      populatedTargetDatabase.prepare("SELECT value FROM initialized_empty_schema").get(),
+    ).toEqual({ value: "existing-user-data" });
+    populatedTargetDatabase
+      .prepare("DELETE FROM initialized_empty_schema WHERE value = ?")
+      .run("existing-user-data");
+    populatedTargetDatabase.close();
     const result = await importer.import(userId, candidate.candidateId, true);
     expect(result).toMatchObject({ state: "COMMITTED", credentialCount: 1 });
     expect(await credentials.resolve(userId, result.profileId, "deepseek")).toBe(

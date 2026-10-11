@@ -54,6 +54,7 @@ class FakeChild extends EventEmitter implements DesktopChildProcess {
   readonly sent: unknown[] = [];
   startBehavior: "ready" | "bad-pid" | "silent" = "ready";
   stopBehavior: "closed" | "blocked" = "closed";
+  exitCodeOnStop = 0;
 
   send(message: unknown, callback?: (error: Error | null) => void): boolean {
     this.sent.push(structuredClone(message));
@@ -94,7 +95,7 @@ class FakeChild extends EventEmitter implements DesktopChildProcess {
           ipcProtocolVersion: 1,
           generationId: message.generationId,
         });
-        this.finish(0, null);
+        this.finish(this.exitCodeOnStop, null);
       });
     }
     return true;
@@ -360,6 +361,20 @@ describe("DesktopDaemonSupervisor", () => {
       setup.child.sent.some((item) => isRecord(item) && item.type === "STOP_DESKTOP_DAEMON"),
     ).toBe(true);
     expect(setup.child.exitCode).toBe(0);
+  });
+
+  it("returns the real graceful child exit code and rejects a nonzero child exit", async () => {
+    const successful = createSupervisor();
+    await successful.supervisor.synchronizeAccountState(createAuthorizedState());
+    await expect(successful.supervisor.closeForApplicationQuit()).resolves.toBe(0);
+
+    const failedChild = new FakeChild();
+    failedChild.exitCodeOnStop = 7;
+    const failed = createSupervisor({ child: failedChild });
+    await failed.supervisor.synchronizeAccountState(createAuthorizedState());
+    await expect(failed.supervisor.closeForApplicationQuit()).rejects.toMatchObject({
+      code: "DAEMON_EXIT_UNCONFIRMED",
+    });
   });
 
   it("keeps Profile switching blocked when graceful shutdown is not confirmed", async () => {

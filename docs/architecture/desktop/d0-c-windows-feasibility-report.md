@@ -101,16 +101,16 @@ The final command was the `run.ps1` invocation above, with the fresh current-
 source archive supplied using `-BundlePath`. Results below reflect the saved
 evidence JSON, not a prediction.
 
-| Gate            | Result      | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| --------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| G1 Runtime      | **PASS**    | Staged Node `v24.18.0` started by absolute executable path; ABI `137`, N-API `10`, SQLite `3.53.1`; no Node, pnpm, Rust/Cargo, or Git on the staged process `PATH`.                                                                                                                                                                                                                                                                                 |
-| G2 SQLite       | **BLOCKED** | The production Daemon opened and migrated the disposable database; integrity check was `ok` with 32 tables; Session and completed Run survived restart and transcript reads. The first Daemon's normal `close()` did not acknowledge within 20 seconds, so the required graceful-close/reopen sequence is not established. The POC terminated only its owned child before reopening the DB.                                                         |
-| G3 PTY          | **PASS**    | Actual packaged `@caelush/runtime` PTY adapter and `node-pty@1.1.0`: native load, PTY spawn, UTF-8 input/output (`PTY-UTF8-终端✓`), normal exit `0`, cancellation/termination observed.                                                                                                                                                                                                                                                             |
-| G4 Sandbox      | **PASS**    | Packaged PE and manifest SHA verified; actual workspace status and prepare protocol reached `READY`; restricted child wrote inside the disposable workspace and its write to a sibling directory was denied. Provider reports `PARTIAL` enforcement, not a hard OS sandbox.                                                                                                                                                                         |
-| G5 Web/SSE      | **PASS**    | Packaged Web index, JS, and CSS returned HTTP 200 and loaded in Electron. Production Daemon Health/Info schemas passed at an OS-assigned loopback port. A local scripted provider completed one Run with zero external provider calls. Durable SSE sequences were `1..10`; replay after cursor `6` returned `7..10`; aborting the live stream did not cancel or lose the Run.                                                                       |
-| G6 Process/IPC  | **BLOCKED** | Private child IPC, PID/generation validation, new generation after restart, stale-generation rejection, child-exit detection, and failure injections all passed: `CHILD_EXIT_BEFORE_READY`, `STARTUP_TIMEOUT`, `INVALID_BOOTSTRAP_MESSAGE`, `GENERATION_MISMATCH`, `CHILD_EXIT_AFTER_READY`, `SHUTDOWN_TIMEOUT`. Normal Daemon shutdown did not acknowledge within 20 seconds. Only the POC-owned child was terminated; final orphan count was `0`. |
-| G7 Clean Host   | **BLOCKED** | A copied portable directory ran with `PATH=System32` and no developer tools in that path. This host had no available Windows Sandbox or clean Windows VM, so this does not meet the clean-host gate.                                                                                                                                                                                                                                                |
-| G8 Architecture | **PASS**    | The fixture uses the existing Daemon production composition and public package entries; no Agent authority, DaemonInfo capability, Protocol, or production runtime behavior was changed. The targeted architecture check and daemon production E2E result are recorded in the validation section below.                                                                                                                                             |
+| Gate            | Result               | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1 Runtime      | **PASS**             | Staged Node `v24.18.0` started by absolute executable path; ABI `137`, N-API `10`, SQLite `3.53.1`; no Node, pnpm, Rust/Cargo, or Git on the staged process `PATH`.                                                                                                                                                                                                                                                                                 |
+| G2 SQLite       | **BLOCKED**          | The production Daemon opened and migrated the disposable database; integrity check was `ok` with 32 tables; Session and completed Run survived restart and transcript reads. The first Daemon's normal `close()` did not acknowledge within 20 seconds, so the required graceful-close/reopen sequence is not established. The POC terminated only its owned child before reopening the DB.                                                         |
+| G3 PTY          | **PASS**             | Actual packaged `@caelush/runtime` PTY adapter and `node-pty@1.1.0`: native load, PTY spawn, UTF-8 input/output (`PTY-UTF8-终端✓`), normal exit `0`, cancellation/termination observed.                                                                                                                                                                                                                                                             |
+| G4 Sandbox      | **PASS**             | Packaged PE and manifest SHA verified; actual workspace status and prepare protocol reached `READY`; restricted child wrote inside the disposable workspace and its write to a sibling directory was denied. Provider reports `PARTIAL` enforcement, not a hard OS sandbox.                                                                                                                                                                         |
+| G5 Web/SSE      | **PASS**             | Packaged Web index, JS, and CSS returned HTTP 200 and loaded in Electron. Production Daemon Health/Info schemas passed at an OS-assigned loopback port. A local scripted provider completed one Run with zero external provider calls. Durable SSE sequences were `1..10`; replay after cursor `6` returned `7..10`; aborting the live stream did not cancel or lose the Run.                                                                       |
+| G6 Process/IPC  | **BLOCKED**          | Private child IPC, PID/generation validation, new generation after restart, stale-generation rejection, child-exit detection, and failure injections all passed: `CHILD_EXIT_BEFORE_READY`, `STARTUP_TIMEOUT`, `INVALID_BOOTSTRAP_MESSAGE`, `GENERATION_MISMATCH`, `CHILD_EXIT_AFTER_READY`, `SHUTDOWN_TIMEOUT`. Normal Daemon shutdown did not acknowledge within 20 seconds. Only the POC-owned child was terminated; final orphan count was `0`. |
+| G7 Clean Host   | **DEFERRED_BY_USER** | The D0-C copied-directory check with `PATH=System32` did not establish a clean-host result. The user explicitly deferred clean Windows verification during D6 because no clean environment is available. This status is not a pass and must be reassessed before Stable `1.0.0`.                                                                                                                                                                    |
+| G8 Architecture | **PASS**             | The fixture uses the existing Daemon production composition and public package entries; no Agent authority, DaemonInfo capability, Protocol, or production runtime behavior was changed. The targeted architecture check and daemon production E2E result are recorded in the validation section below.                                                                                                                                             |
 
 G2's database-integrity and restart-recovery subchecks passed. G2 remains
 BLOCKED because its normal shutdown prerequisite did not pass. G4's provider
@@ -144,13 +144,13 @@ upgrade the product's documented security boundary into a hard sandbox.
 
 ## Targeted Validation
 
-| Check                    | Command                                                                                                                                  | Result                                              |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| POC source syntax        | `node --check` for each `.mjs` and `.cjs` under `scripts/poc/windows-desktop/`                                                           | **PASS**                                            |
-| POC Windows vertical run | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/poc/windows-desktop/run.ps1 -BundlePath <fresh-current-source-archive>` | **PARTIAL** — G1/G3/G4/G5/G8 pass; G2/G6/G7 blocked |
-| Daemon production E2E    | `pnpm --filter @caelush/daemon exec vitest run test/daemon-production-e2e.test.ts`                                                       | **PASS** — 2 tests passed                           |
-| Architecture CI          | `pnpm check:architecture:ci`                                                                                                             | **PASS**                                            |
-| Diff hygiene             | `git diff --check`                                                                                                                       | **PASS**                                            |
+| Check                    | Command                                                                                                                                  | Result                                                                                                                                   |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| POC source syntax        | `node --check` for each `.mjs` and `.cjs` under `scripts/poc/windows-desktop/`                                                           | **PASS**                                                                                                                                 |
+| POC Windows vertical run | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/poc/windows-desktop/run.ps1 -BundlePath <fresh-current-source-archive>` | **PARTIAL** — historical D0-C result: G1/G3/G4/G5/G8 passed; G2/G6 were blocked; the clean-host result is now `DEFERRED_BY_USER` for D6. |
+| Daemon production E2E    | `pnpm --filter @caelush/daemon exec vitest run test/daemon-production-e2e.test.ts`                                                       | **PASS** — 2 tests passed                                                                                                                |
+| Architecture CI          | `pnpm check:architecture:ci`                                                                                                             | **PASS**                                                                                                                                 |
+| Diff hygiene             | `git diff --check`                                                                                                                       | **PASS**                                                                                                                                 |
 
 `pnpm build` ran once across the 18 workspaces because the existing release
 builder needs current workspace outputs to produce the fresh portable test
@@ -316,8 +316,10 @@ phase timings and aggregate socket/request counts for diagnosis.
 
 #### Regression Evidence
 
-- The final POC passed gates G2, G6, and G8. The overall POC result remains
-  PARTIAL because G7 remains BLOCKED.
+- The final D0-C POC passed gates G2, G6, and G8 after the regression fixes.
+  Its historical result was PARTIAL while a clean host was unavailable. D6 now
+  records `CLEAN_HOST_VERIFICATION = DEFERRED_BY_USER`; this is not a pass and
+  does not count as a D6 Development Scope failure.
 - G2 evidence: shutdown requested; `daemon.close()` fulfilled; `CLOSED`
   acknowledged; child exit code `0`; SQLite reopened; 32 tables;
   `integrity_check = ok`; Session, Run, and assistant Transcript recovered.
@@ -341,9 +343,11 @@ reads the single final answer after daemon restart"`: 1 passed.
 
 #### Remaining Risks
 
-G7 Clean Host remains BLOCKED because no clean Windows VM or Windows Sandbox was
-available; it was not rerun. The remediation POC reuses a staged product tree,
-so this round does not establish a fresh release archive hash. The Windows
-restricted-token provider still reports `PARTIAL` enforcement, and formal
-Electron packaging, Host Token authentication, and signed distribution remain
-deferred as documented above. D0-C remains PARTIAL and is not COMPLETE.
+`CLEAN_HOST_VERIFICATION = DEFERRED_BY_USER`: no clean Windows VM or Windows
+Sandbox was available, and the check was not rerun. This is not a pass; it must
+be reassessed before Stable `1.0.0`. The remediation POC reuses a staged product
+tree, so this round does not establish a fresh release archive hash. The
+Windows restricted-token provider still reports `PARTIAL` enforcement, and
+formal Electron packaging, Host Token authentication, and signed distribution
+remain deferred as documented above. D0-C's historical POC status remains
+PARTIAL and is not COMPLETE.

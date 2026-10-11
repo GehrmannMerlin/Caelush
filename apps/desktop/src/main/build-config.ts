@@ -1,7 +1,9 @@
 declare const __CAELUSH_BUILD_CONFIG__: string;
 
 export interface DesktopBuildConfiguration {
+  readonly purpose: "development" | "internal-test" | "production";
   readonly production: boolean;
+  readonly channel: "dev" | "beta" | "stable";
   readonly cloudOrigin: string;
   readonly offlinePublicKeys: Readonly<Record<string, string>>;
   readonly externalHttpsHosts: readonly string[];

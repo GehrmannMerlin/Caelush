@@ -236,11 +236,17 @@ export class DesktopDaemonSupervisor {
     this.clearExpiryTimer();
     this.freezeProxyAccess();
     this.options.onStateChange?.();
-    return this.enqueue(() => this.stopCurrentGeneration());
+    return this.enqueue(async () => {
+      await this.stopCurrentGeneration();
+    });
   }
 
-  closeForApplicationQuit(): Promise<void> {
-    return this.beginAccountBoundary();
+  closeForApplicationQuit(): Promise<number | null> {
+    this.desired = undefined;
+    this.clearExpiryTimer();
+    this.freezeProxyAccess();
+    this.options.onStateChange?.();
+    return this.enqueue(() => this.stopCurrentGeneration());
   }
 
   getAgentEntry(state: AccountState): AccountState["agentEntry"] {
@@ -639,9 +645,9 @@ export class DesktopDaemonSupervisor {
     });
   }
 
-  private async stopCurrentGeneration(): Promise<void> {
+  private async stopCurrentGeneration(): Promise<number | null> {
     const generation = this.current;
-    if (generation === undefined) return;
+    if (generation === undefined) return null;
     this.acceptingRequests = false;
     this.freezeProxyAccess();
     generation.lifecycleState = "STOPPING";
@@ -706,6 +712,7 @@ export class DesktopDaemonSupervisor {
       await generation.logSink.close();
       if (generation.child.connected) generation.child.disconnect();
       this.options.onStateChange?.();
+      return exit.code;
     } catch (error) {
       waiter.cancel();
       if (this.current === generation && generation.lifecycleState !== "STOP_BLOCKED") {
