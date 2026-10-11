@@ -7,7 +7,17 @@ import { DpapiVault } from "./credentials/vault.js";
 import { ProviderCredentialVault } from "./credentials/provider-credential-vault.js";
 import { DesktopProviderCredentialMigrator } from "./migration/provider-credential-migration.js";
 import { DesktopLegacyDataImporter } from "./migration/legacy-data-import.js";
-import { BUILD_CONFIGURATION, trustedOfflineKeys } from "./build-config.js";
+import {
+  BUILD_CONFIGURATION,
+  trustedOfflineKeys,
+  trustedUpdateConfiguration,
+} from "./build-config.js";
+import { UpdatePolicyClient } from "./cloud/update-policy.js";
+import { DesktopUpdateCoordinator } from "./update/coordinator.js";
+import { UpdateStateStore } from "./update/state-store.js";
+import { downloadInstaller } from "./update/downloader.js";
+import { handoffVerifiedNsis } from "./update/nsis-handoff.js";
+import { captureUpdateProfile, verifyUpdateProfile } from "./update/profile-verification.js";
 import { registerDesktopIpc } from "./ipc/handlers.js";
 import { registerAppProtocol } from "./protocol/app-protocol.js";
 import { DesktopLocalProxy } from "./protocol/local-proxy.js";
@@ -145,6 +155,94 @@ if (!singleInstance) {
   const proxy = new DesktopLocalProxy({
     acquireLease: (requestSignal) => supervisor.acquireProxyLease(requestSignal),
   });
+  const updateTrust = trustedUpdateConfiguration();
+  const updateStore = new UpdateStateStore(
+    join(localAppDataDirectory ?? app.getPath("userData"), "Caelush", "shared", "updates"),
+    new WindowsProfilePermissions(process.platform),
+  );
+  let updateProfileRoot: string | null = null;
+  let accountInitializedByUpdate = false;
+  let updateOwnsShutdown = false;
+  let updateSuspendsAccountSynchronization = false;
+  const updates = new DesktopUpdateCoordinator({
+    version: app.getVersion(),
+    trust: updateTrust,
+    store: updateStore,
+    client: new UpdatePolicyClient(BUILD_CONFIGURATION.cloudOrigin, updateTrust, app.getVersion()),
+    download: (policy, signal, progress) =>
+      downloadInstaller(policy, updateStore, updateTrust, signal, progress),
+    confirmInstall: async () => {
+      const result = await dialog.showMessageBox({
+        type: "question",
+        title: "Install Caelush update",
+        message: "Install the verified update and restart Caelush?",
+        detail:
+          "The Agent must confirm a safe shutdown before the installer can start. Current work will not be forcefully stopped.",
+        buttons: ["Install and restart", "Later"],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      });
+      return result.response === 0;
+    },
+    safeShutdown: async () => {
+      if (shutdownInProgress)
+        throw Object.assign(new Error("Desktop shutdown is already pending."), {
+          failureKind: "SAFE_SHUTDOWN_PENDING",
+        });
+      updateProfileRoot =
+        supervisor.getActiveProfileIdentity()?.profile.rootDirectory ?? updateProfileRoot;
+      updateOwnsShutdown = true;
+      updateSuspendsAccountSynchronization = true;
+      try {
+        await closeManagedDaemon();
+      } finally {
+        updateOwnsShutdown = false;
+      }
+    },
+    captureProfile: () =>
+      captureUpdateProfile(updateProfileRoot, join(app.getPath("userData"), "credentials.dpapi")),
+    handoff: async (pending) =>
+      handoffVerifiedNsis({
+        store: updateStore,
+        pending,
+        trust: updateTrust,
+        executablePath: process.execPath,
+        userDataDirectory: app.getPath("userData"),
+        browserDirectory: updateProfileRoot === null ? null : join(updateProfileRoot, "browser"),
+        internalTest: BUILD_CONFIGURATION.purpose === "internal-test",
+        quit: () => {
+          safeQuitApproved = true;
+          app.quit();
+        },
+      }),
+    verifyRuntime: async () => {
+      await verifyPackagedDesktopResources({
+        packaged: app.isPackaged,
+        appPath: app.getAppPath(),
+        resourcesPath: process.resourcesPath,
+      });
+      await account.initialize();
+      accountInitializedByUpdate = true;
+      await supervisor.synchronizeAccountState(account.getState());
+      if (updateStore.pending()?.profileSnapshot && !supervisor.getActiveProfileIdentity())
+        throw new Error("Post-install Profile runtime is not ready.");
+    },
+    verifyProfile: async (snapshot, browserSnapshot) => {
+      await verifyUpdateProfile(
+        snapshot,
+        localAppDataDirectory ?? "",
+        join(app.getPath("userData"), "credentials.dpapi"),
+        browserSnapshot,
+      );
+      if (snapshot !== null) await vault.initialize();
+    },
+    resume: async () => {
+      updateSuspendsAccountSynchronization = false;
+      await supervisor.synchronizeAccountState(account.getState());
+      updateProfileRoot = null;
+    },
+  });
 
   function projectAccountState(state: AccountState): AccountState {
     return { ...state, agentEntry: supervisor.getAgentEntry(state) };
@@ -245,7 +343,12 @@ if (!singleInstance) {
       callback(false),
     );
     logD6Startup("APP_PROTOCOL_REGISTERED");
+    await updates.initialize();
     unsubscribeAccount = account.subscribe((state) => {
+      if (updateSuspendsAccountSynchronization) {
+        publishProjectedAccountState();
+        return;
+      }
       void supervisor
         .synchronizeAccountState(state)
         .catch(() => undefined)
@@ -253,8 +356,7 @@ if (!singleInstance) {
     });
     openMainWindow();
     logD6Startup("ACCOUNT_INITIALIZATION_STARTED");
-    void account
-      .initialize()
+    void (accountInitializedByUpdate ? Promise.resolve() : account.initialize())
       .then(async () => {
         logD6Startup("ACCOUNT_INITIALIZATION_COMPLETED");
         try {
@@ -284,6 +386,10 @@ if (!singleInstance) {
   });
 
   app.on("before-quit", (event) => {
+    if (!safeQuitApproved && (updateOwnsShutdown || updates.getState().status === "INSTALLING")) {
+      event.preventDefault();
+      return;
+    }
     if (!safeQuitApproved) {
       event.preventDefault();
       if (shutdownInProgress) return;
@@ -367,15 +473,24 @@ if (!singleInstance) {
       version: app.getVersion(),
       projectAccountState,
       beginAccountBoundary: async () => {
+        if (updateSuspendsAccountSynchronization)
+          throw Object.assign(new Error("Account changes wait for the pending update shutdown."), {
+            code: "UPDATE_SHUTDOWN_PENDING",
+          });
         await desktopPanels?.closeAll();
         await supervisor.beginAccountBoundary();
       },
       synchronizeAccountState: (state) => supervisor.synchronizeAccountState(state),
       legacyImporter,
       desktopPanels,
+      updates,
     });
     mainWindow.on("close", (event) => {
       if (safeQuitApproved) return;
+      if (updateOwnsShutdown || updates.getState().status === "INSTALLING") {
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
       if (shutdownInProgress) return;
       void closeManagedDaemon()

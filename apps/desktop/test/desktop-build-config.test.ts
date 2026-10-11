@@ -26,6 +26,8 @@ describe("Desktop build purpose and release channel", () => {
         CAELUSH_CLOUD_ORIGIN: "https://cloud.caelush.example",
         CAELUSH_CLOUD_ALLOWED_HOSTS: "cloud.caelush.example",
         CAELUSH_OFFLINE_TRUSTED_KEYS_JSON: VALID_KEYRING,
+        CAELUSH_UPDATE_TRUSTED_KEYS_JSON: JSON.stringify({ update_release: "B".repeat(42) + "A" }),
+        CAELUSH_UPDATE_RELEASE_HOSTS: "releases.caelush.example",
       }),
     ).toMatchObject({ purpose: "production", production: true, channel: "beta" });
   });
@@ -40,6 +42,8 @@ describe("Desktop build purpose and release channel", () => {
         CAELUSH_CLOUD_ORIGIN: "https://cloud.caelush.example",
         CAELUSH_CLOUD_ALLOWED_HOSTS: "cloud.caelush.example",
         CAELUSH_OFFLINE_TRUSTED_KEYS_JSON: VALID_KEYRING,
+        CAELUSH_UPDATE_TRUSTED_KEYS_JSON: JSON.stringify({ update_release: "B".repeat(42) + "A" }),
+        CAELUSH_UPDATE_RELEASE_HOSTS: "releases.caelush.example",
       }),
     ).toMatchObject({ purpose: "production", production: true, channel: "stable" });
     expect(() =>

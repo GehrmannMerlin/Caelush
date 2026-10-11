@@ -51,6 +51,7 @@ export declare function classifyD5TestMainSmokeResult(
 export declare function assertInstallRegistration(
   snapshot: InstallRegistrySnapshot,
   expectedInstallRoot: string,
+  expectedVersion?: string,
 ): Readonly<{ scope: "HKCU"; installRoot: string }>;
 
 export declare function buildNsisInstallArguments(installRoot: string): Readonly<{

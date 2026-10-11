@@ -12,7 +12,7 @@ export const D6_PROVIDER_API_KEY = "d6-scripted-provider-fixture-key";
 export const D6_PROVIDER_RESPONSE = "The installed D6 Agent fixture run completed.";
 const D6_NATIVE_REPLAY_FIXTURE = "caelush-d6-controlled-private-native-replay";
 
-export async function startInternalCloudFixture(identity) {
+export async function startInternalCloudFixture(identity, updateFixture) {
   assert.ok(identity && Number.isInteger(identity.cloudPort));
   const privateKey = createPrivateKey(await readFile(identity.privateKeyPath));
   const accounts = new Map();
@@ -27,6 +27,13 @@ export async function startInternalCloudFixture(identity) {
   });
 
   async function handleCloudRequest(request, response) {
+    if (
+      updateFixture &&
+      new URL(request.url, "http://127.0.0.1").pathname === "/v1/desktop/update-policy"
+    ) {
+      const result = updateFixture.getPolicy(request);
+      return json(response, result.status, result.body);
+    }
     const body = await readJsonBody(request);
     if (request.method === "POST" && request.url === "/v1/auth/login") {
       if (
@@ -101,8 +108,13 @@ export async function startInternalCloudFixture(identity) {
 
 export async function startD6ProviderFixture() {
   const requests = [];
+  let queuedTool = null;
   const server = createServer((request, response) => {
-    void handleProviderRequest(request, response, requests).catch(() => {
+    void handleProviderRequest(request, response, requests, () => {
+      const tool = queuedTool;
+      queuedTool = null;
+      return tool;
+    }).catch(() => {
       if (!response.headersSent) response.writeHead(500, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: { message: "fixture failed" } }));
     });
@@ -117,6 +129,11 @@ export async function startD6ProviderFixture() {
     apiKey: D6_PROVIDER_API_KEY,
     origin: `http://127.0.0.1:${address.port}/v1`,
     requests,
+    queueTool(command) {
+      assert.equal(queuedTool, null);
+      assert.equal(typeof command, "string");
+      queuedTool = { cmd: command, yield_time_ms: 30000 };
+    },
     close: () => closeServer(server),
   });
 }
@@ -173,7 +190,7 @@ function createAuthResult(account, keyId, signingKey, refreshTokens, accessToken
   };
 }
 
-async function handleProviderRequest(request, response, requests) {
+async function handleProviderRequest(request, response, requests, takeTool = () => null) {
   if (request.headers.authorization !== `Bearer ${D6_PROVIDER_API_KEY}`) {
     return json(response, 401, { error: { message: "fixture authentication failed" } });
   }
@@ -185,6 +202,7 @@ async function handleProviderRequest(request, response, requests) {
   if (request.method === "POST" && request.url === "/v1/chat/completions") {
     const body = await readJsonBody(request);
     requests.push("CHAT_COMPLETION");
+    const tool = takeTool();
     if (
       Array.isArray(body.messages) &&
       body.messages.some(
@@ -207,7 +225,9 @@ async function handleProviderRequest(request, response, requests) {
       "content-type": "text/event-stream",
     });
     response.end(
-      `${chunk({ role: "assistant", reasoning_content: D6_NATIVE_REPLAY_FIXTURE })}${chunk({ content: D6_PROVIDER_RESPONSE })}${chunk({}, "stop")}data: [DONE]\n\n`,
+      tool
+        ? `${chunk({ role: "assistant", reasoning_content: D6_NATIVE_REPLAY_FIXTURE })}${chunk({ tool_calls: [{ index: 0, id: "d72_held_effect", type: "function", function: { name: "exec_command", arguments: JSON.stringify(tool) } }] })}${chunk({}, "tool_calls")}data: [DONE]\n\n`
+        : `${chunk({ role: "assistant", reasoning_content: D6_NATIVE_REPLAY_FIXTURE })}${chunk({ content: D6_PROVIDER_RESPONSE })}${chunk({}, "stop")}data: [DONE]\n\n`,
     );
     return;
   }

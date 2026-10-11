@@ -35,6 +35,7 @@ import {
   normalizeRegistryRegistrationSnapshot,
 } from "./windows-d6-acceptance-helpers.mjs";
 import { startD6ProviderFixture, startInternalCloudFixture } from "./windows-d6-fixtures.mjs";
+import { startLocalUpdateFixture } from "./local-update-fixture.mjs";
 
 if (process.platform !== "win32" || process.arch !== "x64") {
   throw new Error("D6 installed smoke requires Windows x64.");
@@ -43,6 +44,9 @@ if (process.platform !== "win32" || process.arch !== "x64") {
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPOSITORY_ROOT = path.resolve(APP_ROOT, "..", "..");
 const RUN_ID = `${process.pid}-${randomUUID().slice(0, 8)}`;
+const D72_INPUT = process.env.CAELUSH_D72_SMOKE_INPUT
+  ? JSON.parse(await readFile(process.env.CAELUSH_D72_SMOKE_INPUT, "utf8"))
+  : null;
 const OUTPUT_ROOT = path.resolve(
   process.env.CAELUSH_DESKTOP_OUTPUT_ROOT ?? path.join("D:\\", `Caelush D6 Recovery ${RUN_ID}`),
 );
@@ -92,6 +96,8 @@ let providerFixture;
 let currentRuntime;
 let nextCdpCommandId = 0;
 let installedFixture;
+let updateFixture;
+let cleanupBlocked = false;
 
 assert.equal(path.parse(OUTPUT_ROOT).root.toLowerCase(), "d:\\");
 assert.ok(
@@ -127,10 +133,19 @@ try {
   record(`INSTALLER_SHA512=${installerSha512}`);
 
   internalTestIdentity = await loadInternalTestIdentity();
+  if (D72_INPUT) {
+    updateFixture = await startLocalUpdateFixture(
+      D72_INPUT.updateIdentity,
+      D72_INPUT.versionBInstaller,
+    );
+    record(`D72_VERSION_A=0.1.0 VERSION_B=0.1.1`);
+    record(`D72_REAL_UPDATE_BYTES=${updateFixture.artifactSize}`);
+    record(`D72_REAL_UPDATE_SHA512=${updateFixture.sha512}`);
+  }
   record(`INTERNAL_TEST_KEY_ID=${internalTestIdentity.keyId}`);
   record(`INTERNAL_TEST_CLOUD_ORIGIN=http://127.0.0.1:${internalTestIdentity.cloudPort}`);
   if (process.env.CAELUSH_D6_CLOUD_FIXTURE_PARENT !== "1") {
-    localCloudFixture = await startInternalCloudFixture(internalTestIdentity);
+    localCloudFixture = await startInternalCloudFixture(internalTestIdentity, updateFixture);
   }
 
   const existingEntries = await readCaelushUninstallEntries();
@@ -309,11 +324,21 @@ try {
   assert.ok(existsSync(path.join(profileRoot, "private-replay-keys")));
   record(`PERSISTENT_DATA_FILES=${retainedBeforeReinstall.length}`);
 
-  await runInstaller(INSTALLER_PATH, INSTALL_ROOT, INSTALLER_ENV);
-  const retainedAfterReinstall = await snapshotPersistentData(USER_DATA_ROOT, LOCAL_APP_DATA_ROOT);
-  assert.deepEqual(retainedAfterReinstall, retainedBeforeReinstall);
-  const registrationAfterReinstall = await waitForUninstallEntry(INSTALL_ROOT);
-  assert.equal(registrationAfterReinstall.DisplayVersion, "0.1.0");
+  if (D72_INPUT) await runVerifiedVersionUpgrade();
+  else {
+    await runInstaller(INSTALLER_PATH, INSTALL_ROOT, INSTALLER_ENV);
+    const retainedAfterReinstall = await snapshotPersistentData(
+      USER_DATA_ROOT,
+      LOCAL_APP_DATA_ROOT,
+    );
+    assert.deepEqual(retainedAfterReinstall, retainedBeforeReinstall);
+  }
+  const registrationAfterReinstall = await waitForUninstallEntry(
+    INSTALL_ROOT,
+    20000,
+    D72_INPUT ? "0.1.1" : "0.1.0",
+  );
+  assert.equal(registrationAfterReinstall.DisplayVersion, D72_INPUT ? "0.1.1" : "0.1.0");
   assert.equal(registrationAfterReinstall.Scope, "HKCU");
   assert.equal(
     normalizePath(registrationAfterReinstall.InstallLocation),
@@ -328,12 +353,22 @@ try {
     normalizePath(startMenuAfterReinstall.TargetPath),
     normalizePath(INSTALLED_EXECUTABLE),
   );
-  record("SAME_VERSION_REINSTALL_DATA_RETAINED=PASS");
+  record(
+    D72_INPUT
+      ? "D72_VERSION_UPGRADE_DATA_RETAINED=PASS"
+      : "SAME_VERSION_REINSTALL_DATA_RETAINED=PASS",
+  );
 
   const reopenedRunState = inspectFixtureDatabase(LOCAL_APP_DATA_ROOT);
-  assert.equal(reopenedRunState.completedRuns, completedRunState.completedRuns);
-  assert.equal(reopenedRunState.durableEvents, completedRunState.durableEvents);
-  assert.equal(reopenedRunState.messages, completedRunState.messages);
+  if (D72_INPUT) {
+    assert.ok(reopenedRunState.completedRuns >= completedRunState.completedRuns);
+    assert.ok(reopenedRunState.durableEvents >= completedRunState.durableEvents);
+    assert.ok(reopenedRunState.messages >= completedRunState.messages);
+  } else {
+    assert.equal(reopenedRunState.completedRuns, completedRunState.completedRuns);
+    assert.equal(reopenedRunState.durableEvents, completedRunState.durableEvents);
+    assert.equal(reopenedRunState.messages, completedRunState.messages);
+  }
   record("RESTART_RESTORED_SQLITE_SESSION_RUN_EVENTS=PASS");
 
   const secondRuntime = await launchInstalledApplication(INSTALLED_EXECUTABLE, {
@@ -383,6 +418,7 @@ try {
   record("UNINSTALL_USER_DATA_VAULT_PROFILE_BACKUP_RETAINED=PASS");
   await writeFinalBuildIdentity(buildIdentitySeed, installerSha512);
   record("D6_WINDOWS_INSTALLER_SMOKE=PASS");
+  if (D72_INPUT) record("D72_WINDOWS_VERIFIED_VERSION_UPGRADE_SMOKE=PASS");
   retainTestDataOnFailure = false;
 } catch (error) {
   if (startMenuShortcutStatus === "RUNNING") startMenuShortcutStatus = "FAIL";
@@ -398,10 +434,17 @@ try {
   if (currentRuntime !== undefined) {
     await closeInstalledApplication(currentRuntime, { cleanup: true }).catch(async (error) => {
       record(`D6_APP_CLEANUP=FAIL ${safeError(error)}`);
-      await terminateProcessTree(currentRuntime.child.pid);
+      if (D72_INPUT) {
+        cleanupBlocked = true;
+        record("D72_CLEANUP_WAITING_SAFE_SHUTDOWN=RETAINED");
+      } else await terminateProcessTree(currentRuntime.child.pid);
     });
   }
-  if (installed) {
+  if (D72_INPUT && (await findRunningCaelushProcesses()).length > 0) {
+    cleanupBlocked = true;
+    record("D72_CLEANUP_RUNNING_DESKTOP_RETAINED=PASS");
+  }
+  if (installed && !cleanupBlocked) {
     try {
       const registration = await waitForUninstallEntry(INSTALL_ROOT, 3_000);
       if (registration !== undefined)
@@ -412,9 +455,10 @@ try {
   }
   if (providerFixture !== undefined) await providerFixture.close();
   if (localCloudFixture !== undefined) await localCloudFixture.close();
+  if (updateFixture !== undefined) await updateFixture.close();
   await writeFile(LOG_PATH, `${evidence.join("\n")}\n`, "utf8");
   process.stdout.write(`${evidence.join("\n")}\nD6_EVIDENCE_LOG=${LOG_PATH}\n`);
-  if (!retainTestDataOnFailure) {
+  if (!retainTestDataOnFailure && !cleanupBlocked) {
     await rm(TEST_ROOT, { recursive: true, force: true });
     await rm(INSTALL_ROOT, { recursive: true, force: true });
   }
@@ -431,12 +475,310 @@ async function runInstaller(installerPath, installDirectory, environment) {
   await waitFor(() => existsSync(INSTALLED_EXECUTABLE), "Caelush.exe to be installed", 30_000);
 }
 
+/** Uses installed Main + Preload, real TLS bytes, native confirmation and the real NSIS helper. */
+async function runVerifiedVersionUpgrade() {
+  const runtime = await launchInstalledApplication(INSTALLED_EXECUTABLE, {
+    ...USER_ENV,
+    CAELUSH_HOME: LEGACY_HOME,
+  });
+  currentRuntime = runtime;
+  await waitFor(
+    async () => {
+      const state = JSON.parse(
+        await evaluateRenderer(
+          runtime,
+          "window.caelushDesktop.account.getState().then(JSON.stringify)",
+        ),
+      );
+      return state.agentEntry.available ? state : null;
+    },
+    "A Profile ready before update",
+    60000,
+  );
+  await waitForRenderer(
+    runtime,
+    "document.querySelector('.desktop-update-panel')?.textContent.includes('Caelush 0.1.0')",
+    "installed update UI current version",
+  );
+  record("D72_INSTALLED_ACCOUNT_UPDATE_UI=PASS");
+  await navigateRenderer(runtime, "caelush-app://app/agent/");
+  await waitForRenderer(runtime, "window.caelushDesktop !== undefined", "Agent update bridge");
+  const updateState = async () =>
+    JSON.parse(
+      await evaluateRenderer(
+        runtime,
+        "window.caelushDesktop.update.getState().then(JSON.stringify)",
+      ),
+    );
+  await evaluateRenderer(runtime, "window.caelushDesktop.update.check().then(JSON.stringify)");
+  await waitFor(
+    async () => {
+      const state = await updateState();
+      if (state.status === "ERROR") throw new Error(`Update check ${state.errorCode}`);
+      return state.status === "UPDATE_AVAILABLE" ? state : null;
+    },
+    "signed update discovered",
+    20000,
+  );
+  await evaluateRenderer(runtime, "window.caelushDesktop.update.download().then(JSON.stringify)");
+  await waitFor(
+    async () => {
+      const state = await updateState();
+      if (state.status === "ERROR") throw new Error(`Update download ${state.errorCode}`);
+      return state.status === "READY_TO_INSTALL" ? state : null;
+    },
+    "real verified NSIS download",
+    300000,
+  );
+  record("D72_MAIN_PINNED_ED25519_HTTPS_STREAM_SIZE_SHA512=PASS");
+  await evaluateRenderer(
+    runtime,
+    `window.caelushDesktop.workspace.terminal.create({workspaceId:${JSON.stringify(installedFixture.workspaceId)},cols:80,rows:24}).then(JSON.stringify)`,
+  );
+  const liveBrowserBounds = await prepareStableBrowserBounds(runtime);
+  await evaluateRenderer(
+    runtime,
+    `window.caelushDesktop.browser.createLease({bounds:${JSON.stringify(liveBrowserBounds)}}).then(JSON.stringify)`,
+  );
+  const oldRun = await agentApi(runtime, `/api/v1/runs/${installedFixture.runId}`);
+  const capabilities = await agentApi(runtime, "/api/v1/security/capabilities");
+  const full = capabilities.value.presets.find((p) => p.id === "FULL_ACCESS");
+  const holdScript = path.join(oldRun.value.workspace.path, "d72-held-tool.mjs");
+  const toolStarted = path.join(oldRun.value.workspace.path, "d72-tool-started");
+  const releaseTool = path.join(oldRun.value.workspace.path, "d72-release-tool");
+  await writeFile(
+    holdScript,
+    `import {writeFile,access} from 'node:fs/promises';\nawait writeFile('d72-tool-started','started');\nconst deadline=Date.now()+25000;\nwhile(Date.now()<deadline){try{await access('d72-release-tool');break;}catch{}await new Promise(r=>setTimeout(r,100));}\nconsole.log('d72-safe-effect-finished');\n`,
+    { flag: "wx" },
+  );
+  providerFixture.queueTool("node ./d72-held-tool.mjs");
+  try {
+    const count = providerFixture.requests.length;
+    const held = await agentApi(runtime, `/api/v1/sessions/${installedFixture.sessionId}/runs`, {
+      method: "POST",
+      body: {
+        goal: "D7-2 controlled safe shutdown pending Tool effect",
+        workspace: oldRun.value.workspace,
+        model: oldRun.value.model,
+        runtime: oldRun.value.runtime,
+        preset: { id: "FULL_ACCESS", expectedVersion: full.version },
+        ...(oldRun.value.resourcePolicy
+          ? { resourcePolicy: oldRun.value.resourcePolicy }
+          : { limits: oldRun.value.limits }),
+      },
+    });
+    assert.equal(held.status, 201);
+    await agentApi(runtime, `/api/v1/runs/${held.value.id}/start`, { method: "POST" });
+    await waitFor(
+      () => providerFixture.requests.length > count,
+      "held real Agent model turn",
+      20000,
+    );
+    await waitFor(() => existsSync(toolStarted), "real Tool effect started", 20000);
+    await evaluateRenderer(runtime, "window.caelushDesktop.update.install().then(JSON.stringify)");
+    await clickNativeInstallConfirmation(runtime.child.pid);
+    await waitFor(
+      async () => {
+        const state = await updateState();
+        if (state.status === "ERROR") throw new Error(`Safe shutdown ${state.errorCode}`);
+        return state.status === "WAITING_FOR_SAFE_SHUTDOWN" &&
+          state.message.includes("not confirmed")
+          ? state
+          : null;
+      },
+      "real SAFE_CHECKPOINT_PENDING update wait",
+      30000,
+    );
+    const updatesRoot = path.join(LOCAL_APP_DATA_ROOT, "Caelush", "shared", "updates");
+    assert.equal(
+      (await readdir(updatesRoot)).some(
+        (name) => name.endsWith(".handoff.json") || name.endsWith(".receipt.json"),
+      ),
+      false,
+    );
+    record("D72_REAL_SAFE_CHECKPOINT_PENDING_NO_INSTALLER=PASS");
+    record("D72_ACTIVE_BROWSER_USER_TERMINAL_CONTROLLED_SHUTDOWN=PASS");
+    await writeFile(releaseTool, "release", { flag: "wx" });
+    await waitFor(
+      () => {
+        const info = inspectFixtureDatabase(LOCAL_APP_DATA_ROOT);
+        const db = new DatabaseSync(info.databasePath, { readOnly: true });
+        try {
+          return (
+            db.prepare("SELECT status FROM agent_runs WHERE id=?").get(held.value.id)?.status ===
+            "COMPLETED"
+          );
+        } finally {
+          db.close();
+        }
+      },
+      "held Agent completes through canonical authority",
+      30000,
+    );
+    record("D72_PENDING_TOOL_FINISHES_RUN_COMPLETED=PASS");
+    await evaluateRenderer(
+      runtime,
+      "window.caelushDesktop.update.deferInstall().then(JSON.stringify)",
+    );
+    await waitFor(
+      async () => {
+        const state = await updateState();
+        return state.status === "INSTALL_DEFERRED";
+      },
+      "deferred install restores Agent",
+      30000,
+    );
+    await evaluateRenderer(runtime, "window.caelushDesktop.update.install().then(JSON.stringify)");
+    await clickNativeInstallConfirmation(runtime.child.pid);
+    await waitFor(
+      async () => {
+        if (runtime.child.exitCode !== null) return true;
+        const state = await updateState().catch(() => null);
+        if (state?.status === "ERROR")
+          throw new Error(`Update install rejected: ${state.errorCode} ${state.message}`);
+        return false;
+      },
+      "old Desktop exits after verified handoff",
+      60000,
+    );
+    assert.equal(runtime.child.exitCode, 0);
+    record("D72_OLD_DESKTOP_SAFE_SHUTDOWN_EXIT=PASS");
+    currentRuntime = undefined;
+    const target = await waitFor(
+      async () => {
+        const response = await fetch(`http://127.0.0.1:${runtime.port}/json/list`).catch(
+          () => null,
+        );
+        if (!response?.ok) return null;
+        const targets = await response.json();
+        return (
+          targets.find(
+            (t) => t.type === "page" && t.url === "caelush-login://app/" && t.webSocketDebuggerUrl,
+          ) ?? null
+        );
+      },
+      "NSIS relaunches real B Desktop",
+      300000,
+    );
+    const newRuntime = { ...runtime, target };
+    const completed = await waitFor(
+      async () => {
+        const state = JSON.parse(
+          await evaluateRenderer(
+            newRuntime,
+            "window.caelushDesktop.update.getState().then(JSON.stringify)",
+          ),
+        );
+        if (state.status === "ERROR")
+          throw new Error(`Post-install ${state.errorCode}: ${state.message}`);
+        return state.status === "COMPLETED" ? state : null;
+      },
+      "B runtime Profile post-install completion",
+      60000,
+    );
+    assert.equal(completed.currentVersion, "0.1.1");
+    const version = JSON.parse(
+      await evaluateRenderer(
+        newRuntime,
+        "window.caelushDesktop.window.getPlatform().then(JSON.stringify)",
+      ),
+    );
+    assert.equal(version.version, "0.1.1");
+    const pending = JSON.parse(await readFile(path.join(updatesRoot, "state.json"), "utf8")).data
+      .pending;
+    assert.equal(pending.step, "COMPLETED");
+    const receipt = JSON.parse(
+      await readFile(path.join(updatesRoot, `${pending.transactionId}.receipt.json`), "utf8"),
+    );
+    assert.equal(receipt.exitCode, 0);
+    assert.ok(receipt.installerPid > 0);
+    const manifest = JSON.parse(
+      await readFile(path.join(RESOURCE_ROOT, "desktop-resource-manifest.json"), "utf8"),
+    );
+    assert.equal(manifest.productVersion, "0.1.1");
+    assert.equal(manifest.daemonVersion, "0.1.1");
+    await verifyDesktopResourceFiles(manifest, RESOURCE_ROOT);
+    record(`D72_NSIS_EXIT=${receipt.exitCode} PID=${receipt.installerPid}`);
+    record("D72_B_DESKTOP_DAEMON_MANIFEST_PROFILE_VAULT_BROWSER_BACKUP_VERIFIED=PASS");
+    await assertRestoredInstalledSession(newRuntime);
+    await navigateRenderer(newRuntime, "caelush-login://app/");
+    await evaluateRenderer(newRuntime, "window.caelushDesktop.window.close().then(()=>true)");
+    await waitFor(
+      async () => {
+        const response = await fetch(`http://127.0.0.1:${runtime.port}/json/list`).catch(
+          () => null,
+        );
+        return response === null;
+      },
+      "B graceful close",
+      60000,
+    );
+    record("D72_REAL_UPGRADE_NATIVE_REPLAY_CONTINUATION=PASS");
+  } finally {
+    if (!existsSync(releaseTool)) await writeFile(releaseTool, "release", { flag: "wx" });
+  }
+}
+
+async function clickNativeInstallConfirmation(processId) {
+  const script = String.raw`
+Add-Type -TypeDefinition @'
+using System;using System.Text;using System.Runtime.InteropServices;
+public class D72Dialog {
+public delegate bool EnumProc(IntPtr h,IntPtr p);
+[DllImport("user32.dll")]public static extern bool EnumWindows(EnumProc cb,IntPtr p);
+[DllImport("user32.dll")]public static extern bool EnumChildWindows(IntPtr h,EnumProc cb,IntPtr p);
+[DllImport("user32.dll")]public static extern int GetWindowText(IntPtr h,StringBuilder t,int n);
+[DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
+[DllImport("user32.dll")]public static extern IntPtr SendMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
+}
+'@
+$found=$false;$deadline=[DateTime]::UtcNow.AddSeconds(20)
+while(-not $found -and [DateTime]::UtcNow -lt $deadline){
+  [D72Dialog]::EnumWindows({param($h,$p)
+    [uint32]$owner=0;[void][D72Dialog]::GetWindowThreadProcessId($h,[ref]$owner)
+    $text=New-Object Text.StringBuilder 256;[void][D72Dialog]::GetWindowText($h,$text,256)
+    if($owner -eq [uint32]$env:CAELUSH_D72_DIALOG_PID -and $text.ToString() -eq 'Install Caelush update'){
+      [D72Dialog]::EnumChildWindows($h,{param($button,$unused)
+        $name=New-Object Text.StringBuilder 256;[void][D72Dialog]::GetWindowText($button,$name,256)
+        if($name.ToString().Replace('&','') -eq 'Install and restart'){[void][D72Dialog]::SendMessage($button,0x00F5,[IntPtr]::Zero,[IntPtr]::Zero);$script:found=$true}
+        return $true
+      },[IntPtr]::Zero)|Out-Null
+    };return $true
+  },[IntPtr]::Zero)|Out-Null
+  Start-Sleep -Milliseconds 100
+}
+if(-not $found){throw 'Native update confirmation was not found'}
+`;
+  const result = await runProcess(
+    path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64"),
+    ],
+    { ...USER_ENV, CAELUSH_D72_DIALOG_PID: String(processId) },
+    30000,
+    { captureOutput: true },
+  );
+  assert.equal(result.code, 0, `Native update confirmation failed: ${result.output}`);
+}
+
 async function loadInternalTestIdentity() {
   const identity = JSON.parse(await readFile(INTERNAL_TEST_IDENTITY_PATH, "utf8"));
   assert.ok(/^d6_test_[0-9a-f-]{36}$/u.test(identity.keyId));
   assert.ok(/^[A-Za-z0-9_-]{43}$/u.test(identity.publicKey));
   assert.ok(Number.isInteger(identity.cloudPort) && identity.cloudPort >= 1024);
-  assertExactChild(identity.privateKeyPath, OUTPUT_ROOT, path.basename(identity.privateKeyPath));
+  if (D72_INPUT) {
+    assert.equal(identity.privateKeyPath, D72_INPUT.accountIdentity.privateKeyPath);
+    assertExactChild(
+      identity.privateKeyPath,
+      path.dirname(OUTPUT_ROOT),
+      "offline-test-private.pem",
+    );
+  } else
+    assertExactChild(identity.privateKeyPath, OUTPUT_ROOT, path.basename(identity.privateKeyPath));
   await readFile(identity.privateKeyPath);
   return identity;
 }
@@ -1087,7 +1429,7 @@ async function verifyInstalledTerminal(runtime, workspaceId) {
   record("INSTALLED_NODE24_USER_TERMINAL_POWERSHELL_UTF8_RESIZE_CLOSE=PASS");
 }
 
-async function verifyInstalledBrowserGuest(runtime, options = {}) {
+async function prepareStableBrowserBounds(runtime) {
   await clickRenderer(
     runtime,
     "(()=>{const button=document.querySelector('.desktop-panel-toggle');if(!button)return false;if(button.getAttribute('aria-expanded')!=='true')button.click();return true})()",
@@ -1105,15 +1447,29 @@ async function verifyInstalledBrowserGuest(runtime, options = {}) {
   );
   await waitForRenderer(
     runtime,
-    "(()=>{const viewport=document.querySelector('.desktop-browser-viewport');const rect=viewport?.getBoundingClientRect();return viewport?.closest('[hidden]')===null&&rect?.width>=140&&rect?.height>=120})()",
+    "(()=>{const toggle=document.querySelector('.desktop-panel-toggle');if(toggle?.getAttribute('aria-expanded')==='false'){toggle.click();return false}const tab=[...document.querySelectorAll('.desktop-panel-tabs button')].find(item=>item.textContent?.includes('浏览器'));if(tab&&tab.getAttribute('aria-selected')!=='true'){tab.click();return false}const viewport=document.querySelector('.desktop-browser-viewport');const rect=viewport?.getBoundingClientRect();return viewport?.closest('[hidden]')===null&&rect?.width>=140&&rect?.height>=120})()",
     "visible production Browser viewport",
   );
-  const bounds = JSON.parse(
-    await evaluateRenderer(
-      runtime,
-      "(()=>{const rect=document.querySelector('.desktop-browser-viewport').getBoundingClientRect();return JSON.stringify({x:Math.round(rect.left),y:Math.round(rect.top),width:Math.round(rect.width),height:Math.round(rect.height)})})()",
-    ),
+  let previous;
+  let stableSamples = 0;
+  return waitFor(
+    async () => {
+      const serialized = await evaluateRenderer(
+        runtime,
+        "(()=>{const r=document.querySelector('.desktop-browser-viewport').getBoundingClientRect();const x=Math.ceil(r.left),y=Math.ceil(r.top);return JSON.stringify({x,y,width:Math.floor(Math.min(r.right,innerWidth)-x)-1,height:Math.floor(Math.min(r.bottom,innerHeight)-y)-1})})()",
+      );
+      stableSamples = serialized === previous ? stableSamples + 1 : 0;
+      previous = serialized;
+      const bounds = JSON.parse(serialized);
+      return stableSamples >= 3 && bounds.width >= 140 && bounds.height >= 120 ? bounds : null;
+    },
+    "stable Browser panel bounds after the width transition",
+    10000,
   );
+}
+
+async function verifyInstalledBrowserGuest(runtime, options = {}) {
+  const bounds = await prepareStableBrowserBounds(runtime);
   record(`INSTALLED_BROWSER_PANEL_BOUNDS=${JSON.stringify(bounds)}`);
   const targetUrl = "https://example.com/";
   const expression = `((async()=>{const api=window.caelushDesktop;const lease=await api.browser.createLease({bounds:${JSON.stringify(bounds)}});let timer;let unsubscribe;try{const settled=new Promise((resolve,reject)=>{timer=setTimeout(()=>reject(new Error('Browser Guest navigation timed out')),30000);unsubscribe=api.browser.subscribeState((state)=>{if(state.leaseId===lease.leaseId&&state.url===${JSON.stringify(targetUrl)}&&!state.loading)resolve(state)})});settled.catch(()=>undefined);const state=await api.browser.navigate({leaseId:lease.leaseId,url:${JSON.stringify(targetUrl)}});if(!state.loading&&!state.errorCode) return JSON.stringify(state);const final=await settled;return JSON.stringify(final)}finally{clearTimeout(timer);unsubscribe?.()}})())`;
@@ -1680,7 +2036,11 @@ if (!(Test-Path -LiteralPath $uninstallPath)) {
   );
 }
 
-async function waitForUninstallEntry(expectedInstallRoot, timeoutMs = 20_000) {
+async function waitForUninstallEntry(
+  expectedInstallRoot,
+  timeoutMs = 20_000,
+  expectedVersion = "0.1.0",
+) {
   let lastFailure = "REGISTRY_KEY_MISSING";
   try {
     return await waitFor(
@@ -1694,7 +2054,11 @@ async function waitForUninstallEntry(expectedInstallRoot, timeoutMs = 20_000) {
         }
         if (snapshot === null) return null;
         try {
-          const identity = assertInstallRegistration(snapshot, expectedInstallRoot);
+          const identity = assertInstallRegistration(
+            snapshot,
+            expectedInstallRoot,
+            expectedVersion,
+          );
           const uninstallPath = extractUninstallerPath(snapshot.uninstall.UninstallString);
           return {
             ...snapshot.uninstall,

@@ -6,10 +6,6 @@ import { AccountController, AccountOperationError } from "../account/controller.
 import { AccountStateSchema } from "../account/state.js";
 import type { AccountState } from "../account/state.js";
 import type { DesktopLegacyDataImporter } from "../migration/legacy-data-import.js";
-import type {
-  LegacyDataImportResult,
-  LegacyDataImportSummary,
-} from "../../shared/legacy-data-contract.js";
 import {
   AcceptedResponseSchema,
   DeviceRevocationResponseSchema,
@@ -18,6 +14,8 @@ import {
 } from "../cloud/schemas.js";
 import { safeErrorForIpc } from "./safe-error.js";
 import { DesktopWorkspacePanelController } from "../workspace/panel-controller.js";
+import type { DesktopUpdateCoordinator } from "../update/coordinator.js";
+import { UpdateStateSchema } from "../../shared/update-contract.js";
 
 export const IPC_CHANNELS = Object.freeze({
   account: Object.freeze({
@@ -45,6 +43,15 @@ export const IPC_CHANNELS = Object.freeze({
     workspace: "caelush:feature:workspace",
     browser: "caelush:feature:browser",
     update: "caelush:feature:update",
+  }),
+  update: Object.freeze({
+    getState: "caelush:update:get-state",
+    check: "caelush:update:check",
+    download: "caelush:update:download",
+    install: "caelush:update:install",
+    cancelDownload: "caelush:update:cancel-download",
+    deferInstall: "caelush:update:defer-install",
+    state: "caelush:update:state",
   }),
   workspace: Object.freeze({
     availability: "caelush:workspace:get-availability",
@@ -115,9 +122,7 @@ const PlatformOutput = z
 const WorkspaceUnavailable = z
   .object({ available: z.literal(false), reason: z.literal("D4_LOCAL_AGENT_PENDING") })
   .strict();
-const UpdateUnavailable = z
-  .object({ available: z.literal(false), reason: z.literal("D6_UPDATER_PENDING") })
-  .strict();
+const UpdateAvailability = z.object({ available: z.boolean() }).strict();
 const PanelAvailability = z.union([
   z.object({ available: z.literal(true) }).strict(),
   z
@@ -232,18 +237,6 @@ const TerminalSessionOutput = z
     rows: z.number().int(),
   })
   .strict();
-const TerminalOutputSchema = z
-  .object({
-    terminalId: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
-    data: z
-      .string()
-      .max(16 * 1024)
-      .optional(),
-    exitCode: z.number().int().nullable().optional(),
-    signal: z.string().max(32).nullable().optional(),
-    errorCode: z.enum(["TERMINAL_OUTPUT_BACKPRESSURE", "TERMINAL_UNAVAILABLE"]).optional(),
-  })
-  .strict();
 const BrowserBoundsSchema = z
   .object({
     x: z.number().int().min(0).max(10000),
@@ -321,18 +314,6 @@ const LegacyImportSummarySchema = z
   })
   .strict();
 const LegacyImportInput = z.object({ candidateId: z.uuid(), confirmed: z.literal(true) }).strict();
-const LegacyImportProgressSchema = z
-  .object({
-    progress: z.enum([
-      "BACKUP_VERIFIED",
-      "IMPORT_STAGED",
-      "DESTINATION_VERIFIED",
-      "CREDENTIALS_SECURED",
-      "COMMITTED",
-      "RECOVERY_REQUIRED",
-    ]),
-  })
-  .strict();
 const LegacyImportCountsSchema = z
   .object({
     workspaces: z.number().int().nonnegative().safe(),
@@ -375,6 +356,7 @@ export interface RegisterDesktopIpcOptions {
   readonly synchronizeAccountState?: (state: AccountState) => Promise<void>;
   readonly legacyImporter?: DesktopLegacyDataImporter;
   readonly desktopPanels?: DesktopWorkspacePanelController;
+  readonly updates?: DesktopUpdateCoordinator;
 }
 
 type IpcCallerPolicy = "LOGIN" | "AGENT" | "LOGIN_OR_AGENT";
@@ -935,10 +917,69 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
     available: false,
     reason: "D4_LOCAL_AGENT_PENDING",
   }));
-  register(feature.update, NoInput, UpdateUnavailable, () => ({
-    available: false,
-    reason: "D6_UPDATER_PENDING",
-  }));
+  register(
+    feature.update,
+    NoInput,
+    UpdateAvailability,
+    () => ({ available: options.updates !== undefined }),
+    undefined,
+    IPC_OPERATION_TIMEOUT_MS,
+    "LOGIN_OR_AGENT",
+  );
+  const updates = options.updates;
+  if (updates) {
+    const channels = IPC_CHANNELS.update;
+    register(
+      channels.getState,
+      NoInput,
+      UpdateStateSchema,
+      () => updates.getState(),
+      undefined,
+      IPC_OPERATION_TIMEOUT_MS,
+      "LOGIN_OR_AGENT",
+    );
+    for (const [channel, action] of [
+      [channels.check, () => updates.check()],
+      [channels.download, () => updates.download()],
+      [channels.install, () => updates.install()],
+      [channels.deferInstall, () => updates.deferInstall()],
+    ] as const) {
+      register(
+        channel,
+        NoInput,
+        UpdateStateSchema,
+        () => {
+          void action();
+          return updates.getState();
+        },
+        undefined,
+        IPC_OPERATION_TIMEOUT_MS,
+        "LOGIN_OR_AGENT",
+      );
+    }
+    register(
+      channels.cancelDownload,
+      NoInput,
+      UpdateStateSchema,
+      () => updates.cancelDownload(),
+      undefined,
+      IPC_OPERATION_TIMEOUT_MS,
+      "LOGIN_OR_AGENT",
+    );
+  }
+  const unsubscribeUpdates = updates?.subscribe((state) => {
+    if (
+      options.window.isDestroyed() ||
+      options.window.webContents.isDestroyed() ||
+      !isTrustedCallerUrl(
+        options.window.webContents.mainFrame.url,
+        options.rendererTrust,
+        "LOGIN_OR_AGENT",
+      )
+    )
+      return;
+    options.window.webContents.send(IPC_CHANNELS.update.state, UpdateStateSchema.parse(state));
+  });
 
   const unsubscribe = options.controller.subscribe((state) => {
     if (options.window.isDestroyed() || options.window.webContents.isDestroyed()) return;
@@ -949,6 +990,7 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
   });
 
   return () => {
+    unsubscribeUpdates?.();
     unsubscribe();
     for (const channel of registered) main.removeHandler(channel);
   };

@@ -15,6 +15,7 @@ function fixture(
     readonly synchronizeAccountState?: () => Promise<void>;
     readonly projectAccountState?: (state: never) => never;
     readonly desktopPanels?: unknown;
+    readonly updates?: unknown;
     readonly developmentOrigin?: string | null;
   } = {},
 ) {
@@ -88,6 +89,7 @@ function fixture(
     platform: "win32",
     arch: "x64",
     version: "0.1.0",
+    ...(options.updates ? { updates: options.updates as never } : {}),
     ...(options.legacyImporter === undefined
       ? {}
       : { legacyImporter: options.legacyImporter as never }),
@@ -119,6 +121,57 @@ function fixture(
 }
 
 describe("Desktop IPC security boundary", () => {
+  it("allows update status on login and Agent main frames while rejecting guest and path/URL input", async () => {
+    const state = {
+      status: "IDLE",
+      currentVersion: "0.1.0",
+      latestVersion: null,
+      releaseNotes: "",
+      artifactSize: 0,
+      downloadedBytes: 0,
+      mandatory: false,
+      graceDeadline: null,
+      errorCode: null,
+      message: "Ready",
+    };
+    const updates = {
+      getState: () => state,
+      subscribe: () => () => {},
+      check: vi.fn(async () => {}),
+      download: vi.fn(async () => {}),
+      install: vi.fn(async () => {}),
+      cancelDownload: () => state,
+      deferInstall: vi.fn(async () => {}),
+    };
+    const test = fixture({ updates });
+    const invoke = test.handlers.get(IPC_CHANNELS.update.check)!;
+    for (const url of ["caelush-login://app/", "caelush-app://app/agent/"]) {
+      test.frame.url = url;
+      expect(await invoke(test.event(), undefined)).toMatchObject({ ok: true });
+    }
+    for (const input of [
+      { URL: "https://evil.example/a" },
+      { InstallerPath: "C:\\evil.exe" },
+      { ShellArguments: ["/S"] },
+      { TrustMode: "skip" },
+    ]) {
+      expect(await invoke(test.event(), input)).toMatchObject({
+        ok: false,
+        error: { code: "IPC_INPUT_INVALID" },
+      });
+    }
+    test.frame.url = "https://example.com/";
+    expect(await invoke(test.event(), undefined)).toMatchObject({
+      ok: false,
+      error: { code: "IPC_CALLER_INVALID" },
+    });
+    test.frame.url = "caelush-app://app/agent/";
+    expect(
+      await invoke({ ...test.event(), senderFrame: { url: test.frame.url } }, undefined),
+    ).toMatchObject({ ok: false, error: { code: "IPC_CALLER_INVALID" } });
+    test.dispose();
+    expect(test.handlers.has(IPC_CHANNELS.update.check)).toBe(false);
+  });
   it("registers only named methods and rejects a wrong frame origin", async () => {
     const test = fixture();
     expect(test.handlers.has("caelush:account:get-state")).toBe(true);

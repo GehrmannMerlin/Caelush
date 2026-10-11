@@ -2,6 +2,7 @@ import electron = require("electron");
 import type { AccountState } from "../main/account/state.js";
 import type { DesktopApi } from "./api-types.js";
 import type { LegacyImportProgress } from "../shared/legacy-data-contract.js";
+import type { DesktopUpdateState } from "../shared/update-contract.js";
 
 const channels = {
   account: {
@@ -29,6 +30,15 @@ const channels = {
     workspace: "caelush:feature:workspace",
     browser: "caelush:feature:browser",
     update: "caelush:feature:update",
+  },
+  update: {
+    getState: "caelush:update:get-state",
+    check: "caelush:update:check",
+    download: "caelush:update:download",
+    install: "caelush:update:install",
+    cancelDownload: "caelush:update:cancel-download",
+    deferInstall: "caelush:update:defer-install",
+    state: "caelush:update:state",
   },
   workspace: {
     availability: "caelush:workspace:get-availability",
@@ -371,6 +381,34 @@ const api: DesktopApi = Object.freeze({
   workspace: Object.freeze(desktopWorkspaceApi),
   browser: Object.freeze(desktopBrowserApi),
   update: Object.freeze({
+    getState: async () =>
+      unwrapIpcResult<DesktopUpdateState>(
+        await electron.ipcRenderer.invoke(channels.update.getState),
+      ),
+    check: async () =>
+      unwrapIpcResult<DesktopUpdateState>(await electron.ipcRenderer.invoke(channels.update.check)),
+    download: async () =>
+      unwrapIpcResult<DesktopUpdateState>(
+        await electron.ipcRenderer.invoke(channels.update.download),
+      ),
+    install: async () =>
+      unwrapIpcResult<DesktopUpdateState>(
+        await electron.ipcRenderer.invoke(channels.update.install),
+      ),
+    cancelDownload: async () =>
+      unwrapIpcResult<DesktopUpdateState>(
+        await electron.ipcRenderer.invoke(channels.update.cancelDownload),
+      ),
+    deferInstall: async () =>
+      unwrapIpcResult<DesktopUpdateState>(
+        await electron.ipcRenderer.invoke(channels.update.deferInstall),
+      ),
+    subscribeState: (listener: (state: DesktopUpdateState) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: DesktopUpdateState) =>
+        listener(state);
+      electron.ipcRenderer.on(channels.update.state, handler);
+      return () => electron.ipcRenderer.removeListener(channels.update.state, handler);
+    },
     getAvailability: async () =>
       unwrapIpcResult<Awaited<ReturnType<DesktopApi["update"]["getAvailability"]>>>(
         await electron.ipcRenderer.invoke(channels.feature.update),

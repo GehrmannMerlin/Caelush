@@ -137,10 +137,16 @@ export interface DesktopApi {
     subscribeState(listener: (state: BrowserGuestState) => void): () => void;
   };
   readonly update: {
-    getAvailability(): Promise<{
-      readonly available: false;
-      readonly reason: "D6_UPDATER_PENDING";
-    }>;
+    getAvailability(): Promise<{ readonly available: boolean }>;
+    getState(): Promise<import("../shared/update-contract.js").DesktopUpdateState>;
+    check(): Promise<import("../shared/update-contract.js").DesktopUpdateState>;
+    download(): Promise<import("../shared/update-contract.js").DesktopUpdateState>;
+    install(): Promise<import("../shared/update-contract.js").DesktopUpdateState>;
+    cancelDownload(): Promise<import("../shared/update-contract.js").DesktopUpdateState>;
+    deferInstall(): Promise<import("../shared/update-contract.js").DesktopUpdateState>;
+    subscribeState(
+      listener: (state: import("../shared/update-contract.js").DesktopUpdateState) => void,
+    ): () => void;
   };
   readonly legacyData: {
     inspect(): Promise<LegacyDataImportSummary>;

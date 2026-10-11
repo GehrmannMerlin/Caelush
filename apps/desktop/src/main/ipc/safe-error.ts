@@ -8,6 +8,7 @@ import { DesktopWorkspaceError } from "../workspace/file-service.js";
 import { DesktopTerminalError } from "../terminal/user-terminal-manager.js";
 import { BrowserGuestError } from "../browser/url-policy.js";
 import { DesktopEditorError } from "../ide/editor-resolver.js";
+import { DesktopUpdateError } from "../update/error.js";
 
 export interface SafeIpcError {
   readonly code: string;
@@ -15,6 +16,7 @@ export interface SafeIpcError {
 }
 
 export function safeErrorForIpc(error: unknown): SafeIpcError {
+  if (error instanceof DesktopUpdateError) return { code: error.code, message: error.message };
   if (error instanceof AccountOperationError || error instanceof CloudClientError) {
     return { code: error.code.slice(0, 64), message: error.message.slice(0, 512) };
   }

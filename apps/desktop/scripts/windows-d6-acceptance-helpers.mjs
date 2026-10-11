@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 
 const PRODUCT_NAME = "Caelush";
 const PRODUCT_VERSION = "0.1.0";
-const UNINSTALL_DISPLAY_NAME = `${PRODUCT_NAME} ${PRODUCT_VERSION}`;
 const APP_ID = "com.caelush.desktop";
 const INSTALL_REGISTRY_KEY = `Software\\${electronBuilderAppGuid(APP_ID)}`;
 const UNINSTALL_REGISTRY_KEY_PREFIX = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\";
@@ -41,7 +40,11 @@ export function findCompletedInstalledSession(response) {
   return null;
 }
 
-export function assertInstallRegistration(snapshot, expectedInstallRoot) {
+export function assertInstallRegistration(
+  snapshot,
+  expectedInstallRoot,
+  expectedVersion = PRODUCT_VERSION,
+) {
   if (snapshot?.install === null || snapshot?.install === undefined) {
     throw new Error("REGISTRY_KEY_MISSING:INSTALL");
   }
@@ -73,8 +76,8 @@ export function assertInstallRegistration(snapshot, expectedInstallRoot) {
   }
 
   if (
-    uninstall.DisplayName !== UNINSTALL_DISPLAY_NAME ||
-    uninstall.DisplayVersion !== PRODUCT_VERSION
+    uninstall.DisplayName !== `${PRODUCT_NAME} ${expectedVersion}` ||
+    uninstall.DisplayVersion !== expectedVersion
   ) {
     throw new Error("REGISTRY_PATH_MISMATCH:PRODUCT_IDENTITY");
   }

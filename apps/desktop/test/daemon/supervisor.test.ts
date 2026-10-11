@@ -394,4 +394,51 @@ describe("DesktopDaemonSupervisor", () => {
     expect(profileSelections).toHaveLength(1);
     expect(setup.supervisor.acquireProxyLease(new AbortController().signal)).toBeNull();
   });
+  it("retains bound credential RPC for an in-flight Agent while safe shutdown is blocked", async () => {
+    const child = new FakeChild();
+    child.stopBehavior = "blocked";
+    const setup = createSupervisor({ child });
+    const state = createAuthorizedState();
+    await setup.supervisor.synchronizeAccountState(state);
+    const start = child.sent[0];
+    if (!isRecord(start)) throw new Error("missing startup");
+    await expect(setup.supervisor.closeForApplicationQuit()).rejects.toMatchObject({
+      code: "SAFE_CHECKPOINT_PENDING",
+    });
+    child.emit("message", {
+      type: "CREDENTIAL_RESOLVE",
+      requestId: "b224fcb7-f36a-457b-a71e-e72416b24a59",
+      generationId: start.generationId,
+      profileId: start.profileId,
+      childPid: child.pid,
+      providerId: "deepseek",
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(
+      child.sent.some(
+        (item) =>
+          isRecord(item) &&
+          item.type === "CREDENTIAL_RESPONSE" &&
+          item.requestId === "b224fcb7-f36a-457b-a71e-e72416b24a59",
+      ),
+    ).toBe(true);
+    expect(setup.supervisor.acquireProxyLease(new AbortController().signal)).toBeNull();
+    child.stopBehavior = "closed";
+    await setup.supervisor.closeForApplicationQuit();
+    const responses = child.sent.filter(
+      (item) => isRecord(item) && item.type === "CREDENTIAL_RESPONSE",
+    ).length;
+    child.emit("message", {
+      type: "CREDENTIAL_RESOLVE",
+      requestId: "d77c7dbd-6734-4b8f-b038-68bbccfd0d39",
+      generationId: start.generationId,
+      profileId: start.profileId,
+      childPid: child.pid,
+      providerId: "deepseek",
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(
+      child.sent.filter((item) => isRecord(item) && item.type === "CREDENTIAL_RESPONSE"),
+    ).toHaveLength(responses);
+  });
 });

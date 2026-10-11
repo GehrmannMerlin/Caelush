@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { UpdatePanel } from "./UpdatePanel.js";
 import {
   ArrowLeft,
   ArrowRight,
@@ -425,6 +426,7 @@ export function DesktopApp() {
         </div>
       </header>
       {authenticatedScreen}
+      <UpdatePanel />
       <footer className="app-footer">
         <span>{platformLabel}</span>
         <span>

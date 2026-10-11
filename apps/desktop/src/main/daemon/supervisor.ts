@@ -480,7 +480,9 @@ export class DesktopDaemonSupervisor {
         cloudUserId: userId,
       },
       isCurrentGeneration: () =>
-        this.current === generation && !generation.abortController.signal.aborted,
+        // Proxy cancellation freezes Renderer access; accepted Agent work still belongs to
+        // this exact Child/Profile until its confirmed exit releases the existing RPC.
+        this.current === generation && !generation.exitObserved && generation.child.connected,
       credentials: this.options.credentialVault,
       send: (response) => sendChildMessage(child, response),
     });
@@ -663,8 +665,6 @@ export class DesktopDaemonSupervisor {
         "SAFE_SHUTDOWN_PENDING",
       );
     }
-
-    this.disposeCredentialRpc(generation);
 
     const stopMessage = {
       type: "STOP_DESKTOP_DAEMON",

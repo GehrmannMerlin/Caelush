@@ -1456,3 +1456,49 @@ button:disabled {
     transition-duration: 0.01ms !important;
   }
 }
+/* Desktop update entry remains available on the account and signed-out screens. */
+.desktop-update-panel {
+  position: fixed;
+  bottom: 34px;
+  right: 24px;
+  z-index: 40;
+  max-width: 400px;
+  border: 1px solid #d8dde5;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 6px 20px #17223b15;
+  font-size: 13px;
+}
+.desktop-update-panel summary {
+  cursor: pointer;
+  padding: 10px 14px;
+}
+.desktop-update-content {
+  padding: 0 14px 14px;
+  max-height: 60vh;
+  overflow: auto;
+}
+.desktop-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.desktop-update-actions button {
+  padding: 7px 10px;
+  border: 1px solid #ccd3de;
+  border-radius: 6px;
+  background: #f7f9fc;
+  cursor: pointer;
+}
+.desktop-update-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.desktop-release-notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+}
+.desktop-update-content progress {
+  width: 100%;
+}

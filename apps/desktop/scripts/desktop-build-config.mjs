@@ -1,3 +1,7 @@
+import { isIP } from "node:net";
+import { X509Certificate } from "node:crypto";
+import { Buffer } from "node:buffer";
+import { URL } from "node:url";
 const BUILD_PURPOSES = new Set(["development", "internal-test", "production"]);
 const CHANNELS = new Set(["dev", "beta", "stable"]);
 const INTERNAL_TEST_KEY_ID_PREFIX = "d6_test_";
@@ -73,12 +77,66 @@ export function resolveDesktopBuildConfiguration(environment) {
     throw new Error("DEVELOPMENT_CLOUD_ORIGIN_MUST_BE_HTTPS_OR_LOOPBACK");
   }
 
+  const trustedUpdatePublicKeys = parseKeyring(environment.CAELUSH_UPDATE_TRUSTED_KEYS_JSON);
+  const allowedUpdateReleaseHosts = parseList(environment.CAELUSH_UPDATE_RELEASE_HOSTS);
+  const internalTestUpdateCa = environment.CAELUSH_UPDATE_TEST_CA_PEM ?? null;
+  const updateKeys = Object.keys(trustedUpdatePublicKeys);
+  if (
+    Object.values(trustedUpdatePublicKeys).some((key) =>
+      Object.values(offlinePublicKeys).includes(key),
+    )
+  ) {
+    throw new Error("UPDATE_OFFLINE_KEY_REUSE_FORBIDDEN");
+  }
+  if (
+    allowedUpdateReleaseHosts.some(
+      (host) =>
+        isIP(host) ||
+        !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(host),
+    )
+  ) {
+    throw new Error("UPDATE_HOST_ALLOWLIST_INVALID");
+  }
+  if (purpose === "production") {
+    if (updateKeys.length === 0 || allowedUpdateReleaseHosts.length === 0)
+      throw new Error("PRODUCTION_UPDATE_TRUST_REQUIRED");
+    if (
+      updateKeys.some((key) => /test/i.test(key)) ||
+      internalTestUpdateCa ||
+      allowedUpdateReleaseHosts.some(
+        (host) => !host.includes(".") || /\.(test|invalid|localhost|local)$/.test(host),
+      )
+    ) {
+      throw new Error("PRODUCTION_UPDATE_TEST_TRUST_FORBIDDEN");
+    }
+  } else if (purpose === "internal-test" && updateKeys.length > 0) {
+    if (
+      updateKeys.some((key) => !key.startsWith("d72_test_")) ||
+      allowedUpdateReleaseHosts.some((host) => host !== "localhost") ||
+      allowedUpdateReleaseHosts.length !== 1 ||
+      !internalTestUpdateCa
+    ) {
+      throw new Error("INTERNAL_TEST_UPDATE_TRUST_INVALID");
+    }
+  } else if (internalTestUpdateCa) throw new Error("UPDATE_TEST_TLS_REQUIRES_INTERNAL_BUILD");
+  if (internalTestUpdateCa) {
+    if (
+      internalTestUpdateCa.length > 16384 ||
+      !new X509Certificate(internalTestUpdateCa).subject.includes("localhost")
+    )
+      throw new Error("INTERNAL_TEST_UPDATE_CA_INVALID");
+  }
   return Object.freeze({
     purpose,
     production,
     channel,
     cloudOrigin,
     offlinePublicKeys,
+    distributionTrustProfile: "PRIVATE_UNSIGNED",
+    trustedUpdatePublicKeys,
+    allowedUpdateReleaseHosts: Object.freeze(allowedUpdateReleaseHosts),
+    updateChannel: channel,
+    internalTestUpdateCa,
     externalHttpsHosts: Object.freeze(["github.com", "www.caelush.com"]),
   });
 }
