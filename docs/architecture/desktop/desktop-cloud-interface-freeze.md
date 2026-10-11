@@ -270,18 +270,26 @@ the release builder reads the Launcher version. Product version source,
 Desktop/Daemon/Web compatibility matrix, and actual capability negotiation are
 `DEFERRED — D0-B CONTRACT DETAIL`.
 
-Update trust requires all three checks before install:
+The D0-B historical contract listed all three checks below as mandatory.
+D7-1 amends the release trust requirement: Caelush's current personal and
+small-group distribution profile is `PRIVATE_UNSIGNED`, while
+`AUTHENTICODE_TRUSTED` remains an optional future build profile. Both profiles
+require the first two checks; only `AUTHENTICODE_TRUSTED` also requires the
+third check:
 
 1. Verify the Cloud Update Policy Ed25519 signature and reject a policy revision
    lower than the highest accepted revision.
 2. Verify the downloaded artifact SHA-512 against the policy/Updater Manifest.
-3. Verify Windows Authenticode signer and signature against the release trust
-   policy.
+3. For `AUTHENTICODE_TRUSTED` builds, verify a valid Windows Authenticode
+   signature, trusted certificate chain, and expected Publisher identity.
 
 The policy and Updater Manifest must identify the same product, channel,
-version, platform, architecture, revision, and artifact digest. Download hosts
-are constrained by a release-domain allowlist. An unverified or mismatched file
-is never passed to an installer. Forced update waits for Core's safe durable
+version, platform, architecture, revision, and artifact digest. The selected
+trust profile comes only from trusted Desktop build configuration. Cloud,
+Renderer, environment variables, ordinary user preferences, and unsigned
+responses cannot lower it. Download hosts are constrained by the compiled
+release-domain allowlist. An unverified or mismatched file is never passed to
+an installer. Forced update waits for Core's safe durable
 boundary; it cannot abandon in-flight Tool effects, bypass Run checkpointing,
 or write `COMPLETED` itself. Exact canonical JSON, policy/manifest fields,
 signer rotation and version-comparison implementation are D0-B/D7 work; D0-A
@@ -548,7 +556,8 @@ input/output, Browser history, cookies, and page content remain local.
 The canonical product-version and first Desktop/Daemon/Web compatibility
 matrix is in
 [`product-version-and-compatibility.md`](./product-version-and-compatibility.md).
-`0.1.0` remains current; `1.0.0` is a target only after D8-B. Channels are
+`0.1.0` remains current; `1.0.0` is a target only after D8-B. Stable versioning
+does not imply Windows Authenticode signing. Channels are
 `dev`, `beta`, and `stable`. Protocol/API versions evolve independently from
 product SemVer.
 
@@ -556,13 +565,20 @@ The signed policy fields, constrained JCS bytes, Ed25519 key selection,
 SemVer/channel checks, revision monotonicity, allowed release host, and
 artifact verification order are in
 [`signed-update-policy-contract.md`](./signed-update-policy-contract.md).
-The trust order is signed Cloud policy, exact artifact size/SHA-512 and
-manifest binding, then Windows Authenticode publisher verification. Cloud
-policy revisions cannot roll back. The Cloud policy and Updater Manifest must
-refer to one artifact. An unverified download is never sent to an installer,
-and mandatory updates wait for Core's safe durable boundary. D0-B has no
-production signer, updater, downloader, version-changing release pipeline, or
-Authenticode implementation.
+Both profiles require a signed Cloud policy and exact artifact size/SHA-512
+and manifest binding. `PRIVATE_UNSIGNED` (the current personal/small-group
+choice) does not require Authenticode. The optional `AUTHENTICODE_TRUSTED`
+profile adds publisher verification. The profile is fixed by trusted Desktop
+build configuration; Cloud cannot change the trust root or disable checks.
+Cloud policy revisions cannot roll back. The Cloud policy and Updater Manifest
+must refer to one artifact. An unverified download is never sent to an
+installer, and mandatory updates wait for Core's safe durable boundary. The
+public OpenAPI and signed policy payload remain unchanged by D7-1. The initial
+unsigned installer must be obtained from a developer-controlled HTTPS channel
+and its digest checked through an independent trusted channel; its embedded
+Cloud key cannot protect an installer that an attacker replaced before the
+first launch. D0-B's triple-check rule remains historical context, superseded
+by the D7-1 profile amendment.
 
 ### Build graph
 
@@ -583,8 +599,8 @@ unit tests.
 | D3-A–D3-B | Electron shell, Preload, login state machine                       | Implement the frozen five Preload namespaces and per-method DTO/sender/state checks                                                   |
 | D4-A–D4-D | Profile, Host Token, proxy, Provider Key and legacy data migration | Implement private bootstrap/Host Token/process generation, profile isolation, proxy, Key migration and backup-safe import             |
 | D5        | Workspace panels, files, user terminal, Browser Guest and editors  | Single-round Desktop-only integration through reviewed Main APIs and existing Daemon authority; see the D5 capability extension above |
-| D6-A–D6-B | Windows install and upgrade compatibility                          | Implement Desktop Resource Manifest, native resource staging, signed installer and migration-safe upgrades                            |
-| D7-A–D7-C | Cloud release policy and Desktop auto-update                       | Implement signer custody/rotation, policy-manifest-artifact matching, download, integrity, Authenticode and safe install boundary     |
+| D6-A–D6-B | Windows install and upgrade compatibility                          | Implement Desktop Resource Manifest, native resource staging, installer packaging and migration-safe upgrades                        |
+| D7-A–D7-C | Cloud release policy and Desktop auto-update                       | Implement signer custody/rotation, policy-manifest-artifact matching, download, integrity, selected trust profile and safe install boundary |
 | D8-A–D8-B | Production deployment, security acceptance and stable release      | Deploy Cloud, complete independent security acceptance, and only then claim stable `1.0.0`                                            |
 
 No D0-C or later implementation is performed by this addendum.

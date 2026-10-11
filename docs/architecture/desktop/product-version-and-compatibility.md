@@ -55,6 +55,11 @@ The current `0.1.0` is a development repository version. D0-B does not release
 Desktop `1.0.0`, change package versions, or make a stable-release claim.
 `1.0.0` becomes the stable product version only after D8-B production security
 acceptance and stable release gates pass.
+Stable product versioning does not assert that a Windows installer has an
+Authenticode signature or a verified Windows Publisher identity. The current
+personal/small-group distribution profile is `PRIVATE_UNSIGNED`; see the
+versioned D7-1 amendment in
+[`signed-update-policy-contract.md`](./signed-update-policy-contract.md).
 
 ## First compatibility matrix
 

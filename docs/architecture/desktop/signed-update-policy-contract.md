@@ -1,6 +1,7 @@
 # Signed Desktop Update Policy Contract
 
-- **Round:** Caelush Desktop & Cloud — D0-B
+- **Original contract:** Caelush Desktop & Cloud — D0-B
+- **Trust-profile amendment:** Caelush Desktop & Cloud — D7-1
 - **Scope:** normative offline contract and test verifier; no production update client
 - **Target artifact:** Windows x64 Desktop
 - **Production implementation:** D7-A–D7-C
@@ -105,7 +106,7 @@ format, and revision checks. It does not download, persist accepted policy
 state, fetch keys, install files, run Authenticode, or coordinate Daemon
 shutdown.
 
-## Release Manifest binding and verification layers
+## Release Manifest binding and distribution trust profiles
 
 The legacy `scripts/build-release.mjs` Release Manifest currently includes
 `product`, `version`, `platform`, `arch`, `nodeRange`, `createdAt`,
@@ -117,23 +118,53 @@ Authenticode identity.
 
 The D7 update pipeline must bind the signed policy and Updater Manifest to the
 same product, version, platform, architecture, channel, artifact URL, byte
-size, and SHA-512 digest. The downloaded file must pass all three gates before
-execution:
+size, and SHA-512 digest. Caelush currently adopts the `PRIVATE_UNSIGNED`
+distribution trust profile for personal and small-group use. Its installer is
+not Authenticode signed, and Windows Publisher identity is not asserted. The
+downloaded file must pass all application-level gates before execution:
 
 1. Verify the Cloud policy's Ed25519 signature and monotonic revision.
 2. Verify exact artifact size and SHA-512 bytes against the matching release
    manifest.
-3. Verify the Windows Authenticode signature and expected publisher identity.
+3. In `AUTHENTICODE_TRUSTED` builds only, additionally verify a valid Windows
+   Authenticode signature, trusted certificate chain, and expected Publisher
+   identity.
 
-Any mismatch rejects the file. No unchecked download is passed to an installer.
-The client defaults to refusing downgrade. A mandatory policy may require the
-next safe update opportunity, but it cannot interrupt a durable Core boundary,
-abandon an in-flight Tool side effect, change Run completion, or bypass Core's
-safe shutdown semantics.
+For `PRIVATE_UNSIGNED`, Authenticode is `NOT_REQUIRED`; this is the selected
+product trust profile, not a runtime bypass. For `AUTHENTICODE_TRUSTED`, all
+three checks above are required. The profile is fixed by trusted Desktop build
+configuration. It is not selected by the Cloud response, Renderer, ordinary
+user configuration, environment variables, or an unverified HTTP response.
+The signed policy envelope and payload remain unchanged and contain no field
+that can weaken the build's trust requirements. A production downloader must
+enforce HTTPS, the compiled host allowlist, and redirect/final-host checks in
+both profiles.
+
+Any required check mismatch rejects the file. No unchecked download is passed
+to an installer. The client defaults to refusing downgrade. A mandatory policy
+may require the next safe update opportunity, but it cannot interrupt a
+durable Core boundary, abandon an in-flight Tool side effect, change Run
+completion, or bypass Core's safe shutdown semantics.
+
+### First-install trust and unsigned distribution limits
+
+The Ed25519 policy signature protects only clients that already contain the
+corresponding trusted public key. Replacing a first-download installer could
+also replace its embedded keyring, so first-install trust cannot be established
+by that installer alone. The initial installer must come from a developer-
+controlled HTTPS channel; users must be able to compare its SHA-512 or SHA-256
+digest through an independent trusted channel. Third-party mirrors are not
+recommended. Caelush does not claim Windows Publisher certification. A Stable
+product version is a product maturity/release designation and does not imply
+Authenticode signing.
 
 ## Test ownership and deferred work
 
-The offline tests cover canonical bytes, fixed signature verification,
+The D0-B history froze three gates, including Authenticode, as the only release
+mode. D7-1 supersedes that Authenticode requirement for the selected
+`PRIVATE_UNSIGNED` profile while preserving signed policy and exact artifact
+integrity requirements. The offline tests cover canonical bytes, fixed
+signature verification,
 duplicate keys, malformed Unicode, unsupported numeric forms, tampering,
 unknown `keyId`, invalid validity windows, revision rollback/conflict, SemVer
 channel checks, downgrade refusal, and release artifact shape. They do not
