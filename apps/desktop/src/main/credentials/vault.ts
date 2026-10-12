@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const FILE_MAGIC = Buffer.from("CAELUSH-DPAPI-V1\0", "ascii");
@@ -167,7 +167,12 @@ export class DpapiVault {
     await mkdir(directory, { recursive: true });
     try {
       await writeFile(temporaryPath, output, { flag: "wx", mode: 0o600 });
-      await rename(temporaryPath, this.filePath);
+      // A merged Windows AppData directory can keep its logical C: identity while
+      // newly created files live on D:. Resolve the file after creation so both
+      // sides of the atomic replacement use the same physical directory.
+      const source = await realpath(temporaryPath);
+      const destination = path.join(path.dirname(source), path.basename(this.filePath));
+      await rename(source, destination);
     } catch {
       await rm(temporaryPath, { force: true }).catch(() => undefined);
       throw new VaultUnavailableError("Secure credential storage could not be updated.");

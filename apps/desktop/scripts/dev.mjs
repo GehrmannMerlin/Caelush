@@ -3,13 +3,23 @@ import { once } from "node:events";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { prepareDevelopmentSandboxRunner } from "../../../scripts/build-sandbox-runner.mjs";
 import { prepareElectronRuntime } from "./stage-electron-runtime.mjs";
 import { resolveViteEntry } from "./resolve-vite-entry.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rendererOrigin = "http://127.0.0.1:5173";
 const viteEntry = resolveViteEntry();
-const env = { ...process.env, CAELUSH_DESKTOP_DEV_URL: rendererOrigin };
+const preparedSandboxRunner = await prepareDevelopmentSandboxRunner({ environment: process.env });
+if (preparedSandboxRunner.status === "UNAVAILABLE") {
+  process.stderr.write(
+    "Caelush could not prepare the Windows security component; restricted permissions remain unavailable.\n",
+  );
+}
+const env = {
+  ...preparedSandboxRunner.environment,
+  CAELUSH_DESKTOP_DEV_URL: rendererOrigin,
+};
 const vite = spawn(
   process.execPath,
   [viteEntry, "--host", "127.0.0.1", "--port", "5173", "--strictPort"],

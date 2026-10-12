@@ -263,12 +263,13 @@ async function verifyProfileBinding(
   if (localAppDataDirectory === undefined || localAppDataDirectory.trim().length === 0) {
     throw new Error("profile");
   }
-  const expectedRoot = path.join(
-    path.resolve(localAppDataDirectory),
-    "Caelush",
-    "profiles",
-    profileId,
-  );
+  const managedRoot = path.join(path.resolve(localAppDataDirectory), "Caelush");
+  const managedMetadata = await lstat(managedRoot);
+  if (managedMetadata.isSymbolicLink() || !managedMetadata.isDirectory())
+    throw new Error("profile");
+  // Main resolves the OS-owned AppData redirect before selecting the profile.
+  // Bind to that same physical managed root while rejecting substituted junctions.
+  const expectedRoot = path.join(await realpath(managedRoot), "profiles", profileId);
   if (!samePath(absoluteRoot, expectedRoot)) throw new Error("profile");
   const metadata = await lstat(absoluteRoot);
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw new Error("profile");

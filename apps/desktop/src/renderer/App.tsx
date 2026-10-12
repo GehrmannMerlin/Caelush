@@ -51,7 +51,7 @@ export function DesktopApp() {
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [devices, setDevices] = useState<readonly SafeDevice[]>([]);
-  const [platformLabel, setPlatformLabel] = useState("Windows · Desktop");
+  const [platformLabel, setPlatformLabel] = useState("Windows · 桌面端");
   const [legacySummary, setLegacySummary] = useState<LegacyDataImportSummary | null>(null);
   const [legacyDismissed, setLegacyDismissed] = useState(false);
   const [legacyBusy, setLegacyBusy] = useState(false);
@@ -90,7 +90,9 @@ export function DesktopApp() {
       .getPlatform()
       .then(({ platform, arch, version }) => {
         if (active)
-          setPlatformLabel(`${platform === "win32" ? "Windows" : platform} ${arch} · ${version}`);
+          setPlatformLabel(
+            `${platform === "win32" ? "Windows" : platform} ${arch} · 版本 ${version}`,
+          );
       })
       .catch(() => undefined);
     return () => {
@@ -177,7 +179,7 @@ export function DesktopApp() {
     await submit(event, async () => {
       await window.caelushDesktop.account.register({ email, password });
       setPassword("");
-      setFeedback("If this address can be registered, a verification email is on its way.");
+      setFeedback("如果该邮箱可以注册，我们已发送验证邮件。");
       setScreen("verify");
     });
   }
@@ -187,7 +189,7 @@ export function DesktopApp() {
       await window.caelushDesktop.account.verifyEmail({ verificationToken: token });
       setToken("");
       setPassword("");
-      setFeedback("Email verified. Sign in to connect this device.");
+      setFeedback("邮箱验证成功。请登录以连接此设备。");
       setScreen("login");
     });
   }
@@ -195,16 +197,14 @@ export function DesktopApp() {
   async function resendVerification(event: FormEvent<HTMLFormElement>) {
     await submit(event, async () => {
       await window.caelushDesktop.account.resendVerification({ email });
-      setFeedback("If the address needs verification, a new email has been sent.");
+      setFeedback("如果该邮箱需要验证，我们已重新发送验证邮件。");
     });
   }
 
   async function forgotPassword(event: FormEvent<HTMLFormElement>) {
     await submit(event, async () => {
       await window.caelushDesktop.account.forgotPassword({ email });
-      setFeedback(
-        "If an account exists for this address, password recovery instructions have been sent.",
-      );
+      setFeedback("如果该邮箱已注册，我们已发送密码重置说明。");
       setScreen("reset");
     });
   }
@@ -214,7 +214,7 @@ export function DesktopApp() {
       await window.caelushDesktop.account.resetPassword({ resetToken: token, newPassword });
       setToken("");
       setNewPassword("");
-      setFeedback("Password reset. You can sign in with the new password.");
+      setFeedback("密码已重置。现在可以使用新密码登录。");
       setScreen("login");
     });
   }
@@ -224,7 +224,7 @@ export function DesktopApp() {
       await window.caelushDesktop.account.changePassword({ currentPassword, newPassword });
       setCurrentPassword("");
       setNewPassword("");
-      setFeedback("Password changed. Sign in again with your new password.");
+      setFeedback("密码已修改，请使用新密码重新登录。");
       setScreen("login");
     });
   }
@@ -237,8 +237,8 @@ export function DesktopApp() {
       setScreen("login");
       setFeedback(
         result.serverRevoked
-          ? "Signed out and Cloud session revoked."
-          : "Local credentials cleared. Cloud session revocation could not be confirmed.",
+          ? "已退出登录，并撤销云端会话。"
+          : "本地凭据已清除，但未能确认云端会话是否已撤销。",
       );
     } catch (error) {
       setFeedback(errorMessage(error));
@@ -260,8 +260,8 @@ export function DesktopApp() {
   }
 
   async function revokeDevice(device: SafeDevice) {
-    const label = device.current ? "this device" : device.label;
-    if (!window.confirm(`Revoke ${label}? That device will need to sign in again.`)) return;
+    const label = device.current ? "此设备" : formatDeviceLabel(device.label);
+    if (!window.confirm(`确定撤销“${label}”的访问权限吗？该设备需要重新登录。`)) return;
     setBusy(true);
     setFeedback(null);
     try {
@@ -282,8 +282,7 @@ export function DesktopApp() {
       await window.caelushDesktop.legacyData.import({ candidateId, confirmed: true });
       setLegacyMessage({
         tone: "info",
-        message:
-          "Local data import completed. The protected backup is verified and the original source remains in place.",
+        message: "本地数据导入完成。受保护的备份已验证，原始数据仍保留在原位置。",
       });
       setLegacySummary(await window.caelushDesktop.legacyData.inspect());
     } catch (error) {
@@ -305,8 +304,7 @@ export function DesktopApp() {
       await window.caelushDesktop.legacyData.resume();
       setLegacyMessage({
         tone: "info",
-        message:
-          "Protected recovery completed. The destination Profile passed verification and the original source remains in place.",
+        message: "受保护的数据恢复已完成。目标账户数据已验证，原始数据仍保留在原位置。",
       });
       setLegacySummary(await window.caelushDesktop.legacyData.inspect());
     } catch (error) {
@@ -386,7 +384,7 @@ export function DesktopApp() {
           <img src="/caelush-app-icon.png" alt="" />
           <span>CAELUSH</span>
           <i />
-          <span className="topbar-product">Desktop</span>
+          <span className="topbar-product">桌面端</span>
         </div>
         <div className="topbar-state">
           <span
@@ -394,23 +392,23 @@ export function DesktopApp() {
           />
           <span>
             {online
-              ? "Cloud connected"
+              ? "云端已连接"
               : accountState.status === "AUTHORIZED_OFFLINE"
-                ? "Offline authorization"
-                : "Account"}
+                ? "离线授权"
+                : "账户"}
           </span>
         </div>
-        <div className="native-controls" aria-label="Window controls">
+        <div className="native-controls" aria-label="窗口控制">
           <button
             type="button"
-            aria-label="Minimize window"
+            aria-label="最小化窗口"
             onClick={() => void window.caelushDesktop.window.minimize()}
           >
             <span className="minimize-mark" />
           </button>
           <button
             type="button"
-            aria-label="Maximize or restore window"
+            aria-label="最大化或还原窗口"
             onClick={() => void window.caelushDesktop.window.maximizeOrRestore()}
           >
             <span className="maximize-mark" />
@@ -418,7 +416,7 @@ export function DesktopApp() {
           <button
             type="button"
             className="close-control"
-            aria-label="Close window"
+            aria-label="关闭窗口"
             onClick={() => void window.caelushDesktop.window.close()}
           >
             <X size={15} />
@@ -430,7 +428,7 @@ export function DesktopApp() {
       <footer className="app-footer">
         <span>{platformLabel}</span>
         <span>
-          <ShieldCheck size={13} /> Credentials stay in Windows protected storage
+          <ShieldCheck size={13} /> 凭据受 Windows 安全存储保护
         </span>
       </footer>
     </div>
@@ -469,15 +467,14 @@ function AuthShell(props: {
           <div className="brand-emblem">
             <img src="/caelush-app-icon.png" alt="Caelush" />
           </div>
-          <p className="eyebrow">LOCAL FIRST · ACCOUNT READY</p>
+          <p className="eyebrow">本地优先 · 账户已就绪</p>
           <h1>
-            Your work
+            你的工作
             <br />
-            <em>stays yours.</em>
+            <em>由你掌控。</em>
           </h1>
           <p className="brand-copy">
-            Connect your Caelush account to authorize this device. Your local workspace remains on
-            this computer.
+            登录 Caelush 账户以授权此设备。本地工作区仍保留在这台电脑上。
           </p>
           <div className="brand-rail">
             <div className="rail-item is-active">
@@ -485,8 +482,8 @@ function AuthShell(props: {
                 <LockKeyhole size={15} />
               </span>
               <div>
-                <b>Private by design</b>
-                <small>Credentials stay in the Windows vault</small>
+                <b>隐私优先</b>
+                <small>凭据保存在 Windows 安全存储中</small>
               </div>
               <Check size={15} />
             </div>
@@ -495,8 +492,8 @@ function AuthShell(props: {
                 <Clock3 size={15} />
               </span>
               <div>
-                <b>Offline ready</b>
-                <small>Use a signed grant for up to 15 days</small>
+                <b>离线可用</b>
+                <small>使用签名授权，最长可离线使用 15 天</small>
               </div>
             </div>
           </div>
@@ -504,7 +501,7 @@ function AuthShell(props: {
         <div className="brand-panel-foot">
           <span>01</span>
           <i />
-          <span>ACCOUNT ACCESS</span>
+          <span>账户访问</span>
         </div>
       </section>
 
@@ -515,15 +512,14 @@ function AuthShell(props: {
               <div className="form-symbol is-warning">
                 <LockKeyhole size={20} />
               </div>
-              <p className="eyebrow">SECURE STORAGE UNAVAILABLE</p>
-              <h2>Sign in is locked</h2>
+              <p className="eyebrow">安全存储不可用</p>
+              <h2>登录功能已锁定</h2>
               <p className="auth-description">
-                Windows protected credential storage could not be opened. Caelush will not save
-                credentials without it.
+                无法打开 Windows 受保护的凭据存储。为保护账户安全，Caelush 不会在此状态下保存凭据。
               </p>
               <MessageBox
                 message={
-                  props.message ?? "Check this Windows user profile and restart Caelush Desktop."
+                  props.message ?? "请检查当前 Windows 用户配置，然后重新启动 Caelush 桌面端。"
                 }
                 tone="error"
               />
@@ -540,7 +536,7 @@ function AuthShell(props: {
                     <ShieldCheck size={19} />
                   )}
                 </div>
-                <p className="eyebrow">CAELUSH ACCOUNT</p>
+                <p className="eyebrow">CAELUSH 账户</p>
                 <h2>{authTitle(props.screen)}</h2>
                 <p className="auth-description">{authDescription(props.screen)}</p>
               </div>
@@ -555,7 +551,7 @@ function AuthShell(props: {
                   <EmailField value={props.email} onChange={props.setEmail} />
                   <PasswordField
                     value={props.password}
-                    label="Password"
+                    label="密码"
                     autoComplete="current-password"
                     visible={props.showPassword}
                     onChange={props.setPassword}
@@ -567,20 +563,20 @@ function AuthShell(props: {
                       type="button"
                       onClick={() => props.setScreen("forgot")}
                     >
-                      Forgot password?
+                      忘记密码？
                     </button>
                   </div>
                   <PrimaryButton busy={props.busy}>
-                    Sign in <ArrowRight size={16} />
+                    登录 <ArrowRight size={16} />
                   </PrimaryButton>
                   <div className="auth-switch">
-                    New to Caelush?{" "}
+                    还没有 Caelush 账户？{" "}
                     <button
                       className="text-button"
                       type="button"
                       onClick={() => props.setScreen("register")}
                     >
-                      Create an account
+                      创建账户
                     </button>
                   </div>
                 </form>
@@ -590,26 +586,24 @@ function AuthShell(props: {
                   <EmailField value={props.email} onChange={props.setEmail} />
                   <PasswordField
                     value={props.password}
-                    label="Create password"
+                    label="设置密码"
                     autoComplete="new-password"
                     visible={props.showPassword}
                     onChange={props.setPassword}
                     onToggle={() => props.setShowPassword(!props.showPassword)}
                   />
-                  <p className="field-hint">
-                    A verification email is required before this account can sign in.
-                  </p>
+                  <p className="field-hint">需要先验证邮箱，才能登录此账户。</p>
                   <PrimaryButton busy={props.busy}>
-                    Create account <ArrowRight size={16} />
+                    创建账户 <ArrowRight size={16} />
                   </PrimaryButton>
                   <div className="auth-switch">
-                    Already registered?{" "}
+                    已有账户？{" "}
                     <button
                       className="text-button"
                       type="button"
                       onClick={() => props.setScreen("login")}
                     >
-                      Sign in
+                      登录
                     </button>
                   </div>
                 </form>
@@ -618,7 +612,7 @@ function AuthShell(props: {
                 <div className="auth-form">
                   <form onSubmit={props.onVerify}>
                     <label className="field-label" htmlFor="verification-token">
-                      Email verification token
+                      邮箱验证码
                     </label>
                     <div className="input-wrap">
                       <Mail size={16} />
@@ -633,35 +627,34 @@ function AuthShell(props: {
                       />
                     </div>
                     <PrimaryButton busy={props.busy}>
-                      Verify email <ArrowRight size={16} />
+                      验证邮箱 <ArrowRight size={16} />
                     </PrimaryButton>
                   </form>
                   <form className="secondary-form" onSubmit={props.onResend}>
                     <p className="field-hint">
-                      Didn’t receive an email? We’ll send another if this address needs
-                      verification.
+                      没有收到邮件？如果该邮箱需要验证，我们可以重新发送。
                     </p>
                     <EmailField value={props.email} onChange={props.setEmail} />
                     <button className="secondary-button" disabled={props.busy} type="submit">
-                      Resend verification email
+                      重新发送验证邮件
                     </button>
                   </form>
-                  <BackLink onClick={() => props.setScreen("login")}>Back to sign in</BackLink>
+                  <BackLink onClick={() => props.setScreen("login")}>返回登录</BackLink>
                 </div>
               )}
               {props.screen === "forgot" && (
                 <form className="auth-form" onSubmit={props.onForgot}>
                   <EmailField value={props.email} onChange={props.setEmail} />
                   <PrimaryButton busy={props.busy}>
-                    Send recovery email <ArrowRight size={16} />
+                    发送密码重置邮件 <ArrowRight size={16} />
                   </PrimaryButton>
-                  <BackLink onClick={() => props.setScreen("login")}>Back to sign in</BackLink>
+                  <BackLink onClick={() => props.setScreen("login")}>返回登录</BackLink>
                 </form>
               )}
               {props.screen === "reset" && (
                 <form className="auth-form" onSubmit={props.onReset}>
                   <label className="field-label" htmlFor="reset-token">
-                    Password reset token
+                    密码重置码
                   </label>
                   <div className="input-wrap">
                     <KeyRound size={16} />
@@ -677,24 +670,24 @@ function AuthShell(props: {
                   </div>
                   <PasswordField
                     value={props.newPassword}
-                    label="New password"
+                    label="新密码"
                     autoComplete="new-password"
                     visible={props.showPassword}
                     onChange={props.setNewPassword}
                     onToggle={() => props.setShowPassword(!props.showPassword)}
                   />
                   <PrimaryButton busy={props.busy}>
-                    Reset password <ArrowRight size={16} />
+                    重置密码 <ArrowRight size={16} />
                   </PrimaryButton>
-                  <BackLink onClick={() => props.setScreen("login")}>Back to sign in</BackLink>
+                  <BackLink onClick={() => props.setScreen("login")}>返回登录</BackLink>
                 </form>
               )}
             </>
           )}
         </div>
         <div className="auth-panel-bottom">
-          <span>Encrypted on this Windows user profile</span>
-          <span>CAELUSH · DESKTOP</span>
+          <span>已在此 Windows 用户配置中加密</span>
+          <span>CAELUSH · 桌面端</span>
         </div>
       </section>
     </main>
@@ -729,40 +722,40 @@ function AccountHome(props: {
 }) {
   const { accountState } = props;
   const offline = accountState.status === "AUTHORIZED_OFFLINE";
-  const accountName = accountState.account?.email ?? "Caelush account";
+  const accountName = accountState.account?.email ?? "Caelush 账户";
   return (
     <main className="account-layout">
       <aside className="account-sidebar">
-        <div className="sidebar-section-label">ACCOUNT</div>
+        <div className="sidebar-section-label">账户</div>
         <button
           className={`side-nav ${props.activeView === "home" ? "is-current" : ""}`}
           onClick={() => props.onNavigate("home")}
         >
-          <MonitorCog size={16} /> Overview
+          <MonitorCog size={16} /> 总览
         </button>
         <button
           className={`side-nav ${props.activeView === "devices" ? "is-current" : ""}`}
           onClick={() => props.onNavigate("devices")}
         >
-          <LaptopMinimal size={16} /> Devices
+          <LaptopMinimal size={16} /> 设备
         </button>
         <button
           className={`side-nav ${props.activeView === "security" ? "is-current" : ""}`}
           onClick={() => props.onNavigate("security")}
         >
-          <KeyRound size={16} /> Security
+          <KeyRound size={16} /> 安全设置
         </button>
         <div className="sidebar-separator" />
         <div className="sidebar-profile">
           <div className="profile-avatar">{accountName.slice(0, 1).toUpperCase()}</div>
           <div className="profile-meta">
             <b>{accountName}</b>
-            <span>{offline ? "Offline authorized" : "Connected"}</span>
+            <span>{offline ? "离线授权" : "已连接"}</span>
           </div>
           <button
             type="button"
             className="icon-button signout-icon"
-            aria-label="Sign out"
+            aria-label="退出登录"
             disabled={props.busy}
             onClick={props.onLogout}
           >
@@ -775,7 +768,7 @@ function AccountHome(props: {
           disabled={props.busy}
           onClick={props.onLogout}
         >
-          <LogOut size={15} /> Sign out
+          <LogOut size={15} /> 退出登录
         </button>
       </aside>
 
@@ -783,19 +776,19 @@ function AccountHome(props: {
         <div className="account-page-head">
           <div>
             <p className="eyebrow">
-              ACCOUNT CENTER <span>/</span> {props.activeView.toUpperCase()}
+              账户中心 <span>/</span> {accountViewLabel(props.activeView)}
             </p>
             <h2>
               {props.activeView === "home"
-                ? "Account overview"
+                ? "账户总览"
                 : props.activeView === "devices"
-                  ? "Your devices"
-                  : "Security settings"}
+                  ? "设备管理"
+                  : "安全设置"}
             </h2>
           </div>
           <div className={`authorization-pill ${offline ? "is-offline" : ""}`}>
             <span className="connection-dot" />
-            {offline ? "Offline authorized" : "Account connected"}
+            {offline ? "离线授权" : "账户已连接"}
           </div>
         </div>
         {props.feedback && <MessageBox message={props.feedback} tone="info" />}
@@ -867,11 +860,11 @@ function Overview(props: {
       <section className={`connection-banner ${offline ? "is-offline" : ""}`}>
         <div className="banner-icon">{offline ? <Unplug size={19} /> : <Cloud size={19} />}</div>
         <div className="banner-copy">
-          <b>{offline ? "Offline authorization is active" : "Account connected"}</b>
+          <b>{offline ? "离线授权已启用" : "账户已连接"}</b>
           <span>
             {offline
-              ? "This device can use its signed authorization until it expires."
-              : "Your account and this Windows device are connected to Caelush Cloud."}
+              ? "此设备可在签名授权到期前继续离线使用。"
+              : "你的账户已通过此 Windows 设备连接到 Caelush 云端。"}
           </span>
         </div>
         {offline ? (
@@ -881,14 +874,14 @@ function Overview(props: {
             disabled={props.busy}
             onClick={props.onReconnect}
           >
-            Sign in to reconnect <ArrowRight size={14} />
+            登录并重新连接 <ArrowRight size={14} />
           </button>
         ) : (
           <button
             className="icon-button banner-action"
             type="button"
             disabled={props.busy}
-            aria-label="Refresh account connection"
+            aria-label="刷新账户连接状态"
             onClick={props.onRefresh}
           >
             <RefreshCw size={16} className={props.busy ? "spin" : ""} />
@@ -902,11 +895,11 @@ function Overview(props: {
               <Clock3 size={17} />
             </div>
             <div>
-              <span>OFFLINE GRANT</span>
+              <span>离线授权</span>
               <b>
                 {grant.remainingHours < 24
-                  ? `${grant.remainingHours} hours remaining`
-                  : `${Math.ceil(grant.remainingHours / 24)} days remaining`}
+                  ? `还剩 ${grant.remainingHours} 小时`
+                  : `还剩 ${Math.ceil(grant.remainingHours / 24)} 天`}
               </b>
             </div>
           </div>
@@ -918,8 +911,8 @@ function Overview(props: {
             />
           </div>
           <div className="grant-dates">
-            <span>Issued {formatDate(grant.issuedAt)}</span>
-            <span>Expires {formatDate(grant.expiresAt)}</span>
+            <span>签发时间：{formatDate(grant.issuedAt)}</span>
+            <span>到期时间：{formatDate(grant.expiresAt)}</span>
           </div>
         </section>
       )}
@@ -927,38 +920,37 @@ function Overview(props: {
         <section className="detail-panel">
           <div className="panel-heading">
             <div>
-              <span className="eyebrow">IDENTITY</span>
-              <h3>Account details</h3>
+              <span className="eyebrow">账户信息</span>
+              <h3>账户详情</h3>
             </div>
             <BadgeCheck size={18} />
           </div>
           <div className="detail-row">
-            <span>Email address</span>
+            <span>邮箱地址</span>
             <b>{state.account?.email ?? "—"}</b>
           </div>
           <div className="detail-row">
-            <span>Verification</span>
+            <span>邮箱验证</span>
             <b className="verified-state">
-              <Check size={14} /> Verified
+              <Check size={14} /> 已验证
             </b>
           </div>
           <div className="detail-row">
-            <span>Entitlement</span>
+            <span>账户权益</span>
             <b>
-              {state.account?.entitlements.find((item) => item.enabled)?.code ??
-                "No active entitlement"}
+              {formatEntitlement(state.account?.entitlements.find((item) => item.enabled)?.code)}
             </b>
           </div>
           <div className="detail-row">
-            <span>Account since</span>
+            <span>注册时间</span>
             <b>{state.account ? formatDate(state.account.createdAt) : "—"}</b>
           </div>
         </section>
         <section className="detail-panel device-summary">
           <div className="panel-heading">
             <div>
-              <span className="eyebrow">THIS DEVICE</span>
-              <h3>Windows desktop</h3>
+              <span className="eyebrow">当前设备</span>
+              <h3>Windows 桌面端</h3>
             </div>
             <LaptopMinimal size={18} />
           </div>
@@ -967,12 +959,12 @@ function Overview(props: {
               <LaptopMinimal size={19} />
             </div>
             <div>
-              <b>{state.device?.label ?? "Caelush Desktop"}</b>
-              <span>{state.device?.current ? "Current device" : "Device not verified"}</span>
+              <b>{formatDeviceLabel(state.device?.label ?? "Caelush Desktop")}</b>
+              <span>{state.device?.current ? "当前设备" : "设备尚未验证"}</span>
             </div>
           </div>
           <div className="detail-row">
-            <span>Device ID</span>
+            <span>设备 ID</span>
             <b className="mono-value">{state.device?.deviceId ?? "—"}</b>
           </div>
           <button
@@ -980,7 +972,7 @@ function Overview(props: {
             className="inline-action"
             onClick={() => props.onNavigate("devices")}
           >
-            Manage devices <ChevronRight size={15} />
+            管理设备 <ChevronRight size={15} />
           </button>
         </section>
       </div>
@@ -999,10 +991,10 @@ function Overview(props: {
           <MonitorCog size={20} />
         </div>
         <div className="pending-copy">
-          <p className="eyebrow">LOCAL AGENT</p>
+          <p className="eyebrow">本地 Agent</p>
           <h3>
             {state.agentEntry.available
-              ? "Your local Agent is ready"
+              ? "本地 Agent 已就绪"
               : agentStatusTitle(state.agentEntry.reason)}
           </h3>
           <p>{agentStatusDescription(state.agentEntry.reason)}</p>
@@ -1013,11 +1005,11 @@ function Overview(props: {
             className="primary-button compact-primary"
             onClick={props.onOpenAgent}
           >
-            Open Agent <ArrowRight size={15} />
+            打开 Agent <ArrowRight size={15} />
           </button>
         ) : (
           <span className="pending-status">
-            {state.agentEntry.reason === "DAEMON_STARTING" ? "STARTING" : "UNAVAILABLE"}
+            {state.agentEntry.reason === "DAEMON_STARTING" ? "正在启动" : "暂不可用"}
           </span>
         )}
       </section>
@@ -1056,40 +1048,37 @@ function LegacyImportPanel(props: {
           <ShieldCheck size={18} />
         </div>
         <div>
-          <p className="eyebrow">LOCAL DATA</p>
-          <h3>
-            {summary.pendingRecovery ? "Local import recovery needed" : "Legacy Caelush data"}
-          </h3>
+          <p className="eyebrow">本地数据</p>
+          <h3>{summary.pendingRecovery ? "需要恢复本地数据导入" : "发现旧版 Caelush 数据"}</h3>
         </div>
       </div>
       {summary.pendingRecovery ? (
         <p className="legacy-import-copy">
-          A previous import has not been committed. The Profile must pass protected recovery and a
-          local Agent start before completion. Your legacy source is kept.
+          上次的数据导入尚未完成。请先通过受保护的恢复流程，并确认本地 Agent
+          已启动。原始数据会保留。
         </p>
       ) : (
         <p className="legacy-import-copy">
-          A previous Caelush data folder is available on this Windows user profile. Review its
-          contents before adding them to this account.
+          此 Windows 用户配置中发现旧版 Caelush 数据。请先检查数据内容，再决定是否导入到此账户。
         </p>
       )}
       {summary.sources.map((source) => (
         <div className="legacy-source" key={source.candidateId}>
           <div className="legacy-source-title">
-            <b>{source.sourceLabel}</b>
+            <b>{formatImportSourceLabel(source.sourceLabel)}</b>
             <span>{formatBytes(source.estimatedBytes)}</span>
           </div>
           <div className="legacy-count-grid">
-            <LegacyCount label="Workspaces" value={source.workspaces} />
-            <LegacyCount label="Sessions" value={source.sessions} />
-            <LegacyCount label="Runs" value={source.runs} />
-            <LegacyCount label="Messages" value={source.messages} />
-            <LegacyCount label="Durable events" value={source.durableEvents} />
-            <LegacyCount label="Context checkpoints" value={source.contextCheckpoints} />
-            <LegacyCount label="Tool records" value={source.toolExecutions} />
-            <LegacyCount label="Provider credentials" value={source.providerCredentials} />
-            <LegacyCount label="Model selections" value={source.modelSelections} />
-            <LegacyCount label="Private Replay files" value={source.privateReplayFiles} />
+            <LegacyCount label="工作区" value={source.workspaces} />
+            <LegacyCount label="会话" value={source.sessions} />
+            <LegacyCount label="运行记录" value={source.runs} />
+            <LegacyCount label="消息" value={source.messages} />
+            <LegacyCount label="持久化事件" value={source.durableEvents} />
+            <LegacyCount label="上下文检查点" value={source.contextCheckpoints} />
+            <LegacyCount label="工具记录" value={source.toolExecutions} />
+            <LegacyCount label="模型服务凭据" value={source.providerCredentials} />
+            <LegacyCount label="模型选择" value={source.modelSelections} />
+            <LegacyCount label="私密回放文件" value={source.privateReplayFiles} />
           </div>
           {!summary.pendingRecovery && !source.importable && source.reason && (
             <p className="legacy-block-reason">{legacyBlockReason(source.reason)}</p>
@@ -1105,7 +1094,7 @@ function LegacyImportPanel(props: {
                   setReviewDismissed(false);
                 }}
               >
-                Review import <ArrowRight size={14} />
+                查看导入内容 <ArrowRight size={14} />
               </button>
               <button
                 type="button"
@@ -1113,17 +1102,16 @@ function LegacyImportPanel(props: {
                 disabled={props.busy}
                 onClick={props.onDismiss}
               >
-                Not now
+                暂不导入
               </button>
             </div>
           )}
           {showReview && candidate?.candidateId === source.candidateId && (
             <div className="legacy-confirmation">
-              <b>Import into this account’s local Profile?</b>
+              <b>将数据导入此账户的本地配置中？</b>
               <p>
-                The data will stay on this PC and will not be uploaded to Cloud. Caelush creates and
-                verifies a protected backup first. The source folder stays in place, and other Cloud
-                accounts will not automatically share this data.
+                数据会保留在这台电脑上，不会上传到云端。Caelush
+                会先创建并验证受保护的备份。原始文件夹会保留，其他云端账户也不会自动共享这些数据。
               </p>
               <div className="legacy-import-actions">
                 <button
@@ -1137,7 +1125,7 @@ function LegacyImportPanel(props: {
                   ) : (
                     <ShieldCheck size={15} />
                   )}
-                  Import into this account
+                  导入到此账户
                 </button>
                 <button
                   type="button"
@@ -1148,7 +1136,7 @@ function LegacyImportPanel(props: {
                     setReviewDismissed(true);
                   }}
                 >
-                  Not now
+                  暂不导入
                 </button>
               </div>
             </div>
@@ -1159,14 +1147,13 @@ function LegacyImportPanel(props: {
         <div className="legacy-confirmation">
           <b>
             {summary.recoveryState === "DESTINATION_VERIFIED"
-              ? "The destination passed checks; the local Agent needs a verified start"
+              ? "目标数据已通过检查；需要确认本地 Agent 成功启动"
               : summary.recoveryState === "RECOVERY_BLOCKED"
-                ? "Recovery is waiting for a protected retry"
-                : "A verified import backup is available"}
+                ? "恢复流程已暂停，等待安全重试"
+                : "已备妥并验证数据导入备份"}
           </b>
           <p>
-            Resume checks the backup against this account Profile, continues credential protection,
-            and verifies the destination before the local Agent starts.
+            继续操作会核对备份与此账户的数据，完成凭据保护，并在启动本地 Agent 前再次验证目标数据。
           </p>
           <button
             type="button"
@@ -1175,7 +1162,7 @@ function LegacyImportPanel(props: {
             onClick={props.onResume}
           >
             {props.busy ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}
-            Resume protected recovery
+            继续安全恢复
           </button>
         </div>
       )}
@@ -1203,17 +1190,17 @@ function LegacyCount(props: { label: string; value: number }) {
 function legacyProgressLabel(progress: LegacyImportProgress): string {
   switch (progress) {
     case "BACKUP_VERIFIED":
-      return "Protected backup verified";
+      return "受保护的备份已验证";
     case "IMPORT_STAGED":
-      return "Import prepared";
+      return "导入内容已准备就绪";
     case "DESTINATION_VERIFIED":
-      return "Profile data restored and checked";
+      return "账户数据已恢复并检查";
     case "CREDENTIALS_SECURED":
-      return "Provider credentials secured";
+      return "模型服务凭据已安全保存";
     case "COMMITTED":
-      return "Import complete";
+      return "导入完成";
     case "RECOVERY_REQUIRED":
-      return "Protected recovery is required";
+      return "需要进行受保护的数据恢复";
   }
 }
 
@@ -1222,18 +1209,18 @@ function legacyBlockReason(
 ): string {
   switch (reason) {
     case "SOURCE_UNREADABLE":
-      return "This source could not be read safely.";
+      return "无法安全读取此数据来源。";
     case "UNSUPPORTED_SCHEMA":
-      return "This data format is not supported by the safe importer.";
+      return "安全导入程序不支持此数据格式。";
     case "TARGET_NOT_EMPTY":
-      return "This account Profile already contains data. Import is disabled to protect it.";
+      return "此账户的数据空间已有内容。为保护现有数据，已禁用导入。";
     case "NO_IMPORTABLE_DATA":
-      return "No local Agent records or replay files were found.";
+      return "未找到本地 Agent 记录或回放文件。";
   }
 }
 
 function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024) return `${bytes} 字节`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
@@ -1242,32 +1229,32 @@ function formatBytes(bytes: number): string {
 function agentStatusTitle(reason: AccountState["agentEntry"]["reason"]): string {
   switch (reason) {
     case "DAEMON_STARTING":
-      return "Starting your local Agent";
+      return "正在启动本地 Agent";
     case "PROTOCOL_INCOMPATIBLE":
-      return "Desktop and local Agent versions differ";
+      return "桌面端与本地 Agent 版本不匹配";
     case "SAFE_SHUTDOWN_PENDING":
-      return "The local Agent is finishing a safe shutdown";
+      return "本地 Agent 正在安全关闭";
     case "DAEMON_UNAVAILABLE":
-      return "The local Agent is unavailable";
+      return "本地 Agent 暂不可用";
     case "ACCOUNT_NOT_AUTHORIZED":
     case undefined:
-      return "Local Agent unavailable";
+      return "本地 Agent 暂不可用";
   }
 }
 
 function agentStatusDescription(reason: AccountState["agentEntry"]["reason"]): string {
   switch (reason) {
     case "DAEMON_STARTING":
-      return "Your account Profile is being prepared and checked before workspace access opens.";
+      return "正在准备并检查账户数据，完成后即可打开工作区。";
     case "PROTOCOL_INCOMPATIBLE":
-      return "Workspace access is disabled until Desktop and its managed Daemon pass the compatibility checks.";
+      return "桌面端与其管理的本地服务通过兼容性检查后，才能访问工作区。";
     case "SAFE_SHUTDOWN_PENDING":
-      return "A local operation is reaching a safe checkpoint. Profile switching remains paused.";
+      return "本地操作正在进入安全检查点，暂时无法切换账户数据。";
     case "DAEMON_UNAVAILABLE":
-      return "The managed local service did not pass startup verification. Retry by signing in again or restarting Desktop.";
+      return "本地服务未能通过启动检查。请重新登录或重启桌面端后再试。";
     case "ACCOUNT_NOT_AUTHORIZED":
     case undefined:
-      return "Sign in or restore a valid offline authorization to open your local workspace.";
+      return "请登录或恢复有效的离线授权，以打开本地工作区。";
   }
 }
 
@@ -1283,8 +1270,8 @@ function DeviceManager(props: {
     <section className="table-panel">
       <div className="table-heading">
         <div>
-          <h3>Signed-in devices</h3>
-          <p>Review and revoke devices connected to your account.</p>
+          <h3>已登录设备</h3>
+          <p>查看已连接到账户的设备，并撤销不再使用的设备。</p>
         </div>
         <button
           type="button"
@@ -1292,20 +1279,20 @@ function DeviceManager(props: {
           disabled={!online || props.busy}
           onClick={props.onRefresh}
         >
-          <RefreshCw size={14} /> Refresh account
+          <RefreshCw size={14} /> 刷新账户
         </button>
       </div>
       {!online ? (
         <div className="empty-state">
           <Unplug size={20} />
-          <b>Device list is unavailable offline</b>
-          <span>Reconnect to Cloud to check device status or revoke access.</span>
+          <b>离线时无法查看设备列表</b>
+          <span>连接云端后即可查看设备状态或撤销访问权限。</span>
         </div>
       ) : props.devices.length === 0 ? (
         <div className="empty-state">
           <LoaderCircle size={20} className="spin" />
-          <b>Loading device list</b>
-          <span>Caelush is checking the devices on your account.</span>
+          <b>正在加载设备列表</b>
+          <span>Caelush 正在检查此账户关联的设备。</span>
         </div>
       ) : (
         <div className="device-list">
@@ -1316,17 +1303,16 @@ function DeviceManager(props: {
               </div>
               <div className="device-row-main">
                 <b>
-                  {device.label}{" "}
-                  {device.current && <span className="current-tag">THIS DEVICE</span>}
+                  {formatDeviceLabel(device.label)}{" "}
+                  {device.current && <span className="current-tag">当前设备</span>}
                 </b>
                 <span>
-                  Last active{" "}
-                  {device.lastSeenAt ? formatDate(device.lastSeenAt) : "Not yet recorded"}
+                  最近活动：{device.lastSeenAt ? formatDate(device.lastSeenAt) : "暂无记录"}
                 </span>
               </div>
               <div className="device-row-status">
                 <span className={`status-dot ${device.revokedAt ? "is-revoked" : ""}`} />
-                {device.revokedAt ? "Revoked" : "Active"}
+                {device.revokedAt ? "已撤销" : "使用中"}
               </div>
               {!device.revokedAt && (
                 <button
@@ -1335,7 +1321,7 @@ function DeviceManager(props: {
                   disabled={props.busy}
                   onClick={() => props.onRevoke(device)}
                 >
-                  Revoke
+                  撤销
                 </button>
               )}
             </div>
@@ -1343,8 +1329,8 @@ function DeviceManager(props: {
         </div>
       )}
       <div className="table-note">
-        <ShieldCheck size={15} /> Revoking a device immediately invalidates its online sessions.
-        Offline grants are checked again when that device reconnects.
+        <ShieldCheck size={15} />{" "}
+        撤销设备后，其在线会话会立即失效。设备重新连接时，系统也会重新检查离线授权。
       </div>
     </section>
   );
@@ -1365,20 +1351,15 @@ function SecuritySettings(props: {
       <section className="table-panel password-panel">
         <div className="table-heading">
           <div>
-            <h3>Change password</h3>
-            <p>Updating your password ends other active account sessions.</p>
+            <h3>修改密码</h3>
+            <p>修改密码后，其他已登录的账户会话将会失效。</p>
           </div>
           <KeyRound size={18} />
         </div>
-        {!props.online && (
-          <MessageBox
-            message="Connect to Cloud before changing the account password."
-            tone="info"
-          />
-        )}
+        {!props.online && <MessageBox message="请先连接云端，再修改账户密码。" tone="info" />}
         <form className="password-change-form" onSubmit={props.onChangePassword}>
           <label className="field-label" htmlFor="current-password">
-            Current password
+            当前密码
           </label>
           <div className="input-wrap">
             <LockKeyhole size={16} />
@@ -1394,7 +1375,7 @@ function SecuritySettings(props: {
             />
           </div>
           <label className="field-label" htmlFor="new-password">
-            New password
+            新密码
           </label>
           <div className="input-wrap">
             <KeyRound size={16} />
@@ -1414,7 +1395,7 @@ function SecuritySettings(props: {
             type="submit"
             disabled={!props.online || props.busy}
           >
-            {props.busy ? <LoaderCircle size={15} className="spin" /> : null} Change password{" "}
+            {props.busy ? <LoaderCircle size={15} className="spin" /> : null} 修改密码{" "}
             <ArrowRight size={15} />
           </button>
         </form>
@@ -1422,10 +1403,10 @@ function SecuritySettings(props: {
       <section className="security-note">
         <ShieldCheck size={18} />
         <div>
-          <b>Credential storage</b>
+          <b>凭据存储</b>
           <span>
-            Refresh credentials, the device signing key, and offline authorization are encrypted
-            with the Windows user profile. Access credentials are kept in Main process memory only.
+            刷新凭据、设备签名密钥和离线授权均通过当前 Windows
+            用户配置加密。访问凭据仅保存在主进程内存中。
           </span>
         </div>
       </section>
@@ -1435,7 +1416,7 @@ function SecuritySettings(props: {
         disabled={props.busy}
         onClick={props.onRefresh}
       >
-        Check account authorization <ChevronRight size={15} />
+        检查账户授权状态 <ChevronRight size={15} />
       </button>
     </div>
   );
@@ -1445,7 +1426,7 @@ function EmailField(props: { value: string; onChange(value: string): void }) {
   return (
     <div className="field-group">
       <label className="field-label" htmlFor="account-email">
-        Email address
+        邮箱地址
       </label>
       <div className="input-wrap">
         <Mail size={16} />
@@ -1491,7 +1472,7 @@ function PasswordField(props: {
         <button
           type="button"
           className="input-action"
-          aria-label={props.visible ? "Hide password" : "Show password"}
+          aria-label={props.visible ? "隐藏密码" : "显示密码"}
           onClick={props.onToggle}
         >
           {props.visible ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -1521,7 +1502,7 @@ function MessageBox(props: { message: string; tone: "info" | "error" }) {
   return (
     <div className={`message-box ${props.tone}`} role={props.tone === "error" ? "alert" : "status"}>
       {props.tone === "error" ? <CircleAlert size={16} /> : <BadgeCheck size={16} />}
-      <span>{props.message}</span>
+      <span>{localizeUiMessage(props.message)}</span>
     </div>
   );
 }
@@ -1529,39 +1510,102 @@ function MessageBox(props: { message: string; tone: "info" | "error" }) {
 function authTitle(screen: AuthScreen): string {
   switch (screen) {
     case "register":
-      return "Create your account";
+      return "创建账户";
     case "verify":
-      return "Verify your email";
+      return "验证邮箱";
     case "forgot":
-      return "Recover your password";
+      return "找回密码";
     case "reset":
-      return "Set a new password";
+      return "设置新密码";
     default:
-      return "Welcome back";
+      return "欢迎回来";
   }
 }
 
 function authDescription(screen: AuthScreen): string {
   switch (screen) {
     case "register":
-      return "Create an account to authorize Caelush on this device.";
+      return "创建账户，以授权 Caelush 在此设备上运行。";
     case "verify":
-      return "Enter the verification token from the email sent to your address.";
+      return "请输入发送到此邮箱的验证码。";
     case "forgot":
-      return "We’ll send recovery instructions if this email has an account.";
+      return "如果此邮箱已注册，我们会发送密码重置说明。";
     case "reset":
-      return "Use the token in your recovery email to update your password.";
+      return "请输入密码重置邮件中的验证码，以设置新密码。";
     default:
-      return "Sign in to connect your account and authorize this device.";
+      return "登录以连接账户并授权此设备。";
   }
 }
 
 function formatDate(value: string): string {
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "Unknown";
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
-    date,
-  );
+  if (!Number.isFinite(date.getTime())) return "未知时间";
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function accountViewLabel(view: AccountScreen): string {
+  switch (view) {
+    case "home":
+      return "总览";
+    case "devices":
+      return "设备";
+    case "security":
+      return "安全设置";
+  }
+}
+
+function formatDeviceLabel(label: string): string {
+  if (label === "Caelush Desktop") return "Caelush 桌面端";
+  if (label === "Windows desktop") return "Windows 桌面端";
+  return label;
+}
+
+function formatImportSourceLabel(label: string): string {
+  if (label === "Default Caelush data") return "Caelush 默认数据目录";
+  if (label === "Custom CAELUSH_HOME") return "自定义 CAELUSH_HOME 目录";
+  return label;
+}
+
+function formatEntitlement(code: string | undefined): string {
+  if (code === undefined) return "暂无有效权益";
+  if (code === "CAELUSH_DESKTOP_BASIC") return "Caelush 桌面端基础版";
+  return code;
+}
+
+function localizeUiMessage(message: string): string {
+  if (/[\u3400-\u9fff]/u.test(message)) return message;
+  const normalized = message.toLowerCase();
+  if (normalized.includes("vault") || normalized.includes("credential storage")) {
+    return "无法访问 Windows 安全存储。请检查当前用户配置后重新启动 Caelush。";
+  }
+  if (normalized.includes("expired") && normalized.includes("session")) {
+    return "云端会话已过期，请刷新账户授权后继续。";
+  }
+  if (normalized.includes("expired") && normalized.includes("offline")) {
+    return "离线授权已过期，请连接云端后继续。";
+  }
+  if (
+    normalized.includes("password") &&
+    (normalized.includes("invalid") || normalized.includes("incorrect"))
+  ) {
+    return "密码不正确，请检查后重试。";
+  }
+  if (normalized.includes("verification") || normalized.includes("verify")) {
+    return "邮箱验证未完成或验证码无效，请检查邮件后重试。";
+  }
+  if (normalized.includes("email")) return "邮箱地址无效或账户请求未能完成，请检查后重试。";
+  if (
+    normalized.includes("network") ||
+    normalized.includes("fetch") ||
+    normalized.includes("timeout")
+  ) {
+    return "网络连接暂不可用，请检查网络后重试。";
+  }
+  if (normalized.includes("device")) return "设备授权请求未能完成，请刷新账户后重试。";
+  if (normalized.includes("request") || normalized.includes("account")) {
+    return "账户请求未能完成，请检查信息或稍后重试。";
+  }
+  return "请求未能完成，请检查信息或网络连接后重试。";
 }
 
 function errorMessage(error: unknown): string {
@@ -1571,7 +1615,7 @@ function errorMessage(error: unknown): string {
     "message" in error &&
     typeof error.message === "string"
   ) {
-    return error.message.slice(0, 512);
+    return localizeUiMessage(error.message.slice(0, 512));
   }
-  return "The account request could not be completed.";
+  return "账户请求未能完成，请稍后重试。";
 }

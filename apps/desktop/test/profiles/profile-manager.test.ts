@@ -1,7 +1,8 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import * as fs from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ProfileManager,
   profileIdForUser,
@@ -9,6 +10,11 @@ import {
 } from "../../src/main/profiles/profile-manager.js";
 
 const roots: string[] = [];
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, realpath: vi.fn(actual.realpath) };
+});
 
 async function createRoot(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "caelush-profile-test-"));
@@ -31,10 +37,58 @@ function manager(rootDirectory: string) {
 }
 
 afterEach(async () => {
+  vi.mocked(fs.realpath).mockRestore();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe("Desktop account profile isolation", () => {
+  it("resolves the managed root when only its children are redirected by the Windows host", async () => {
+    const root = await createRoot();
+    const physical = path.join(root, "physical");
+    const logical = path.join(root, "logical");
+    await mkdir(path.join(physical, "Local"), { recursive: true });
+    await symlink(physical, logical, "junction");
+    const localAppData = path.join(logical, "Local");
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    vi.mocked(fs.realpath).mockImplementation(async (value, options) => {
+      if (String(value) === localAppData) return localAppData;
+      return actual.realpath(value, options);
+    });
+    const profile = await manager(localAppData).selectForUser(
+      "9a8773e9-17e4-4ee0-9f9d-b4cfa3e29af0",
+    );
+    expect(profile.rootDirectory).toBe(
+      path.join(await actual.realpath(physical), "Local", "Caelush", "profiles", profile.profileId),
+    );
+  });
+
+  it("resolves an OS-provided AppData root through a redirected ancestor before enforcing containment", async () => {
+    const root = await createRoot();
+    const physical = path.join(root, "physical");
+    const logical = path.join(root, "logical");
+    await mkdir(path.join(physical, "Local"), { recursive: true });
+    await symlink(physical, logical, "junction");
+    const profiles = manager(path.join(logical, "Local"));
+    const profile = await profiles.selectForUser("9a8773e9-17e4-4ee0-9f9d-b4cfa3e29af0");
+    expect(profile.rootDirectory).toBe(
+      path.join(await realpath(physical), "Local", "Caelush", "profiles", profile.profileId),
+    );
+    await expect(profiles.selectForUser("9a8773e9-17e4-4ee0-9f9d-b4cfa3e29af0")).resolves.toEqual(
+      profile,
+    );
+  });
+
+  it("continues rejecting a symlink supplied as the AppData root itself", async () => {
+    const root = await createRoot();
+    const physical = path.join(root, "physical");
+    const logical = path.join(root, "logical");
+    await mkdir(physical);
+    await symlink(physical, logical, "junction");
+    await expect(
+      manager(logical).selectForUser("9a8773e9-17e4-4ee0-9f9d-b4cfa3e29af0"),
+    ).rejects.toMatchObject({ code: "PROFILE_PATH_UNSAFE" });
+  });
+
   it("derives stable opaque profiles and creates independent storage trees", async () => {
     const localAppData = await createRoot();
     const profiles = manager(localAppData);
@@ -48,7 +102,9 @@ describe("Desktop account profile isolation", () => {
     expect(userA.databasePath).toBe(path.join(userA.rootDirectory, "caelush.db"));
     expect(userA.logsDirectory).toBe(path.join(userA.rootDirectory, "logs"));
     expect(userA.runsDirectory).toBe(path.join(userA.rootDirectory, "runs"));
-    const metadata = JSON.parse(await (await import("node:fs/promises")).readFile(userA.metadataPath, "utf8"));
+    const metadata = JSON.parse(
+      await (await import("node:fs/promises")).readFile(userA.metadataPath, "utf8"),
+    );
     expect(metadata).toEqual({
       schemaVersion: 1,
       profileId: userA.profileId,

@@ -19,7 +19,7 @@ export interface CreateWindowOptions {
 
 export function createMainWindow(options: CreateWindowOptions): BrowserWindow {
   const window = new BrowserWindow({
-    title: "Caelush Desktop",
+    title: "Caelush 桌面端",
     width: 1120,
     height: 760,
     minWidth: 780,
@@ -27,7 +27,7 @@ export function createMainWindow(options: CreateWindowOptions): BrowserWindow {
     center: true,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: "#0b1111",
+    backgroundColor: "#ffffff",
     icon: join(options.appPath, "resources", "caelush-app-icon.png"),
     webPreferences: createSecureWebPreferences(options.preloadPath, BUILD_CONFIGURATION.production),
   });

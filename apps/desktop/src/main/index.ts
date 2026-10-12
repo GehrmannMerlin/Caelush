@@ -70,7 +70,7 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-app.setName("Caelush Desktop");
+app.setName("Caelush 桌面端");
 if (process.platform === "win32") app.setAppUserModelId("com.caelush.desktop");
 
 const singleInstance = app.requestSingleInstanceLock();

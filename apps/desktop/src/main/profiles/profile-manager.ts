@@ -1,13 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
-import {
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  realpath,
-  rm,
-} from "node:fs/promises";
+import { lstat, mkdir, open, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -56,7 +49,11 @@ export interface AccountProfile {
 
 export class ProfileManagerError extends Error {
   constructor(
-    readonly code: "PROFILE_ID_INVALID" | "PROFILE_PATH_UNSAFE" | "PROFILE_METADATA_INVALID" | "PROFILE_PERMISSIONS_INVALID",
+    readonly code:
+      | "PROFILE_ID_INVALID"
+      | "PROFILE_PATH_UNSAFE"
+      | "PROFILE_METADATA_INVALID"
+      | "PROFILE_PERMISSIONS_INVALID",
     message: string,
   ) {
     super(message);
@@ -81,8 +78,8 @@ export function profileIdForUser(userId: string): string {
 
 export class ProfileManager {
   private readonly localAppDataDirectory: string;
-  private readonly profileRootDirectory: string;
-  private readonly sharedRootDirectory: string;
+  private profileRootInitialized = false;
+  private profileRootDirectory: string;
   private readonly platform: NodeJS.Platform;
   private operationTail: Promise<void> = Promise.resolve();
 
@@ -93,7 +90,6 @@ export class ProfileManager {
     }
     this.localAppDataDirectory = path.resolve(options.localAppDataDirectory);
     this.profileRootDirectory = path.join(this.localAppDataDirectory, "Caelush");
-    this.sharedRootDirectory = path.join(this.profileRootDirectory, "shared");
     if (this.platform === "win32" && !path.win32.isAbsolute(this.localAppDataDirectory)) {
       throw new ProfileManagerError("PROFILE_PATH_UNSAFE", "The local profile root is invalid.");
     }
@@ -174,8 +170,30 @@ export class ProfileManager {
   }
 
   private async ensureLayout(): Promise<void> {
-    await assertExistingDirectory(this.localAppDataDirectory, this.platform);
-    await ensureChildDirectory(this.localAppDataDirectory, "Caelush", this.platform);
+    if (!this.profileRootInitialized) {
+      // Main supplies the OS root. MSIX can redirect its ancestors or just the
+      // newly created Caelush directory. Resolve that managed root once, then
+      // retain strict canonical containment checks for every profile child.
+      try {
+        const metadata = await lstat(this.localAppDataDirectory);
+        if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw unsafePathError();
+        const localRoot = await realpath(this.localAppDataDirectory);
+        await assertExistingDirectory(localRoot, this.platform);
+        const managedRoot = path.join(localRoot, "Caelush");
+        await mkdir(managedRoot, { mode: 0o700 }).catch((error: unknown) => {
+          if (!isFsError(error) || error.code !== "EEXIST") throw error;
+        });
+        const managedMetadata = await lstat(managedRoot);
+        if (managedMetadata.isSymbolicLink() || !managedMetadata.isDirectory())
+          throw unsafePathError();
+        this.profileRootDirectory = await realpath(managedRoot);
+        await assertExistingDirectory(this.profileRootDirectory, this.platform);
+        this.profileRootInitialized = true;
+      } catch {
+        throw unsafePathError();
+      }
+    }
+    await assertExistingDirectory(this.profileRootDirectory, this.platform);
     await this.options.permissions.secureDirectory(this.profileRootDirectory);
     await this.options.permissions.verifyDirectory(this.profileRootDirectory);
     const profilesDirectory = path.join(this.profileRootDirectory, "profiles");
@@ -269,10 +287,7 @@ export class WindowsProfilePermissions implements ProfilePermissions {
     const sid = await this.currentUserSid();
     try {
       const metadata = await lstat(value);
-      if (
-        metadata.isSymbolicLink() ||
-        (directory ? !metadata.isDirectory() : !metadata.isFile())
-      ) {
+      if (metadata.isSymbolicLink() || (directory ? !metadata.isDirectory() : !metadata.isFile())) {
         throw permissionError();
       }
       await this.runIcacls([value, "/verify", "/C"]);
@@ -339,9 +354,7 @@ function decodeWindowsAclSnapshot(value: Buffer): string {
 
 /** Verify the SID-based ACL snapshot produced by `icacls /save`, whose SDDL is locale-neutral. */
 function verifyPrivateWindowsAcl(snapshot: string, userSid: string): void {
-  const daclLine = snapshot
-    .split(/\r?\n/u)
-    .find((line) => /^D:(?:(?:P|AI|AR))*\(/u.test(line));
+  const daclLine = snapshot.split(/\r?\n/u).find((line) => /^D:(?:(?:P|AI|AR))*\(/u.test(line));
   const dacl = daclLine?.match(/^D:(?:(?:P|AI|AR))*((?:\([^()]+\))+)/u)?.[1];
   if (dacl === undefined) throw permissionError();
 
@@ -354,8 +367,7 @@ function verifyPrivateWindowsAcl(snapshot: string, userSid: string): void {
       sid: fields[5],
     };
   });
-  const isFullControl = (rights: string | undefined) =>
-    rights === "FA" || rights === "0x10000000";
+  const isFullControl = (rights: string | undefined) => rights === "FA" || rights === "0x10000000";
   const userFullControl = entries.some(
     (entry) => entry.access === "A" && entry.sid === userSid && isFullControl(entry.rights),
   );
@@ -373,10 +385,17 @@ async function readProfileMetadata(
 ): Promise<z.infer<typeof ProfileMetadataSchema> | null> {
   try {
     const metadata = await lstat(metadataPath);
-    if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.nlink !== 1 || metadata.size > 4096) {
+    if (
+      metadata.isSymbolicLink() ||
+      !metadata.isFile() ||
+      metadata.nlink !== 1 ||
+      metadata.size > 4096
+    ) {
       throw metadataError();
     }
-    const parsed = ProfileMetadataSchema.safeParse(JSON.parse(await readFile(metadataPath, "utf8")));
+    const parsed = ProfileMetadataSchema.safeParse(
+      JSON.parse(await readFile(metadataPath, "utf8")),
+    );
     if (!parsed.success) throw metadataError();
     return parsed.data;
   } catch (error) {
@@ -409,7 +428,12 @@ async function ensureChildDirectory(
   childName: string,
   platform: NodeJS.Platform,
 ): Promise<boolean> {
-  if (childName.length === 0 || childName === "." || childName === ".." || /[\\/]/u.test(childName)) {
+  if (
+    childName.length === 0 ||
+    childName === "." ||
+    childName === ".." ||
+    /[\\/]/u.test(childName)
+  ) {
     throw unsafePathError();
   }
   await assertExistingDirectory(parent, platform);
@@ -426,7 +450,10 @@ async function ensureChildDirectory(
   return created;
 }
 
-async function assertExistingDirectory(directory: string, platform: NodeJS.Platform): Promise<void> {
+async function assertExistingDirectory(
+  directory: string,
+  platform: NodeJS.Platform,
+): Promise<void> {
   try {
     const metadata = await lstat(directory);
     if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw unsafePathError();
@@ -444,7 +471,8 @@ function assertContained(parent: string, target: string, platform: NodeJS.Platfo
     relative === ".." ||
     relative.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relative) ||
-    (platform === "win32" && path.win32.parse(parent).root.toLowerCase() !== path.win32.parse(target).root.toLowerCase())
+    (platform === "win32" &&
+      path.win32.parse(parent).root.toLowerCase() !== path.win32.parse(target).root.toLowerCase())
   ) {
     throw unsafePathError();
   }

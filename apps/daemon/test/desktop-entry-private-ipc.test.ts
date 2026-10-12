@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { fork, type ChildProcess } from "node:child_process";
 import { request as httpRequest } from "node:http";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,58 @@ afterEach(async () => {
 });
 
 describe("private Desktop Daemon child IPC", () => {
+  it("binds a physical profile when Windows exposes LocalAppData through a redirected ancestor", async () => {
+    const profile = await createProfile();
+    const aliases = await mkdtemp(path.join(tmpdir(), "caelush-d4-redirected-"));
+    profileRoots.push(aliases);
+    const alias = path.join(aliases, "redirected");
+    await symlink(path.dirname(profile.localAppDataDirectory), alias, "junction");
+    const logicalLocalAppData = path.join(alias, path.basename(profile.localAppDataDirectory));
+    const child = spawnChild(logicalLocalAppData, profile.rootDirectory);
+    const start = makeStartMessage(profile.profileId);
+    const response = waitForMessage(
+      child,
+      (value) =>
+        isRecord(value) &&
+        (value.type === "DAEMON_READY" || value.type === "DAEMON_STARTUP_FAILED"),
+    );
+    await send(child, start);
+    expect(await response).toMatchObject({ type: "DAEMON_READY", profileId: profile.profileId });
+    const closed = waitForMessage(
+      child,
+      (value) => isRecord(value) && value.type === "DAEMON_CLOSED",
+    );
+    await send(child, {
+      type: "STOP_DESKTOP_DAEMON",
+      ipcProtocolVersion: 1,
+      generationId: start.generationId,
+    });
+    await closed;
+    await waitForExit(child);
+  }, 30_000);
+
+  it("rejects a junction substituted for the managed Caelush root", async () => {
+    const profile = await createProfile();
+    const forgedLocalAppData = await mkdtemp(path.join(tmpdir(), "caelush-d4-forged-root-"));
+    profileRoots.push(forgedLocalAppData);
+    await symlink(
+      path.join(profile.localAppDataDirectory, "Caelush"),
+      path.join(forgedLocalAppData, "Caelush"),
+      "junction",
+    );
+    const child = spawnChild(forgedLocalAppData, profile.rootDirectory);
+    const response = waitForMessage(
+      child,
+      (value) => isRecord(value) && value.type === "DAEMON_STARTUP_FAILED",
+    );
+    await send(child, makeStartMessage(profile.profileId));
+    expect(await response).toMatchObject({
+      type: "DAEMON_STARTUP_FAILED",
+      code: "PROFILE_BINDING_INVALID",
+    });
+    await waitForExit(child);
+  }, 30_000);
+
   it("starts on an ephemeral loopback port, enforces its Host Token, and rejects repeat bootstrap", async () => {
     const profile = await createProfile();
     const child = spawnChild(profile.localAppDataDirectory, profile.rootDirectory);

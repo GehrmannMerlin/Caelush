@@ -1469,7 +1469,7 @@ textarea:disabled {
 /* Viewport-split application shell: the sidebar and the conversation own their scroll. */
 :root {
   --web-sidebar-width: clamp(248px, 24vw, 292px);
-  --web-sidebar-bg: #eaf3ff;
+  --web-sidebar-bg: #fbfbfb;
   --web-sidebar-ink: #234b72;
   --web-sidebar-muted: #6483a2;
   --web-sidebar-line: #d1e2f5;
