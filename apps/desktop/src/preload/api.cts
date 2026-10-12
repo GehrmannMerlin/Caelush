@@ -8,6 +8,7 @@ const channels = {
   account: {
     state: "caelush:account:state",
     getState: "caelush:account:get-state",
+    retryAgentStartup: "caelush:account:retry-agent-startup",
     register: "caelush:account:register",
     login: "caelush:account:login",
     logout: "caelush:account:logout",
@@ -128,6 +129,10 @@ function unwrapIpcResult<T>(result: unknown): T {
 const accountApi: DesktopApi["account"] = {
   getState: async () =>
     unwrapIpcResult<AccountState>(await electron.ipcRenderer.invoke(channels.account.getState)),
+  retryAgentStartup: async () =>
+    unwrapIpcResult<AccountState>(
+      await electron.ipcRenderer.invoke(channels.account.retryAgentStartup),
+    ),
   subscribeState(listener: (state: AccountState) => void) {
     const handler = (_event: Electron.IpcRendererEvent, state: AccountState) => listener(state);
     electron.ipcRenderer.on(channels.account.state, handler);

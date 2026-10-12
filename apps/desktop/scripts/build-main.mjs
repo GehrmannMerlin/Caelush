@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -7,8 +7,12 @@ import { resolveDesktopBuildConfiguration } from "./desktop-build-config.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const configuration = resolveDesktopBuildConfiguration(process.env);
-await mkdir(path.join(appRoot, "dist", "main"), { recursive: true });
-await mkdir(path.join(appRoot, "dist", "preload"), { recursive: true });
+const mainOutput = path.join(appRoot, "dist", "main");
+const preloadOutput = path.join(appRoot, "dist", "preload");
+await rm(mainOutput, { recursive: true, force: true });
+await rm(preloadOutput, { recursive: true, force: true });
+await mkdir(mainOutput, { recursive: true });
+await mkdir(preloadOutput, { recursive: true });
 
 const compiledConfiguration = configuration;
 const define = { __CAELUSH_BUILD_CONFIG__: JSON.stringify(JSON.stringify(compiledConfiguration)) };
@@ -22,7 +26,10 @@ await build({
   format: "esm",
   target: "node24",
   external: ["electron"],
-  sourcemap: true,
+  minify: configuration.purpose !== "development",
+  sourcemap:
+    configuration.purpose === "development" ||
+    process.env.CAELUSH_DESKTOP_INCLUDE_SOURCEMAPS === "true",
   define,
 });
 

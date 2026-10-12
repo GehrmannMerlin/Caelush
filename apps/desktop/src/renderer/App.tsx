@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { UpdatePage } from "./UpdatePage.js";
 import {
   ArrowLeft,
@@ -12,11 +20,11 @@ import {
   Download,
   Eye,
   EyeOff,
+  House,
   KeyRound,
   LaptopMinimal,
   LoaderCircle,
   LockKeyhole,
-  LogOut,
   Mail,
   MonitorCog,
   RefreshCw,
@@ -31,6 +39,7 @@ import type {
 
 type AuthScreen = "login" | "register" | "verify" | "forgot" | "reset";
 type AccountScreen = "home" | "devices" | "security" | "updates";
+type AppScreen = AuthScreen | AccountScreen | "agent-starting";
 
 const initialState: AccountState = {
   status: "INITIALIZING",
@@ -41,7 +50,13 @@ const initialState: AccountState = {
 
 export function DesktopApp() {
   const [accountState, setAccountState] = useState<AccountState>(initialState);
-  const [screen, setScreen] = useState<AuthScreen | AccountScreen>("login");
+  const [screen, setScreen] = useState<AppScreen>("login");
+  const accountRouteRequested =
+    window.location.protocol === "caelush-login:" &&
+    new URLSearchParams(window.location.search).get("view") === "account";
+  const agentLaunchRequested =
+    window.location.protocol === "caelush-login:" &&
+    new URLSearchParams(window.location.search).get("view") === "agent";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -49,9 +64,15 @@ export function DesktopApp() {
   const [currentPassword, setCurrentPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [agentRetrying, setAgentRetrying] = useState(false);
+  const [manualReconnect, setManualReconnect] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const agentNavigationStarted = useRef(false);
+  const agentLaunchRetryStarted = useRef(false);
   const [devices, setDevices] = useState<readonly SafeDevice[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
   const [legacySummary, setLegacySummary] = useState<LegacyDataImportSummary | null>(null);
+  const [legacyLoading, setLegacyLoading] = useState(false);
   const [legacyDismissed, setLegacyDismissed] = useState(false);
   const [legacyBusy, setLegacyBusy] = useState(false);
   const [legacyProgress, setLegacyProgress] = useState<LegacyImportProgress | null>(null);
@@ -69,10 +90,27 @@ export function DesktopApp() {
     screen === "verify" ||
     screen === "forgot" ||
     screen === "reset";
-  const reconnectingOffline = accountState.status === "AUTHORIZED_OFFLINE" && authScreenOpen;
+  const reconnectingOffline =
+    accountState.status === "AUTHORIZED_OFFLINE" && authScreenOpen && manualReconnect;
+  const shouldStartAgent =
+    authenticated &&
+    !accountRouteRequested &&
+    !reconnectingOffline &&
+    (authScreenOpen || screen === "agent-starting");
   const activeView = useMemo<AccountScreen>(() => {
     return screen === "devices" || screen === "security" || screen === "updates" ? screen : "home";
   }, [screen]);
+  const retryAgentStartup = useCallback(async () => {
+    setAgentRetrying(true);
+    setFeedback(null);
+    try {
+      setAccountState(await window.caelushDesktop.account.retryAgentStartup());
+    } catch (error) {
+      setFeedback(errorMessage(error));
+    } finally {
+      setAgentRetrying(false);
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -84,7 +122,22 @@ export function DesktopApp() {
       .then((state) => {
         if (active) setAccountState(state);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (active) {
+          setAccountState((current) =>
+            current.status === "INITIALIZING"
+              ? {
+                  ...current,
+                  status: "ERROR",
+                  lastError: {
+                    code: "ACCOUNT_STATE_UNAVAILABLE",
+                    message: "暂时无法读取账户状态，请重新打开页面。",
+                  },
+                }
+              : current,
+          );
+        }
+      });
     return () => {
       active = false;
       unsubscribe();
@@ -93,22 +146,59 @@ export function DesktopApp() {
 
   useEffect(() => {
     if (!authenticated) {
+      agentNavigationStarted.current = false;
       setScreen((current) =>
-        current === "devices" || current === "security" || current === "updates"
+        current === "devices" ||
+        current === "security" ||
+        current === "updates" ||
+        current === "agent-starting"
           ? "login"
           : current,
       );
-    } else if (online && authScreenOpen) {
-      setScreen("home");
+      return;
     }
-  }, [authenticated, online, authScreenOpen, screen]);
+    if (shouldStartAgent && screen !== "agent-starting") setScreen("agent-starting");
+    if (!shouldStartAgent) agentNavigationStarted.current = false;
+  }, [authenticated, shouldStartAgent, screen]);
+
+  useEffect(() => {
+    if (!shouldStartAgent || !accountState.agentEntry.available || agentNavigationStarted.current)
+      return;
+    agentNavigationStarted.current = true;
+    window.location.assign("caelush-app://app/agent/");
+  }, [accountState.agentEntry.available, shouldStartAgent]);
+
+  useEffect(() => {
+    if (
+      !agentLaunchRequested ||
+      !authenticated ||
+      accountState.agentEntry.available ||
+      accountState.agentEntry.reason === undefined ||
+      accountState.agentEntry.reason === "DAEMON_STARTING" ||
+      agentRetrying ||
+      agentLaunchRetryStarted.current
+    ) {
+      return;
+    }
+    agentLaunchRetryStarted.current = true;
+    void retryAgentStartup();
+  }, [
+    accountState.agentEntry.available,
+    accountState.agentEntry.reason,
+    agentLaunchRequested,
+    agentRetrying,
+    retryAgentStartup,
+    authenticated,
+  ]);
 
   useEffect(() => {
     if (screen !== "devices" || !online) {
+      setDevicesLoading(false);
       if (!online) setDevices([]);
       return;
     }
     let active = true;
+    setDevicesLoading(true);
     void window.caelushDesktop.account
       .listDevices()
       .then((result) => {
@@ -116,6 +206,9 @@ export function DesktopApp() {
       })
       .catch((error: unknown) => {
         if (active) setFeedback(errorMessage(error));
+      })
+      .finally(() => {
+        if (active) setDevicesLoading(false);
       });
     return () => {
       active = false;
@@ -127,10 +220,13 @@ export function DesktopApp() {
       setLegacySummary(null);
       setLegacyProgress(null);
       setLegacyMessage(null);
+      setLegacyLoading(false);
       return;
     }
     let active = true;
+    setLegacySummary(null);
     setLegacyDismissed(false);
+    setLegacyLoading(true);
     const unsubscribe = window.caelushDesktop.legacyData.subscribeProgress((progress) => {
       if (active) setLegacyProgress(progress);
     });
@@ -141,6 +237,9 @@ export function DesktopApp() {
       })
       .catch((error: unknown) => {
         if (active) setLegacyMessage({ tone: "error", message: errorMessage(error) });
+      })
+      .finally(() => {
+        if (active) setLegacyLoading(false);
       });
     return () => {
       active = false;
@@ -165,7 +264,8 @@ export function DesktopApp() {
     await submit(event, async () => {
       await window.caelushDesktop.account.login({ email, password });
       setPassword("");
-      setScreen("home");
+      setManualReconnect(false);
+      setScreen("agent-starting");
     });
   }
 
@@ -221,24 +321,6 @@ export function DesktopApp() {
       setFeedback("密码已修改，请使用新密码重新登录。");
       setScreen("login");
     });
-  }
-
-  async function signOut() {
-    setBusy(true);
-    setFeedback(null);
-    try {
-      const result = await window.caelushDesktop.account.logout();
-      setScreen("login");
-      setFeedback(
-        result.serverRevoked
-          ? "已退出登录，并撤销云端会话。"
-          : "本地凭据已清除，但未能确认云端会话是否已撤销。",
-      );
-    } catch (error) {
-      setFeedback(errorMessage(error));
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function refreshAccount() {
@@ -314,25 +396,38 @@ export function DesktopApp() {
 
   const apiError = feedback ?? accountState.lastError?.message ?? null;
   const authenticatedScreen =
-    authenticated && !reconnectingOffline ? (
+    accountRouteRequested && accountState.status === "INITIALIZING" ? (
+      <AccountLoadingScreen view={activeView} />
+    ) : shouldStartAgent ? (
+      <AgentStartupScreen
+        state={accountState}
+        retrying={agentRetrying}
+        message={feedback}
+        onRetry={() => void retryAgentStartup()}
+      />
+    ) : authenticated && !reconnectingOffline ? (
       <AccountHome
         accountState={accountState}
         activeView={activeView}
         devices={devices}
+        devicesLoading={devicesLoading}
         busy={busy}
         feedback={apiError}
-        onNavigate={setScreen}
-        onLogout={() => void signOut()}
-        onOpenAgent={() => window.location.assign("caelush-app://app/agent/")}
+        onNavigate={(nextView) => {
+          if (nextView === "devices") setDevicesLoading(true);
+          setScreen(nextView);
+        }}
         onRefresh={() => void refreshAccount()}
         onRevoke={(device) => void revokeDevice(device)}
         onReconnect={() => {
           setEmail(accountState.account?.email ?? "");
+          setManualReconnect(true);
           setFeedback(null);
           setScreen("login");
         }}
         onChangePassword={(event) => void changePassword(event)}
         legacySummary={legacySummary}
+        legacyLoading={legacyLoading}
         legacyDismissed={legacyDismissed}
         legacyBusy={legacyBusy}
         legacyProgress={legacyProgress}
@@ -347,7 +442,7 @@ export function DesktopApp() {
       />
     ) : (
       <AuthShell
-        screen={screen as AuthScreen}
+        screen={screen === "agent-starting" ? "login" : (screen as AuthScreen)}
         status={accountState.status}
         email={email}
         password={password}
@@ -372,6 +467,85 @@ export function DesktopApp() {
     );
 
   return <div className="desktop-app">{authenticatedScreen}</div>;
+}
+
+function AgentStartupScreen(props: {
+  state: AccountState;
+  retrying: boolean;
+  message: string | null;
+  onRetry(): void;
+}) {
+  const reason = props.state.agentEntry.reason;
+  const isStarting =
+    props.state.agentEntry.available || reason === undefined || reason === "DAEMON_STARTING";
+  const status = agentStartupStatus(reason);
+
+  return (
+    <main className="agent-startup-page" aria-busy={isStarting || props.retrying}>
+      <section className="agent-startup-content" aria-live="polite" aria-atomic="true">
+        <img className="agent-startup-logo" src="/caelush-logo.png" alt="Caelush" />
+        {isStarting && !props.message ? (
+          <LoaderCircle className="agent-startup-indicator spin" aria-hidden="true" />
+        ) : (
+          <CircleAlert className="agent-startup-indicator is-error" aria-hidden="true" />
+        )}
+        <p className="agent-startup-status">
+          {props.message ? "本地 Agent 启动遇到问题" : status.title}
+        </p>
+        <p className="agent-startup-description">{props.message ?? status.description}</p>
+        {(!isStarting || props.message) && (
+          <button
+            type="button"
+            className="agent-startup-retry"
+            onClick={props.onRetry}
+            disabled={props.retrying}
+          >
+            {props.retrying ? (
+              <LoaderCircle className="spin" size={15} aria-hidden="true" />
+            ) : (
+              <RefreshCw size={15} aria-hidden="true" />
+            )}
+            {props.retrying ? "正在重试" : "重试启动"}
+          </button>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function agentStartupStatus(reason: AccountState["agentEntry"]["reason"]): {
+  title: string;
+  description: string;
+} {
+  switch (reason) {
+    case "DAEMON_UNAVAILABLE":
+      return {
+        title: "本地 Agent 暂时无法启动",
+        description: "请重试启动本地 Agent。",
+      };
+    case "PROTOCOL_INCOMPATIBLE":
+      return {
+        title: "本地 Agent 版本不兼容",
+        description: "请更新桌面端后再试。",
+      };
+    case "SAFE_SHUTDOWN_PENDING":
+      return {
+        title: "正在等待上一会话安全退出",
+        description: "完成后会自动进入工作台。",
+      };
+    case "ACCOUNT_NOT_AUTHORIZED":
+      return {
+        title: "本地 Agent 尚未获得此账户授权",
+        description: "请重试启动本地 Agent。",
+      };
+    case "DAEMON_STARTING":
+    case undefined:
+    default:
+      return {
+        title: "正在准备本地 Agent",
+        description: "准备完成后会自动进入工作台。",
+      };
+  }
 }
 
 function AuthShell(props: {
@@ -399,164 +573,166 @@ function AuthShell(props: {
 }) {
   return (
     <main className="auth-layout">
-      <section className="brand-panel">
-        <div className="brand-orbit brand-orbit-one" />
-        <div className="brand-orbit brand-orbit-two" />
-        <div className="brand-panel-content">
-          <div className="brand-emblem">
-            <img src="/caelush-app-icon.png" alt="Caelush" />
-          </div>
-          <p className="eyebrow">本地优先 · 账户已就绪</p>
-          <h1>
-            你的工作
-            <br />
-            <em>由你掌控。</em>
-          </h1>
-          <p className="brand-copy">
-            登录 Caelush 账户以授权此设备。本地工作区仍保留在这台电脑上。
-          </p>
-          <div className="brand-rail">
-            <div className="rail-item is-active">
-              <span>
-                <LockKeyhole size={15} />
-              </span>
-              <div>
-                <b>隐私优先</b>
-                <small>凭据保存在 Windows 安全存储中</small>
-              </div>
-              <Check size={15} />
+      <div className="auth-content">
+        <section className="brand-panel">
+          <div className="brand-panel-content">
+            <div className="brand-emblem">
+              <img src="/caelush-logo.png" alt="Caelush" />
             </div>
-            <div className="rail-item">
-              <span>
-                <Clock3 size={15} />
-              </span>
-              <div>
-                <b>离线可用</b>
-                <small>使用签名授权，最长可离线使用 15 天</small>
-              </div>
-            </div>
+            <p className="eyebrow">灵感与创造</p>
+            <h1>
+              让灵感 <em>自由生长。</em>
+            </h1>
+            <p className="brand-copy">每一段思绪，都可以成为新的开始。</p>
           </div>
-        </div>
-        <div className="brand-panel-foot">
-          <span>01</span>
-          <i />
-          <span>账户访问</span>
-        </div>
-      </section>
+        </section>
 
-      <section className="auth-panel">
-        <div className="auth-panel-inner">
-          {props.status === "LOCKED" ? (
-            <div className="locked-state">
-              <div className="form-symbol is-warning">
-                <LockKeyhole size={20} />
-              </div>
-              <p className="eyebrow">安全存储不可用</p>
-              <h2>登录功能已锁定</h2>
-              <p className="auth-description">
-                无法打开 Windows 受保护的凭据存储。为保护账户安全，Caelush 不会在此状态下保存凭据。
-              </p>
-              <MessageBox
-                message={
-                  props.message ?? "请检查当前 Windows 用户配置，然后重新启动 Caelush 桌面端。"
-                }
-                tone="error"
-              />
-            </div>
-          ) : (
-            <>
-              <div className="auth-heading">
-                <div className="form-symbol">
-                  {props.screen === "verify" ? (
-                    <Mail size={19} />
-                  ) : props.screen === "forgot" || props.screen === "reset" ? (
-                    <KeyRound size={19} />
-                  ) : (
-                    <ShieldCheck size={19} />
-                  )}
+        <section className="auth-panel">
+          <div className="auth-panel-inner">
+            {props.status === "LOCKED" ? (
+              <div className="locked-state">
+                <div className="form-symbol is-warning">
+                  <LockKeyhole size={20} />
                 </div>
-                <p className="eyebrow">CAELUSH 账户</p>
-                <h2>{authTitle(props.screen)}</h2>
-                <p className="auth-description">{authDescription(props.screen)}</p>
-              </div>
-              {props.message && (
+                <p className="eyebrow">安全存储不可用</p>
+                <h2>登录功能已锁定</h2>
+                <p className="auth-description">
+                  无法打开 Windows 受保护的凭据存储。为保护账户安全，Caelush
+                  不会在此状态下保存凭据。
+                </p>
                 <MessageBox
-                  message={props.message}
-                  tone={props.status === "ERROR" ? "error" : "info"}
+                  message={
+                    props.message ?? "请检查当前 Windows 用户配置，然后重新启动 Caelush 桌面端。"
+                  }
+                  tone="error"
                 />
-              )}
-              {props.screen === "login" && (
-                <form className="auth-form" onSubmit={props.onLogin}>
-                  <EmailField value={props.email} onChange={props.setEmail} />
-                  <PasswordField
-                    value={props.password}
-                    label="密码"
-                    autoComplete="current-password"
-                    visible={props.showPassword}
-                    onChange={props.setPassword}
-                    onToggle={() => props.setShowPassword(!props.showPassword)}
+              </div>
+            ) : (
+              <>
+                <div className="auth-heading">
+                  <h2>{authTitle(props.screen)}</h2>
+                  <p className="auth-description">{authDescription(props.screen)}</p>
+                </div>
+                {props.message && (
+                  <MessageBox
+                    message={props.message}
+                    tone={props.status === "ERROR" ? "error" : "info"}
                   />
-                  <div className="form-row form-row-end">
-                    <button
-                      className="text-button"
-                      type="button"
-                      onClick={() => props.setScreen("forgot")}
-                    >
-                      忘记密码？
-                    </button>
+                )}
+                {props.screen === "login" && (
+                  <form className="auth-form" onSubmit={props.onLogin}>
+                    <EmailField value={props.email} onChange={props.setEmail} />
+                    <PasswordField
+                      value={props.password}
+                      label="密码"
+                      autoComplete="current-password"
+                      visible={props.showPassword}
+                      onChange={props.setPassword}
+                      onToggle={() => props.setShowPassword(!props.showPassword)}
+                    />
+                    <div className="form-row form-row-end">
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() => props.setScreen("forgot")}
+                      >
+                        忘记密码？
+                      </button>
+                    </div>
+                    <PrimaryButton busy={props.busy}>
+                      登录 <ArrowRight size={16} />
+                    </PrimaryButton>
+                    <div className="auth-switch">
+                      还没有 Caelush 账户？{" "}
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() => props.setScreen("register")}
+                      >
+                        创建账户
+                      </button>
+                    </div>
+                  </form>
+                )}
+                {props.screen === "register" && (
+                  <form className="auth-form" onSubmit={props.onRegister}>
+                    <EmailField value={props.email} onChange={props.setEmail} />
+                    <PasswordField
+                      value={props.password}
+                      label="设置密码"
+                      autoComplete="new-password"
+                      visible={props.showPassword}
+                      onChange={props.setPassword}
+                      onToggle={() => props.setShowPassword(!props.showPassword)}
+                    />
+                    <p className="field-hint">需要先验证邮箱，才能登录此账户。</p>
+                    <PrimaryButton busy={props.busy}>
+                      创建账户 <ArrowRight size={16} />
+                    </PrimaryButton>
+                    <div className="auth-switch">
+                      已有账户？{" "}
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() => props.setScreen("login")}
+                      >
+                        登录
+                      </button>
+                    </div>
+                  </form>
+                )}
+                {props.screen === "verify" && (
+                  <div className="auth-form">
+                    <form onSubmit={props.onVerify}>
+                      <label className="field-label" htmlFor="verification-token">
+                        邮箱验证码
+                      </label>
+                      <div className="input-wrap">
+                        <Mail size={16} />
+                        <input
+                          id="verification-token"
+                          value={props.token}
+                          onChange={(event) => props.setToken(event.target.value)}
+                          minLength={16}
+                          maxLength={4096}
+                          required
+                          autoComplete="one-time-code"
+                        />
+                      </div>
+                      <PrimaryButton busy={props.busy}>
+                        验证邮箱 <ArrowRight size={16} />
+                      </PrimaryButton>
+                    </form>
+                    <form className="secondary-form" onSubmit={props.onResend}>
+                      <p className="field-hint">
+                        没有收到邮件？如果该邮箱需要验证，我们可以重新发送。
+                      </p>
+                      <EmailField value={props.email} onChange={props.setEmail} />
+                      <button className="secondary-button" disabled={props.busy} type="submit">
+                        重新发送验证邮件
+                      </button>
+                    </form>
+                    <BackLink onClick={() => props.setScreen("login")}>返回登录</BackLink>
                   </div>
-                  <PrimaryButton busy={props.busy}>
-                    登录 <ArrowRight size={16} />
-                  </PrimaryButton>
-                  <div className="auth-switch">
-                    还没有 Caelush 账户？{" "}
-                    <button
-                      className="text-button"
-                      type="button"
-                      onClick={() => props.setScreen("register")}
-                    >
-                      创建账户
-                    </button>
-                  </div>
-                </form>
-              )}
-              {props.screen === "register" && (
-                <form className="auth-form" onSubmit={props.onRegister}>
-                  <EmailField value={props.email} onChange={props.setEmail} />
-                  <PasswordField
-                    value={props.password}
-                    label="设置密码"
-                    autoComplete="new-password"
-                    visible={props.showPassword}
-                    onChange={props.setPassword}
-                    onToggle={() => props.setShowPassword(!props.showPassword)}
-                  />
-                  <p className="field-hint">需要先验证邮箱，才能登录此账户。</p>
-                  <PrimaryButton busy={props.busy}>
-                    创建账户 <ArrowRight size={16} />
-                  </PrimaryButton>
-                  <div className="auth-switch">
-                    已有账户？{" "}
-                    <button
-                      className="text-button"
-                      type="button"
-                      onClick={() => props.setScreen("login")}
-                    >
-                      登录
-                    </button>
-                  </div>
-                </form>
-              )}
-              {props.screen === "verify" && (
-                <div className="auth-form">
-                  <form onSubmit={props.onVerify}>
-                    <label className="field-label" htmlFor="verification-token">
-                      邮箱验证码
+                )}
+                {props.screen === "forgot" && (
+                  <form className="auth-form" onSubmit={props.onForgot}>
+                    <EmailField value={props.email} onChange={props.setEmail} />
+                    <PrimaryButton busy={props.busy}>
+                      发送密码重置邮件 <ArrowRight size={16} />
+                    </PrimaryButton>
+                    <BackLink onClick={() => props.setScreen("login")}>返回登录</BackLink>
+                  </form>
+                )}
+                {props.screen === "reset" && (
+                  <form className="auth-form" onSubmit={props.onReset}>
+                    <label className="field-label" htmlFor="reset-token">
+                      密码重置码
                     </label>
                     <div className="input-wrap">
-                      <Mail size={16} />
+                      <KeyRound size={16} />
                       <input
-                        id="verification-token"
+                        id="reset-token"
                         value={props.token}
                         onChange={(event) => props.setToken(event.target.value)}
                         minLength={16}
@@ -565,71 +741,207 @@ function AuthShell(props: {
                         autoComplete="one-time-code"
                       />
                     </div>
-                    <PrimaryButton busy={props.busy}>
-                      验证邮箱 <ArrowRight size={16} />
-                    </PrimaryButton>
-                  </form>
-                  <form className="secondary-form" onSubmit={props.onResend}>
-                    <p className="field-hint">
-                      没有收到邮件？如果该邮箱需要验证，我们可以重新发送。
-                    </p>
-                    <EmailField value={props.email} onChange={props.setEmail} />
-                    <button className="secondary-button" disabled={props.busy} type="submit">
-                      重新发送验证邮件
-                    </button>
-                  </form>
-                  <BackLink onClick={() => props.setScreen("login")}>返回登录</BackLink>
-                </div>
-              )}
-              {props.screen === "forgot" && (
-                <form className="auth-form" onSubmit={props.onForgot}>
-                  <EmailField value={props.email} onChange={props.setEmail} />
-                  <PrimaryButton busy={props.busy}>
-                    发送密码重置邮件 <ArrowRight size={16} />
-                  </PrimaryButton>
-                  <BackLink onClick={() => props.setScreen("login")}>返回登录</BackLink>
-                </form>
-              )}
-              {props.screen === "reset" && (
-                <form className="auth-form" onSubmit={props.onReset}>
-                  <label className="field-label" htmlFor="reset-token">
-                    密码重置码
-                  </label>
-                  <div className="input-wrap">
-                    <KeyRound size={16} />
-                    <input
-                      id="reset-token"
-                      value={props.token}
-                      onChange={(event) => props.setToken(event.target.value)}
-                      minLength={16}
-                      maxLength={4096}
-                      required
-                      autoComplete="one-time-code"
+                    <PasswordField
+                      value={props.newPassword}
+                      label="新密码"
+                      autoComplete="new-password"
+                      visible={props.showPassword}
+                      onChange={props.setNewPassword}
+                      onToggle={() => props.setShowPassword(!props.showPassword)}
                     />
-                  </div>
-                  <PasswordField
-                    value={props.newPassword}
-                    label="新密码"
-                    autoComplete="new-password"
-                    visible={props.showPassword}
-                    onChange={props.setNewPassword}
-                    onToggle={() => props.setShowPassword(!props.showPassword)}
-                  />
-                  <PrimaryButton busy={props.busy}>
-                    重置密码 <ArrowRight size={16} />
-                  </PrimaryButton>
-                  <BackLink onClick={() => props.setScreen("login")}>返回登录</BackLink>
-                </form>
-              )}
-            </>
-          )}
+                    <PrimaryButton busy={props.busy}>
+                      重置密码 <ArrowRight size={16} />
+                    </PrimaryButton>
+                    <BackLink onClick={() => props.setScreen("login")}>返回登录</BackLink>
+                  </form>
+                )}
+              </>
+            )}
+          </div>
+          <div className="auth-panel-bottom">
+            <span>已在此 Windows 用户配置中加密</span>
+            <span>CAELUSH · 桌面端</span>
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function AccountLoadingScreen(props: { view: AccountScreen }) {
+  const navigation = ["home", "devices", "security", "updates"] as const;
+  return (
+    <main
+      className="account-layout account-layout--loading"
+      aria-busy="true"
+      aria-label="正在加载账户页面"
+    >
+      <aside className="account-sidebar" aria-hidden="true">
+        <div className="sidebar-section-label">账户</div>
+        {navigation.map((view) => (
+          <div className={`side-nav ${props.view === view ? "is-current" : ""}`} key={view}>
+            <span className="account-skeleton-icon skeleton-block" />
+            <span className="skeleton-block account-skeleton-nav-label" />
+          </div>
+        ))}
+        <div className="sidebar-separator" />
+        <div className="icon-button sidebar-home-button">
+          <span className="skeleton-block account-skeleton-home-icon" />
         </div>
-        <div className="auth-panel-bottom">
-          <span>已在此 Windows 用户配置中加密</span>
-          <span>CAELUSH · 桌面端</span>
+      </aside>
+      <section className="account-content">
+        <div className="account-content-inner">
+          <div className="account-page-head">
+            <div className="account-skeleton-title-group">
+              <span className="skeleton-block account-skeleton-eyebrow" />
+              <span className="skeleton-block account-skeleton-title" />
+            </div>
+            <span className="skeleton-block account-skeleton-status" />
+          </div>
+          <AccountPageSkeleton view={props.view} />
         </div>
       </section>
+      <span className="visually-hidden" role="status">
+        正在加载账户页面
+      </span>
     </main>
+  );
+}
+
+function AccountPageSkeleton(props: { view: AccountScreen }) {
+  if (props.view === "devices") {
+    return (
+      <section className="table-panel account-skeleton-panel" aria-hidden="true">
+        <div className="account-skeleton-panel-heading">
+          <div>
+            <span className="skeleton-block account-skeleton-section-title" />
+            <span className="skeleton-block account-skeleton-copy" />
+          </div>
+          <span className="skeleton-block account-skeleton-button" />
+        </div>
+        <DeviceRowsSkeleton />
+        <span className="skeleton-block account-skeleton-note" />
+      </section>
+    );
+  }
+
+  if (props.view === "security") {
+    return (
+      <div className="security-stack" aria-hidden="true">
+        <section className="table-panel account-skeleton-panel">
+          <div className="account-skeleton-panel-heading">
+            <div>
+              <span className="skeleton-block account-skeleton-section-title" />
+              <span className="skeleton-block account-skeleton-copy" />
+            </div>
+            <span className="skeleton-block account-skeleton-icon-large" />
+          </div>
+          <div className="account-skeleton-form">
+            {[0, 1].map((item) => (
+              <div className="account-skeleton-field" key={item}>
+                <span className="skeleton-block account-skeleton-label" />
+                <span className="skeleton-block account-skeleton-input" />
+              </div>
+            ))}
+            <span className="skeleton-block account-skeleton-submit" />
+          </div>
+        </section>
+        <span className="skeleton-block account-skeleton-security-note" />
+        <span className="skeleton-block account-skeleton-link" />
+      </div>
+    );
+  }
+
+  if (props.view === "updates") {
+    return (
+      <div className="update-page" aria-hidden="true">
+        <section className="update-status-card account-skeleton-panel">
+          <div className="account-skeleton-update-heading">
+            <span className="skeleton-block account-skeleton-icon-large" />
+            <div>
+              <span className="skeleton-block account-skeleton-eyebrow" />
+              <span className="skeleton-block account-skeleton-section-title" />
+              <span className="skeleton-block account-skeleton-copy" />
+            </div>
+          </div>
+          <div className="account-skeleton-update-toolbar">
+            <span className="skeleton-block account-skeleton-button" />
+            <span className="skeleton-block account-skeleton-button" />
+          </div>
+          <span className="skeleton-block account-skeleton-message" />
+        </section>
+        <span className="skeleton-block account-skeleton-note" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="account-skeleton-overview" aria-hidden="true">
+      <span className="skeleton-block account-skeleton-connection" />
+      {[0, 1].map((card) => (
+        <section className="detail-panel account-skeleton-panel" key={card}>
+          <div className="account-skeleton-panel-heading">
+            <div>
+              <span className="skeleton-block account-skeleton-eyebrow" />
+              <span className="skeleton-block account-skeleton-section-title" />
+            </div>
+            <span className="skeleton-block account-skeleton-icon-large" />
+          </div>
+          {card === 0 ? (
+            <div className="account-skeleton-detail-rows">
+              {[0, 1, 2, 3].map((row) => (
+                <div className="account-skeleton-detail-row" key={row}>
+                  <span className="skeleton-block account-skeleton-label" />
+                  <span className="skeleton-block account-skeleton-value" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <>
+              <div className="account-skeleton-device-line">
+                <span className="skeleton-block account-skeleton-device-icon" />
+                <span className="skeleton-block account-skeleton-value" />
+              </div>
+              <span className="skeleton-block account-skeleton-detail-line" />
+              <span className="skeleton-block account-skeleton-link" />
+            </>
+          )}
+        </section>
+      ))}
+      <section className="legacy-import-panel account-skeleton-panel">
+        <div className="account-skeleton-panel-heading">
+          <span className="skeleton-block account-skeleton-icon-large" />
+          <div>
+            <span className="skeleton-block account-skeleton-eyebrow" />
+            <span className="skeleton-block account-skeleton-section-title" />
+          </div>
+        </div>
+        <span className="skeleton-block account-skeleton-copy" />
+        <div className="account-skeleton-count-grid">
+          {Array.from({ length: 10 }, (_, index) => (
+            <span className="skeleton-block account-skeleton-count" key={index} />
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DeviceRowsSkeleton() {
+  return (
+    <div className="device-list account-skeleton-device-list" aria-hidden="true">
+      {[0, 1].map((row) => (
+        <div className="device-row account-skeleton-device-row" key={row}>
+          <span className="skeleton-block account-skeleton-device-icon" />
+          <div className="account-skeleton-device-copy">
+            <span className="skeleton-block account-skeleton-value" />
+            <span className="skeleton-block account-skeleton-copy" />
+          </div>
+          <span className="skeleton-block account-skeleton-device-status" />
+          <span className="skeleton-block account-skeleton-button-small" />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -637,16 +949,16 @@ function AccountHome(props: {
   accountState: AccountState;
   activeView: AccountScreen;
   devices: readonly SafeDevice[];
+  devicesLoading: boolean;
   busy: boolean;
   feedback: string | null;
   onNavigate(screen: AccountScreen): void;
-  onLogout(): void;
-  onOpenAgent(): void;
   onRefresh(): void;
   onReconnect(): void;
   onRevoke(device: SafeDevice): void;
   onChangePassword(event: FormEvent<HTMLFormElement>): void;
   legacySummary: LegacyDataImportSummary | null;
+  legacyLoading: boolean;
   legacyDismissed: boolean;
   legacyBusy: boolean;
   legacyProgress: LegacyImportProgress | null;
@@ -661,7 +973,6 @@ function AccountHome(props: {
 }) {
   const { accountState } = props;
   const offline = accountState.status === "AUTHORIZED_OFFLINE";
-  const accountName = accountState.account?.email ?? "Caelush 账户";
   return (
     <main className="account-layout">
       <aside className="account-sidebar">
@@ -691,29 +1002,14 @@ function AccountHome(props: {
           <Download size={16} /> 检查更新
         </button>
         <div className="sidebar-separator" />
-        <div className="sidebar-profile">
-          <div className="profile-avatar">{accountName.slice(0, 1).toUpperCase()}</div>
-          <div className="profile-meta">
-            <b>{accountName}</b>
-            <span>{offline ? "离线授权" : "已连接"}</span>
-          </div>
-          <button
-            type="button"
-            className="icon-button signout-icon"
-            aria-label="退出登录"
-            disabled={props.busy}
-            onClick={props.onLogout}
-          >
-            <LogOut size={16} />
-          </button>
-        </div>
         <button
-          className="sidebar-logout"
           type="button"
-          disabled={props.busy}
-          onClick={props.onLogout}
+          className="icon-button sidebar-home-button"
+          aria-label="返回工作台"
+          title="返回工作台"
+          onClick={() => window.location.assign("caelush-login://app/?view=agent")}
         >
-          <LogOut size={15} /> 退出登录
+          <House size={18} aria-hidden="true" />
         </button>
       </aside>
 
@@ -746,9 +1042,9 @@ function AccountHome(props: {
               onNavigate={props.onNavigate}
               onRefresh={props.onRefresh}
               onReconnect={props.onReconnect}
-              onOpenAgent={props.onOpenAgent}
               busy={props.busy}
               legacySummary={props.legacySummary}
+              legacyLoading={props.legacyLoading}
               legacyDismissed={props.legacyDismissed}
               legacyBusy={props.legacyBusy}
               legacyProgress={props.legacyProgress}
@@ -762,6 +1058,7 @@ function AccountHome(props: {
             <DeviceManager
               state={accountState}
               devices={props.devices}
+              loading={props.devicesLoading}
               busy={props.busy}
               onRevoke={props.onRevoke}
               onRefresh={props.onRefresh}
@@ -791,9 +1088,9 @@ function Overview(props: {
   onNavigate(screen: AccountScreen): void;
   onRefresh(): void;
   onReconnect(): void;
-  onOpenAgent(): void;
   busy: boolean;
   legacySummary: LegacyDataImportSummary | null;
+  legacyLoading: boolean;
   legacyDismissed: boolean;
   legacyBusy: boolean;
   legacyProgress: LegacyImportProgress | null;
@@ -928,6 +1225,9 @@ function Overview(props: {
       </div>
       <LegacyImportPanel
         summary={props.legacySummary}
+        loading={
+          props.legacyLoading || (props.legacySummary === null && props.legacyMessage === null)
+        }
         dismissed={props.legacyDismissed}
         busy={props.legacyBusy}
         progress={props.legacyProgress}
@@ -936,39 +1236,13 @@ function Overview(props: {
         onImport={props.onImportLegacy}
         onResume={props.onResumeLegacy}
       />
-      <section className="agent-pending">
-        <div className="pending-mark">
-          <MonitorCog size={20} />
-        </div>
-        <div className="pending-copy">
-          <p className="eyebrow">本地 Agent</p>
-          <h3>
-            {state.agentEntry.available
-              ? "本地 Agent 已就绪"
-              : agentStatusTitle(state.agentEntry.reason)}
-          </h3>
-          <p>{agentStatusDescription(state.agentEntry.reason)}</p>
-        </div>
-        {state.agentEntry.available ? (
-          <button
-            type="button"
-            className="primary-button compact-primary"
-            onClick={props.onOpenAgent}
-          >
-            打开 Agent <ArrowRight size={15} />
-          </button>
-        ) : (
-          <span className="pending-status">
-            {state.agentEntry.reason === "DAEMON_STARTING" ? "正在启动" : "暂不可用"}
-          </span>
-        )}
-      </section>
     </>
   );
 }
 
 function LegacyImportPanel(props: {
   summary: LegacyDataImportSummary | null;
+  loading: boolean;
   dismissed: boolean;
   busy: boolean;
   progress: LegacyImportProgress | null;
@@ -980,6 +1254,30 @@ function LegacyImportPanel(props: {
   const [reviewCandidateId, setReviewCandidateId] = useState<string | null>(null);
   const [reviewDismissed, setReviewDismissed] = useState(false);
   const summary = props.summary;
+  if (summary === null && props.loading) {
+    return (
+      <section
+        className="legacy-import-panel account-skeleton-panel account-skeleton-legacy"
+        aria-hidden="true"
+      >
+        <div className="account-skeleton-panel-heading">
+          <span className="skeleton-block account-skeleton-icon-large" />
+          <div>
+            <span className="skeleton-block account-skeleton-eyebrow" />
+            <span className="skeleton-block account-skeleton-section-title" />
+          </div>
+        </div>
+        <span className="skeleton-block account-skeleton-copy" />
+        <span className="skeleton-block account-skeleton-copy account-skeleton-copy-short" />
+        <div className="account-skeleton-detail-line" />
+        <div className="account-skeleton-count-grid">
+          {Array.from({ length: 10 }, (_, index) => (
+            <span className="skeleton-block account-skeleton-count" key={index} />
+          ))}
+        </div>
+      </section>
+    );
+  }
   if (
     summary === null ||
     (summary.sources.length === 0 && !summary.pendingRecovery) ||
@@ -1176,41 +1474,10 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-function agentStatusTitle(reason: AccountState["agentEntry"]["reason"]): string {
-  switch (reason) {
-    case "DAEMON_STARTING":
-      return "正在启动本地 Agent";
-    case "PROTOCOL_INCOMPATIBLE":
-      return "桌面端与本地 Agent 版本不匹配";
-    case "SAFE_SHUTDOWN_PENDING":
-      return "本地 Agent 正在安全关闭";
-    case "DAEMON_UNAVAILABLE":
-      return "本地 Agent 暂不可用";
-    case "ACCOUNT_NOT_AUTHORIZED":
-    case undefined:
-      return "本地 Agent 暂不可用";
-  }
-}
-
-function agentStatusDescription(reason: AccountState["agentEntry"]["reason"]): string {
-  switch (reason) {
-    case "DAEMON_STARTING":
-      return "正在准备并检查账户数据，完成后即可打开工作区。";
-    case "PROTOCOL_INCOMPATIBLE":
-      return "桌面端与其管理的本地服务通过兼容性检查后，才能访问工作区。";
-    case "SAFE_SHUTDOWN_PENDING":
-      return "本地操作正在进入安全检查点，暂时无法切换账户数据。";
-    case "DAEMON_UNAVAILABLE":
-      return "本地服务未能通过启动检查。请重新登录或重启桌面端后再试。";
-    case "ACCOUNT_NOT_AUTHORIZED":
-    case undefined:
-      return "请登录或恢复有效的离线授权，以打开本地工作区。";
-  }
-}
-
 function DeviceManager(props: {
   state: AccountState;
   devices: readonly SafeDevice[];
+  loading: boolean;
   busy: boolean;
   onRevoke(device: SafeDevice): void;
   onRefresh(): void;
@@ -1238,11 +1505,13 @@ function DeviceManager(props: {
           <b>离线时无法查看设备列表</b>
           <span>连接云端后即可查看设备状态或撤销访问权限。</span>
         </div>
+      ) : props.loading ? (
+        <DeviceRowsSkeleton />
       ) : props.devices.length === 0 ? (
         <div className="empty-state">
-          <LoaderCircle size={20} className="spin" />
-          <b>正在加载设备列表</b>
-          <span>Caelush 正在检查此账户关联的设备。</span>
+          <LaptopMinimal size={20} />
+          <b>没有已登录设备</b>
+          <span>此账户当前没有可显示的设备。</span>
         </div>
       ) : (
         <div className="device-list">

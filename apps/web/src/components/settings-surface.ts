@@ -1,5 +1,4 @@
 import { createElement, useState, type FormEvent, type ReactElement } from "react";
-import { DesktopUpdateSettings } from "./desktop-update-settings.js";
 import { ArrowLeft, KeyRound, LoaderCircle, Sparkles, X } from "lucide-react";
 import type { ModelView, ProviderView } from "@caelush/protocol";
 import anthropicIcon from "../assets/providers/anthropic.svg";
@@ -47,7 +46,6 @@ export function SettingsSurface(props: SettingsSurfaceProps): ReactElement {
     createElement(
       "div",
       { className: "settings-surface-panel" },
-      createElement(DesktopUpdateSettings),
       createElement(
         "div",
         { className: "settings-surface-header" },

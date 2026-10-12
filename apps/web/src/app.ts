@@ -44,12 +44,19 @@ import {
 import { ReconnectBanner } from "./components/reconnect-banner.js";
 import { WorkspaceSidebar } from "./components/workspace-sidebar.js";
 import { WorkspaceEmptyState } from "./components/workspace-empty-state.js";
-import { WorkspaceDialog } from "./components/workspace-dialog.js";
 import { ModelPicker } from "./components/model-picker.js";
-import { SettingsSurface } from "./components/settings-surface.js";
 import { PermissionSelector } from "./components/permission-selector.js";
 import { hasTurnPresentationItems } from "./components/turn-presentation-feed.js";
 import { detectDesktopPanelApi, type DesktopPanelApi } from "./host/desktop-panel-api.js";
+
+const WorkspaceDialog = lazy(async () => {
+  const module = await import("./components/workspace-dialog.js");
+  return { default: module.WorkspaceDialog };
+});
+const SettingsSurface = lazy(async () => {
+  const module = await import("./components/settings-surface.js");
+  return { default: module.SettingsSurface };
+});
 
 const DesktopWorkspacePanel = lazy(async () => {
   const module = await import("./components/desktop-workspace-panel.js");
@@ -90,6 +97,7 @@ export function WebHostApp(props: {
   readonly launchContext?: unknown | undefined;
   readonly initialWorkspaceId?: WorkspaceId | undefined;
 }): ReactElement {
+  const desktopHostLoadingUI = typeof window !== "undefined" && window.caelushDesktop !== undefined;
   const [state, setState] = useState<WebHostState>(createInitialWebHostState);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
@@ -251,7 +259,7 @@ export function WebHostApp(props: {
   }, [selectedWorkspace?.id, sessionManager, sessionSnapshot.status]);
 
   if (state.bootstrap !== "READY" || workspaceManager === undefined) {
-    return renderHostBootstrap(state);
+    return renderHostBootstrap(state, desktopHostLoadingUI);
   }
 
   const closeSidebar = () => setSidebarOpen(false);
@@ -338,6 +346,7 @@ export function WebHostApp(props: {
 
   return renderWorkspaceApp({
     host: state,
+    desktopHostLoadingUI,
     workspaceState,
     selectedWorkspace,
     desktopPanelApi,
@@ -364,12 +373,58 @@ export function WebHostApp(props: {
       setSettingsOpen(true);
       setSidebarOpen(false);
     },
+    onCheckUpdates:
+      globalThis.location?.protocol === "caelush-app:" ? checkDesktopUpdates : undefined,
+    onLogout:
+      globalThis.location?.protocol === "caelush-app:"
+        ? () => void logoutDesktopAccount(setWorkspaceActionError)
+        : undefined,
     onCloseSettings: () => setSettingsOpen(false),
   });
 }
 
+function checkDesktopUpdates(): void {
+  if (typeof window === "undefined") return;
+  const desktopApi = (
+    window as unknown as {
+      readonly caelushDesktop?: {
+        readonly update?: { readonly check: () => Promise<unknown> };
+      };
+    }
+  ).caelushDesktop?.update;
+  if (desktopApi === undefined) return;
+  void desktopApi.check().catch(() => undefined);
+}
+
+async function logoutDesktopAccount(
+  reportError: (message: string | undefined) => void,
+): Promise<void> {
+  if (typeof window === "undefined") return;
+  const accountApi = (
+    window as unknown as {
+      readonly caelushDesktop?: {
+        readonly account?: {
+          readonly logout: () => Promise<{ readonly serverRevoked: boolean }>;
+        };
+      };
+    }
+  ).caelushDesktop?.account;
+  if (accountApi === undefined) {
+    reportError("桌面账户服务暂不可用，请稍后重试。");
+    return;
+  }
+  reportError(undefined);
+  try {
+    await accountApi.logout();
+    window.location.assign("caelush-login://app/");
+  } catch {
+    reportError("退出登录未完成，请稍后重试。");
+  }
+}
+
 function renderWorkspaceApp(input: {
   readonly host: WebHostState;
+  readonly desktopHostLoadingUI: boolean;
   readonly workspaceState: WorkspaceManagerState;
   readonly selectedWorkspace?: WorkspaceRecord | undefined;
   readonly desktopPanelApi: DesktopPanelApi | null;
@@ -393,6 +448,8 @@ function renderWorkspaceApp(input: {
   readonly onRegisterWorkspace: (event: FormEvent<HTMLFormElement>) => void;
   readonly settingsOpen: boolean;
   readonly onOpenSettings: () => void;
+  readonly onCheckUpdates?: (() => void) | undefined;
+  readonly onLogout?: (() => void) | undefined;
   readonly onCloseSettings: () => void;
 }): ReactElement {
   const { snapshot, selectedWorkspace } = input;
@@ -412,6 +469,13 @@ function renderWorkspaceApp(input: {
   const canCancelActiveRun =
     snapshot.activeRun !== undefined && canCancelRunStatus(snapshot.activeRun.status);
   const hasWorkspace = selectedWorkspace !== undefined && input.sessionManager !== undefined;
+  const workspaceLoading =
+    input.workspaceState.status === "IDLE" || input.workspaceState.status === "LOADING";
+  const sessionLoading =
+    selectedWorkspace !== undefined &&
+    (input.sessionManager === undefined ||
+      input.snapshot.status === "IDLE" ||
+      input.snapshot.status === "LOADING");
   const workspaceColumnClass =
     hasWorkspace && hasScrollableSessionContent(snapshot)
       ? "workspace-column"
@@ -455,23 +519,27 @@ function renderWorkspaceApp(input: {
             ? "workspace-frame"
             : "workspace-frame workspace-frame--desktop",
       },
-      createElement(WorkspaceSidebar, {
-        workspaces: input.workspaceState.workspaces,
-        selectedWorkspaceId: input.workspaceState.selectedWorkspaceId,
-        expandedWorkspaceIds: input.workspaceState.expandedWorkspaceIds,
-        sessionSummaries: input.workspaceState.sessionSummaries,
-        selectedSessionId: snapshot.selectedSessionId,
-        isDraft: snapshot.isDraft,
-        canNavigate: input.workspaceState.status === "READY",
-        isOpen: input.sidebarOpen,
-        onToggleWorkspace: input.onToggleWorkspace,
-        onSelectWorkspace: input.onSelectWorkspace,
-        onNewSession: input.onNewSession,
-        onSelectSession: input.onSelectSession,
-        onAddWorkspace: input.onAddWorkspace,
-        onForgetWorkspace: input.onForgetWorkspace,
-        onOpenSettings: input.onOpenSettings,
-      }),
+      workspaceLoading
+        ? createElement(WorkbenchSidebarSkeleton, null)
+        : createElement(WorkspaceSidebar, {
+            workspaces: input.workspaceState.workspaces,
+            selectedWorkspaceId: input.workspaceState.selectedWorkspaceId,
+            expandedWorkspaceIds: input.workspaceState.expandedWorkspaceIds,
+            sessionSummaries: input.workspaceState.sessionSummaries,
+            selectedSessionId: snapshot.selectedSessionId,
+            isDraft: snapshot.isDraft,
+            canNavigate: input.workspaceState.status === "READY",
+            isOpen: input.sidebarOpen,
+            onToggleWorkspace: input.onToggleWorkspace,
+            onSelectWorkspace: input.onSelectWorkspace,
+            onNewSession: input.onNewSession,
+            onSelectSession: input.onSelectSession,
+            onAddWorkspace: input.onAddWorkspace,
+            onForgetWorkspace: input.onForgetWorkspace,
+            onOpenSettings: input.onOpenSettings,
+            onCheckUpdates: input.onCheckUpdates,
+            onLogout: input.onLogout,
+          }),
       createElement(
         "div",
         {
@@ -500,73 +568,84 @@ function renderWorkspaceApp(input: {
                   }),
             )
           : null,
-        hasWorkspace
-          ? createElement(SessionWorkspace, {
-              title,
-              activeRun: snapshot.activeRun,
-              controlMode: snapshot.controlMode,
-              approvals: snapshot.approvalState?.requests,
-              recoveryRuns: snapshot.activeRuns.map((run) => ({
-                id: run.id,
-                goal: run.goal,
-                status: run.status,
-                createdAt: run.createdAt,
-              })),
-              history: snapshot.history,
-              turnPresentation: snapshot.turnPresentation,
-              timeline: snapshot.timeline,
-              liveActivity: snapshot.liveActivity,
-              continuityWarning: snapshot.continuityWarning,
-              composer: createElement(PromptComposer, {
-                disabled: composerInteractionDisabled,
-                modelReady,
-                modelPicker: createElement(ModelPicker, {
-                  providers: snapshot.aiProviders ?? [],
-                  models: snapshot.modelDirectory ?? [],
-                  selection: modelSelection,
+        input.desktopHostLoadingUI && (workspaceLoading || sessionLoading)
+          ? createElement(
+              "div",
+              { className: "workbench-loading-region", "aria-busy": true },
+              createElement(WorkbenchLoadingContent, null),
+              createElement(
+                "span",
+                { className: "visually-hidden", role: "status" },
+                "正在加载工作区和会话",
+              ),
+            )
+          : hasWorkspace
+            ? createElement(SessionWorkspace, {
+                title,
+                activeRun: snapshot.activeRun,
+                controlMode: snapshot.controlMode,
+                approvals: snapshot.approvalState?.requests,
+                recoveryRuns: snapshot.activeRuns.map((run) => ({
+                  id: run.id,
+                  goal: run.goal,
+                  status: run.status,
+                  createdAt: run.createdAt,
+                })),
+                history: snapshot.history,
+                turnPresentation: snapshot.turnPresentation,
+                timeline: snapshot.timeline,
+                liveActivity: snapshot.liveActivity,
+                continuityWarning: snapshot.continuityWarning,
+                composer: createElement(PromptComposer, {
                   disabled: composerInteractionDisabled,
-                  onSelect: (selection) => void input.sessionManager?.selectModel(selection),
-                  onOpenSettings: input.onOpenSettings,
+                  modelReady,
+                  modelPicker: createElement(ModelPicker, {
+                    providers: snapshot.aiProviders ?? [],
+                    models: snapshot.modelDirectory ?? [],
+                    selection: modelSelection,
+                    disabled: composerInteractionDisabled,
+                    onSelect: (selection) => void input.sessionManager?.selectModel(selection),
+                    onOpenSettings: input.onOpenSettings,
+                  }),
+                  permissionSelector: createElement(PermissionSelector, {
+                    presets: snapshot.availablePresets,
+                    selected:
+                      snapshot.preparingPreset === undefined
+                        ? (snapshot.requestedPreset ?? snapshot.selectedPreset)
+                        : snapshot.selectedPreset,
+                    preparing: snapshot.preparingPreset,
+                    disabled: composerInteractionDisabled || snapshot.activeRun !== undefined,
+                    error: snapshot.permissionPresetError,
+                    onSelect: (selection) =>
+                      void input.sessionManager?.selectPermissionPreset(selection),
+                    onPrepare: async (selection) =>
+                      (await input.sessionManager?.preparePermissionPreset(selection)) ?? false,
+                  }),
+                  submission: snapshot.submission,
+                  onCancel: canCancelActiveRun
+                    ? async () => (await input.sessionManager?.cancelRun()) ?? false
+                    : undefined,
+                  cancelling: snapshot.controlMode === "CANCELLING",
+                  error: snapshot.error,
+                  contextUsage: snapshot.contextUsage ?? null,
+                  onSubmit: async (prompt) =>
+                    (await input.sessionManager?.submitPrompt(prompt)) ?? false,
                 }),
-                permissionSelector: createElement(PermissionSelector, {
-                  presets: snapshot.availablePresets,
-                  selected:
-                    snapshot.preparingPreset === undefined
-                      ? (snapshot.requestedPreset ?? snapshot.selectedPreset)
-                      : snapshot.selectedPreset,
-                  preparing: snapshot.preparingPreset,
-                  disabled: composerInteractionDisabled || snapshot.activeRun !== undefined,
-                  error: snapshot.permissionPresetError,
-                  onSelect: (selection) =>
-                    void input.sessionManager?.selectPermissionPreset(selection),
-                  onPrepare: async (selection) =>
-                    (await input.sessionManager?.preparePermissionPreset(selection)) ?? false,
-                }),
-                submission: snapshot.submission,
-                onCancel: canCancelActiveRun
-                  ? async () => (await input.sessionManager?.cancelRun()) ?? false
-                  : undefined,
-                cancelling: snapshot.controlMode === "CANCELLING",
-                error: snapshot.error,
-                contextUsage: snapshot.contextUsage ?? null,
-                onSubmit: async (prompt) =>
-                  (await input.sessionManager?.submitPrompt(prompt)) ?? false,
+                onContinueResource: async () =>
+                  (await input.sessionManager?.continueResourceGuard()) ?? false,
+                onResolveApproval: async (approvalId, resolution) =>
+                  (await input.sessionManager?.resolveApproval(approvalId, resolution)) ?? false,
+                onSelectRecoveryRun: async (runId) =>
+                  (await input.sessionManager?.selectRecoveryRun(runId)) ?? false,
+                onConfirmPendingRun: async (runId) =>
+                  (await input.sessionManager?.confirmPendingRun(runId)) ?? false,
+                onCreateContinuitySession: async () =>
+                  (await input.sessionManager?.createContinuitySession()) ?? false,
+              })
+            : createElement(WorkspaceEmptyState, {
+                hasWorkspaces: input.workspaceState.workspaces.length > 0,
+                onAddWorkspace: input.onAddWorkspace,
               }),
-              onContinueResource: async () =>
-                (await input.sessionManager?.continueResourceGuard()) ?? false,
-              onResolveApproval: async (approvalId, resolution) =>
-                (await input.sessionManager?.resolveApproval(approvalId, resolution)) ?? false,
-              onSelectRecoveryRun: async (runId) =>
-                (await input.sessionManager?.selectRecoveryRun(runId)) ?? false,
-              onConfirmPendingRun: async (runId) =>
-                (await input.sessionManager?.confirmPendingRun(runId)) ?? false,
-              onCreateContinuitySession: async () =>
-                (await input.sessionManager?.createContinuitySession()) ?? false,
-            })
-          : createElement(WorkspaceEmptyState, {
-              hasWorkspaces: input.workspaceState.workspaces.length > 0,
-              onAddWorkspace: input.onAddWorkspace,
-            }),
       ),
       input.desktopPanelApi === null
         ? null
@@ -580,25 +659,33 @@ function renderWorkspaceApp(input: {
           ),
     ),
     input.workspaceDialogOpen
-      ? createElement(WorkspaceDialog, {
-          path: input.workspacePath,
-          isPicking: input.workspacePickerBusy,
-          error: input.workspaceActionError,
-          onClose: input.onCloseWorkspaceDialog,
-          onPick: input.onPickWorkspaceDirectory,
-          onSubmit: input.onRegisterWorkspace,
-        })
+      ? createElement(
+          Suspense,
+          { fallback: null },
+          createElement(WorkspaceDialog, {
+            path: input.workspacePath,
+            isPicking: input.workspacePickerBusy,
+            error: input.workspaceActionError,
+            onClose: input.onCloseWorkspaceDialog,
+            onPick: input.onPickWorkspaceDirectory,
+            onSubmit: input.onRegisterWorkspace,
+          }),
+        )
       : null,
     input.settingsOpen
-      ? createElement(SettingsSurface, {
-          providers: snapshot.aiProviders ?? [],
-          models: snapshot.modelDirectory ?? [],
-          onClose: input.onCloseSettings,
-          onConnect: (providerId, apiKey) =>
-            input.sessionManager?.connectProvider(providerId, apiKey) ?? Promise.resolve(false),
-          onDisconnect: (providerId) =>
-            input.sessionManager?.disconnectProvider(providerId) ?? Promise.resolve(false),
-        })
+      ? createElement(
+          Suspense,
+          { fallback: null },
+          createElement(SettingsSurface, {
+            providers: snapshot.aiProviders ?? [],
+            models: snapshot.modelDirectory ?? [],
+            onClose: input.onCloseSettings,
+            onConnect: (providerId, apiKey) =>
+              input.sessionManager?.connectProvider(providerId, apiKey) ?? Promise.resolve(false),
+            onDisconnect: (providerId) =>
+              input.sessionManager?.disconnectProvider(providerId) ?? Promise.resolve(false),
+          }),
+        )
       : null,
   );
 }
@@ -635,7 +722,16 @@ export function hasScrollableSessionContent(
   );
 }
 
-function renderHostBootstrap(state: WebHostState): ReactElement {
+function renderHostBootstrap(state: WebHostState, desktopHostLoadingUI: boolean): ReactElement {
+  if (
+    desktopHostLoadingUI &&
+    (state.bootstrap === "BOOTING" ||
+      state.bootstrap === "CONNECTING" ||
+      state.bootstrap === "CHECKING_PROTOCOL")
+  ) {
+    return renderWorkspaceBootstrapSkeleton();
+  }
+
   return createElement(
     "main",
     { className: "host-shell" },
@@ -674,6 +770,76 @@ function renderHostBootstrap(state: WebHostState): ReactElement {
       state.bootstrap === "READY"
         ? createElement("p", { className: "host-ready" }, "Production Web Host Ready")
         : null,
+    ),
+  );
+}
+
+function renderWorkspaceBootstrapSkeleton(): ReactElement {
+  return createElement(
+    "main",
+    {
+      className: "web-app-shell workspace-bootstrap-loading",
+      "aria-busy": true,
+      "aria-label": "正在加载工作台",
+    },
+    createElement(
+      "div",
+      { className: "workspace-frame workspace-frame--loading" },
+      createElement(WorkbenchSidebarSkeleton, null),
+      createElement(
+        "section",
+        { className: "workspace-column workspace-column--loading" },
+        createElement(WorkbenchLoadingContent, null),
+      ),
+    ),
+    createElement("span", { className: "visually-hidden", role: "status" }, "正在加载工作台"),
+  );
+}
+
+function WorkbenchSidebarSkeleton(): ReactElement {
+  return createElement(
+    "aside",
+    { className: "workspace-sidebar workspace-sidebar--loading", "aria-hidden": true },
+    createElement(
+      "div",
+      { className: "workspace-sidebar-brand" },
+      createElement("span", { className: "skeleton-block workbench-skeleton-logo" }),
+    ),
+    createElement("div", { className: "workbench-skeleton-section" }),
+    createElement("div", { className: "skeleton-block workbench-skeleton-add" }),
+    createElement("div", { className: "skeleton-block workbench-skeleton-project" }),
+    createElement("div", { className: "skeleton-block workbench-skeleton-project" }),
+    createElement(
+      "div",
+      { className: "workbench-skeleton-footer" },
+      createElement("span", { className: "skeleton-block workbench-skeleton-avatar" }),
+      createElement("span", { className: "skeleton-block workbench-skeleton-footer-label" }),
+      createElement("span", { className: "skeleton-block workbench-skeleton-footer-icon" }),
+    ),
+  );
+}
+
+function WorkbenchLoadingContent(): ReactElement {
+  return createElement(
+    "section",
+    { className: "workbench-loading-content", "aria-hidden": true },
+    createElement(
+      "div",
+      { className: "workbench-loading-welcome" },
+      createElement("span", { className: "skeleton-block workbench-skeleton-brand" }),
+      createElement("span", { className: "skeleton-block workbench-skeleton-slogan" }),
+    ),
+    createElement(
+      "div",
+      { className: "workbench-loading-composer" },
+      createElement("span", { className: "skeleton-block workbench-skeleton-prompt" }),
+      createElement(
+        "div",
+        { className: "workbench-skeleton-composer-footer" },
+        createElement("span", { className: "skeleton-block workbench-skeleton-control" }),
+        createElement("span", { className: "skeleton-block workbench-skeleton-control" }),
+        createElement("span", { className: "skeleton-block workbench-skeleton-submit" }),
+      ),
     ),
   );
 }

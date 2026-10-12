@@ -1,5 +1,7 @@
 import {
   createElement,
+  lazy,
+  Suspense,
   useEffect,
   useRef,
   useState,
@@ -9,10 +11,14 @@ import {
 import { Files, PanelRightClose, PanelRightOpen, TerminalSquare, Globe2 } from "lucide-react";
 import type { DesktopPanelApi } from "../host/desktop-panel-api.js";
 import { DesktopFileExplorer } from "./desktop-file-explorer.js";
-import { DesktopTerminal } from "./desktop-terminal.js";
 import { DesktopBrowserControls } from "./desktop-browser-controls.js";
 
 type DesktopPanelTab = "FILES" | "TERMINAL" | "BROWSER";
+
+const DesktopTerminal = lazy(async () => {
+  const module = await import("./desktop-terminal.js");
+  return { default: module.DesktopTerminal };
+});
 
 export function DesktopWorkspacePanel(props: {
   readonly api: DesktopPanelApi;
@@ -164,11 +170,21 @@ export function DesktopWorkspacePanel(props: {
               ? createElement(
                   "div",
                   { className: "desktop-panel-tab-content", hidden: tab !== "TERMINAL" },
-                  createElement(DesktopTerminal, {
-                    api: props.api,
-                    workspaceId: activeWorkspaceId,
-                    visible: terminalVisible,
-                  }),
+                  createElement(
+                    Suspense,
+                    {
+                      fallback: createElement(
+                        "div",
+                        { className: "desktop-panel-empty", role: "status" },
+                        "正在加载终端…",
+                      ),
+                    },
+                    createElement(DesktopTerminal, {
+                      api: props.api,
+                      workspaceId: activeWorkspaceId,
+                      visible: terminalVisible,
+                    }),
+                  ),
                 )
               : null,
             createElement(

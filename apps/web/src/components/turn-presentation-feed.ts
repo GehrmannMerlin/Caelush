@@ -1,4 +1,12 @@
-import { createElement, useEffect, useRef, useState, type ReactElement } from "react";
+import {
+  createElement,
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import { isTerminalRunStatus } from "@caelush/client";
 import type {
   LiveActivity,
@@ -29,8 +37,12 @@ import {
   type FrameScheduler,
 } from "../application/frame-publication-scheduler.js";
 import { projectTurnPresentation } from "../application/turn-presentation-view-model.js";
-import { AssistantMarkdown } from "./assistant-markdown.js";
 import { ModelWaitNotice, usePresentationNow } from "./model-wait-presentation.js";
+
+const AssistantMarkdown = lazy(async () => {
+  const module = await import("./assistant-markdown.js");
+  return { default: module.AssistantMarkdown };
+});
 
 export interface TurnPresentationFeedProps {
   readonly presentation: SessionTurnPresentationResponse;
@@ -526,7 +538,7 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
                         title: activity.text,
                       },
                       activity.phase === "COMMENTARY" || activity.phase === "FINAL_ANSWER"
-                        ? createElement(AssistantMarkdown, null, activity.text)
+                        ? renderAssistantMarkdown(activity.text)
                         : createElement(
                             "p",
                             { className: "turn-presentation-item-text" },
@@ -633,6 +645,16 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
   );
 }
 
+function renderAssistantMarkdown(text: string): ReactElement {
+  return createElement(
+    Suspense,
+    {
+      fallback: createElement("p", { className: "turn-presentation-item-text" }, text),
+    },
+    createElement(AssistantMarkdown, null, text),
+  );
+}
+
 function renderItem(
   item: TurnPresentationItem | TurnPresentationItemV2 | TurnPresentationItemV3,
   now?: number,
@@ -657,7 +679,7 @@ function renderItem(
           ? null
           : createElement("p", { className: "turn-presentation-item-label" }, label),
         item.phase === "FINAL_ANSWER" || item.phase === "COMMENTARY"
-          ? createElement(AssistantMarkdown, null, item.text)
+          ? renderAssistantMarkdown(item.text)
           : createElement("p", { className: "turn-presentation-item-text" }, item.text),
       );
     }

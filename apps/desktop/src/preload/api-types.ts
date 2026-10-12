@@ -23,6 +23,7 @@ import type { DesktopEditorDescriptor, DesktopEditorId } from "../main/ide/edito
 export interface DesktopApi {
   readonly account: {
     getState(): Promise<AccountState>;
+    retryAgentStartup(): Promise<AccountState>;
     subscribeState(listener: (state: AccountState) => void): () => void;
     register(input: {
       readonly email: string;

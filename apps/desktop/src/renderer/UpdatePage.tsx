@@ -6,6 +6,7 @@ export function UpdatePage() {
   const [state, setState] = useState<DesktopUpdateState | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [releases, setReleases] = useState<readonly DesktopReleaseHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
@@ -31,6 +32,9 @@ export function UpdatePage() {
       })
       .catch(() => {
         if (mounted) setHistoryError(true);
+      })
+      .finally(() => {
+        if (mounted) setHistoryLoading(false);
       });
     return () => {
       mounted = false;
@@ -52,6 +56,8 @@ export function UpdatePage() {
   const selectedRelease =
     releases.find((release) => release.version === selectedVersion) ?? releases[0] ?? null;
 
+  if (state === null && requestError === null) return <UpdatePageSkeleton />;
+
   async function action(operation: () => Promise<unknown>) {
     setRequestError(null);
     try {
@@ -72,7 +78,8 @@ export function UpdatePage() {
             <p className="eyebrow">CAELUSH 桌面端</p>
             <h3 id="update-status-heading">软件更新</h3>
             <p className="update-current-version">
-              当前版本 <b>Caelush {state?.currentVersion ?? "读取中…"}</b>
+              当前版本{" "}
+              <b>Caelush {state?.currentVersion ?? (requestError ? "暂不可用" : "读取中…")}</b>
             </p>
           </div>
         </div>
@@ -90,7 +97,13 @@ export function UpdatePage() {
             </button>
             {historyOpen && (
               <div className="update-history-menu" id="update-history-menu">
-                {historyError ? (
+                {historyLoading ? (
+                  <div className="update-history-skeleton" aria-label="正在加载版本记录">
+                    {[0, 1, 2].map((item) => (
+                      <span className="skeleton-block" key={item} />
+                    ))}
+                  </div>
+                ) : historyError ? (
                   <p className="update-history-empty">版本记录暂时无法加载。</p>
                 ) : releases.length === 0 ? (
                   <p className="update-history-empty">当前渠道还没有已发布的版本记录。</p>
@@ -145,7 +158,9 @@ export function UpdatePage() {
             className={`update-state-message ${status === "UP_TO_DATE" ? "is-success" : ""}`}
             role="status"
           >
-            {state ? updateStatusMessage(state, percent) : "正在读取当前桌面端状态…"}
+            {state
+              ? updateStatusMessage(state, percent)
+              : (requestError ?? "正在读取当前桌面端状态…")}
           </div>
         )}
 
@@ -205,6 +220,36 @@ export function UpdatePage() {
       <p className="update-security-note">
         更新安装包会先通过签名和完整性验证；下载完成后，安装仍需确认，并等待本地 Agent 安全退出。
       </p>
+    </div>
+  );
+}
+
+function UpdatePageSkeleton() {
+  return (
+    <div
+      className="update-page update-page--loading"
+      aria-busy="true"
+      aria-label="正在读取更新状态"
+    >
+      <section className="update-status-card update-skeleton-card" aria-hidden="true">
+        <div className="update-status-copy">
+          <span className="skeleton-block update-skeleton-symbol" />
+          <div className="update-skeleton-title-group">
+            <span className="skeleton-block update-skeleton-eyebrow" />
+            <span className="skeleton-block update-skeleton-title" />
+            <span className="skeleton-block update-skeleton-version" />
+          </div>
+        </div>
+        <div className="update-skeleton-toolbar">
+          <span className="skeleton-block update-skeleton-button" />
+          <span className="skeleton-block update-skeleton-button" />
+        </div>
+        <span className="skeleton-block update-skeleton-message" />
+      </section>
+      <span className="skeleton-block update-skeleton-note" aria-hidden="true" />
+      <span className="visually-hidden" role="status">
+        正在读取更新状态
+      </span>
     </div>
   );
 }

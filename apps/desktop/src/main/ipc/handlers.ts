@@ -24,6 +24,7 @@ export const IPC_CHANNELS = Object.freeze({
   account: Object.freeze({
     state: "caelush:account:state",
     getState: "caelush:account:get-state",
+    retryAgentStartup: "caelush:account:retry-agent-startup",
     register: "caelush:account:register",
     login: "caelush:account:login",
     logout: "caelush:account:logout",
@@ -531,6 +532,16 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
   };
   register(account.getState, NoInput, AccountStateSchema, getProjectedState);
   register(
+    account.retryAgentStartup,
+    NoInput,
+    AccountStateSchema,
+    async () => {
+      await synchronizeCurrentState();
+      return getProjectedState();
+    },
+    AUTHORIZED_STATES,
+  );
+  register(
     account.register,
     RegisterInput,
     AcceptedOutput,
@@ -557,6 +568,8 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
       return options.controller.logout(signal);
     },
     LOGOUT_STATES,
+    IPC_OPERATION_TIMEOUT_MS,
+    "LOGIN_OR_AGENT",
   );
   register(
     account.resendVerification,

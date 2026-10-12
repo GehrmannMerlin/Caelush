@@ -2540,6 +2540,58 @@ body {
   text-decoration: none;
 }
 
+.workspace-sidebar-footer--desktop {
+  position: relative;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.workspace-sidebar-footer--desktop .workspace-account-link {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 36px;
+  overflow: hidden;
+  padding: 0 9px;
+  border-radius: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-sidebar-footer--desktop .workspace-settings-control {
+  position: static;
+  width: 36px;
+  flex: 0 0 36px;
+}
+
+.workspace-sidebar-footer--desktop .workspace-settings-button {
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+  border-radius: 8px;
+}
+
+.workspace-sidebar-footer--desktop .workspace-settings-menu {
+  right: 0;
+  bottom: calc(100% + 9px);
+  left: auto;
+  width: 196px;
+  min-width: 196px;
+  max-width: calc(100vw - 32px);
+}
+
+.workspace-sidebar-footer--desktop .workspace-settings-menu-item {
+  white-space: nowrap;
+}
+
 .workspace-settings-button:hover,
 .workspace-settings-button:focus-visible {
   border-color: var(--web-sidebar-line);
@@ -6248,6 +6300,18 @@ body {
   color: #111827;
 }
 
+.workspace-sidebar-footer--desktop .workspace-settings-button,
+.workspace-sidebar-footer--desktop .workspace-settings-button:hover,
+.workspace-sidebar-footer--desktop .workspace-settings-button:focus-visible {
+  border-color: transparent;
+}
+
+.workspace-sidebar-footer--desktop .workspace-settings-button:hover,
+.workspace-sidebar-footer--desktop .workspace-settings-button:focus-visible {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
 /* Give a pristine session a quiet branded landing state without hiding active context. */
 .session-workspace--empty .session-scroll {
   display: flex;
@@ -6986,4 +7050,218 @@ body {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+/* Loading placeholders follow the workspace and account page geometry. */
+.skeleton-block {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #edf2f8;
+  isolation: isolate;
+}
+
+.skeleton-block::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 25%, rgb(255 255 255 / 82%) 48%, transparent 72%);
+  content: "";
+  transform: translateX(-100%);
+  animation: skeleton-sweep 1.45s ease-in-out infinite;
+}
+
+@keyframes skeleton-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.workspace-bootstrap-loading {
+  background: #fff;
+  color: #173b61;
+}
+
+.workspace-frame--loading {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.workspace-sidebar--loading {
+  gap: 0;
+  background: #fafafa;
+}
+
+.workbench-skeleton-logo {
+  width: 108px;
+  height: 25px;
+  border-radius: 7px;
+}
+
+.workbench-skeleton-section {
+  width: 55px;
+  height: 11px;
+  margin: 0 8px 15px;
+  border-radius: 999px;
+  background: #e7edf5;
+}
+
+.workbench-skeleton-add {
+  width: 100%;
+  height: 37px;
+  margin-bottom: 16px;
+  border: 1px solid #d8e4f2;
+  border-radius: 9px;
+}
+
+.workbench-skeleton-project {
+  width: 100%;
+  height: 36px;
+  margin-bottom: 8px;
+  border-radius: 9px;
+}
+
+.workbench-skeleton-footer {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: auto;
+  padding: 12px 4px 0;
+  border-top: 1px solid #e6ebf1;
+}
+
+.workbench-skeleton-avatar {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+}
+
+.workbench-skeleton-footer-label {
+  width: 90px;
+  height: 9px;
+}
+
+.workbench-skeleton-footer-icon {
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+}
+
+.workspace-column--loading {
+  overflow: hidden;
+  background: #fff;
+}
+
+.workbench-loading-region {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.workbench-loading-content {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  flex: 1 1 auto;
+  align-items: center;
+  flex-direction: column;
+  padding: 0 0 12px;
+}
+
+.workbench-loading-welcome {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 18px;
+  padding: 28px 20px;
+}
+
+.workbench-skeleton-brand {
+  width: clamp(160px, 15vw, 215px);
+  height: 43px;
+  border-radius: 10px;
+}
+
+.workbench-skeleton-slogan {
+  width: 145px;
+  height: 11px;
+  border-radius: 999px;
+}
+
+.workbench-loading-composer {
+  display: flex;
+  width: min(calc(100% - 96px), 860px);
+  min-height: 88px;
+  flex: 0 0 auto;
+  justify-content: space-between;
+  flex-direction: column;
+  padding: 15px 16px 10px;
+  border: 1px solid #dce6f2;
+  border-radius: 17px;
+  background: #fff;
+  box-shadow: 0 5px 18px rgb(31 62 110 / 6%);
+}
+
+.workbench-skeleton-prompt {
+  width: min(220px, 60%);
+  height: 11px;
+}
+
+.workbench-skeleton-composer-footer {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.workbench-skeleton-control {
+  width: 82px;
+  height: 20px;
+  border-radius: 999px;
+}
+
+.workbench-skeleton-control:nth-child(2) {
+  width: 65px;
+}
+
+.workbench-skeleton-submit {
+  width: 33px;
+  height: 33px;
+  margin-left: auto;
+  border-radius: 50%;
+}
+
+@media (max-width: 880px) {
+  .workbench-loading-composer {
+    width: min(calc(100% - 56px), 860px);
+  }
+}
+
+@media (max-width: 720px) {
+  .workbench-loading-composer {
+    width: min(calc(100% - 36px), 860px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-block::after {
+    animation: none !important;
+  }
 }

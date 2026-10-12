@@ -12,7 +12,9 @@ import {
   Folder,
   FolderKanban,
   FolderOpen,
+  LogOut,
   Plus,
+  RefreshCw,
   SlidersHorizontal,
   Settings,
 } from "lucide-react";
@@ -38,10 +40,14 @@ export interface WorkspaceSidebarProps {
   readonly onAddWorkspace: () => void;
   readonly onForgetWorkspace: (workspaceId: WorkspaceId) => void;
   readonly onOpenSettings?: () => void;
+  readonly onCheckUpdates?: (() => void) | undefined;
+  readonly onLogout?: (() => void) | undefined;
 }
 
 export interface WorkspaceSettingsMenuProps {
   readonly onSelect: () => void;
+  readonly onCheckUpdates?: (() => void) | undefined;
+  readonly onLogout?: (() => void) | undefined;
 }
 
 export function WorkspaceSettingsMenu(props: WorkspaceSettingsMenuProps): ReactElement {
@@ -64,6 +70,32 @@ export function WorkspaceSettingsMenu(props: WorkspaceSettingsMenuProps): ReactE
       createElement(SlidersHorizontal, { size: 16, strokeWidth: 2, "aria-hidden": true }),
       createElement("span", null, "模型与配置"),
     ),
+    props.onCheckUpdates === undefined
+      ? null
+      : createElement(
+          "button",
+          {
+            type: "button",
+            className: "workspace-settings-menu-item",
+            role: "menuitem",
+            onClick: props.onCheckUpdates,
+          },
+          createElement(RefreshCw, { size: 16, strokeWidth: 2, "aria-hidden": true }),
+          createElement("span", null, "检查更新"),
+        ),
+    props.onLogout === undefined
+      ? null
+      : createElement(
+          "button",
+          {
+            type: "button",
+            className: "workspace-settings-menu-item",
+            role: "menuitem",
+            onClick: props.onLogout,
+          },
+          createElement(LogOut, { size: 16, strokeWidth: 2, "aria-hidden": true }),
+          createElement("span", null, "退出登录"),
+        ),
   );
 }
 
@@ -147,13 +179,17 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
     ),
     createElement(
       "div",
-      { className: "workspace-sidebar-footer" },
+      {
+        className: `workspace-sidebar-footer${isDesktopHost ? " workspace-sidebar-footer--desktop" : ""}`,
+        role: isDesktopHost ? "group" : undefined,
+        "aria-label": isDesktopHost ? "桌面端账户与设置" : undefined,
+      },
       isDesktopHost
         ? createElement(
             "a",
             {
               className: "workspace-settings-button workspace-account-link",
-              href: "caelush-login://app/",
+              href: "caelush-login://app/?view=account",
             },
             createElement("span", null, "Desktop account"),
           )
@@ -168,11 +204,12 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
             className: "workspace-settings-button",
             ref: settingsButtonRef,
             onClick: () => setSettingsMenuOpen((open) => !open),
+            "aria-label": isDesktopHost ? "设置" : undefined,
             "aria-haspopup": "menu",
             "aria-expanded": settingsMenuOpen,
           },
           createElement(Settings, { size: 16, strokeWidth: 2.1, "aria-hidden": true }),
-          createElement("span", null, "设置"),
+          isDesktopHost ? null : createElement("span", null, "设置"),
         ),
         settingsMenuOpen
           ? createElement(WorkspaceSettingsMenu, {
@@ -180,6 +217,20 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
                 setSettingsMenuOpen(false);
                 props.onOpenSettings?.();
               },
+              onCheckUpdates:
+                isDesktopHost && props.onCheckUpdates !== undefined
+                  ? () => {
+                      setSettingsMenuOpen(false);
+                      props.onCheckUpdates?.();
+                    }
+                  : undefined,
+              onLogout:
+                isDesktopHost && props.onLogout !== undefined
+                  ? () => {
+                      setSettingsMenuOpen(false);
+                      props.onLogout?.();
+                    }
+                  : undefined,
             })
           : null,
       ),
