@@ -72,58 +72,11 @@ button:disabled {
   width: 100%;
   height: 100%;
   min-height: 640px;
-  grid-template-rows: 48px minmax(0, 1fr) 28px;
+  grid-template-rows: minmax(0, 1fr) 28px;
   overflow: hidden;
   background: var(--canvas);
 }
 
-.app-topbar {
-  display: flex;
-  align-items: center;
-  height: 48px;
-  padding-left: 18px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-  user-select: none;
-  -webkit-app-region: drag;
-}
-
-.topbar-brand,
-.topbar-state {
-  display: flex;
-  align-items: center;
-}
-.topbar-brand {
-  gap: 9px;
-  color: var(--text);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.15em;
-}
-.topbar-brand img {
-  width: 19px;
-  height: 19px;
-  border-radius: 5px;
-  object-fit: cover;
-}
-.topbar-brand i {
-  width: 1px;
-  height: 14px;
-  margin: 0 2px 0 3px;
-  background: var(--surface-raised);
-}
-.topbar-brand .topbar-product {
-  color: var(--muted);
-  font-weight: 500;
-  letter-spacing: 0.04em;
-}
-.topbar-state {
-  gap: 8px;
-  margin-left: auto;
-  padding-right: 19px;
-  color: var(--muted);
-  font-size: 0.7rem;
-}
 .connection-dot,
 .status-dot {
   width: 7px;
@@ -132,15 +85,9 @@ button:disabled {
   border-radius: 50%;
   background: var(--surface-raised);
 }
-.connection-dot.is-online,
-.connection-dot.is-offline,
 .status-dot {
   background: var(--brand);
   box-shadow: 0 0 0 3px rgb(37 99 235 / 12%);
-}
-.connection-dot.is-offline {
-  background: var(--warning-ink);
-  box-shadow: 0 0 0 3px rgb(217 153 27 / 12%);
 }
 .app-footer {
   display: flex;
@@ -1420,9 +1367,6 @@ button:disabled {
   .legacy-count-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .topbar-state {
-    display: none;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1483,14 +1427,8 @@ button:disabled {
 }
 
 /* Caelush desktop account refresh: calm blue surfaces, stronger Chinese type hierarchy. */
-.app-topbar {
-  height: 54px;
-  padding-left: 22px;
-  border-bottom-color: var(--line);
-  background: var(--surface);
-}
 .desktop-app {
-  grid-template-rows: 54px minmax(0, 1fr) 32px;
+  grid-template-rows: minmax(0, 1fr) 32px;
 }
 .app-footer {
   padding-inline: 22px;
@@ -1500,15 +1438,6 @@ button:disabled {
   font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
   font-size: 0.69rem;
   letter-spacing: 0;
-}
-.topbar-brand {
-  color: var(--text);
-  font-size: 0.78rem;
-}
-.topbar-brand .topbar-product,
-.topbar-state {
-  color: var(--muted);
-  font-size: 0.76rem;
 }
 .auth-layout {
   grid-template-columns: minmax(350px, 0.92fr) minmax(440px, 1.08fr);

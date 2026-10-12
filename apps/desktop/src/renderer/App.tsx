@@ -378,26 +378,6 @@ export function DesktopApp() {
 
   return (
     <div className="desktop-app">
-      <header className="app-topbar">
-        <div className="topbar-brand">
-          <img src="/caelush-app-icon.png" alt="" />
-          <span>CAELUSH</span>
-          <i />
-          <span className="topbar-product">桌面端</span>
-        </div>
-        <div className="topbar-state">
-          <span
-            className={`connection-dot ${online ? "is-online" : authenticated ? "is-offline" : ""}`}
-          />
-          <span>
-            {online
-              ? "云端已连接"
-              : accountState.status === "AUTHORIZED_OFFLINE"
-                ? "离线授权"
-                : "账户"}
-          </span>
-        </div>
-      </header>
       {authenticatedScreen}
       <UpdatePanel />
       <footer className="app-footer">
