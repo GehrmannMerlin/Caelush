@@ -50,7 +50,6 @@ export function DesktopApp() {
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [devices, setDevices] = useState<readonly SafeDevice[]>([]);
-  const [platformLabel, setPlatformLabel] = useState("Windows · 桌面端");
   const [legacySummary, setLegacySummary] = useState<LegacyDataImportSummary | null>(null);
   const [legacyDismissed, setLegacyDismissed] = useState(false);
   const [legacyBusy, setLegacyBusy] = useState(false);
@@ -83,15 +82,6 @@ export function DesktopApp() {
       .getState()
       .then((state) => {
         if (active) setAccountState(state);
-      })
-      .catch(() => undefined);
-    void window.caelushDesktop.window
-      .getPlatform()
-      .then(({ platform, arch, version }) => {
-        if (active)
-          setPlatformLabel(
-            `${platform === "win32" ? "Windows" : platform} ${arch} · 版本 ${version}`,
-          );
       })
       .catch(() => undefined);
     return () => {
@@ -380,12 +370,6 @@ export function DesktopApp() {
     <div className="desktop-app">
       {authenticatedScreen}
       <UpdatePanel />
-      <footer className="app-footer">
-        <span>{platformLabel}</span>
-        <span>
-          <ShieldCheck size={13} /> 凭据受 Windows 安全存储保护
-        </span>
-      </footer>
     </div>
   );
 }
