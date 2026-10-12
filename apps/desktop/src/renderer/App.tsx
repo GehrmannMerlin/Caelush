@@ -21,7 +21,6 @@ import {
   RefreshCw,
   ShieldCheck,
   Unplug,
-  X,
 } from "lucide-react";
 import type { AccountState, SafeDevice } from "../main/account/state.js";
 import type {
@@ -397,30 +396,6 @@ export function DesktopApp() {
                 ? "离线授权"
                 : "账户"}
           </span>
-        </div>
-        <div className="native-controls" aria-label="窗口控制">
-          <button
-            type="button"
-            aria-label="最小化窗口"
-            onClick={() => void window.caelushDesktop.window.minimize()}
-          >
-            <span className="minimize-mark" />
-          </button>
-          <button
-            type="button"
-            aria-label="最大化或还原窗口"
-            onClick={() => void window.caelushDesktop.window.maximizeOrRestore()}
-          >
-            <span className="maximize-mark" />
-          </button>
-          <button
-            type="button"
-            className="close-control"
-            aria-label="关闭窗口"
-            onClick={() => void window.caelushDesktop.window.close()}
-          >
-            <X size={15} />
-          </button>
         </div>
       </header>
       {authenticatedScreen}

@@ -89,8 +89,7 @@ button:disabled {
 }
 
 .topbar-brand,
-.topbar-state,
-.native-controls {
+.topbar-state {
   display: flex;
   align-items: center;
 }
@@ -143,39 +142,6 @@ button:disabled {
   background: var(--warning-ink);
   box-shadow: 0 0 0 3px rgb(217 153 27 / 12%);
 }
-.native-controls {
-  height: 100%;
-  -webkit-app-region: no-drag;
-}
-.native-controls button {
-  display: grid;
-  width: 42px;
-  height: 100%;
-  place-items: center;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-.native-controls button:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-.native-controls .close-control:hover {
-  background: var(--danger-soft);
-}
-.minimize-mark {
-  width: 11px;
-  height: 1px;
-  background: currentColor;
-}
-.maximize-mark {
-  width: 9px;
-  height: 9px;
-  border: 1px solid var(--line);
-  border-radius: 1px;
-}
-
 .app-footer {
   display: flex;
   align-items: center;
@@ -1919,9 +1885,4 @@ button:disabled {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
-}
-
-.native-controls .close-control:hover {
-  color: #fff;
-  background: #d92d20;
 }
