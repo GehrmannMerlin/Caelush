@@ -139,6 +139,9 @@ export interface DesktopApi {
   readonly update: {
     getAvailability(): Promise<{ readonly available: boolean }>;
     getState(): Promise<import("../shared/update-contract.js").DesktopUpdateState>;
+    getReleaseHistory(): Promise<
+      readonly import("../shared/update-contract.js").DesktopReleaseHistoryItem[]
+    >;
     check(): Promise<import("../shared/update-contract.js").DesktopUpdateState>;
     download(): Promise<import("../shared/update-contract.js").DesktopUpdateState>;
     install(): Promise<import("../shared/update-contract.js").DesktopUpdateState>;

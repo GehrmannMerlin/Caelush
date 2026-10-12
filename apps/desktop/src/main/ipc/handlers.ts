@@ -15,7 +15,10 @@ import {
 import { safeErrorForIpc } from "./safe-error.js";
 import { DesktopWorkspacePanelController } from "../workspace/panel-controller.js";
 import type { DesktopUpdateCoordinator } from "../update/coordinator.js";
-import { UpdateStateSchema } from "../../shared/update-contract.js";
+import {
+  DesktopReleaseHistoryItemSchema,
+  UpdateStateSchema,
+} from "../../shared/update-contract.js";
 
 export const IPC_CHANNELS = Object.freeze({
   account: Object.freeze({
@@ -46,6 +49,7 @@ export const IPC_CHANNELS = Object.freeze({
   }),
   update: Object.freeze({
     getState: "caelush:update:get-state",
+    getReleaseHistory: "caelush:update:get-release-history",
     check: "caelush:update:check",
     download: "caelush:update:download",
     install: "caelush:update:install",
@@ -934,6 +938,15 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
       NoInput,
       UpdateStateSchema,
       () => updates.getState(),
+      undefined,
+      IPC_OPERATION_TIMEOUT_MS,
+      "LOGIN_OR_AGENT",
+    );
+    register(
+      channels.getReleaseHistory,
+      NoInput,
+      z.array(DesktopReleaseHistoryItemSchema).max(100),
+      () => updates.getReleaseHistory(),
       undefined,
       IPC_OPERATION_TIMEOUT_MS,
       "LOGIN_OR_AGENT",

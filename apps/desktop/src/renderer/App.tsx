@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { UpdatePanel } from "./UpdatePanel.js";
+import { UpdatePage } from "./UpdatePage.js";
 import {
   ArrowLeft,
   ArrowRight,
@@ -9,6 +9,7 @@ import {
   CircleAlert,
   Clock3,
   Cloud,
+  Download,
   Eye,
   EyeOff,
   KeyRound,
@@ -29,7 +30,7 @@ import type {
 } from "../shared/legacy-data-contract.js";
 
 type AuthScreen = "login" | "register" | "verify" | "forgot" | "reset";
-type AccountScreen = "home" | "devices" | "security";
+type AccountScreen = "home" | "devices" | "security" | "updates";
 
 const initialState: AccountState = {
   status: "INITIALIZING",
@@ -70,7 +71,7 @@ export function DesktopApp() {
     screen === "reset";
   const reconnectingOffline = accountState.status === "AUTHORIZED_OFFLINE" && authScreenOpen;
   const activeView = useMemo<AccountScreen>(() => {
-    return screen === "devices" || screen === "security" ? screen : "home";
+    return screen === "devices" || screen === "security" || screen === "updates" ? screen : "home";
   }, [screen]);
 
   useEffect(() => {
@@ -92,7 +93,11 @@ export function DesktopApp() {
 
   useEffect(() => {
     if (!authenticated) {
-      setScreen((current) => (current === "devices" || current === "security" ? "login" : current));
+      setScreen((current) =>
+        current === "devices" || current === "security" || current === "updates"
+          ? "login"
+          : current,
+      );
     } else if (online && authScreenOpen) {
       setScreen("home");
     }
@@ -366,12 +371,7 @@ export function DesktopApp() {
       />
     );
 
-  return (
-    <div className="desktop-app">
-      {authenticatedScreen}
-      <UpdatePanel />
-    </div>
-  );
+  return <div className="desktop-app">{authenticatedScreen}</div>;
 }
 
 function AuthShell(props: {
@@ -684,6 +684,12 @@ function AccountHome(props: {
         >
           <KeyRound size={16} /> 安全设置
         </button>
+        <button
+          className={`side-nav ${props.activeView === "updates" ? "is-current" : ""}`}
+          onClick={() => props.onNavigate("updates")}
+        >
+          <Download size={16} /> 检查更新
+        </button>
         <div className="sidebar-separator" />
         <div className="sidebar-profile">
           <div className="profile-avatar">{accountName.slice(0, 1).toUpperCase()}</div>
@@ -722,7 +728,9 @@ function AccountHome(props: {
                 ? "账户总览"
                 : props.activeView === "devices"
                   ? "设备管理"
-                  : "安全设置"}
+                  : props.activeView === "security"
+                    ? "安全设置"
+                    : "检查更新"}
             </h2>
           </div>
           <div className={`authorization-pill ${offline ? "is-offline" : ""}`}>
@@ -770,6 +778,7 @@ function AccountHome(props: {
             onRefresh={props.onRefresh}
           />
         )}
+        {props.activeView === "updates" && <UpdatePage />}
       </section>
     </main>
   );
@@ -1490,6 +1499,8 @@ function accountViewLabel(view: AccountScreen): string {
       return "设备";
     case "security":
       return "安全设置";
+    case "updates":
+      return "检查更新";
   }
 }
 

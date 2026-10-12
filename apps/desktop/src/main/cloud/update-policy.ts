@@ -8,6 +8,10 @@ import {
   type VerifiedUpdatePolicy,
 } from "../../shared/signed-update-policy.mjs";
 import { DesktopUpdateError } from "../update/error.js";
+import {
+  DesktopReleaseHistoryResponseSchema,
+  type DesktopReleaseHistoryItem,
+} from "../../shared/update-contract.js";
 export interface UpdateTrust {
   readonly publicKeys: Record<string, string | Buffer>;
   readonly allowedReleaseHosts: readonly string[];
@@ -51,7 +55,13 @@ export function verifyPolicyResponse(
   }
   return Object.freeze({ ...verified, responseJson: raw });
 }
-type Transport = (url: URL, signal: AbortSignal) => Promise<{ status: number; body: string }>;
+const POLICY_RESPONSE_MAX_BYTES = 1024 * 1024;
+const RELEASE_HISTORY_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+type Transport = (
+  url: URL,
+  signal: AbortSignal,
+  maximumBytes: number,
+) => Promise<{ status: number; body: string }>;
 export class UpdatePolicyClient {
   constructor(
     private readonly origin: string,
@@ -82,7 +92,7 @@ export class UpdatePolicyClient {
       channel: this.trust.channel,
       currentVersion: this.version,
     }).toString();
-    const response = await this.transport(url, signal);
+    const response = await this.transport(url, signal, POLICY_RESPONSE_MAX_BYTES);
     if (response.status === 404) return null;
     if (response.status !== 200)
       throw new DesktopUpdateError(
@@ -91,8 +101,43 @@ export class UpdatePolicyClient {
       );
     return verifyPolicyResponse(response.body, this.trust, this.version);
   }
+  async getReleaseHistory(
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<DesktopReleaseHistoryItem[]> {
+    const url = new URL("/v1/desktop/releases", this.origin);
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && url.hostname === "127.0.0.1")) {
+      throw new DesktopUpdateError(
+        "POLICY_ORIGIN_INVALID",
+        "The build's update service origin is invalid.",
+      );
+    }
+    url.search = new URLSearchParams({
+      platform: "windows",
+      arch: "x64",
+      channel: this.trust.channel,
+    }).toString();
+    const response = await this.transport(url, signal, RELEASE_HISTORY_RESPONSE_MAX_BYTES);
+    if (response.status !== 200) {
+      throw new DesktopUpdateError(
+        `UPDATE_HISTORY_HTTP_${response.status}`,
+        "The published release history is unavailable.",
+      );
+    }
+    const parsed = DesktopReleaseHistoryResponseSchema.safeParse(parsePolicyJson(response.body));
+    if (!parsed.success) {
+      throw new DesktopUpdateError(
+        "UPDATE_HISTORY_RESPONSE_INVALID",
+        "The published release history response is invalid.",
+      );
+    }
+    return parsed.data.releases;
+  }
 }
-function requestPolicy(url: URL, signal: AbortSignal): Promise<{ status: number; body: string }> {
+function requestPolicy(
+  url: URL,
+  signal: AbortSignal,
+  maximumBytes: number,
+): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
       () =>
@@ -113,7 +158,7 @@ function requestPolicy(url: URL, signal: AbortSignal): Promise<{ status: number;
         let bytes = 0;
         res.on("data", (chunk: Buffer) => {
           bytes += chunk.length;
-          if (bytes > 1024 * 1024)
+          if (bytes > maximumBytes)
             req.destroy(
               new DesktopUpdateError(
                 "POLICY_RESPONSE_TOO_LARGE",

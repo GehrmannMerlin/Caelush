@@ -92,6 +92,64 @@ describe("signed Cloud update response", () => {
     }));
     expect(await client.check()).toBeNull();
   });
+  it("loads public release-note history without update signing configuration", async () => {
+    let requested: URL | null = null;
+    let responseByteLimit = 0;
+    const client = new UpdatePolicyClient(
+      "http://127.0.0.1:8000",
+      { ...trust, publicKeys: {}, allowedReleaseHosts: [] },
+      "0.1.0",
+      async (url, _signal, maximumBytes) => {
+        requested = url;
+        responseByteLimit = maximumBytes;
+        return {
+          status: 200,
+          body: JSON.stringify({
+            requestId: "c1c57727-06d1-41d8-b854-4feee46ae250",
+            releases: [
+              {
+                version: "0.1.1",
+                channel: "dev",
+                publishedAt: "2026-10-12T00:00:00Z",
+                releaseNotes: "修复问题",
+              },
+            ],
+          }),
+        };
+      },
+    );
+    await expect(client.getReleaseHistory()).resolves.toEqual([
+      {
+        version: "0.1.1",
+        channel: "dev",
+        publishedAt: "2026-10-12T00:00:00Z",
+        releaseNotes: "修复问题",
+      },
+    ]);
+    expect(requested?.pathname).toBe("/v1/desktop/releases");
+    expect(requested?.searchParams.get("channel")).toBe("dev");
+    expect(responseByteLimit).toBe(8 * 1024 * 1024);
+  });
+  it("rejects unrecognized installer fields from the display-only history response", async () => {
+    const client = new UpdatePolicyClient("http://127.0.0.1:8000", trust, "0.1.0", async () => ({
+      status: 200,
+      body: JSON.stringify({
+        requestId: "c1c57727-06d1-41d8-b854-4feee46ae250",
+        releases: [
+          {
+            version: "0.1.1",
+            channel: "dev",
+            publishedAt: "2026-10-12T00:00:00Z",
+            releaseNotes: "版本记录",
+            artifactUrl: "https://releases.example.com/setup.exe",
+          },
+        ],
+      }),
+    }));
+    await expect(client.getReleaseHistory()).rejects.toMatchObject({
+      code: "UPDATE_HISTORY_RESPONSE_INVALID",
+    });
+  });
 });
 describe("application revision and crash state", () => {
   it("isolates revision ranges by channel and keeps the state envelope order-independent", async () => {
@@ -162,7 +220,7 @@ describe("Main coordinator authority", () => {
       version: "0.1.0",
       trust,
       store: state,
-      client: { check },
+      client: { check, getReleaseHistory: async () => [] },
       download: async (_policy, signal, onProgress) => {
         if (signal.aborted) throw new Error("cancelled");
         const name = "00000000-0000-4000-8000-000000000000.exe";
@@ -192,6 +250,12 @@ describe("Main coordinator authority", () => {
     expect(f.coordinator.getState().status).toBe("READY_TO_INSTALL");
     await Promise.all([f.coordinator.install(), f.coordinator.install()]);
     expect(f.handoff).toHaveBeenCalledTimes(1);
+  });
+  it("automatically downloads and verifies a signed update after a successful check", async () => {
+    const f = await fixture();
+    await f.coordinator.check();
+    expect(f.coordinator.getState().status).toBe("READY_TO_INSTALL");
+    expect(f.coordinator.getState().downloadedBytes).toBe(3);
   });
   it("coalesces deferral and prevents installation racing a resumed Daemon", async () => {
     let release!: () => void;

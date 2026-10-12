@@ -319,6 +319,117 @@
           "503": { "$ref": "#/components/responses/ServiceUnavailable" }
         }
       }
+    },
+    "/v1/desktop/releases": {
+      "get": {
+        "tags": [
+          "Desktop Update"
+        ],
+        "summary": "List published Desktop release notes",
+        "description": "Returns bounded release notes for published and retired Desktop releases. Installer URLs, hashes, signatures, and draft release metadata are never included.",
+        "operationId": "listDesktopReleaseHistory",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopReleaseHistoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Temporarily unavailable service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "parameters": [
+          {
+            "name": "platform",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "windows"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "x64"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "dev",
+                "beta",
+                "stable"
+              ]
+            }
+          }
+        ],
+        "x-caelush-authentication": "NONE_PUBLIC_RELEASE_HISTORY",
+        "x-caelush-idempotency": "Safe bounded read of published release-note metadata.",
+        "x-caelush-security": [
+          "Returns only published or retired release notes",
+          "Never returns artifact URLs, hashes, signatures, or draft metadata",
+          "Release history does not authorize downloads"
+        ]
+      }
     }
   },
   "components": {
@@ -897,6 +1008,69 @@
           },
           "signedPolicy": { "$ref": "#/components/schemas/SignedUpdatePolicyEnvelope" }
         }
+      },
+      "DesktopReleaseHistoryItem": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "maxLength": 256,
+            "title": "Version"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "beta",
+              "stable"
+            ],
+            "title": "Channel"
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Publishedat",
+            "description": "Publication time in UTC."
+          },
+          "releaseNotes": {
+            "type": "string",
+            "maxLength": 16384,
+            "title": "Releasenotes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "channel",
+          "publishedAt",
+          "releaseNotes"
+        ],
+        "title": "DesktopReleaseHistoryItem"
+      },
+      "DesktopReleaseHistoryResponse": {
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Requestid",
+            "description": "Transport correlation only."
+          },
+          "releases": {
+            "items": {
+              "$ref": "#/components/schemas/DesktopReleaseHistoryItem"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Releases"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "requestId",
+          "releases"
+        ],
+        "title": "DesktopReleaseHistoryResponse"
       },
       "RegisterRequest": {
         "type": "object",

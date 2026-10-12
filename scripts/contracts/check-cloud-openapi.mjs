@@ -26,6 +26,7 @@ export const REQUIRED_CLOUD_OPERATIONS = Object.freeze({
   "/v1/account/devices": ["get", "listAccountDevices"],
   "/v1/account/devices/{deviceId}": ["delete", "revokeAccountDevice"],
   "/v1/desktop/update-policy": ["get", "getDesktopUpdatePolicy"],
+  "/v1/desktop/releases": ["get", "listDesktopReleaseHistory"],
 });
 
 const REQUIRED_SCHEMA_NAMES = [
@@ -41,6 +42,8 @@ const REQUIRED_SCHEMA_NAMES = [
   "DesktopUpdatePolicy",
   "DesktopRelease",
   "SignedUpdatePolicyEnvelope",
+  "DesktopReleaseHistoryItem",
+  "DesktopReleaseHistoryResponse",
 ];
 
 const HTTP_METHODS = new Set(["get", "put", "post", "delete", "options", "head", "patch", "trace"]);

@@ -2,7 +2,7 @@ import electron = require("electron");
 import type { AccountState } from "../main/account/state.js";
 import type { DesktopApi } from "./api-types.js";
 import type { LegacyImportProgress } from "../shared/legacy-data-contract.js";
-import type { DesktopUpdateState } from "../shared/update-contract.js";
+import type { DesktopReleaseHistoryItem, DesktopUpdateState } from "../shared/update-contract.js";
 
 const channels = {
   account: {
@@ -33,6 +33,7 @@ const channels = {
   },
   update: {
     getState: "caelush:update:get-state",
+    getReleaseHistory: "caelush:update:get-release-history",
     check: "caelush:update:check",
     download: "caelush:update:download",
     install: "caelush:update:install",
@@ -381,6 +382,10 @@ const api: DesktopApi = Object.freeze({
   workspace: Object.freeze(desktopWorkspaceApi),
   browser: Object.freeze(desktopBrowserApi),
   update: Object.freeze({
+    getReleaseHistory: async () =>
+      unwrapIpcResult<DesktopReleaseHistoryItem[]>(
+        await electron.ipcRenderer.invoke(channels.update.getReleaseHistory),
+      ),
     getState: async () =>
       unwrapIpcResult<DesktopUpdateState>(
         await electron.ipcRenderer.invoke(channels.update.getState),

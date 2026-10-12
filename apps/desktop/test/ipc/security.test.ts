@@ -136,6 +136,7 @@ describe("Desktop IPC security boundary", () => {
     };
     const updates = {
       getState: () => state,
+      getReleaseHistory: vi.fn(async () => []),
       subscribe: () => () => {},
       check: vi.fn(async () => {}),
       download: vi.fn(async () => {}),
@@ -144,6 +145,13 @@ describe("Desktop IPC security boundary", () => {
       deferInstall: vi.fn(async () => {}),
     };
     const test = fixture({ updates });
+    const historyInvoke = test.handlers.get(IPC_CHANNELS.update.getReleaseHistory)!;
+    expect(await historyInvoke(test.event(), undefined)).toMatchObject({ ok: true, value: [] });
+    expect(updates.getReleaseHistory).toHaveBeenCalledTimes(1);
+    expect(await historyInvoke(test.event(), { channel: "stable" })).toMatchObject({
+      ok: false,
+      error: { code: "IPC_INPUT_INVALID" },
+    });
     const invoke = test.handlers.get(IPC_CHANNELS.update.check)!;
     for (const url of ["caelush-login://app/", "caelush-app://app/agent/"]) {
       test.frame.url = url;

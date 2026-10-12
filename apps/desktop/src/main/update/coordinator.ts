@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { DesktopUpdateState } from "../../shared/update-contract.js";
+import type {
+  DesktopReleaseHistoryItem,
+  DesktopUpdateState,
+} from "../../shared/update-contract.js";
 import { compareSemVer } from "../../shared/semver.mjs";
 import type { PolicyResponse, UpdateTrust } from "../cloud/update-policy.js";
 import { verifyPolicyResponse } from "../cloud/update-policy.js";
@@ -15,7 +18,10 @@ interface CoordinatorOptions {
   readonly version: string;
   readonly trust: UpdateTrust;
   readonly store: UpdateStateStore;
-  readonly client: { check(signal?: AbortSignal): Promise<PolicyResponse | null> };
+  readonly client: {
+    check(signal?: AbortSignal): Promise<PolicyResponse | null>;
+    getReleaseHistory(signal?: AbortSignal): Promise<DesktopReleaseHistoryItem[]>;
+  };
   readonly download: (
     policy: PolicyResponse,
     signal: AbortSignal,
@@ -60,6 +66,9 @@ export class DesktopUpdateCoordinator {
   subscribe(listener: (state: DesktopUpdateState) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+  getReleaseHistory(): Promise<DesktopReleaseHistoryItem[]> {
+    return this.options.client.getReleaseHistory();
   }
   async initialize(): Promise<void> {
     try {
@@ -148,50 +157,46 @@ export class DesktopUpdateCoordinator {
       await this.options.store.accept(verified);
       this.policy = verified;
       this.projectPolicy(verified);
+      const available = compareSemVer(verified.payload.latestVersion, this.options.version) > 0;
       this.set(
-        compareSemVer(verified.payload.latestVersion, this.options.version) > 0
-          ? "UPDATE_AVAILABLE"
-          : "UP_TO_DATE",
-        compareSemVer(verified.payload.latestVersion, this.options.version) > 0
-          ? "A signed update is available."
+        available ? "UPDATE_AVAILABLE" : "UP_TO_DATE",
+        available
+          ? "A signed update is available. Downloading the verified installer."
           : "The signed policy selects the currently installed version.",
       );
+      if (available) await this.downloadAvailableUpdate();
     });
   }
   download(): Promise<void> {
-    return this.exclusive("download", async () => {
-      if (
-        ["READY_TO_INSTALL", "INSTALLING", "WAITING_FOR_SAFE_SHUTDOWN"].includes(this.state.status)
-      )
-        return;
-      if (
-        !this.policy ||
-        compareSemVer(this.policy.payload.latestVersion, this.options.version) <= 0
-      )
-        throw invalidState();
-      this.policy = this.verify(this.policy.responseJson, this.options.version);
-      this.abort = new AbortController();
-      this.state = { ...this.state, downloadedBytes: 0 };
-      this.set("DOWNLOADING", "Downloading the signed release…");
-      const name = await this.options.download(this.policy, this.abort.signal, (bytes) => {
-        this.state = { ...this.state, downloadedBytes: bytes };
-        this.publish();
-      });
-      this.set("VERIFYING", "Checking the installer size and SHA-512…");
-      await verifyInstaller(this.policy, this.options.store, name);
-      // Expiry can pass during a long download. Never publish a stale installer transaction.
-      this.policy = this.verify(this.policy.responseJson, this.options.version);
-      await this.options.store.setPending({
-        transactionId: randomUUID(),
-        sourceVersion: this.options.version,
-        targetVersion: this.policy.payload.latestVersion,
-        step: "READY",
-        responseJson: this.policy.responseJson,
-        installerName: name,
-        profileSnapshot: null,
-      });
-      this.set("READY_TO_INSTALL", "Download verified. Confirm installation when you are ready.");
+    return this.exclusive("download", () => this.downloadAvailableUpdate());
+  }
+  private async downloadAvailableUpdate(): Promise<void> {
+    if (["READY_TO_INSTALL", "INSTALLING", "WAITING_FOR_SAFE_SHUTDOWN"].includes(this.state.status))
+      return;
+    if (!this.policy || compareSemVer(this.policy.payload.latestVersion, this.options.version) <= 0)
+      throw invalidState();
+    this.policy = this.verify(this.policy.responseJson, this.options.version);
+    this.abort = new AbortController();
+    this.state = { ...this.state, downloadedBytes: 0 };
+    this.set("DOWNLOADING", "Downloading the signed release…");
+    const name = await this.options.download(this.policy, this.abort.signal, (bytes) => {
+      this.state = { ...this.state, downloadedBytes: bytes };
+      this.publish();
     });
+    this.set("VERIFYING", "Checking the installer size and SHA-512…");
+    await verifyInstaller(this.policy, this.options.store, name);
+    // Expiry can pass during a long download. Never publish a stale installer transaction.
+    this.policy = this.verify(this.policy.responseJson, this.options.version);
+    await this.options.store.setPending({
+      transactionId: randomUUID(),
+      sourceVersion: this.options.version,
+      targetVersion: this.policy.payload.latestVersion,
+      step: "READY",
+      responseJson: this.policy.responseJson,
+      installerName: name,
+      profileSnapshot: null,
+    });
+    this.set("READY_TO_INSTALL", "Download verified. Confirm installation when you are ready.");
   }
   install(): Promise<void> {
     return this.exclusive("install", async () => {

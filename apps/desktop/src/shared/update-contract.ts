@@ -1,4 +1,21 @@
 import { z } from "zod";
+
+export const DesktopReleaseHistoryItemSchema = z
+  .object({
+    version: z.string().min(1).max(256),
+    channel: z.enum(["dev", "beta", "stable"]),
+    publishedAt: z.iso.datetime({ offset: true }).max(64),
+    releaseNotes: z.string().max(16384),
+  })
+  .strict();
+export const DesktopReleaseHistoryResponseSchema = z
+  .object({
+    requestId: z.uuid(),
+    releases: z.array(DesktopReleaseHistoryItemSchema).max(100),
+  })
+  .strict();
+export type DesktopReleaseHistoryItem = z.infer<typeof DesktopReleaseHistoryItemSchema>;
+
 export const UpdateStateSchema = z
   .object({
     status: z.enum([
