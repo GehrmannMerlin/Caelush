@@ -718,67 +718,69 @@ function AccountHome(props: {
       </aside>
 
       <section className="account-content">
-        <div className="account-page-head">
-          <div>
-            <p className="eyebrow">
-              账户中心 <span>/</span> {accountViewLabel(props.activeView)}
-            </p>
-            <h2>
-              {props.activeView === "home"
-                ? "账户总览"
-                : props.activeView === "devices"
-                  ? "设备管理"
-                  : props.activeView === "security"
-                    ? "安全设置"
-                    : "检查更新"}
-            </h2>
+        <div className="account-content-inner">
+          <div className="account-page-head">
+            <div>
+              <p className="eyebrow">
+                账户中心 <span>/</span> {accountViewLabel(props.activeView)}
+              </p>
+              <h2>
+                {props.activeView === "home"
+                  ? "账户总览"
+                  : props.activeView === "devices"
+                    ? "设备管理"
+                    : props.activeView === "security"
+                      ? "安全设置"
+                      : "检查更新"}
+              </h2>
+            </div>
+            <div className={`authorization-pill ${offline ? "is-offline" : ""}`}>
+              <span className="connection-dot" />
+              {offline ? "离线授权" : "账户已连接"}
+            </div>
           </div>
-          <div className={`authorization-pill ${offline ? "is-offline" : ""}`}>
-            <span className="connection-dot" />
-            {offline ? "离线授权" : "账户已连接"}
-          </div>
+          {props.feedback && <MessageBox message={props.feedback} tone="info" />}
+          {props.activeView === "home" && (
+            <Overview
+              state={accountState}
+              onNavigate={props.onNavigate}
+              onRefresh={props.onRefresh}
+              onReconnect={props.onReconnect}
+              onOpenAgent={props.onOpenAgent}
+              busy={props.busy}
+              legacySummary={props.legacySummary}
+              legacyDismissed={props.legacyDismissed}
+              legacyBusy={props.legacyBusy}
+              legacyProgress={props.legacyProgress}
+              legacyMessage={props.legacyMessage}
+              onDismissLegacy={props.onDismissLegacy}
+              onImportLegacy={props.onImportLegacy}
+              onResumeLegacy={props.onResumeLegacy}
+            />
+          )}
+          {props.activeView === "devices" && (
+            <DeviceManager
+              state={accountState}
+              devices={props.devices}
+              busy={props.busy}
+              onRevoke={props.onRevoke}
+              onRefresh={props.onRefresh}
+            />
+          )}
+          {props.activeView === "security" && (
+            <SecuritySettings
+              online={!offline}
+              busy={props.busy}
+              currentPassword={props.currentPassword}
+              newPassword={props.newPassword}
+              setCurrentPassword={props.setCurrentPassword}
+              setNewPassword={props.setNewPassword}
+              onChangePassword={props.onChangePassword}
+              onRefresh={props.onRefresh}
+            />
+          )}
+          {props.activeView === "updates" && <UpdatePage />}
         </div>
-        {props.feedback && <MessageBox message={props.feedback} tone="info" />}
-        {props.activeView === "home" && (
-          <Overview
-            state={accountState}
-            onNavigate={props.onNavigate}
-            onRefresh={props.onRefresh}
-            onReconnect={props.onReconnect}
-            onOpenAgent={props.onOpenAgent}
-            busy={props.busy}
-            legacySummary={props.legacySummary}
-            legacyDismissed={props.legacyDismissed}
-            legacyBusy={props.legacyBusy}
-            legacyProgress={props.legacyProgress}
-            legacyMessage={props.legacyMessage}
-            onDismissLegacy={props.onDismissLegacy}
-            onImportLegacy={props.onImportLegacy}
-            onResumeLegacy={props.onResumeLegacy}
-          />
-        )}
-        {props.activeView === "devices" && (
-          <DeviceManager
-            state={accountState}
-            devices={props.devices}
-            busy={props.busy}
-            onRevoke={props.onRevoke}
-            onRefresh={props.onRefresh}
-          />
-        )}
-        {props.activeView === "security" && (
-          <SecuritySettings
-            online={!offline}
-            busy={props.busy}
-            currentPassword={props.currentPassword}
-            newPassword={props.newPassword}
-            setCurrentPassword={props.setCurrentPassword}
-            setNewPassword={props.setNewPassword}
-            onChangePassword={props.onChangePassword}
-            onRefresh={props.onRefresh}
-          />
-        )}
-        {props.activeView === "updates" && <UpdatePage />}
       </section>
     </main>
   );

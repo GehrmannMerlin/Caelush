@@ -1773,6 +1773,11 @@ button:disabled {
   padding: 34px clamp(24px, 3.6vw, 60px);
   background: var(--canvas);
 }
+.account-content-inner {
+  width: 100%;
+  max-width: 1080px;
+  margin-inline: auto;
+}
 .account-page-head {
   margin-bottom: 22px;
 }
