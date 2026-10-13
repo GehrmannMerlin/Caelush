@@ -2,29 +2,34 @@ import type { BrowserWindowConstructorOptions } from "electron";
 
 export interface DesktopRendererTrust {
   readonly developmentOrigin: string | null;
+  readonly allowLoginIpc: boolean;
 }
 
 export function createRendererTrust(
   appIsPackaged: boolean,
   configuredDevUrl: string | undefined,
+  isolatedDevelopment = false,
 ): DesktopRendererTrust {
-  if (appIsPackaged || configuredDevUrl === undefined) return { developmentOrigin: null };
+  if (appIsPackaged || configuredDevUrl === undefined) {
+    return { developmentOrigin: null, allowLoginIpc: false };
+  }
   try {
     const url = new URL(configuredDevUrl);
+    const expectedPort = isolatedDevelopment ? "5174" : "5173";
     if (
       url.protocol === "http:" &&
       url.hostname === "127.0.0.1" &&
-      url.port === "5173" &&
+      url.port === expectedPort &&
       url.pathname === "/" &&
       url.search === "" &&
       url.hash === ""
     ) {
-      return { developmentOrigin: url.origin };
+      return { developmentOrigin: url.origin, allowLoginIpc: isolatedDevelopment };
     }
   } catch {
     // Invalid development configuration fails closed to the packaged app protocol.
   }
-  return { developmentOrigin: null };
+  return { developmentOrigin: null, allowLoginIpc: false };
 }
 
 export function isLocalRendererUrl(destination: string, trust: DesktopRendererTrust): boolean {

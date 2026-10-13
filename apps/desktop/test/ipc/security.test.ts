@@ -17,6 +17,7 @@ function fixture(
     readonly desktopPanels?: unknown;
     readonly updates?: unknown;
     readonly developmentOrigin?: string | null;
+    readonly allowLoginIpc?: boolean;
   } = {},
 ) {
   const handlers = new Map<string, (event: unknown, input: unknown) => Promise<unknown>>();
@@ -69,7 +70,10 @@ function fixture(
       listener(createInitialAccountState("LOGIN_REQUIRED"));
       return () => undefined;
     },
-    register: vi.fn(),
+    register: vi.fn(async () => ({
+      requestId: "00000000-0000-4000-8000-000000000000",
+      status: "ACCEPTED" as const,
+    })),
     login: vi.fn(),
     logout: vi.fn(async () => ({ serverRevoked: true })),
     resendVerification: vi.fn(),
@@ -85,7 +89,10 @@ function fixture(
     ipcMain: ipcMain as never,
     window: window as never,
     controller: controller as never,
-    rendererTrust: { developmentOrigin: options.developmentOrigin ?? null },
+    rendererTrust: {
+      developmentOrigin: options.developmentOrigin ?? null,
+      allowLoginIpc: options.allowLoginIpc ?? false,
+    },
     platform: "win32",
     arch: "x64",
     version: "0.1.0",
@@ -269,6 +276,23 @@ describe("Desktop IPC security boundary", () => {
     expect(account).toMatchObject({ ok: false, error: { code: "IPC_CALLER_INVALID" } });
     expect(workspace).toEqual({ ok: true, value: { available: true } });
     expect(desktopPanels.getAvailability).toHaveBeenCalledOnce();
+    test.dispose();
+  });
+
+  it("allows registration from the explicitly isolated loopback development renderer", async () => {
+    const test = fixture({
+      developmentOrigin: "http://127.0.0.1:5174",
+      allowLoginIpc: true,
+    });
+    test.frame.url = "http://127.0.0.1:5174/";
+
+    const result = await test.handlers.get(IPC_CHANNELS.account.register)?.(test.event(), {
+      email: "person@example.com",
+      password: "development-only-password",
+    });
+
+    expect(result).toMatchObject({ ok: true, value: { status: "ACCEPTED" } });
+    expect(test.controller.register).toHaveBeenCalledOnce();
     test.dispose();
   });
 

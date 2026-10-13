@@ -36,6 +36,24 @@ describe("Electron window security policy", () => {
     expect(createRendererTrust(false, "http://0.0.0.0:5173/").developmentOrigin).toBeNull();
   });
 
+  it("enables Login IPC only for an explicitly isolated development origin", () => {
+    expect(createRendererTrust(false, "http://127.0.0.1:5173/")).toMatchObject({
+      developmentOrigin: "http://127.0.0.1:5173",
+      allowLoginIpc: false,
+    });
+    expect(createRendererTrust(false, "http://127.0.0.1:5174/", true)).toMatchObject({
+      developmentOrigin: "http://127.0.0.1:5174",
+      allowLoginIpc: true,
+    });
+    expect(createRendererTrust(false, "http://127.0.0.1:5174/")).toMatchObject({
+      allowLoginIpc: false,
+    });
+    expect(createRendererTrust(true, "http://127.0.0.1:5174/", true)).toMatchObject({
+      developmentOrigin: null,
+      allowLoginIpc: false,
+    });
+  });
+
   it("opens external navigation only for allowlisted HTTPS hosts", () => {
     const allowed = new Set(["github.com", "www.caelush.com"]);
     expect(allowedExternalHttpsUrl("https://github.com/GehrmannMerlin/Caelush", allowed)).toBe(

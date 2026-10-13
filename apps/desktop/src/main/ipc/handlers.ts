@@ -346,6 +346,7 @@ const LegacyImportResultSchema = z
 
 export interface DesktopRendererTrust {
   readonly developmentOrigin: string | null;
+  readonly allowLoginIpc: boolean;
 }
 
 export interface RegisterDesktopIpcOptions {
@@ -1063,7 +1064,7 @@ function isTrustedCallerUrl(
         candidate.hash === "" &&
         ["/", "/agent", "/agent/"].includes(candidate.pathname)
       ) {
-        return policy !== "LOGIN";
+        return policy !== "LOGIN" || trust.allowLoginIpc;
       }
     } catch {
       // Continue with the production custom origins.
