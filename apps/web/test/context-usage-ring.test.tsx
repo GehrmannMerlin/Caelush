@@ -158,10 +158,15 @@ describe("ContextUsageRing", () => {
     expect(markup).toContain('viewBox="0 0 18 18"');
     expect(markup).toContain('stroke-dashoffset="0.5"');
     expect(markup).toContain("工作上下文");
-    expect(inspectorMarkup).toContain("Raw Context Window");
-    expect(inspectorMarkup).toContain("1,200 tokens");
-    expect(inspectorMarkup).toContain("Current Turn");
-    expect(inspectorMarkup).toContain("180 tokens");
+    expect(inspectorMarkup).toContain('role="progressbar"');
+    expect(inspectorMarkup).toContain('aria-valuenow="50"');
+    expect(inspectorMarkup).toContain("50%");
+    expect(inspectorMarkup).toContain("400 / 800 tokens");
+    expect(inspectorMarkup).toContain("剩余");
+    expect(inspectorMarkup).toContain("缓存命中率");
+    expect(inspectorMarkup).toContain("上下文压缩");
+    expect(inspectorMarkup).not.toContain("Current Turn");
+    expect(inspectorMarkup).not.toContain("Raw Context Window");
   });
 
   it("clamps invalid ratios to the visible 0%–100% ring range", () => {
@@ -175,133 +180,67 @@ describe("ContextUsageRing", () => {
     expect(negative).toContain('stroke-dashoffset="1"');
   });
 
-  it("shows all cache states and keeps unreported rates textual", () => {
+  it("shows the current Run cache hit rate and handles unavailable metrics", () => {
     const warm = renderToStaticMarkup(
       <ContextInspector usage={{ ...baseUsage, promptCache: basePromptCache }} />,
     );
-    const cold = renderToStaticMarkup(
+    const latestOnly = renderToStaticMarkup(
       <ContextInspector
         usage={{
           ...baseUsage,
-          promptCache: { ...basePromptCache, status: "COLD_START" },
+          promptCache: { ...basePromptCache, metricsV2: undefined },
         }}
       />,
     );
-    const reset = renderToStaticMarkup(
+    const unavailable = renderToStaticMarkup(
       <ContextInspector
         usage={{
           ...baseUsage,
           promptCache: {
             ...basePromptCache,
-            status: "RESET",
-            resetReason: "COMPACTION_COMMITTED",
-            resetStepSequence: 3,
-            resetAt: 4,
-          },
-        }}
-      />,
-    );
-    const initialEpoch = renderToStaticMarkup(
-      <ContextInspector
-        usage={{
-          ...baseUsage,
-          promptCache: { ...basePromptCache, resetReason: "INITIAL" },
-        }}
-      />,
-    );
-    const unreported = renderToStaticMarkup(
-      <ContextInspector
-        usage={{
-          ...baseUsage,
-          promptCache: {
-            ...basePromptCache,
-            status: "UNREPORTED",
             latestHitRate: undefined,
-            rollingHitRate: undefined,
-            reusablePrefixEfficiency: undefined,
-            metricsV2: {
-              ...basePromptCache.metricsV2,
-              previousInputCoverage: undefined,
-              fullRun: {
-                mainAgent: { requestCount: 0, hitTokens: 0, accountedTokens: 0 },
-                allPurposes: { requestCount: 0, hitTokens: 0, accountedTokens: 0 },
-              },
-              warm: {
-                mainAgent: { requestCount: 0, hitTokens: 0, accountedTokens: 0 },
-                allPurposes: { requestCount: 0, hitTokens: 0, accountedTokens: 0 },
-              },
-              rolling: {
-                windowSize: 10,
-                mainAgent: { requestCount: 0, hitTokens: 0, accountedTokens: 0 },
-                allPurposes: { requestCount: 0, hitTokens: 0, accountedTokens: 0 },
-              },
-              latestRequest: { purpose: "MAIN_AGENT", cacheUsageReported: false },
-              usageCoverage: {
-                observedRequestCount: 1,
-                completeCacheUsageCount: 0,
-                incompleteOrUnknownCount: 1,
-                providerUsageUnreportedCount: 1,
-                providerUsageWithoutCacheBreakdownCount: 0,
-                failedOrCancelledWithoutUsageCount: 1,
-                inProgressInvocationCount: 0,
-                missingInvocationRecordCount: 0,
-                legacyWithoutCacheBreakdownCount: 0,
-                unidentifiedLegacySampleCount: 0,
-                coverageRate: 0,
-                status: "UNREPORTED",
-              },
-            },
-            purposes: [],
+            metricsV2: undefined,
           },
         }}
       />,
     );
 
-    expect(warm).toContain("暖请求命中率（Provider Usage）");
-    expect(warm).toContain("当前 Run 累计命中率");
-    expect(warm).not.toContain("可复用前缀效率 100%");
-    expect(warm).toContain("Usage Coverage");
-    expect(warm).toContain("已上报 Token 但无 Hit/Miss 1");
-    expect(warm).toContain("500 input tokens");
-    expect(warm).toContain("cache hit 未上报");
-    expect(warm).toContain("Previous Input Coverage Proxy（诊断代理量）");
-    expect(warm).toContain("缓存周期");
+    expect(warm).toContain("缓存命中率");
     expect(warm).toContain("80.0%");
-    expect(cold).toContain("冷启动");
-    expect(reset).toContain("最近重置");
-    expect(reset).toContain("COMPACTION_COMMITTED");
-    expect(reset).toContain("Step 3");
-    expect(initialEpoch).toMatch(/最近重置<\/dt><dd>—<\/dd>/);
-    expect(initialEpoch).not.toContain("INITIAL");
-    expect(unreported).toContain("未上报 usage");
-    expect(unreported).not.toContain("0.0%");
-    expect(unreported).not.toContain("可复用前缀效率");
+    expect(warm).toContain("当前 Run");
+    expect(warm).not.toContain("Usage Coverage");
+    expect(warm).not.toContain("MAIN_AGENT");
+    expect(warm).not.toContain("500 input tokens");
+    expect(latestOnly).toContain("80.0%");
+    expect(latestOnly).toContain("最近请求");
+    expect(unavailable).toContain("暂无数据");
+    expect(unavailable).not.toContain("0.0%");
   });
 
-  it("keeps Purpose-specific Usage visible without claiming missing fields are zero", () => {
+  it("keeps the popover focused on capacity, cache rate, and compactions", () => {
     const legacy = renderToStaticMarkup(<ContextInspector usage={baseUsage} />);
     const withAuxiliary = renderToStaticMarkup(
       <ContextInspector usage={{ ...baseUsage, promptCache: basePromptCache }} />,
     );
 
     expect(legacy).toContain("工作上下文");
-    expect(legacy).not.toContain("平台实际命中率");
-    expect(withAuxiliary).toContain("压缩请求");
-    expect(withAuxiliary).toContain("1 request");
-    expect(withAuxiliary).toContain("500 input tokens");
-    expect(withAuxiliary).toContain("60 input tokens");
-    expect(withAuxiliary).toContain("cache hit 未上报");
-    expect(withAuxiliary).toContain("Usage Coverage");
+    expect(legacy).toContain("50%");
+    expect(withAuxiliary).toContain("80.0%");
+    expect(withAuxiliary).toContain("1 次");
+    expect(withAuxiliary).toContain("正常");
+    expect(withAuxiliary).not.toContain("压缩请求");
+    expect(withAuxiliary).not.toContain("request");
+    expect(withAuxiliary).not.toContain("Usage Coverage");
   });
 
-  it("defines narrow-screen cache layout constraints", () => {
+  it("keeps the compact inspector usable on narrow screens", () => {
     const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 
-    expect(styles).toMatch(/\.context-cache-section\s*\{[^}]*min-width:\s*0/s);
-    expect(styles).toMatch(/\.context-cache-purpose-list\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+    expect(styles).toMatch(/\.context-inspector-progress\s*\{[^}]*height:\s*7px/s);
+    expect(styles).toMatch(/\.context-inspector-metrics\s*\{[^}]*grid-template-columns:/s);
     expect(styles).toMatch(/@media\s*\(max-width:\s*480px\)[\s\S]*?\.context-inspector/);
     expect(styles).toMatch(
-      /@media\s*\(max-width:\s*480px\)[\s\S]*?\.context-inspector\s*\{[^}]*max-height:\s*calc\(100dvh - 120px\);[^}]*overflow-y:\s*auto/s,
+      /@media\s*\(max-width:\s*480px\)[\s\S]*?\.context-inspector\s*\{[^}]*max-height:\s*calc\(100dvh - 100px\);[^}]*overflow-y:\s*auto/s,
     );
   });
 });
