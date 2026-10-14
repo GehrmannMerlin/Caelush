@@ -1,4 +1,4 @@
-import { createElement, useEffect, useRef, useState, type ReactElement } from "react";
+import { createElement, useState, type ReactElement } from "react";
 import type {
   WorkspaceId,
   WorkspaceRecord,
@@ -12,17 +12,23 @@ import {
   Folder,
   FolderKanban,
   FolderOpen,
-  LogOut,
   Plus,
-  RefreshCw,
-  SlidersHorizontal,
-  Settings,
 } from "lucide-react";
 import { derivePromptTitle } from "../application/prompt.js";
 import { sessionArchiveStore } from "../application/session-archive-store.js";
 import caelushLogo from "../assets/logo/caelush-logo.png";
 import archiveIcon from "../assets/icons/archive.svg";
 import { RunStatusIcon, runStatusClass, runStatusLabel } from "./run-status.js";
+import {
+  WorkspaceSidebarFooter,
+  type WorkspaceSidebarDesktopActions,
+} from "./workspace-sidebar-footer.js";
+
+export {
+  WorkspaceSettingsMenu,
+  type WorkspaceSettingsMenuProps,
+  type WorkspaceSidebarDesktopActions,
+} from "./workspace-sidebar-footer.js";
 
 export interface WorkspaceSidebarProps {
   readonly workspaces: readonly WorkspaceRecord[];
@@ -40,99 +46,16 @@ export interface WorkspaceSidebarProps {
   readonly onAddWorkspace: () => void;
   readonly onForgetWorkspace: (workspaceId: WorkspaceId) => void;
   readonly onOpenSettings?: () => void;
-  readonly onCheckUpdates?: (() => void) | undefined;
-  readonly onLogout?: (() => void) | undefined;
-}
-
-export interface WorkspaceSettingsMenuProps {
-  readonly onSelect: () => void;
-  readonly onCheckUpdates?: (() => void) | undefined;
-  readonly onLogout?: (() => void) | undefined;
-}
-
-export function WorkspaceSettingsMenu(props: WorkspaceSettingsMenuProps): ReactElement {
-  return createElement(
-    "div",
-    {
-      id: "workspace-settings-menu",
-      className: "workspace-settings-menu",
-      role: "menu",
-      "aria-label": "设置选项",
-    },
-    createElement(
-      "button",
-      {
-        type: "button",
-        className: "workspace-settings-menu-item",
-        role: "menuitem",
-        onClick: props.onSelect,
-      },
-      createElement(SlidersHorizontal, { size: 16, strokeWidth: 2, "aria-hidden": true }),
-      createElement("span", null, "模型与配置"),
-    ),
-    props.onCheckUpdates === undefined
-      ? null
-      : createElement(
-          "button",
-          {
-            type: "button",
-            className: "workspace-settings-menu-item",
-            role: "menuitem",
-            onClick: props.onCheckUpdates,
-          },
-          createElement(RefreshCw, { size: 16, strokeWidth: 2, "aria-hidden": true }),
-          createElement("span", null, "检查更新"),
-        ),
-    props.onLogout === undefined
-      ? null
-      : createElement(
-          "button",
-          {
-            type: "button",
-            className: "workspace-settings-menu-item",
-            role: "menuitem",
-            onClick: props.onLogout,
-          },
-          createElement(LogOut, { size: 16, strokeWidth: 2, "aria-hidden": true }),
-          createElement("span", null, "退出登录"),
-        ),
-  );
+  readonly desktopActions?: WorkspaceSidebarDesktopActions | undefined;
 }
 
 export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
-  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [archivedSessions, setArchivedSessions] = useState(() => sessionArchiveStore.list());
-  const settingsControlRef = useRef<HTMLDivElement>(null);
-  const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const archivedSessionIds = new Set(archivedSessions.map((record) => record.sessionId));
-  const isDesktopHost = globalThis.location?.protocol === "caelush-app:";
 
   const archiveSession = (sessionId: SessionId): void => {
     setArchivedSessions(sessionArchiveStore.archive(sessionId));
   };
-
-  useEffect(() => {
-    if (!settingsMenuOpen) return undefined;
-
-    const closeOnOutsidePointer = (event: PointerEvent): void => {
-      const target = event.target;
-      if (target instanceof Node && !settingsControlRef.current?.contains(target)) {
-        setSettingsMenuOpen(false);
-      }
-    };
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      setSettingsMenuOpen(false);
-      settingsButtonRef.current?.focus();
-    };
-
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [settingsMenuOpen]);
 
   return createElement(
     "aside",
@@ -177,64 +100,10 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
         renderWorkspace(props, workspace, archivedSessionIds, archiveSession),
       ),
     ),
-    createElement(
-      "div",
-      {
-        className: `workspace-sidebar-footer${isDesktopHost ? " workspace-sidebar-footer--desktop" : ""}`,
-        role: isDesktopHost ? "group" : undefined,
-        "aria-label": isDesktopHost ? "桌面端账户与设置" : undefined,
-      },
-      isDesktopHost
-        ? createElement(
-            "a",
-            {
-              className: "workspace-settings-button workspace-account-link",
-              href: "caelush-login://app/?view=account",
-            },
-            createElement("span", null, "Desktop account"),
-          )
-        : null,
-      createElement(
-        "div",
-        { className: "workspace-settings-control", ref: settingsControlRef },
-        createElement(
-          "button",
-          {
-            type: "button",
-            className: "workspace-settings-button",
-            ref: settingsButtonRef,
-            onClick: () => setSettingsMenuOpen((open) => !open),
-            "aria-label": isDesktopHost ? "设置" : undefined,
-            "aria-haspopup": "menu",
-            "aria-expanded": settingsMenuOpen,
-          },
-          createElement(Settings, { size: 16, strokeWidth: 2.1, "aria-hidden": true }),
-          isDesktopHost ? null : createElement("span", null, "设置"),
-        ),
-        settingsMenuOpen
-          ? createElement(WorkspaceSettingsMenu, {
-              onSelect: () => {
-                setSettingsMenuOpen(false);
-                props.onOpenSettings?.();
-              },
-              onCheckUpdates:
-                isDesktopHost && props.onCheckUpdates !== undefined
-                  ? () => {
-                      setSettingsMenuOpen(false);
-                      props.onCheckUpdates?.();
-                    }
-                  : undefined,
-              onLogout:
-                isDesktopHost && props.onLogout !== undefined
-                  ? () => {
-                      setSettingsMenuOpen(false);
-                      props.onLogout?.();
-                    }
-                  : undefined,
-            })
-          : null,
-      ),
-    ),
+    createElement(WorkspaceSidebarFooter, {
+      onOpenSettings: props.onOpenSettings,
+      desktopActions: props.desktopActions,
+    }),
   );
 }
 

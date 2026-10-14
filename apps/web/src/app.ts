@@ -42,12 +42,16 @@ import {
   SessionSelectionStore,
 } from "./application/session-persistence.js";
 import { ReconnectBanner } from "./components/reconnect-banner.js";
-import { WorkspaceSidebar } from "./components/workspace-sidebar.js";
+import {
+  WorkspaceSidebar,
+  type WorkspaceSidebarDesktopActions,
+} from "./components/workspace-sidebar.js";
 import { WorkspaceEmptyState } from "./components/workspace-empty-state.js";
 import { ModelPicker } from "./components/model-picker.js";
 import { PermissionSelector } from "./components/permission-selector.js";
 import { hasTurnPresentationItems } from "./components/turn-presentation-feed.js";
-import { detectDesktopPanelApi, type DesktopPanelApi } from "./host/desktop-panel-api.js";
+import { observeDesktopPanelApi, type DesktopPanelApi } from "./host/desktop-panel-api.js";
+import { resolveClientHostIntegration } from "./host/desktop-integration.js";
 
 const WorkspaceDialog = lazy(async () => {
   const module = await import("./components/workspace-dialog.js");
@@ -97,7 +101,8 @@ export function WebHostApp(props: {
   readonly launchContext?: unknown | undefined;
   readonly initialWorkspaceId?: WorkspaceId | undefined;
 }): ReactElement {
-  const desktopHostLoadingUI = typeof window !== "undefined" && window.caelushDesktop !== undefined;
+  const clientHost = useMemo(() => resolveClientHostIntegration(), []);
+  const desktopHostLoadingUI = clientHost.loadingUi;
   const [state, setState] = useState<WebHostState>(createInitialWebHostState);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
@@ -124,20 +129,11 @@ export function WebHostApp(props: {
   }, [props.client, props.launchContext, props.initialWorkspaceId]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || window.caelushDesktop === undefined) return;
-    const api = window.caelushDesktop;
-    let active = true;
-    const unsubscribe = api.workspace.subscribeAvailability((available) => {
-      if (active) setDesktopPanelApi(available ? api : null);
-    });
-    void detectDesktopPanelApi().then((detected) => {
-      if (active) setDesktopPanelApi(detected);
-    });
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, []);
+    return observeDesktopPanelApi(
+      clientHost.kind === "DESKTOP" ? clientHost.panelApi : null,
+      setDesktopPanelApi,
+    );
+  }, [clientHost]);
 
   const workspaceManager = useMemo(() => {
     if (state.bootstrap !== "READY") return undefined;
@@ -344,6 +340,22 @@ export function WebHostApp(props: {
     }
   };
 
+  const desktopActions: WorkspaceSidebarDesktopActions | undefined =
+    clientHost.kind === "DESKTOP"
+      ? {
+          accountHref: clientHost.account?.href,
+          onCheckUpdates:
+            clientHost.updates === undefined
+              ? undefined
+              : () => void clientHost.updates?.check().catch(() => undefined),
+          onLogout:
+            clientHost.account === undefined
+              ? undefined
+              : () =>
+                  void logoutDesktopAccount(clientHost.account!.logout, setWorkspaceActionError),
+        }
+      : undefined;
+
   return renderWorkspaceApp({
     host: state,
     desktopHostLoadingUI,
@@ -373,49 +385,18 @@ export function WebHostApp(props: {
       setSettingsOpen(true);
       setSidebarOpen(false);
     },
-    onCheckUpdates:
-      globalThis.location?.protocol === "caelush-app:" ? checkDesktopUpdates : undefined,
-    onLogout:
-      globalThis.location?.protocol === "caelush-app:"
-        ? () => void logoutDesktopAccount(setWorkspaceActionError)
-        : undefined,
+    desktopActions,
     onCloseSettings: () => setSettingsOpen(false),
   });
 }
 
-function checkDesktopUpdates(): void {
-  if (typeof window === "undefined") return;
-  const desktopApi = (
-    window as unknown as {
-      readonly caelushDesktop?: {
-        readonly update?: { readonly check: () => Promise<unknown> };
-      };
-    }
-  ).caelushDesktop?.update;
-  if (desktopApi === undefined) return;
-  void desktopApi.check().catch(() => undefined);
-}
-
 async function logoutDesktopAccount(
+  logout: () => Promise<{ readonly serverRevoked: boolean }>,
   reportError: (message: string | undefined) => void,
 ): Promise<void> {
-  if (typeof window === "undefined") return;
-  const accountApi = (
-    window as unknown as {
-      readonly caelushDesktop?: {
-        readonly account?: {
-          readonly logout: () => Promise<{ readonly serverRevoked: boolean }>;
-        };
-      };
-    }
-  ).caelushDesktop?.account;
-  if (accountApi === undefined) {
-    reportError("桌面账户服务暂不可用，请稍后重试。");
-    return;
-  }
   reportError(undefined);
   try {
-    await accountApi.logout();
+    await logout();
     window.location.assign("caelush-login://app/");
   } catch {
     reportError("退出登录未完成，请稍后重试。");
@@ -448,8 +429,7 @@ function renderWorkspaceApp(input: {
   readonly onRegisterWorkspace: (event: FormEvent<HTMLFormElement>) => void;
   readonly settingsOpen: boolean;
   readonly onOpenSettings: () => void;
-  readonly onCheckUpdates?: (() => void) | undefined;
-  readonly onLogout?: (() => void) | undefined;
+  readonly desktopActions?: WorkspaceSidebarDesktopActions | undefined;
   readonly onCloseSettings: () => void;
 }): ReactElement {
   const { snapshot, selectedWorkspace } = input;
@@ -487,6 +467,44 @@ function renderWorkspaceApp(input: {
       snapshot.modelDirectory.some(
         (model) => model.provider === modelSelection.provider && model.id === modelSelection.model,
       ));
+  const promptComposer = createElement(PromptComposer, {
+    disabled: !hasWorkspace || composerInteractionDisabled,
+    modelReady: hasWorkspace ? modelReady : false,
+    placeholder: hasWorkspace ? undefined : "先添加工作区，再开始对话",
+    ...(hasWorkspace
+      ? {
+          modelPicker: createElement(ModelPicker, {
+            providers: snapshot.aiProviders ?? [],
+            models: snapshot.modelDirectory ?? [],
+            selection: modelSelection,
+            disabled: composerInteractionDisabled,
+            onSelect: (selection) => void input.sessionManager?.selectModel(selection),
+            onOpenSettings: input.onOpenSettings,
+          }),
+          permissionSelector: createElement(PermissionSelector, {
+            presets: snapshot.availablePresets,
+            selected:
+              snapshot.preparingPreset === undefined
+                ? (snapshot.requestedPreset ?? snapshot.selectedPreset)
+                : snapshot.selectedPreset,
+            preparing: snapshot.preparingPreset,
+            disabled: composerInteractionDisabled || snapshot.activeRun !== undefined,
+            error: snapshot.permissionPresetError,
+            onSelect: (selection) => void input.sessionManager?.selectPermissionPreset(selection),
+            onPrepare: async (selection) =>
+              (await input.sessionManager?.preparePermissionPreset(selection)) ?? false,
+          }),
+        }
+      : {}),
+    submission: snapshot.submission,
+    onCancel: canCancelActiveRun
+      ? async () => (await input.sessionManager?.cancelRun()) ?? false
+      : undefined,
+    cancelling: snapshot.controlMode === "CANCELLING",
+    error: hasWorkspace ? snapshot.error : undefined,
+    contextUsage: hasWorkspace ? (snapshot.contextUsage ?? null) : null,
+    onSubmit: async (prompt) => (await input.sessionManager?.submitPrompt(prompt)) ?? false,
+  });
 
   return createElement(
     "main",
@@ -537,8 +555,7 @@ function renderWorkspaceApp(input: {
             onAddWorkspace: input.onAddWorkspace,
             onForgetWorkspace: input.onForgetWorkspace,
             onOpenSettings: input.onOpenSettings,
-            onCheckUpdates: input.onCheckUpdates,
-            onLogout: input.onLogout,
+            desktopActions: input.desktopActions,
           }),
       createElement(
         "div",
@@ -582,6 +599,12 @@ function renderWorkspaceApp(input: {
           : hasWorkspace
             ? createElement(SessionWorkspace, {
                 title,
+                workspaceName: selectedWorkspace.displayName,
+                workspaces: input.workspaceState.workspaces,
+                selectedWorkspaceId: input.workspaceState.selectedWorkspaceId,
+                workspacePickerDisabled: input.workspaceState.status !== "READY",
+                onAddWorkspace: input.onAddWorkspace,
+                onSelectWorkspace: input.onSelectWorkspace,
                 activeRun: snapshot.activeRun,
                 controlMode: snapshot.controlMode,
                 approvals: snapshot.approvalState?.requests,
@@ -596,41 +619,7 @@ function renderWorkspaceApp(input: {
                 timeline: snapshot.timeline,
                 liveActivity: snapshot.liveActivity,
                 continuityWarning: snapshot.continuityWarning,
-                composer: createElement(PromptComposer, {
-                  disabled: composerInteractionDisabled,
-                  modelReady,
-                  modelPicker: createElement(ModelPicker, {
-                    providers: snapshot.aiProviders ?? [],
-                    models: snapshot.modelDirectory ?? [],
-                    selection: modelSelection,
-                    disabled: composerInteractionDisabled,
-                    onSelect: (selection) => void input.sessionManager?.selectModel(selection),
-                    onOpenSettings: input.onOpenSettings,
-                  }),
-                  permissionSelector: createElement(PermissionSelector, {
-                    presets: snapshot.availablePresets,
-                    selected:
-                      snapshot.preparingPreset === undefined
-                        ? (snapshot.requestedPreset ?? snapshot.selectedPreset)
-                        : snapshot.selectedPreset,
-                    preparing: snapshot.preparingPreset,
-                    disabled: composerInteractionDisabled || snapshot.activeRun !== undefined,
-                    error: snapshot.permissionPresetError,
-                    onSelect: (selection) =>
-                      void input.sessionManager?.selectPermissionPreset(selection),
-                    onPrepare: async (selection) =>
-                      (await input.sessionManager?.preparePermissionPreset(selection)) ?? false,
-                  }),
-                  submission: snapshot.submission,
-                  onCancel: canCancelActiveRun
-                    ? async () => (await input.sessionManager?.cancelRun()) ?? false
-                    : undefined,
-                  cancelling: snapshot.controlMode === "CANCELLING",
-                  error: snapshot.error,
-                  contextUsage: snapshot.contextUsage ?? null,
-                  onSubmit: async (prompt) =>
-                    (await input.sessionManager?.submitPrompt(prompt)) ?? false,
-                }),
+                composer: promptComposer,
                 onContinueResource: async () =>
                   (await input.sessionManager?.continueResourceGuard()) ?? false,
                 onResolveApproval: async (approvalId, resolution) =>
@@ -644,7 +633,12 @@ function renderWorkspaceApp(input: {
               })
             : createElement(WorkspaceEmptyState, {
                 hasWorkspaces: input.workspaceState.workspaces.length > 0,
+                workspaces: input.workspaceState.workspaces,
+                selectedWorkspaceId: input.workspaceState.selectedWorkspaceId,
+                disabled: input.workspaceState.status !== "READY",
                 onAddWorkspace: input.onAddWorkspace,
+                onSelectWorkspace: input.onSelectWorkspace,
+                composer: promptComposer,
               }),
       ),
       input.desktopPanelApi === null

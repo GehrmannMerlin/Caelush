@@ -21,6 +21,7 @@ import type { BrowserGuestBounds, BrowserGuestState } from "../main/browser/gues
 import type { DesktopEditorDescriptor, DesktopEditorId } from "../main/ide/editor-resolver.js";
 
 export interface DesktopApi {
+  readonly protocolVersion: 1;
   readonly account: {
     getState(): Promise<AccountState>;
     retryAgentStartup(): Promise<AccountState>;

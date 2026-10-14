@@ -76,6 +76,33 @@ describe("WorkspaceSidebar", () => {
     expect(html.match(/role="menuitem"/g)).toHaveLength(1);
   });
 
+  it("renders Desktop account and native actions only when the host injects them", () => {
+    const html = renderToStaticMarkup(
+      <WorkspaceSidebar
+        workspaces={[]}
+        expandedWorkspaceIds={[]}
+        sessionSummaries={{}}
+        isDraft={false}
+        canNavigate
+        onToggleWorkspace={vi.fn()}
+        onSelectWorkspace={vi.fn()}
+        onNewSession={vi.fn()}
+        onSelectSession={vi.fn()}
+        onAddWorkspace={vi.fn()}
+        onForgetWorkspace={vi.fn()}
+        desktopActions={{
+          accountHref: "caelush-login://app/?view=account",
+          onCheckUpdates: vi.fn(),
+          onLogout: vi.fn(),
+        }}
+      />,
+    );
+
+    expect(html).toContain('href="caelush-login://app/?view=account"');
+    expect(html).toContain("Desktop account");
+    expect(html).toContain('aria-label="桌面端账户与设置"');
+  });
+
   it("keeps the workspace path in a hoverable card tooltip and puts removal inside the card", () => {
     const workspaceId = createWorkspaceId();
     const html = renderToStaticMarkup(

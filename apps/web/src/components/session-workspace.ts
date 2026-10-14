@@ -1,5 +1,5 @@
 import { createElement, type ReactElement } from "react";
-import type { ClientAgentRun } from "@caelush/protocol";
+import type { ClientAgentRun, WorkspaceId, WorkspaceRecord } from "@caelush/protocol";
 import { type LiveActivityState, type TimelineState, type TranscriptEntry } from "@caelush/client";
 import type { ApprovalResolution, RunId } from "@caelush/protocol";
 import type { ApprovalView } from "@caelush/client";
@@ -14,10 +14,16 @@ import {
 } from "./turn-presentation-feed.js";
 import { ApprovalCard } from "./approval-card.js";
 import { RecoveryPanel, type RecoveryRunView } from "./recovery-panel.js";
-import caelushLogo from "../assets/logo/caelush-logo.png";
+import { ConversationStartPanel } from "./conversation-start-panel.js";
 
 export interface SessionWorkspaceProps {
   readonly title: string;
+  readonly workspaceName?: string | undefined;
+  readonly workspaces: readonly WorkspaceRecord[];
+  readonly selectedWorkspaceId?: WorkspaceId | undefined;
+  readonly workspacePickerDisabled?: boolean | undefined;
+  readonly onAddWorkspace: () => void;
+  readonly onSelectWorkspace: (workspaceId: WorkspaceId) => void;
   readonly activeRun?: ClientAgentRun | undefined;
   readonly history: readonly TranscriptEntry[];
   readonly turnPresentation?: SessionTurnPresentationResponse | undefined;
@@ -145,12 +151,7 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
                 isActive: props.activeRun !== undefined && isActiveRun(props.activeRun.status),
               })
             : isPristineSession
-              ? createElement(
-                  "div",
-                  { className: "conversation-welcome" },
-                  createElement("img", { src: caelushLogo, alt: "Caelush" }),
-                  createElement("p", null, "保持对未知的探索热情"),
-                )
+              ? null
               : props.history.map((entry) =>
                   createElement(
                     "article",
@@ -252,7 +253,16 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
             ),
           ),
         ),
-    props.composer,
+    createElement(ConversationStartPanel, {
+      composer: props.composer,
+      workspaces: props.workspaces,
+      selectedWorkspaceId: props.selectedWorkspaceId,
+      workspaceName: props.workspaceName,
+      isSettled: !isPristineSession,
+      disabled: props.workspacePickerDisabled,
+      onAddWorkspace: props.onAddWorkspace,
+      onSelectWorkspace: props.onSelectWorkspace,
+    }),
   );
 }
 

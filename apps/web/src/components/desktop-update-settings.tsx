@@ -1,32 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  resolveClientHostIntegration,
+  type DesktopUpdateState,
+} from "../host/desktop-integration.js";
 
-interface UpdateState {
-  status: string;
-  currentVersion: string;
-  latestVersion: string | null;
-  message: string;
-  releaseNotes: string;
-  artifactSize: number;
-  downloadedBytes: number;
-  mandatory: boolean;
-}
-interface UpdateApi {
-  getState(): Promise<UpdateState>;
-  check(): Promise<unknown>;
-  download(): Promise<unknown>;
-  install(): Promise<unknown>;
-  cancelDownload(): Promise<unknown>;
-  deferInstall(): Promise<unknown>;
-  subscribeState(listener: (s: UpdateState) => void): () => void;
-}
-function updateApi(): UpdateApi | undefined {
-  return (window as Window & { caelushDesktop?: { update?: UpdateApi } }).caelushDesktop?.update;
-}
 export function DesktopUpdateSettings() {
-  const [state, setState] = useState<UpdateState | null>(null);
+  const host = useMemo(() => resolveClientHostIntegration(), []);
+  const api = host.kind === "DESKTOP" ? host.updateSettings : undefined;
+  const [state, setState] = useState<DesktopUpdateState | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    const api = updateApi();
     if (!api) return;
     let active = true;
     void api
@@ -42,8 +25,7 @@ export function DesktopUpdateSettings() {
       active = false;
       unsubscribe();
     };
-  }, []);
-  const api = updateApi();
+  }, [api]);
   if (!api || !state) return null;
   const busy = ["CHECKING", "DOWNLOADING", "VERIFYING", "INSTALLING"].includes(state.status);
   const ready = ["READY_TO_INSTALL", "WAITING_FOR_SAFE_SHUTDOWN", "INSTALL_DEFERRED"].includes(

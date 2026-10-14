@@ -576,7 +576,7 @@ export class WebSessionManager {
       }
       this.publish({ submission: "STARTING", error: undefined });
       return this.confirmPendingRun(run.id);
-    } catch {
+    } catch (error) {
       if (
         this.activeLifecycle !== undefined &&
         this.activeLifecycle.run.id === this.snapshot.activeRun?.id
@@ -595,7 +595,7 @@ export class WebSessionManager {
       this.publish({
         submission: "IDLE",
         composerEnabled: true,
-        error: sessionError(code),
+        error: submissionError(code, error),
       });
       return false;
     }
@@ -672,8 +672,11 @@ export class WebSessionManager {
         error: undefined,
       });
       return true;
-    } catch {
-      this.publish({ submission: "IDLE", error: sessionError("SESSION_CREATE_FAILED") });
+    } catch (error) {
+      this.publish({
+        submission: "IDLE",
+        error: submissionError("SESSION_CREATE_FAILED", error),
+      });
       return false;
     }
   }
@@ -2380,6 +2383,56 @@ function sessionError(code: WebSessionErrorCode): WebSessionError {
       "旧会话缺少当前模型安全续接所需的历史记录。请在当前工作区新建会话，再自行提交任务。",
   };
   return { code, message: messages[code] };
+}
+
+function submissionError(
+  fallback: "SESSION_CREATE_FAILED" | "RUN_CREATE_FAILED",
+  error: unknown,
+): WebSessionError {
+  if (error instanceof CaelushClientHttpError) {
+    const messages: Record<typeof error.code, string> = {
+      INVALID_REQUEST: "请求参数无效，工作区状态可能已过期。请重新选择工作区后重试。",
+      INVALID_EVENT_CURSOR: "事件游标无效，请刷新会话后重试。",
+      EVENT_CURSOR_AHEAD: "会话状态尚未同步完成，请刷新后重试。",
+      NOT_FOUND: "工作区或会话已不存在，请刷新工作区列表后重试。",
+      CONFLICT: "当前会话或工作区状态已变化，请刷新后重试。",
+      MODEL_PROVIDER_UNAVAILABLE: "模型服务未连接或所选模型不可用，请检查模型设置。",
+      AI_AUTHENTICATION: "模型服务认证失败，请检查对应的 API 密钥。",
+      AI_PROVIDER_UNAVAILABLE: "模型服务暂时无法连接，请检查网络或稍后重试。",
+      AI_MODEL_UNAVAILABLE: "当前模型不可用，请切换模型或刷新模型列表后重试。",
+      AI_REASONING_UNSUPPORTED: "当前模型不支持所选推理等级，请调整后重试。",
+      ENVIRONMENT_CREDENTIAL_READ_ONLY: "模型凭据由运行环境提供，不能在应用内修改。",
+      NO_MODEL_SELECTED: "尚未选择可用模型，请先选择模型后重试。",
+      ACTIVE_RUN_CONFLICT: "当前工作区仍有运行中的任务，请等待任务结束后重试。",
+      STORAGE_ERROR: "本地存储发生错误，操作未完成。",
+      INTERNAL_ERROR: "Agent 服务内部错误，操作未完成。",
+    };
+    const requestId = error.requestId;
+    const needsDiagnosticId = error.code === "STORAGE_ERROR" || error.code === "INTERNAL_ERROR";
+    return {
+      code: fallback,
+      reasonCode: error.code,
+      message:
+        needsDiagnosticId && requestId !== undefined
+          ? `${messages[error.code]} 诊断编号：${requestId}`
+          : messages[error.code],
+    };
+  }
+  if (error instanceof CaelushProtocolCompatibilityError) {
+    return {
+      code: fallback,
+      reasonCode: "PROTOCOL_INCOMPATIBLE",
+      message: "当前 Web/桌面端与 Agent 服务协议不兼容，请更新并重启服务后重试。",
+    };
+  }
+  if (error instanceof CaelushClientProtocolError) {
+    return {
+      code: fallback,
+      reasonCode: "AGENT_TRANSPORT_OR_RESPONSE_ERROR",
+      message: "无法连接 Agent 服务，或服务返回了无法识别的响应。请检查服务连接后重试。",
+    };
+  }
+  return sessionError(fallback);
 }
 
 function permissionPreparationError(reasonCode?: string): WebSessionError {

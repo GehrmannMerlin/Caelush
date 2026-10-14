@@ -144,15 +144,10 @@ export interface DesktopPanelApi {
   };
 }
 
-declare global {
-  interface Window {
-    readonly caelushDesktop?: DesktopPanelApi;
-  }
-}
-
-export async function detectDesktopPanelApi(): Promise<DesktopPanelApi | null> {
-  if (typeof window === "undefined" || window.caelushDesktop === undefined) return null;
-  const api = window.caelushDesktop;
+export async function detectDesktopPanelApi(
+  api: DesktopPanelApi | null = null,
+): Promise<DesktopPanelApi | null> {
+  if (api === null) return null;
   try {
     const availability = await api.workspace.getAvailability();
     return availability.available ? api : null;
@@ -160,4 +155,25 @@ export async function detectDesktopPanelApi(): Promise<DesktopPanelApi | null> {
     // Main checks that this call came from the trusted Agent frame.
     return null;
   }
+}
+
+/** Subscribe before reading so a delayed initial result cannot overwrite a newer event. */
+export function observeDesktopPanelApi(
+  api: DesktopPanelApi | null,
+  onChange: (api: DesktopPanelApi | null) => void,
+): () => void {
+  if (api === null) return () => undefined;
+  let active = true;
+  let receivedEvent = false;
+  const unsubscribe = api.workspace.subscribeAvailability((available) => {
+    receivedEvent = true;
+    if (active) onChange(available ? api : null);
+  });
+  void detectDesktopPanelApi(api).then((detected) => {
+    if (active && !receivedEvent) onChange(detected);
+  });
+  return () => {
+    active = false;
+    unsubscribe();
+  };
 }

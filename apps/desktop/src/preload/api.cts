@@ -365,6 +365,7 @@ function isBrowserState(
 }
 
 const api: DesktopApi = Object.freeze({
+  protocolVersion: 1,
   account: Object.freeze(accountApi),
   window: Object.freeze({
     minimize: async () =>

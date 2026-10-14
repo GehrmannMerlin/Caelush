@@ -365,15 +365,17 @@ describe("Web presentation", () => {
     const html = renderToStaticMarkup(
       <SessionWorkspace
         title="新会话"
+        workspaceName="Caelush"
         history={[]}
         timeline={createInitialTimelineState()}
         composer={<div>COMPOSER_MARKER</div>}
       />,
     );
 
-    expect(html).toContain('class="conversation-welcome"');
+    expect(html).toContain('class="conversation-start-brand"');
     expect(html).toContain('alt="Caelush"');
-    expect(html).toContain("保持对未知的探索热情");
+    expect(html).toContain("Caelush");
+    expect(html).not.toContain("保持对未知的探索热情");
     expect(html).not.toContain("在这个会话中输入第一条任务。");
     expect(html).not.toContain('id="session-workspace-title"');
   });

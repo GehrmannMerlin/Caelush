@@ -19,6 +19,7 @@ export interface PromptComposerProps {
   readonly error?: WebSessionError | undefined;
   readonly contextUsage?: ContextUsageProjection | null;
   readonly modelReady?: boolean | undefined;
+  readonly placeholder?: string | undefined;
   readonly modelPicker?: ReactElement;
   readonly permissionSelector?: ReactElement;
   readonly onCancel?: (() => Promise<boolean> | void) | undefined;
@@ -157,7 +158,7 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
       onChange: (event) => setValue((event.currentTarget as HTMLTextAreaElement).value),
       onKeyDown,
       disabled: props.disabled,
-      placeholder: "输入任务……",
+      placeholder: props.placeholder ?? "输入任务……",
       "aria-label": "任务输入",
       rows: 1,
     }),

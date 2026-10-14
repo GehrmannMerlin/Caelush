@@ -22,11 +22,6 @@ export interface SessionServiceOptions {
   readonly modelCanonicalizer?: DaemonModelCanonicalizer;
   readonly workspaceService?: WorkspaceService;
   readonly defaultSelection?: () => Promise<ClientModelSelectionWithReasoning | undefined>;
-  readonly validateSelection?: (selection: {
-    readonly provider: string;
-    readonly model: string;
-    readonly reasoningLevel?: import("@caelush/protocol").ReasoningLevel;
-  }) => Promise<void>;
 }
 
 export class SessionService {
@@ -89,13 +84,8 @@ export class SessionService {
         defaultReasoningLevel = selection.reasoningLevel;
       }
     }
-    if (defaultModel !== undefined && this.options.validateSelection !== undefined) {
-      await this.options.validateSelection({
-        provider: defaultModel.provider,
-        model: defaultModel.model,
-        ...(defaultReasoningLevel === undefined ? {} : { reasoningLevel: defaultReasoningLevel }),
-      });
-    }
+    // Persisting a session is independent from live provider discovery and credentials.
+    // Run creation performs the authoritative availability check before any work is queued.
     const session = AgentSessionSchema.parse({
       id: this.createId(),
       ...(workspaceId === undefined ? {} : { workspaceId }),

@@ -100,8 +100,6 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
       ? {}
       : {
           defaultSelection: () => dependencies.aiConfiguration!.getNewSessionSelection(),
-          validateSelection: (selection) =>
-            dependencies.aiConfiguration!.validateSelection(selection),
         }),
   });
   registerSessionRoutes(app, sessionService, {
