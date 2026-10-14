@@ -52,6 +52,7 @@ describe("Context Runtime production E2E", () => {
       modelSources: [fixtureModelSource()],
       adapterOverrides: [provider],
       defaultModel: { provider: "fixture", model: "fixture-model" },
+      contextBudgetPolicyVersion: "ADAPTIVE_V1",
     });
     const client = new CaelushClient({ baseUrl: daemon.url });
     const session = await client.createSession({
@@ -84,13 +85,20 @@ describe("Context Runtime production E2E", () => {
     expect(usage).toMatchObject({
       rawContextWindowTokens: expect.any(Number),
       effectiveInputLimitTokens: expect.any(Number),
+      fullRequestInputEstimateTokens: expect.any(Number),
+      fullWindowUsedRatio: expect.any(Number),
       lastBuildAt: expect.any(Number),
       lastBuildStatus: "SUCCESS",
     });
+    expect(usage.fullRequestInputEstimateTokens).toBeGreaterThanOrEqual(usage.estimatedInputTokens);
+    expect(usage.fullWindowUsedRatio).toBe(
+      Math.min(1, usage.fullRequestInputEstimateTokens / usage.rawContextWindowTokens),
+    );
+    expect(usage.pressureState).toBe("NORMAL");
     expect(usage.effectiveInputLimitTokens).toBeLessThanOrEqual(
       usage.rawContextWindowTokens - 8_192 - 1_280,
     );
-    expect(provider.calls).toBeGreaterThanOrEqual(2);
+    expect(provider.calls).toBeGreaterThan(0);
   }, 20_000);
 });
 

@@ -95,6 +95,19 @@ export function createContextReceiptBuilder(
         input.model,
         tokenEstimator,
       );
+      const requestOverheadTokens = input.policy.requestOverhead.totalTokens;
+      const fullRequestInputEstimateTokens = materializedTokens + requestOverheadTokens;
+      if (
+        !Number.isSafeInteger(requestOverheadTokens) ||
+        requestOverheadTokens < 0 ||
+        !Number.isSafeInteger(fullRequestInputEstimateTokens)
+      ) {
+        throw new TypeError("Full Context Usage token estimate is invalid.");
+      }
+      const fullWindowUsedRatio =
+        input.policy.contextWindowTokens === 0
+          ? 0
+          : Math.min(1, fullRequestInputEstimateTokens / input.policy.contextWindowTokens);
       const pressure = classifyContextPressure(materializedTokens, input.policy);
       const sources = [...sourceReceipts].sort((left, right) =>
         compareStrings(left.providerId, right.providerId),
@@ -122,7 +135,7 @@ export function createContextReceiptBuilder(
         remainingTokens: Math.max(0, input.policy.effectiveInputLimitTokens - materializedTokens),
         pressure,
         compactionCount: input.compactionCount ?? 0,
-        requestOverheadTokens: input.policy.requestOverhead.totalTokens,
+        requestOverheadTokens,
         contributions,
       });
       const usage: ContextUsageSnapshot = Object.freeze({
@@ -131,6 +144,9 @@ export function createContextReceiptBuilder(
         contextWindowTokens: input.policy.contextWindowTokens,
         effectiveInputLimitTokens: input.policy.effectiveInputLimitTokens,
         estimatedInputTokens: materializedTokens,
+        requestOverheadTokens,
+        fullRequestInputEstimateTokens,
+        fullWindowUsedRatio,
         remainingTokens: Math.max(0, input.policy.effectiveInputLimitTokens - materializedTokens),
         pressureState: pressure,
         compactionCount: input.compactionCount ?? 0,

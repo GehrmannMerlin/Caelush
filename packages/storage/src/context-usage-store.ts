@@ -29,10 +29,13 @@ interface UsageRow {
 }
 
 interface UsageEnvelope {
-  readonly version: 3;
+  readonly version: 4;
   readonly breakdown: readonly ContextUsageSourceBreakdown[];
   readonly contextFingerprint: string | null;
   readonly promptSurface: ContextPromptSurfaceReceipt | null;
+  readonly requestOverheadTokens?: number;
+  readonly fullRequestInputEstimateTokens?: number;
+  readonly fullWindowUsedRatio?: number;
 }
 
 export class SqliteContextUsageStore implements ContextUsageStorePort {
@@ -44,10 +47,17 @@ export class SqliteContextUsageStore implements ContextUsageStorePort {
       compareStrings(left.sourceId, right.sourceId),
     );
     const envelope: UsageEnvelope = {
-      version: 3,
+      version: 4,
       breakdown,
       contextFingerprint: snapshot.contextFingerprint ?? null,
       promptSurface: snapshot.promptSurface ?? null,
+      ...(snapshot.requestOverheadTokens === undefined
+        ? {}
+        : {
+            requestOverheadTokens: snapshot.requestOverheadTokens,
+            fullRequestInputEstimateTokens: snapshot.fullRequestInputEstimateTokens,
+            fullWindowUsedRatio: snapshot.fullWindowUsedRatio,
+          }),
     };
     try {
       this.database.client
@@ -133,6 +143,33 @@ function assertSnapshot(snapshot: ContextUsageSnapshot): void {
   if (snapshot.effectiveInputLimitTokens > snapshot.contextWindowTokens) {
     throw new StorageError("Context Usage effective input limit is invalid.");
   }
+  const fullUsageFields = [
+    snapshot.requestOverheadTokens,
+    snapshot.fullRequestInputEstimateTokens,
+    snapshot.fullWindowUsedRatio,
+  ];
+  const hasFullUsageFields = fullUsageFields.some((value) => value !== undefined);
+  if (hasFullUsageFields) {
+    const [overhead, fullEstimate, fullRatio] = fullUsageFields;
+    if (
+      overhead === undefined ||
+      fullEstimate === undefined ||
+      fullRatio === undefined ||
+      !Number.isSafeInteger(overhead) ||
+      overhead < 0 ||
+      !Number.isSafeInteger(fullEstimate) ||
+      fullEstimate !== snapshot.estimatedInputTokens + overhead ||
+      !Number.isFinite(fullRatio) ||
+      fullRatio < 0 ||
+      fullRatio > 1 ||
+      fullRatio !==
+        (snapshot.contextWindowTokens === 0
+          ? 0
+          : Math.min(1, fullEstimate / snapshot.contextWindowTokens))
+    ) {
+      throw new StorageError("Context Usage full-window projection is invalid.");
+    }
+  }
   if (!(
     snapshot.pressureState === "NORMAL" ||
     snapshot.pressureState === "PROACTIVE" ||
@@ -212,7 +249,7 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
       throw new Error("invalid usage envelope");
     const candidate = envelope as Record<string, unknown>;
     if (
-      (candidate.version !== 2 && candidate.version !== 3) ||
+      (candidate.version !== 2 && candidate.version !== 3 && candidate.version !== 4) ||
       !Array.isArray(candidate.breakdown) ||
       (candidate.contextFingerprint !== null && typeof candidate.contextFingerprint !== "string")
     )
@@ -221,7 +258,37 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
       throw new Error("invalid V2 usage envelope");
     }
     const promptSurface =
-      candidate.version === 3 ? decodePromptSurfaceReceipt(candidate.promptSurface) : undefined;
+      candidate.version === 3 || candidate.version === 4
+        ? decodePromptSurfaceReceipt(candidate.promptSurface)
+        : undefined;
+    const fullUsageFields = [
+      candidate.requestOverheadTokens,
+      candidate.fullRequestInputEstimateTokens,
+      candidate.fullWindowUsedRatio,
+    ];
+    const hasFullUsageFields = fullUsageFields.some((value) => value !== undefined);
+    if (
+      hasFullUsageFields &&
+      (candidate.version !== 4 ||
+        !Number.isSafeInteger(candidate.requestOverheadTokens) ||
+        (candidate.requestOverheadTokens as number) < 0 ||
+        !Number.isSafeInteger(candidate.fullRequestInputEstimateTokens) ||
+        (candidate.fullRequestInputEstimateTokens as number) !==
+          row.estimated_input_tokens + (candidate.requestOverheadTokens as number) ||
+        typeof candidate.fullWindowUsedRatio !== "number" ||
+        !Number.isFinite(candidate.fullWindowUsedRatio) ||
+        candidate.fullWindowUsedRatio < 0 ||
+        candidate.fullWindowUsedRatio > 1 ||
+        candidate.fullWindowUsedRatio !==
+          (row.context_window_tokens === 0
+            ? 0
+            : Math.min(
+                1,
+                (candidate.fullRequestInputEstimateTokens as number) / row.context_window_tokens,
+              )))
+    ) {
+      throw new Error("invalid full-window usage projection");
+    }
     const breakdown = candidate.breakdown.map((item) => decodeBreakdown(item));
     const ids = breakdown.map((item) => item.sourceId);
     if (new Set(ids).size !== ids.length) throw new Error("duplicate usage source");
@@ -233,6 +300,13 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
       contextWindowTokens: row.context_window_tokens,
       effectiveInputLimitTokens: row.effective_input_limit_tokens,
       estimatedInputTokens: row.estimated_input_tokens,
+      ...(hasFullUsageFields
+        ? {
+            requestOverheadTokens: candidate.requestOverheadTokens as number,
+            fullRequestInputEstimateTokens: candidate.fullRequestInputEstimateTokens as number,
+            fullWindowUsedRatio: candidate.fullWindowUsedRatio as number,
+          }
+        : {}),
       remainingTokens: row.remaining_tokens,
       pressureState: row.pressure_state,
       compactionCount: row.compaction_count,

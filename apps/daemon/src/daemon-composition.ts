@@ -1346,6 +1346,12 @@ function projectV2ContextUsage(input: ContextUsageSnapshot) {
     rawContextWindowTokens: input.contextWindowTokens,
     effectiveInputLimitTokens,
     estimatedInputTokens,
+    ...(input.fullRequestInputEstimateTokens === undefined
+      ? {}
+      : {
+          fullRequestInputEstimateTokens: input.fullRequestInputEstimateTokens,
+          fullWindowUsedRatio: input.fullWindowUsedRatio,
+        }),
     usedRatio,
     remainingTokens,
     pressureState: input.pressureState,

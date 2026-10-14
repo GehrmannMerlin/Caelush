@@ -276,6 +276,54 @@ describe("Context Usage Protocol projection", () => {
     expect(protocol.ContextUsageResponseSchema.parse(null)).toBeNull();
   });
 
+  it("accepts optional full-window usage independently from input-budget pressure", () => {
+    const parsed = protocol.ContextUsageProjectionSchema.parse({
+      ...baseUsage,
+      pressureState: "PROACTIVE",
+      fullRequestInputEstimateTokens: 8_500,
+      fullWindowUsedRatio: 0.53125,
+    });
+
+    expect(parsed).toMatchObject({
+      pressureState: "PROACTIVE",
+      fullRequestInputEstimateTokens: 8_500,
+      fullWindowUsedRatio: 0.53125,
+    });
+    expect(
+      protocol.ContextUsageProjectionSchema.parse({
+        ...baseUsage,
+        rawContextWindowTokens: 12_000,
+        fullRequestInputEstimateTokens: 8_500,
+        fullWindowUsedRatio: 8_500 / 12_000,
+      }).fullWindowUsedRatio,
+    ).toBe(8_500 / 12_000);
+    expect(protocol.ContextUsageProjectionSchema.parse(baseUsage)).toEqual(baseUsage);
+  });
+
+  it.each([
+    { fullRequestInputEstimateTokens: 0, fullWindowUsedRatio: 0 },
+    { fullRequestInputEstimateTokens: 20_000, fullWindowUsedRatio: 1 },
+  ])("accepts bounded zero and overfull model-window use: %o", (projection) => {
+    expect(
+      protocol.ContextUsageProjectionSchema.parse({ ...baseUsage, ...projection })
+        .fullWindowUsedRatio,
+    ).toBe(projection.fullWindowUsedRatio);
+  });
+
+  it.each([
+    { fullRequestInputEstimateTokens: -1 },
+    { fullRequestInputEstimateTokens: 1.5 },
+    { fullRequestInputEstimateTokens: Number.MAX_SAFE_INTEGER + 1 },
+    { fullWindowUsedRatio: -0.01 },
+    { fullWindowUsedRatio: 1.01 },
+    { fullWindowUsedRatio: Number.NaN },
+    { fullRequestInputEstimateTokens: 4_000, fullWindowUsedRatio: 0.9 },
+  ])("rejects malformed full-window usage fields: %o", (patch) => {
+    expect(
+      protocol.ContextUsageProjectionSchema.safeParse({ ...baseUsage, ...patch }).success,
+    ).toBe(false);
+  });
+
   it("validates complete cache metrics and rejects non-safe or inconsistent coverage counts", () => {
     expect(
       protocol.ContextUsageProjectionSchema.parse({

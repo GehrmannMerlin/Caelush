@@ -443,6 +443,8 @@ export const ContextUsageProjectionSchema = z
     rawContextWindowTokens: z.number().int().nonnegative().optional(),
     effectiveInputLimitTokens: z.number().int().positive(),
     estimatedInputTokens: z.number().int().nonnegative(),
+    fullRequestInputEstimateTokens: SafeTokenCountSchema.optional(),
+    fullWindowUsedRatio: SafeRateSchema.optional(),
     usedRatio: z.number().min(0).max(1),
     remainingTokens: z.number().int().nonnegative(),
     pressureState: ContextUsagePressureStateSchema,
@@ -455,7 +457,32 @@ export const ContextUsageProjectionSchema = z
     lastBuildStatus: z.enum(["SUCCESS", "FAILED", "CONTEXT_EXHAUSTED"]).optional(),
     promptCache: PromptCacheUsageSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((usage, context) => {
+    const fullEstimate = usage.fullRequestInputEstimateTokens;
+    const fullRatio = usage.fullWindowUsedRatio;
+    if ((fullEstimate === undefined) !== (fullRatio === undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: [
+          fullEstimate === undefined ? "fullRequestInputEstimateTokens" : "fullWindowUsedRatio",
+        ],
+        message: "Full-window estimate and ratio must be reported together.",
+      });
+      return;
+    }
+    if (fullEstimate === undefined || fullRatio === undefined) return;
+    const contextWindowTokens = usage.rawContextWindowTokens ?? usage.contextWindowTokens;
+    const expectedRatio =
+      contextWindowTokens === 0 ? 0 : Math.min(1, fullEstimate / contextWindowTokens);
+    if (fullRatio !== expectedRatio) {
+      context.addIssue({
+        code: "custom",
+        path: ["fullWindowUsedRatio"],
+        message: "Full-window ratio must match the bounded token estimate and context window.",
+      });
+    }
+  });
 
 export const ContextUsageResponseSchema = ContextUsageProjectionSchema.nullable();
 export type PromptCacheStatus = z.infer<typeof PromptCacheStatusSchema>;

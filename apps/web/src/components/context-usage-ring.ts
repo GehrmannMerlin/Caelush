@@ -10,7 +10,15 @@ export function ContextUsageRing(props: {
   readonly usage?: ContextUsageProjection | null;
 }): ReactElement {
   const [open, setOpen] = useState(false);
-  const ratio = clampRatio(props.usage?.usedRatio ?? 0);
+  const contextWindowTokens =
+    props.usage?.rawContextWindowTokens ?? props.usage?.contextWindowTokens ?? 0;
+  const ratio = clampRatio(
+    props.usage?.fullWindowUsedRatio ??
+      (contextWindowTokens === 0
+        ? 0
+        : (props.usage?.fullRequestInputEstimateTokens ?? props.usage?.estimatedInputTokens ?? 0) /
+          contextWindowTokens),
+  );
   const label =
     props.usage == null
       ? "工作上下文用量：暂无数据"

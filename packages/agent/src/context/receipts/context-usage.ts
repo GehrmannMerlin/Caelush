@@ -19,6 +19,12 @@ export interface ContextUsageSnapshot {
   readonly contextWindowTokens: number;
   readonly effectiveInputLimitTokens: number;
   readonly estimatedInputTokens: number;
+  /** Tokens added by the provider request envelope and Tool schemas. */
+  readonly requestOverheadTokens?: number;
+  /** Estimated model input including request overhead. */
+  readonly fullRequestInputEstimateTokens?: number;
+  /** Full request estimate divided by the model's complete context window. */
+  readonly fullWindowUsedRatio?: number;
   readonly remainingTokens: number;
   readonly pressureState: ContextPressureState;
   readonly compactionCount: number;
