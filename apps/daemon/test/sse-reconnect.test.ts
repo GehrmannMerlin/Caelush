@@ -62,6 +62,11 @@ async function makeServer() {
       expectedVersion: 1,
       createdAt: new Date(1_700_000_000_000).toISOString(),
     }),
+    contextBudgetPolicy: {
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 16_384,
+      safetyReserveTokens: 4_096,
+    },
     limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
     createdAt: 1_700_000_000_000,
   });

@@ -149,6 +149,11 @@ export function fakeContextEngine(): FakeContextEngine {
       preparations.push({ mode: input.mode, messages });
       return {
         messages,
+        requestBudget: {
+          version: "LEGACY_FULL_OUTPUT_V1",
+          outputReserveTokens: 0,
+          safetyReserveTokens: 0,
+        },
         report: {
           estimatedInputTokens: 1,
           effectiveInputLimitTokens: input.model.limits.contextWindowTokens,

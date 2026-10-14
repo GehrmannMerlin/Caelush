@@ -103,6 +103,11 @@ describe("Prompt Surface V3 production composition", () => {
         expectedVersion: 1,
         createdAt: new Date(1).toISOString(),
       }),
+      contextBudgetPolicy: {
+        version: "ADAPTIVE_V1",
+        outputReserveTokens: 1_000,
+        safetyReserveTokens: 1_000,
+      },
       limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 10_000 },
       createdAt: createTimestampMs(1),
     });
@@ -251,6 +256,11 @@ describe("Prompt Surface V3 production composition", () => {
         expectedVersion: 1,
         createdAt: new Date(1).toISOString(),
       }),
+      contextBudgetPolicy: {
+        version: "ADAPTIVE_V1",
+        outputReserveTokens: 1_000,
+        safetyReserveTokens: 1_000,
+      },
       limits: { maxSteps: 12, maxToolCalls: 12, timeoutMs: 10_000 },
       createdAt: createTimestampMs(1),
     });
@@ -403,8 +413,8 @@ describe("Prompt Surface V3 production composition", () => {
       return { prepared, stepId };
     }
 
-    const first = await prepareStep(1);
-    const second = await prepareStep(2);
+    await prepareStep(1);
+    await prepareStep(2);
 
     const resourceState = await storage.resourceGovernance.get(run.id);
     if (resourceState === null) throw new Error("Resource governance fixture was not created.");
@@ -415,7 +425,7 @@ describe("Prompt Surface V3 production composition", () => {
       revision: resourceState.revision + 1,
       updatedAt: createTimestampMs(7_000),
     });
-    const third = await prepareStep(3);
+    await prepareStep(3);
     nowMs = Date.parse("2026-10-08T12:29:59.999Z");
     const fourth = await prepareStep(4);
 
@@ -501,16 +511,16 @@ describe("Prompt Surface V3 production composition", () => {
 
     const fifth = await prepareStep(5);
     await writeFile(join(directory, "README.md"), "Tracked fixture changed at step 6.\n", "utf8");
-    const sixth = await prepareStep(6);
+    await prepareStep(6);
     await writeFile(
       join(directory, "AGENTS.md"),
       "Preserve project boundaries and verify edits.\n",
       "utf8",
     );
-    const seventh = await prepareStep(7);
+    await prepareStep(7);
     const updatedHtml = initialHtml.replace("login-v1-cache-fixture", "login-v2-cache-fixture");
     await writeFile(join(directory, "login.html"), updatedHtml, "utf8");
-    const eighth = await prepareStep(8);
+    await prepareStep(8);
 
     await runtime.dispose();
     runtime = new LocalRuntime({

@@ -1,7 +1,6 @@
 import type { ConversationTurnId } from "../../messages/types/ids.js";
 import type {
   ContextHistoryIndex,
-  ContextHistoryUnit,
   ContextHistoryUnitKind,
 } from "../history/semantic-history-unit.js";
 import { orderContextHistoryUnits } from "../history/semantic-history-unit.js";

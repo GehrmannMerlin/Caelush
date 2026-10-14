@@ -359,7 +359,7 @@ function composeFixture(input: {
   readonly toolResultCount?: { value: number };
   readonly clock: { now(): ReturnType<typeof createTimestampMs> };
 }): Promise<DaemonComposition> {
-  let observedToolResults = input.toolResultCount ?? { value: 0 };
+  const observedToolResults = input.toolResultCount ?? { value: 0 };
   return composeDaemon({
     storage: storage!,
     notifier: {

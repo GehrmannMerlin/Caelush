@@ -164,7 +164,8 @@ describe("SqliteRunExecutionStore canonical/durable compatibility", () => {
     const storage = await openCaelushStorage({ path: databasePath });
     try {
       const session = makeSession();
-      const { contextBudgetPolicy: _contextBudgetPolicy, ...pendingRun } = makeRun(session.id);
+      const pendingRun = { ...makeRun(session.id) };
+      delete pendingRun.contextBudgetPolicy;
       const run = AgentRunSchema.parse({
         ...pendingRun,
         status: "RUNNING" as const,

@@ -54,7 +54,8 @@ describe("RunRepository", () => {
   it("decodes and updates historical Runs that do not have a context budget snapshot", async () => {
     const { database, sessions, runs } = await createRepositories();
     const session = makeSession();
-    const { contextBudgetPolicy: _contextBudgetPolicy, ...legacyRun } = makeRun(session.id);
+    const legacyRun = { ...makeRun(session.id) };
+    delete legacyRun.contextBudgetPolicy;
     await sessions.insert(session);
     database.client
       .prepare(

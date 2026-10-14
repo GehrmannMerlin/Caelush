@@ -1,7 +1,7 @@
 import type { AIModelSettings, ModelDescriptor } from "@caelush/ai";
-import type { PreparedModelContext } from "@caelush/agent";
 import { describe, expect, it } from "vitest";
 import * as contextPolicy from "../src/context/policy/context-policy.js";
+import type { PreparedModelContext } from "../src/loop/types.js";
 import { buildModelRequest } from "../src/loop/turn/model-request-builder.js";
 
 const MODEL: ModelDescriptor = {

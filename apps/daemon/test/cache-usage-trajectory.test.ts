@@ -7,7 +7,7 @@ import {
   createDeterministicConversationTurnIdFactory,
   type ContextSummarizationInput,
 } from "@caelush/agent";
-import { createRunId, createStepId, createTimestampMs } from "@caelush/protocol";
+import { createStepId, createTimestampMs } from "@caelush/protocol";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { createBudgetedContextSummarizer } from "../src/context/context-compaction-composition.js";

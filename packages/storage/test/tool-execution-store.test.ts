@@ -67,6 +67,11 @@ function makeRun(sessionId: AgentSession["id"], status: AgentRun["status"] = "RU
       ...securityPolicy,
       policyDigest: computeSecurityPolicyDigest(securityPolicy),
     },
+    contextBudgetPolicy: {
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 16_384,
+      safetyReserveTokens: 4_096,
+    },
     limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
     createdAt: createTimestampMs(100),
     startedAt: status === "RUNNING" ? createTimestampMs(101) : undefined,

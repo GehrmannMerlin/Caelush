@@ -83,6 +83,11 @@ function makeRun(overrides: Partial<AgentRun> = {}): AgentRun {
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "READ_ONLY",
     approvalPolicy: "ON_BOUNDARY",
+    contextBudgetPolicy: {
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 16_384,
+      safetyReserveTokens: 4_096,
+    },
     limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 10_000 },
     createdAt: AT,
     startedAt: AT,

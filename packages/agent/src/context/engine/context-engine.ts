@@ -1682,15 +1682,6 @@ function samePromptSurfaceIdentity(left: PromptSurfaceEpoch, right: PromptSurfac
   );
 }
 
-function samePromptSurfaceAnchor(left: PromptSurfaceAnchor, right: PromptSurfaceAnchor): boolean {
-  return (
-    left.messageId === right.messageId &&
-    left.runId === right.runId &&
-    left.conversationTurnId === right.conversationTurnId &&
-    left.sequence === right.sequence
-  );
-}
-
 function promptSurfaceAnchors(
   surface: PromptSurfaceEpochWithSnapshots,
 ): readonly PromptSurfaceAnchor[] {

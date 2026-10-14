@@ -113,6 +113,11 @@ function makeRun(maxSteps = 4) {
     permissionProfile: "READ_ONLY",
     approvalPolicy: "ON_BOUNDARY",
     securityPolicy: makeSecurityPolicy(),
+    contextBudgetPolicy: {
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 16_384,
+      safetyReserveTokens: 4_096,
+    },
     limits: { maxSteps, maxToolCalls: 4, timeoutMs: 10_000 },
     createdAt: createTimestampMs(1),
   });

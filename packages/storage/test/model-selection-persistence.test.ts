@@ -49,6 +49,11 @@ describe("durable model and reasoning selection", () => {
       permissionProfile: "PROJECT_ACCESS",
       approvalPolicy: "ON_BOUNDARY",
       securityPolicy: makeSecurityPolicy("PROJECT_ACCESS", "ON_BOUNDARY"),
+      contextBudgetPolicy: {
+        version: "ADAPTIVE_V1",
+        outputReserveTokens: 16_384,
+        safetyReserveTokens: 4_096,
+      },
       limits: { maxSteps: 1, maxToolCalls: 1, timeoutMs: 5_000 },
       createdAt: now,
     });
@@ -80,6 +85,11 @@ describe("durable model and reasoning selection", () => {
       permissionProfile: "PROJECT_ACCESS",
       approvalPolicy: "ON_BOUNDARY",
       securityPolicy: makeSecurityPolicy("PROJECT_ACCESS", "ON_BOUNDARY"),
+      contextBudgetPolicy: {
+        version: "ADAPTIVE_V1",
+        outputReserveTokens: 16_384,
+        safetyReserveTokens: 4_096,
+      },
       limits: { maxSteps: 1, maxToolCalls: 1, timeoutMs: 5_000 },
       createdAt: now,
     });

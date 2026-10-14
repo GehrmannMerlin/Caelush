@@ -50,6 +50,7 @@ describe("daemon adaptive long-run boundary", () => {
       },
       info: composition.info,
       modelCanonicalizer: composition.modelCanonicalizer,
+      contextBudgetPolicyResolver: composition.contextBudgetPolicyResolver,
       securityCapabilityService: new SecurityCapabilityService(),
     });
 

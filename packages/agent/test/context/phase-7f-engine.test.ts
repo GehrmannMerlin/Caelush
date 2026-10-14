@@ -33,6 +33,7 @@ import {
   type ContextUsageSnapshot,
   type ContextUsageStorePort,
   type DeterministicCompactionFactsProvider,
+  type PreparedModelContext,
 } from "@caelush/agent";
 import { createEventId, createRunId, createSessionId } from "@caelush/protocol";
 
@@ -624,7 +625,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     const compactionCommit: ContextCompactionCommitPort = {
       async commit(input) {
         commitAttempts += 1;
-        const surfaceBeforeCommit = promptSurfaceStore.inspect(input.runId);
+        const surfaceBeforeCommit = promptSurfaceStore.inspect(input.checkpoint.runId);
         promptSurfaceResetBeforeCheckpointCommit =
           surfaceBeforeCommit?.resetReason === "COMPACTION_COMMITTED";
         if (commitShouldFail) throw new Error("durable summary commit unavailable");
@@ -647,6 +648,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       sourceRegistry: registry,
       checkpointRepository: {
         async create() {
+          if (latestCheckpoint === undefined) throw new Error("checkpoint is not available yet");
           return latestCheckpoint;
         },
         async getLatestByRun(runId) {
@@ -656,7 +658,9 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
           return latestCheckpoint;
         },
         async listByRun(runId) {
-          return String(runId) === String(historicalRunId) ? [latestCheckpoint] : [];
+          return String(runId) === String(historicalRunId) && latestCheckpoint !== undefined
+            ? [latestCheckpoint]
+            : [];
         },
       },
       authorityProvider: authority,

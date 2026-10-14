@@ -139,9 +139,21 @@ interface FrozenContextRequestBudget {
   readonly safetyReserveTokens: number;
 }
 
+interface FrozenSelectedAssistantReplaySource {
+  readonly messageId: string;
+  readonly runId: string;
+  readonly callId?: string;
+  readonly providerId?: string;
+  readonly model?: string;
+  readonly api?: string;
+  readonly hasProviderState: boolean;
+}
+
 interface FrozenPreparedModelContext {
   readonly messages: readonly AIMessage[];
   readonly requestBudget: FrozenContextRequestBudget;
+  readonly selectedMessageIds?: readonly string[];
+  readonly selectedAssistantReplaySources?: readonly FrozenSelectedAssistantReplaySource[];
   readonly report: FrozenContextBuildReport;
   readonly observationPolicy: FrozenToolObservationPolicySnapshot;
   readonly checkpoint?: ContextCheckpointRef;
@@ -301,6 +313,8 @@ type PreparedContextKeys = Expect<
     Keys<PreparedModelContext>,
     | "messages"
     | "requestBudget"
+    | "selectedMessageIds"
+    | "selectedAssistantReplaySources"
     | "report"
     | "observationPolicy"
     | "checkpoint"

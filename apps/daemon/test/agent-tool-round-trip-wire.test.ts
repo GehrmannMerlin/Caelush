@@ -149,6 +149,11 @@ function makeRun(workspace: string) {
     }),
     // The current VIEW_ONLY preset is immutable and carries ON_BOUNDARY approval policy.
     approvalPolicy: "ON_BOUNDARY",
+    contextBudgetPolicy: {
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 16_384,
+      safetyReserveTokens: 4_096,
+    },
     limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 10_000 },
     createdAt: createTimestampMs(1),
   });

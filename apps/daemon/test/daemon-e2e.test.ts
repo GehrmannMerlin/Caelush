@@ -73,6 +73,11 @@ async function startFactory(databasePath: string) {
     runs: storage.runs,
     eventHub,
     activeStreams,
+    contextBudgetPolicyResolver: {
+      async resolve() {
+        return { version: "LEGACY_FULL_OUTPUT_V1" };
+      },
+    },
     securityCapabilityService: new SecurityCapabilityService(),
     config: { host: "127.0.0.1", port: 0, sseHeartbeatIntervalMs: 0 },
   });
