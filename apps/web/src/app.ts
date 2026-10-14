@@ -675,7 +675,8 @@ function renderWorkspaceApp(input: {
             models: snapshot.modelDirectory ?? [],
             onClose: input.onCloseSettings,
             onConnect: (providerId, apiKey) =>
-              input.sessionManager?.connectProvider(providerId, apiKey) ?? Promise.resolve(false),
+              input.sessionManager?.connectProvider(providerId, apiKey) ??
+              Promise.resolve({ ok: false, message: "Provider 连接功能暂不可用。" }),
             onDisconnect: (providerId) =>
               input.sessionManager?.disconnectProvider(providerId) ?? Promise.resolve(false),
           }),

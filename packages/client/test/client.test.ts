@@ -522,6 +522,22 @@ describe("CaelushClient", () => {
     expect(String((error as Error).message)).not.toContain(secret);
   });
 
+  it.each([
+    [401, "DESKTOP_ACCOUNT_UNAUTHORIZED"],
+    [503, "LOCAL_AGENT_UNAVAILABLE"],
+  ] as const)("preserves the Desktop proxy error %s %s", async (status, code) => {
+    const client = new CaelushClient({
+      baseUrl: "caelush-app://app",
+      fetch: async () =>
+        Response.json(
+          { error: { code, message: "Safe local status.", requestId: "req_test" } },
+          { status },
+        ),
+    });
+
+    await expect(client.getHealth()).rejects.toMatchObject({ status, code });
+  });
+
   it("cancels an active SSE reader when the caller aborts", async () => {
     const controller = new AbortController();
     let cancelled = false;

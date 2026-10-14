@@ -25,6 +25,7 @@ import {
   type WorkspaceRef,
 } from "@caelush/protocol";
 import {
+  CaelushClientHttpError,
   CaelushProtocolCompatibilityError,
   type Timer,
   type WatchRunEventsOptions,
@@ -44,6 +45,29 @@ const otherWorkspace: WorkspaceRef = {
 };
 
 describe("WebSessionManager", () => {
+  it.each([
+    ["DESKTOP_ACCOUNT_UNAUTHORIZED", 401, "桌面账户"],
+    ["LOCAL_AGENT_UNAVAILABLE", 503, "本地 Agent"],
+    ["AI_AUTHENTICATION", 401, "API Key"],
+  ] as const)("explains provider connection failure %s", async (code, status, expected) => {
+    const client = makeClient();
+    client.connectAIProvider = vi.fn(async () => {
+      throw new CaelushClientHttpError({
+        code,
+        status,
+        message: "upstream-secret-detail",
+      });
+    });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    const result = await manager.connectProvider("deepseek", "fixture-secret-key");
+
+    expect(result).toMatchObject({ ok: false, message: expect.stringContaining(expected) });
+    expect(JSON.stringify(result)).not.toContain("fixture-secret-key");
+    expect(JSON.stringify(result)).not.toContain("upstream-secret-detail");
+    manager.dispose();
+  });
+
   it("loads only current-workspace Sessions and preserves selected identity", async () => {
     const current = makeSession({ defaultWorkspace: workspace });
     const other = makeSession({ defaultWorkspace: otherWorkspace });

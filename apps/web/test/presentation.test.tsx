@@ -295,7 +295,7 @@ describe("Web presentation", () => {
         providers={[provider]}
         models={[]}
         onClose={vi.fn()}
-        onConnect={vi.fn(async () => true)}
+        onConnect={vi.fn(async () => ({ ok: true }))}
         onDisconnect={vi.fn(async () => true)}
       />,
     );

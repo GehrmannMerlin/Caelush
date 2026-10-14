@@ -70,6 +70,21 @@ describe("Main-owned Desktop Daemon proxy", () => {
     expect(available.acquireLease).not.toHaveBeenCalled();
   });
 
+  it("reports an unavailable local Agent separately from an unauthorized account", async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    const proxy = new DesktopLocalProxy({
+      acquireLease: () => null,
+      isAccountAuthorized: () => true,
+      fetcher,
+    });
+
+    const response = await proxy.handle(rendererRequest());
+
+    expect(response.status).toBe(503);
+    expect((await response.json()).error.code).toBe("LOCAL_AGENT_UNAVAILABLE");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("requires Electron's browser-controlled Agent origin and rejects the account origin", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response("ok"));
     const setup = createProxy(fetcher);

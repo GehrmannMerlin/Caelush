@@ -1,6 +1,7 @@
 import { createElement, useState, type FormEvent, type ReactElement } from "react";
 import { ArrowLeft, KeyRound, LoaderCircle, Sparkles, X } from "lucide-react";
 import type { ModelView, ProviderView } from "@caelush/protocol";
+import type { ProviderConnectionResult } from "../application/session-manager.js";
 import anthropicIcon from "../assets/providers/anthropic.svg";
 import deepseekIcon from "../assets/providers/deepseek.svg";
 import geminiIcon from "../assets/providers/gemini.svg";
@@ -33,7 +34,7 @@ export interface SettingsSurfaceProps {
   readonly providers: readonly ProviderView[];
   readonly models: readonly ModelView[];
   readonly onClose: () => void;
-  readonly onConnect: (providerId: string, apiKey: string) => Promise<boolean>;
+  readonly onConnect: (providerId: string, apiKey: string) => Promise<ProviderConnectionResult>;
   readonly onDisconnect: (providerId: string) => Promise<boolean>;
 }
 
@@ -124,7 +125,7 @@ function ProviderEditor(props: {
   readonly provider: ProviderView;
   readonly modelCount: number;
   readonly onBack: () => void;
-  readonly onConnect: (providerId: string, apiKey: string) => Promise<boolean>;
+  readonly onConnect: (providerId: string, apiKey: string) => Promise<ProviderConnectionResult>;
   readonly onDisconnect: (providerId: string) => Promise<boolean>;
 }): ReactElement {
   const [apiKey, setApiKey] = useState("");
@@ -136,9 +137,9 @@ function ProviderEditor(props: {
     if (environmentOwned || apiKey.trim().length === 0 || busy) return;
     setBusy(true);
     setError(undefined);
-    const ok = await props.onConnect(props.provider.id, apiKey);
+    const result = await props.onConnect(props.provider.id, apiKey);
     setBusy(false);
-    if (!ok) setError("API Key 无效或 Provider 暂时不可连接。");
+    if (!result.ok) setError(result.message);
     else setApiKey("");
   };
   const disconnect = async () => {

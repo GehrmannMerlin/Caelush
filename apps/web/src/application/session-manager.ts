@@ -135,6 +135,9 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
   watchRunEvents(runId: RunId, options?: WatchRunEventsOptions): AsyncIterable<PublicRunEvent>;
 }
 
+export type ProviderConnectionResult =
+  { readonly ok: true } | { readonly ok: false; readonly message: string };
+
 export type WebSessionLoadState = "IDLE" | "LOADING" | "READY" | "ERROR";
 export type WebSubmissionState = "IDLE" | "SUBMITTING" | "RUN_CREATED" | "STARTING" | "ACTIVE";
 export type WebTransportState = "CONNECTED" | "RECONNECTING" | "DISCONNECTED";
@@ -724,14 +727,16 @@ export class WebSessionManager {
     }
   }
 
-  async connectProvider(providerId: string, apiKey: string): Promise<boolean> {
-    if (this.options.client.connectAIProvider === undefined) return false;
+  async connectProvider(providerId: string, apiKey: string): Promise<ProviderConnectionResult> {
+    if (this.options.client.connectAIProvider === undefined) {
+      return { ok: false, message: "Provider 连接功能暂不可用。" };
+    }
     try {
       await this.options.client.connectAIProvider(providerId, { apiKey });
       await this.loadAIControl();
-      return true;
-    } catch {
-      return false;
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, message: providerConnectionMessage(error) };
     }
   }
 
@@ -2385,6 +2390,22 @@ function sessionError(code: WebSessionErrorCode): WebSessionError {
   return { code, message: messages[code] };
 }
 
+function providerConnectionMessage(error: unknown): string {
+  if (error instanceof CaelushClientHttpError) {
+    switch (error.code) {
+      case "DESKTOP_ACCOUNT_UNAUTHORIZED":
+        return "桌面账户未授权或已过期，请在账户页重新登录后重试。";
+      case "LOCAL_AGENT_UNAVAILABLE":
+        return "本地 Agent 暂不可用，请在账户页查看启动状态后重试。";
+      case "AI_AUTHENTICATION":
+        return "API Key 被 Provider 拒绝，请核对服务商和密钥权限。";
+      case "AI_PROVIDER_UNAVAILABLE":
+        return "Provider 暂时无法连接，请检查网络后重试。";
+    }
+  }
+  return "Provider 连接失败，请稍后重试。";
+}
+
 function submissionError(
   fallback: "SESSION_CREATE_FAILED" | "RUN_CREATE_FAILED",
   error: unknown,
@@ -2401,6 +2422,8 @@ function submissionError(
       AI_PROVIDER_UNAVAILABLE: "模型服务暂时无法连接，请检查网络或稍后重试。",
       AI_MODEL_UNAVAILABLE: "当前模型不可用，请切换模型或刷新模型列表后重试。",
       AI_REASONING_UNSUPPORTED: "当前模型不支持所选推理等级，请调整后重试。",
+      DESKTOP_ACCOUNT_UNAUTHORIZED: "桌面账户未授权或已过期，请在账户页重新登录后重试。",
+      LOCAL_AGENT_UNAVAILABLE: "本地 Agent 暂不可用，请在账户页查看启动状态后重试。",
       ENVIRONMENT_CREDENTIAL_READ_ONLY: "模型凭据由运行环境提供，不能在应用内修改。",
       NO_MODEL_SELECTED: "尚未选择可用模型，请先选择模型后重试。",
       ACTIVE_RUN_CONFLICT: "当前工作区仍有运行中的任务，请等待任务结束后重试。",

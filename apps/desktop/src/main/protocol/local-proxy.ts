@@ -42,6 +42,7 @@ export interface DesktopDaemonProxyLease {
 
 export interface DesktopLocalProxyOptions {
   readonly acquireLease: (requestSignal: AbortSignal) => DesktopDaemonProxyLease | null;
+  readonly isAccountAuthorized?: () => boolean;
   readonly fetcher?: typeof fetch;
   readonly maxRequestBodyBytes?: number;
 }
@@ -84,6 +85,9 @@ export class DesktopLocalProxy {
 
     const lease = this.options.acquireLease(request.signal);
     if (lease === null) {
+      if (this.options.isAccountAuthorized?.() === true) {
+        return proxyError(503, "LOCAL_AGENT_UNAVAILABLE", "The local Agent is unavailable.");
+      }
       return proxyError(401, "DESKTOP_ACCOUNT_UNAUTHORIZED", "Sign in to use the local Agent.");
     }
     if (!isOwnedLoopbackTarget(lease.baseUrl) || !isValidHostToken(lease.hostToken)) {

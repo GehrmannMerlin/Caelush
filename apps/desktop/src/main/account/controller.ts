@@ -77,6 +77,8 @@ interface OnlineSession {
   readonly accessExpiresAt: Date;
 }
 
+const ONLINE_REFRESH_LEAD_MS = 60_000;
+
 export interface DesktopLoginInput {
   readonly email: string;
   readonly password: string;
@@ -96,6 +98,7 @@ export class AccountController {
   private state = createInitialAccountState();
   private readonly listeners = new Set<(state: AccountState) => void>();
   private onlineSession: OnlineSession | undefined;
+  private onlineRefreshTimer: NodeJS.Timeout | undefined;
   private activeAccountKey: string | null = null;
   private monotonicAnchor: { readonly trustedTime: Date; readonly monotonicMs: number } | undefined;
   private operationTail: Promise<void> = Promise.resolve();
@@ -347,7 +350,14 @@ export class AccountController {
         await this.enterOfflineOrExpired(accountKey, record, identity.privateKeyPkcs8Base64);
         return;
       }
-      this.setState(this.accountState("REFRESHING", record, null));
+      this.clearOnlineRefreshTimer();
+      if (
+        this.state.status !== "AUTHENTICATED_ONLINE" ||
+        this.onlineSession === undefined ||
+        this.onlineSession.accessExpiresAt.getTime() <= this.now().getTime()
+      ) {
+        this.setState(this.accountState("REFRESHING", record, null));
+      }
       await this.consumeRefreshToken(
         accountKey,
         record,
@@ -614,6 +624,7 @@ export class AccountController {
       accessToken: auth.tokens.accessToken,
       accessExpiresAt: new Date(auth.tokens.accessExpiresAt),
     };
+    this.scheduleOnlineRefresh();
     const safeAccount = safeAccountProjection(auth.account);
     this.setState({
       status: "AUTHENTICATED_ONLINE",
@@ -831,7 +842,31 @@ export class AccountController {
   }
 
   private clearOnlineSession(): void {
+    this.clearOnlineRefreshTimer();
     this.onlineSession = undefined;
+  }
+
+  private scheduleOnlineRefresh(): void {
+    this.clearOnlineRefreshTimer();
+    const expiry = this.onlineSession?.accessExpiresAt.getTime();
+    if (expiry === undefined || !Number.isFinite(expiry)) return;
+    const remaining = expiry - this.now().getTime();
+    if (!Number.isFinite(remaining) || remaining <= 0) return;
+    const delay = Math.min(
+      2_147_483_647,
+      Math.max(1, remaining - ONLINE_REFRESH_LEAD_MS, remaining / 2),
+    );
+    this.onlineRefreshTimer = setTimeout(() => {
+      this.onlineRefreshTimer = undefined;
+      if (this.state.status !== "AUTHENTICATED_ONLINE") return;
+      void this.refreshNow(new AbortController().signal).catch(() => undefined);
+    }, delay);
+    this.onlineRefreshTimer.unref();
+  }
+
+  private clearOnlineRefreshTimer(): void {
+    if (this.onlineRefreshTimer !== undefined) clearTimeout(this.onlineRefreshTimer);
+    this.onlineRefreshTimer = undefined;
   }
 
   private now(): Date {

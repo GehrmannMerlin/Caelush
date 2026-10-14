@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AccountState } from "../../src/main/account/state.js";
 import { DaemonInfoSchema } from "@caelush/protocol";
 import {
@@ -149,6 +149,9 @@ function createSupervisor(
     readonly profileSelections?: string[];
     readonly credentialVault?: MainCredentialVaultPort;
     readonly onSpawn?: (environment: NodeJS.ProcessEnv) => void;
+    readonly now?: () => number;
+    readonly onlineExpiry?: () => Date | undefined;
+    readonly onAuthorizationExpired?: (state: "ONLINE" | "OFFLINE") => void;
   } = {},
 ) {
   const child = options.child ?? new FakeChild();
@@ -205,6 +208,11 @@ function createSupervisor(
     startupTimeoutMs: options.startupTimeoutMs ?? 1000,
     shutdownTimeoutMs: 1000,
     proxyDrainTimeoutMs: options.proxyDrainTimeoutMs ?? 100,
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.onlineExpiry === undefined ? {} : { onlineExpiry: options.onlineExpiry }),
+    ...(options.onAuthorizationExpired === undefined
+      ? {}
+      : { onAuthorizationExpired: options.onAuthorizationExpired }),
     spawnDaemon: (_resources, _profileRoot, environment) => {
       options.onSpawn?.(environment);
       return child;
@@ -232,6 +240,41 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 describe("DesktopDaemonSupervisor", () => {
+  it.each(["ONLINE", "OFFLINE"] as const)(
+    "notifies and closes the active generation when %s authorization reaches its expiry",
+    async (authority) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      let now = Date.parse("2026-10-14T12:00:00.000Z");
+      const expiry = now + 1000;
+      const onAuthorizationExpired = vi.fn();
+      const setup = createSupervisor({
+        now: () => now,
+        onlineExpiry: () => new Date(expiry),
+        onAuthorizationExpired,
+      });
+      const initial = createAuthorizedState();
+      const state: AccountState = {
+        ...initial,
+        status: authority === "ONLINE" ? "AUTHENTICATED_ONLINE" : "AUTHORIZED_OFFLINE",
+        offlineGrant: { ...initial.offlineGrant!, expiresAt: new Date(expiry).toISOString() },
+      };
+      try {
+        await setup.supervisor.synchronizeAccountState(state);
+        expect(setup.supervisor.getAgentEntry(state)).toEqual({ available: true });
+
+        now = expiry;
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(onAuthorizationExpired).toHaveBeenCalledExactlyOnceWith(authority);
+        expect(setup.supervisor.acquireProxyLease(new AbortController().signal)).toBeNull();
+        await vi.waitFor(() => expect(setup.child.exitCode).toBe(0));
+      } finally {
+        await setup.supervisor.closeForApplicationQuit();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("uses a strict DaemonInfo fixture for the compatibility handshake", () => {
     const parsed = DaemonInfoSchema.safeParse(INFO);
     expect(parsed.success, parsed.success ? undefined : parsed.error.message).toBe(true);

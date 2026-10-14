@@ -168,6 +168,8 @@ if (!singleInstance) {
   });
   const proxy = new DesktopLocalProxy({
     acquireLease: (requestSignal) => supervisor.acquireProxyLease(requestSignal),
+    isAccountAuthorized: () =>
+      supervisor.getAgentEntry(account.getState()).reason !== "ACCOUNT_NOT_AUTHORIZED",
   });
   const updateTrust = trustedUpdateConfiguration();
   const updateStore = new UpdateStateStore(
@@ -374,7 +376,7 @@ if (!singleInstance) {
     logD6Startup("APP_PROTOCOL_REGISTERED");
     await updates.initialize();
     unsubscribeAccount = account.subscribe((state) => {
-      if (updateSuspendsAccountSynchronization) {
+      if (updateSuspendsAccountSynchronization || shutdownInProgress || safeQuitApproved) {
         publishProjectedAccountState();
         return;
       }

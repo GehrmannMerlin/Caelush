@@ -910,7 +910,11 @@ export class DesktopDaemonSupervisor {
     if (desired?.expiresAt === undefined) return;
     const delay = Math.max(0, desired.expiresAt - this.now());
     this.expiryTimer = setTimeout(() => {
-      if (!this.isDesiredAccountCurrent(desired)) return;
+      if (this.desired !== desired) return;
+      if (desired.expiresAt !== undefined && desired.expiresAt > this.now()) {
+        this.scheduleExpiry(desired);
+        return;
+      }
       this.desired = undefined;
       this.freezeProxyAccess();
       this.options.onAuthorizationExpired?.(desired.state);
