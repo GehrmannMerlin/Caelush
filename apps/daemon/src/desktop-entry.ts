@@ -11,6 +11,8 @@ import { DAEMON_VERSION } from "./version.js";
 const PROFILE_ID = /^u_[0-9a-f]{64}$/u;
 const TOKEN = /^[A-Za-z0-9_-]{43}$/u;
 const SECRET = /^[A-Za-z0-9_-]{43}$/u;
+const desktopProfileLocalAppDataDirectory = process.env.CAELUSH_DESKTOP_PROFILE_LOCAL_APPDATA;
+delete process.env.CAELUSH_DESKTOP_PROFILE_LOCAL_APPDATA;
 const REQUIRED_CAPABILITIES = [
   "runExecution",
   "runRecovery",
@@ -169,7 +171,11 @@ async function startFromBootstrap(
     const profileRootDirectory = process.env.CAELUSH_HOME;
     if (profileRootDirectory === undefined) throw new Error("profile");
     failureCode = "PROFILE_BINDING_INVALID";
-    const verifiedProfileRoot = await verifyProfileBinding(profileRootDirectory, message.profileId);
+    const verifiedProfileRoot = await verifyProfileBinding(
+      profileRootDirectory,
+      message.profileId,
+      desktopProfileLocalAppDataDirectory,
+    );
     failureCode = "DAEMON_START_FAILED";
     const databasePath = path.join(verifiedProfileRoot, "caelush.db");
     const environment = desktopProviderEnvironment(process.env);
@@ -257,9 +263,10 @@ function desktopProviderEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEn
 async function verifyProfileBinding(
   profileRootDirectory: string,
   profileId: string,
+  profileLocalAppDataDirectory?: string,
 ): Promise<string> {
   const absoluteRoot = path.resolve(profileRootDirectory);
-  const localAppDataDirectory = process.env.LOCALAPPDATA;
+  const localAppDataDirectory = profileLocalAppDataDirectory ?? process.env.LOCALAPPDATA;
   if (localAppDataDirectory === undefined || localAppDataDirectory.trim().length === 0) {
     throw new Error("profile");
   }

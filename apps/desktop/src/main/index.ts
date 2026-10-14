@@ -1,4 +1,4 @@
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { app, BrowserWindow, dialog, protocol, safeStorage, session } from "electron";
 import { AccountController } from "./account/controller.js";
 import type { AccountState } from "./account/state.js";
@@ -71,6 +71,13 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 app.setName("Caelush 桌面端");
+const developmentDataRoot = resolveDevelopmentDataRoot(
+  app.isPackaged,
+  process.env.CAELUSH_DESKTOP_DEV_DATA_ROOT,
+);
+if (developmentDataRoot !== undefined) {
+  app.setPath("userData", join(developmentDataRoot, "electron-user-data"));
+}
 if (process.platform === "win32") app.setAppUserModelId("com.caelush.desktop");
 
 const singleInstance = app.requestSingleInstanceLock();
@@ -83,7 +90,11 @@ if (!singleInstance) {
   let unsubscribeAccount: (() => void) | null = null;
   let safeQuitApproved = false;
   let shutdownInProgress = false;
-  const rendererTrust = createRendererTrust(app.isPackaged, process.env.CAELUSH_DESKTOP_DEV_URL);
+  const rendererTrust = createRendererTrust(
+    app.isPackaged,
+    process.env.CAELUSH_DESKTOP_DEV_URL,
+    developmentDataRoot !== undefined,
+  );
   const cloud = new CloudAccountClient(BUILD_CONFIGURATION.cloudOrigin);
   const vault = new DpapiVault(join(app.getPath("userData"), "credentials.dpapi"), {
     isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
@@ -101,7 +112,7 @@ if (!singleInstance) {
     vault,
     credentials: providerCredentialVault,
   });
-  const localAppDataDirectory = process.env.LOCALAPPDATA;
+  const localAppDataDirectory = developmentDataRoot ?? process.env.LOCALAPPDATA;
   const profileManager = localAppDataDirectory
     ? new ProfileManager({
         localAppDataDirectory,
@@ -136,6 +147,9 @@ if (!singleInstance) {
   });
   const supervisor = new DesktopDaemonSupervisor({
     profileManager,
+    ...(developmentDataRoot === undefined || localAppDataDirectory === undefined
+      ? {}
+      : { profileLocalAppDataDirectory: localAppDataDirectory }),
     credentialVault: providerCredentialVault,
     credentialMigrator: providerCredentialMigrator,
     resolveResources: () =>
@@ -306,6 +320,21 @@ if (!singleInstance) {
   });
 
   app.whenReady().then(async () => {
+    if (developmentDataRoot !== undefined) {
+      try {
+        const permissions = new WindowsProfilePermissions(process.platform);
+        const userDataDirectory = app.getPath("userData");
+        await permissions.secureDirectory(userDataDirectory);
+        await permissions.verifyDirectory(userDataDirectory);
+      } catch {
+        dialog.showErrorBox(
+          "Development data permissions could not be verified",
+          "The isolated Desktop development data directory is not private to this Windows user. Choose a different directory and try again.",
+        );
+        app.quit();
+        return;
+      }
+    }
     logD6Startup("APP_WHEN_READY", { userDataPath: app.getPath("userData") });
     if (app.isPackaged) {
       try {
@@ -581,4 +610,16 @@ function safeResourceVerificationFailure(error: unknown): string {
     }
   }
   return "UNCLASSIFIED";
+}
+
+function resolveDevelopmentDataRoot(
+  packaged: boolean,
+  environmentValue: string | undefined,
+): string | undefined {
+  if (packaged || environmentValue === undefined) return undefined;
+  const value = environmentValue.trim();
+  if (value.length === 0 || !isAbsolute(value)) {
+    throw new Error("The isolated Desktop development data directory must be absolute.");
+  }
+  return resolve(value);
 }

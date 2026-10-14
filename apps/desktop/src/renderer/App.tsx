@@ -1,19 +1,9 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type FormEvent,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { UpdatePage } from "./UpdatePage.js";
 import {
   ArrowLeft,
   ArrowRight,
   BadgeCheck,
-  Check,
-  ChevronRight,
   CircleAlert,
   Clock3,
   Cloud,
@@ -38,8 +28,15 @@ import type {
 } from "../shared/legacy-data-contract.js";
 
 type AuthScreen = "login" | "register" | "verify" | "forgot" | "reset";
-type AccountScreen = "home" | "devices" | "security" | "updates";
+type AccountScreen = "home" | "security" | "updates";
 type AppScreen = AuthScreen | AccountScreen | "agent-starting";
+
+const brandTitlePrefix = Array.from("让灵感 ");
+const brandTitleAccent = Array.from("自由生长。");
+const brandTitleCharacterCount = brandTitlePrefix.length + brandTitleAccent.length;
+const brandTitleText = [...brandTitlePrefix, ...brandTitleAccent].join("");
+const brandCopyCharacters = Array.from("每一段思绪，都可以成为新的开始。");
+const brandCopyText = brandCopyCharacters.join("");
 
 const initialState: AccountState = {
   status: "INITIALIZING",
@@ -97,9 +94,7 @@ export function DesktopApp() {
     !accountRouteRequested &&
     !reconnectingOffline &&
     (authScreenOpen || screen === "agent-starting");
-  const activeView = useMemo<AccountScreen>(() => {
-    return screen === "devices" || screen === "security" || screen === "updates" ? screen : "home";
-  }, [screen]);
+  const activeView: AccountScreen = screen === "security" || screen === "updates" ? screen : "home";
   const retryAgentStartup = useCallback(async () => {
     setAgentRetrying(true);
     setFeedback(null);
@@ -148,10 +143,7 @@ export function DesktopApp() {
     if (!authenticated) {
       agentNavigationStarted.current = false;
       setScreen((current) =>
-        current === "devices" ||
-        current === "security" ||
-        current === "updates" ||
-        current === "agent-starting"
+        current === "security" || current === "updates" || current === "agent-starting"
           ? "login"
           : current,
       );
@@ -192,9 +184,9 @@ export function DesktopApp() {
   ]);
 
   useEffect(() => {
-    if (screen !== "devices" || !online) {
+    if (!online) {
       setDevicesLoading(false);
-      if (!online) setDevices([]);
+      setDevices([]);
       return;
     }
     let active = true;
@@ -213,7 +205,7 @@ export function DesktopApp() {
     return () => {
       active = false;
     };
-  }, [online, screen]);
+  }, [online]);
 
   useEffect(() => {
     if (!authenticated || accountState.account?.userId === undefined) {
@@ -323,18 +315,6 @@ export function DesktopApp() {
     });
   }
 
-  async function refreshAccount() {
-    setBusy(true);
-    setFeedback(null);
-    try {
-      await window.caelushDesktop.account.refreshNow();
-    } catch (error) {
-      setFeedback(errorMessage(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function revokeDevice(device: SafeDevice) {
     const label = device.current ? "此设备" : formatDeviceLabel(device.label);
     if (!window.confirm(`确定撤销“${label}”的访问权限吗？该设备需要重新登录。`)) return;
@@ -414,10 +394,8 @@ export function DesktopApp() {
         busy={busy}
         feedback={apiError}
         onNavigate={(nextView) => {
-          if (nextView === "devices") setDevicesLoading(true);
           setScreen(nextView);
         }}
-        onRefresh={() => void refreshAccount()}
         onRevoke={(device) => void revokeDevice(device)}
         onReconnect={() => {
           setEmail(accountState.account?.email ?? "");
@@ -548,6 +526,60 @@ function agentStartupStatus(reason: AccountState["agentEntry"]["reason"]): {
   }
 }
 
+function BrandIntroduction() {
+  const [reducedMotion] = useState(
+    () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
+  );
+  const [visibleCharacters, setVisibleCharacters] = useState(
+    reducedMotion ? brandTitleCharacterCount : 0,
+  );
+  const [copyRevealed, setCopyRevealed] = useState(reducedMotion);
+
+  useEffect(() => {
+    if (reducedMotion) return;
+
+    let visibleCount = 0;
+    let timeoutId = 0;
+    const typeNextCharacter = () => {
+      visibleCount += 1;
+      setVisibleCharacters(visibleCount);
+
+      if (visibleCount === brandTitleCharacterCount) {
+        timeoutId = window.setTimeout(() => setCopyRevealed(true), 160);
+        return;
+      }
+
+      timeoutId = window.setTimeout(typeNextCharacter, 92);
+    };
+
+    timeoutId = window.setTimeout(typeNextCharacter, 180);
+    return () => window.clearTimeout(timeoutId);
+  }, [reducedMotion]);
+
+  const visiblePrefix = brandTitlePrefix.slice(0, visibleCharacters).join("");
+  const visibleAccentCount = Math.max(0, visibleCharacters - brandTitlePrefix.length);
+  const titleComplete = visibleCharacters === brandTitleCharacterCount;
+
+  return (
+    <div className="brand-panel-content">
+      <h1 aria-label={brandTitleText}>
+        <span className="brand-title-visual" aria-hidden="true">
+          <span>{visiblePrefix}</span>
+          <em>{brandTitleAccent.slice(0, visibleAccentCount).join("")}</em>
+          <span className={`brand-typing-caret${titleComplete ? " is-complete" : ""}`} />
+        </span>
+      </h1>
+      <p className={`brand-copy${copyRevealed ? " is-revealed" : ""}`} aria-label={brandCopyText}>
+        {brandCopyCharacters.map((character, index) => (
+          <span key={index} aria-hidden="true" style={{ animationDelay: `${index * 38}ms` }}>
+            {character}
+          </span>
+        ))}
+      </p>
+    </div>
+  );
+}
+
 function AuthShell(props: {
   screen: AuthScreen;
   status: AccountState["status"];
@@ -573,18 +605,12 @@ function AuthShell(props: {
 }) {
   return (
     <main className="auth-layout">
+      <div className="brand-emblem">
+        <img src="/caelush-logo.png" alt="Caelush" />
+      </div>
       <div className="auth-content">
         <section className="brand-panel">
-          <div className="brand-panel-content">
-            <div className="brand-emblem">
-              <img src="/caelush-logo.png" alt="Caelush" />
-            </div>
-            <p className="eyebrow">灵感与创造</p>
-            <h1>
-              让灵感 <em>自由生长。</em>
-            </h1>
-            <p className="brand-copy">每一段思绪，都可以成为新的开始。</p>
-          </div>
+          <BrandIntroduction />
         </section>
 
         <section className="auth-panel">
@@ -769,7 +795,7 @@ function AuthShell(props: {
 }
 
 function AccountLoadingScreen(props: { view: AccountScreen }) {
-  const navigation = ["home", "devices", "security", "updates"] as const;
+  const navigation = ["home", "security", "updates"] as const;
   return (
     <main
       className="account-layout account-layout--loading"
@@ -792,11 +818,7 @@ function AccountLoadingScreen(props: { view: AccountScreen }) {
       <section className="account-content">
         <div className="account-content-inner">
           <div className="account-page-head">
-            <div className="account-skeleton-title-group">
-              <span className="skeleton-block account-skeleton-eyebrow" />
-              <span className="skeleton-block account-skeleton-title" />
-            </div>
-            <span className="skeleton-block account-skeleton-status" />
+            <span className="skeleton-block account-skeleton-title" />
           </div>
           <AccountPageSkeleton view={props.view} />
         </div>
@@ -809,22 +831,6 @@ function AccountLoadingScreen(props: { view: AccountScreen }) {
 }
 
 function AccountPageSkeleton(props: { view: AccountScreen }) {
-  if (props.view === "devices") {
-    return (
-      <section className="table-panel account-skeleton-panel" aria-hidden="true">
-        <div className="account-skeleton-panel-heading">
-          <div>
-            <span className="skeleton-block account-skeleton-section-title" />
-            <span className="skeleton-block account-skeleton-copy" />
-          </div>
-          <span className="skeleton-block account-skeleton-button" />
-        </div>
-        <DeviceRowsSkeleton />
-        <span className="skeleton-block account-skeleton-note" />
-      </section>
-    );
-  }
-
   if (props.view === "security") {
     return (
       <div className="security-stack" aria-hidden="true">
@@ -847,7 +853,6 @@ function AccountPageSkeleton(props: { view: AccountScreen }) {
           </div>
         </section>
         <span className="skeleton-block account-skeleton-security-note" />
-        <span className="skeleton-block account-skeleton-link" />
       </div>
     );
   }
@@ -859,7 +864,6 @@ function AccountPageSkeleton(props: { view: AccountScreen }) {
           <div className="account-skeleton-update-heading">
             <span className="skeleton-block account-skeleton-icon-large" />
             <div>
-              <span className="skeleton-block account-skeleton-eyebrow" />
               <span className="skeleton-block account-skeleton-section-title" />
               <span className="skeleton-block account-skeleton-copy" />
             </div>
@@ -878,41 +882,22 @@ function AccountPageSkeleton(props: { view: AccountScreen }) {
   return (
     <div className="account-skeleton-overview" aria-hidden="true">
       <span className="skeleton-block account-skeleton-connection" />
-      {[0, 1].map((card) => (
-        <section className="detail-panel account-skeleton-panel" key={card}>
-          <div className="account-skeleton-panel-heading">
-            <div>
-              <span className="skeleton-block account-skeleton-eyebrow" />
-              <span className="skeleton-block account-skeleton-section-title" />
-            </div>
-            <span className="skeleton-block account-skeleton-icon-large" />
-          </div>
-          {card === 0 ? (
-            <div className="account-skeleton-detail-rows">
-              {[0, 1, 2, 3].map((row) => (
-                <div className="account-skeleton-detail-row" key={row}>
-                  <span className="skeleton-block account-skeleton-label" />
-                  <span className="skeleton-block account-skeleton-value" />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <>
-              <div className="account-skeleton-device-line">
-                <span className="skeleton-block account-skeleton-device-icon" />
-                <span className="skeleton-block account-skeleton-value" />
-              </div>
-              <span className="skeleton-block account-skeleton-detail-line" />
-              <span className="skeleton-block account-skeleton-link" />
-            </>
-          )}
-        </section>
-      ))}
+      <section className="detail-panel account-skeleton-panel">
+        <div className="account-skeleton-panel-heading">
+          <span className="skeleton-block account-skeleton-section-title" />
+          <span className="skeleton-block account-skeleton-icon-large" />
+        </div>
+        <div className="account-skeleton-device-line">
+          <span className="skeleton-block account-skeleton-device-icon" />
+          <span className="skeleton-block account-skeleton-value" />
+        </div>
+        <span className="skeleton-block account-skeleton-detail-line" />
+        <DeviceRowsSkeleton />
+      </section>
       <section className="legacy-import-panel account-skeleton-panel">
         <div className="account-skeleton-panel-heading">
           <span className="skeleton-block account-skeleton-icon-large" />
           <div>
-            <span className="skeleton-block account-skeleton-eyebrow" />
             <span className="skeleton-block account-skeleton-section-title" />
           </div>
         </div>
@@ -953,7 +938,6 @@ function AccountHome(props: {
   busy: boolean;
   feedback: string | null;
   onNavigate(screen: AccountScreen): void;
-  onRefresh(): void;
   onReconnect(): void;
   onRevoke(device: SafeDevice): void;
   onChangePassword(event: FormEvent<HTMLFormElement>): void;
@@ -984,12 +968,6 @@ function AccountHome(props: {
           <MonitorCog size={16} /> 总览
         </button>
         <button
-          className={`side-nav ${props.activeView === "devices" ? "is-current" : ""}`}
-          onClick={() => props.onNavigate("devices")}
-        >
-          <LaptopMinimal size={16} /> 设备
-        </button>
-        <button
           className={`side-nav ${props.activeView === "security" ? "is-current" : ""}`}
           onClick={() => props.onNavigate("security")}
         >
@@ -1016,32 +994,22 @@ function AccountHome(props: {
       <section className="account-content">
         <div className="account-content-inner">
           <div className="account-page-head">
-            <div>
-              <p className="eyebrow">
-                账户中心 <span>/</span> {accountViewLabel(props.activeView)}
-              </p>
-              <h2>
-                {props.activeView === "home"
-                  ? "账户总览"
-                  : props.activeView === "devices"
-                    ? "设备管理"
-                    : props.activeView === "security"
-                      ? "安全设置"
-                      : "检查更新"}
-              </h2>
-            </div>
-            <div className={`authorization-pill ${offline ? "is-offline" : ""}`}>
-              <span className="connection-dot" />
-              {offline ? "离线授权" : "账户已连接"}
-            </div>
+            <h2>
+              {props.activeView === "home"
+                ? "总览"
+                : props.activeView === "security"
+                  ? "安全设置"
+                  : "检查更新"}
+            </h2>
           </div>
           {props.feedback && <MessageBox message={props.feedback} tone="info" />}
           {props.activeView === "home" && (
             <Overview
               state={accountState}
-              onNavigate={props.onNavigate}
-              onRefresh={props.onRefresh}
+              devices={props.devices}
+              devicesLoading={props.devicesLoading}
               onReconnect={props.onReconnect}
+              onRevoke={props.onRevoke}
               busy={props.busy}
               legacySummary={props.legacySummary}
               legacyLoading={props.legacyLoading}
@@ -1054,16 +1022,6 @@ function AccountHome(props: {
               onResumeLegacy={props.onResumeLegacy}
             />
           )}
-          {props.activeView === "devices" && (
-            <DeviceManager
-              state={accountState}
-              devices={props.devices}
-              loading={props.devicesLoading}
-              busy={props.busy}
-              onRevoke={props.onRevoke}
-              onRefresh={props.onRefresh}
-            />
-          )}
           {props.activeView === "security" && (
             <SecuritySettings
               online={!offline}
@@ -1073,7 +1031,6 @@ function AccountHome(props: {
               setCurrentPassword={props.setCurrentPassword}
               setNewPassword={props.setNewPassword}
               onChangePassword={props.onChangePassword}
-              onRefresh={props.onRefresh}
             />
           )}
           {props.activeView === "updates" && <UpdatePage />}
@@ -1085,9 +1042,10 @@ function AccountHome(props: {
 
 function Overview(props: {
   state: AccountState;
-  onNavigate(screen: AccountScreen): void;
-  onRefresh(): void;
+  devices: readonly SafeDevice[];
+  devicesLoading: boolean;
   onReconnect(): void;
+  onRevoke(device: SafeDevice): void;
   busy: boolean;
   legacySummary: LegacyDataImportSummary | null;
   legacyLoading: boolean;
@@ -1102,6 +1060,11 @@ function Overview(props: {
   const { state } = props;
   const offline = state.status === "AUTHORIZED_OFFLINE";
   const grant = state.offlineGrant;
+  const currentDevice = props.devices.find((device) => device.current) ?? state.device;
+  const currentDeviceCanBeRevoked =
+    currentDevice !== undefined &&
+    props.devices.some((device) => device.deviceId === currentDevice.deviceId && !device.revokedAt);
+  const otherDevices = props.devices.filter((device) => !device.current);
   return (
     <>
       <section className={`connection-banner ${offline ? "is-offline" : ""}`}>
@@ -1123,17 +1086,7 @@ function Overview(props: {
           >
             登录并重新连接 <ArrowRight size={14} />
           </button>
-        ) : (
-          <button
-            className="icon-button banner-action"
-            type="button"
-            disabled={props.busy}
-            aria-label="刷新账户连接状态"
-            onClick={props.onRefresh}
-          >
-            <RefreshCw size={16} className={props.busy ? "spin" : ""} />
-          </button>
-        )}
+        ) : null}
       </section>
       {offline && grant && (
         <section className="grant-panel">
@@ -1164,41 +1117,9 @@ function Overview(props: {
         </section>
       )}
       <div className="overview-grid">
-        <section className="detail-panel">
-          <div className="panel-heading">
-            <div>
-              <span className="eyebrow">账户信息</span>
-              <h3>账户详情</h3>
-            </div>
-            <BadgeCheck size={18} />
-          </div>
-          <div className="detail-row">
-            <span>邮箱地址</span>
-            <b>{state.account?.email ?? "—"}</b>
-          </div>
-          <div className="detail-row">
-            <span>邮箱验证</span>
-            <b className="verified-state">
-              <Check size={14} /> 已验证
-            </b>
-          </div>
-          <div className="detail-row">
-            <span>账户权益</span>
-            <b>
-              {formatEntitlement(state.account?.entitlements.find((item) => item.enabled)?.code)}
-            </b>
-          </div>
-          <div className="detail-row">
-            <span>注册时间</span>
-            <b>{state.account ? formatDate(state.account.createdAt) : "—"}</b>
-          </div>
-        </section>
         <section className="detail-panel device-summary">
           <div className="panel-heading">
-            <div>
-              <span className="eyebrow">当前设备</span>
-              <h3>Windows 桌面端</h3>
-            </div>
+            <h3>Windows 桌面端</h3>
             <LaptopMinimal size={18} />
           </div>
           <div className="device-name">
@@ -1206,21 +1127,68 @@ function Overview(props: {
               <LaptopMinimal size={19} />
             </div>
             <div>
-              <b>{formatDeviceLabel(state.device?.label ?? "Caelush Desktop")}</b>
-              <span>{state.device?.current ? "当前设备" : "设备尚未验证"}</span>
+              <b>{formatDeviceLabel(currentDevice?.label ?? "Caelush Desktop")}</b>
+              <span>{currentDevice ? "当前设备" : "设备尚未验证"}</span>
             </div>
           </div>
           <div className="detail-row">
             <span>设备 ID</span>
-            <b className="mono-value">{state.device?.deviceId ?? "—"}</b>
+            <b className="mono-value">{currentDevice?.deviceId ?? "—"}</b>
           </div>
-          <button
-            type="button"
-            className="inline-action"
-            onClick={() => props.onNavigate("devices")}
-          >
-            管理设备 <ChevronRight size={15} />
-          </button>
+          {currentDeviceCanBeRevoked && currentDevice && (
+            <button
+              type="button"
+              className="revoke-button device-current-revoke"
+              disabled={offline || props.busy}
+              onClick={() => props.onRevoke(currentDevice)}
+            >
+              撤销此设备
+            </button>
+          )}
+          <div className="device-list-heading">其他已登录设备</div>
+          {offline ? (
+            <p className="device-list-message">连接云端后可管理其他登录设备。</p>
+          ) : props.devicesLoading ? (
+            <DeviceRowsSkeleton />
+          ) : otherDevices.length === 0 ? (
+            <p className="device-list-message">暂无其他已登录设备。</p>
+          ) : (
+            <div className="device-list">
+              {otherDevices.map((device) => (
+                <div className="device-row" key={device.deviceId}>
+                  <div className="device-tile">
+                    <LaptopMinimal size={18} />
+                  </div>
+                  <div className="device-row-main">
+                    <b>{formatDeviceLabel(device.label)}</b>
+                    <span>
+                      最近活动：{device.lastSeenAt ? formatDate(device.lastSeenAt) : "暂无记录"}
+                    </span>
+                  </div>
+                  <div className="device-row-status">
+                    <span className={`status-dot ${device.revokedAt ? "is-revoked" : ""}`} />
+                    {device.revokedAt ? "已撤销" : "使用中"}
+                  </div>
+                  {!device.revokedAt && (
+                    <button
+                      type="button"
+                      className="revoke-button"
+                      disabled={props.busy}
+                      onClick={() => props.onRevoke(device)}
+                    >
+                      撤销
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="table-note">
+            <ShieldCheck size={15} />
+            <span>
+              撤销设备后，其在线会话会立即失效。设备重新连接时，系统也会重新检查离线授权。
+            </span>
+          </div>
         </section>
       </div>
       <LegacyImportPanel
@@ -1263,7 +1231,6 @@ function LegacyImportPanel(props: {
         <div className="account-skeleton-panel-heading">
           <span className="skeleton-block account-skeleton-icon-large" />
           <div>
-            <span className="skeleton-block account-skeleton-eyebrow" />
             <span className="skeleton-block account-skeleton-section-title" />
           </div>
         </div>
@@ -1296,7 +1263,6 @@ function LegacyImportPanel(props: {
           <ShieldCheck size={18} />
         </div>
         <div>
-          <p className="eyebrow">本地数据</p>
           <h3>{summary.pendingRecovery ? "需要恢复本地数据导入" : "发现旧版 Caelush 数据"}</h3>
         </div>
       </div>
@@ -1474,87 +1440,6 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-function DeviceManager(props: {
-  state: AccountState;
-  devices: readonly SafeDevice[];
-  loading: boolean;
-  busy: boolean;
-  onRevoke(device: SafeDevice): void;
-  onRefresh(): void;
-}) {
-  const online = props.state.status === "AUTHENTICATED_ONLINE";
-  return (
-    <section className="table-panel">
-      <div className="table-heading">
-        <div>
-          <h3>已登录设备</h3>
-          <p>查看已连接到账户的设备，并撤销不再使用的设备。</p>
-        </div>
-        <button
-          type="button"
-          className="secondary-button compact"
-          disabled={!online || props.busy}
-          onClick={props.onRefresh}
-        >
-          <RefreshCw size={14} /> 刷新账户
-        </button>
-      </div>
-      {!online ? (
-        <div className="empty-state">
-          <Unplug size={20} />
-          <b>离线时无法查看设备列表</b>
-          <span>连接云端后即可查看设备状态或撤销访问权限。</span>
-        </div>
-      ) : props.loading ? (
-        <DeviceRowsSkeleton />
-      ) : props.devices.length === 0 ? (
-        <div className="empty-state">
-          <LaptopMinimal size={20} />
-          <b>没有已登录设备</b>
-          <span>此账户当前没有可显示的设备。</span>
-        </div>
-      ) : (
-        <div className="device-list">
-          {props.devices.map((device) => (
-            <div className="device-row" key={device.deviceId}>
-              <div className="device-tile">
-                <LaptopMinimal size={18} />
-              </div>
-              <div className="device-row-main">
-                <b>
-                  {formatDeviceLabel(device.label)}{" "}
-                  {device.current && <span className="current-tag">当前设备</span>}
-                </b>
-                <span>
-                  最近活动：{device.lastSeenAt ? formatDate(device.lastSeenAt) : "暂无记录"}
-                </span>
-              </div>
-              <div className="device-row-status">
-                <span className={`status-dot ${device.revokedAt ? "is-revoked" : ""}`} />
-                {device.revokedAt ? "已撤销" : "使用中"}
-              </div>
-              {!device.revokedAt && (
-                <button
-                  type="button"
-                  className="revoke-button"
-                  disabled={props.busy}
-                  onClick={() => props.onRevoke(device)}
-                >
-                  撤销
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="table-note">
-        <ShieldCheck size={15} />{" "}
-        撤销设备后，其在线会话会立即失效。设备重新连接时，系统也会重新检查离线授权。
-      </div>
-    </section>
-  );
-}
-
 function SecuritySettings(props: {
   online: boolean;
   busy: boolean;
@@ -1563,7 +1448,6 @@ function SecuritySettings(props: {
   setCurrentPassword(value: string): void;
   setNewPassword(value: string): void;
   onChangePassword(event: FormEvent<HTMLFormElement>): void;
-  onRefresh(): void;
 }) {
   return (
     <div className="security-stack">
@@ -1629,14 +1513,6 @@ function SecuritySettings(props: {
           </span>
         </div>
       </section>
-      <button
-        type="button"
-        className="inline-action"
-        disabled={props.busy}
-        onClick={props.onRefresh}
-      >
-        检查账户授权状态 <ChevronRight size={15} />
-      </button>
     </div>
   );
 }
@@ -1762,19 +1638,6 @@ function formatDate(value: string): string {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
-function accountViewLabel(view: AccountScreen): string {
-  switch (view) {
-    case "home":
-      return "总览";
-    case "devices":
-      return "设备";
-    case "security":
-      return "安全设置";
-    case "updates":
-      return "检查更新";
-  }
-}
-
 function formatDeviceLabel(label: string): string {
   if (label === "Caelush Desktop") return "Caelush 桌面端";
   if (label === "Windows desktop") return "Windows 桌面端";
@@ -1787,12 +1650,6 @@ function formatImportSourceLabel(label: string): string {
   return label;
 }
 
-function formatEntitlement(code: string | undefined): string {
-  if (code === undefined) return "暂无有效权益";
-  if (code === "CAELUSH_DESKTOP_BASIC") return "Caelush 桌面端基础版";
-  return code;
-}
-
 function localizeUiMessage(message: string): string {
   if (/[\u3400-\u9fff]/u.test(message)) return message;
   const normalized = message.toLowerCase();
@@ -1800,7 +1657,7 @@ function localizeUiMessage(message: string): string {
     return "无法访问 Windows 安全存储。请检查当前用户配置后重新启动 Caelush。";
   }
   if (normalized.includes("expired") && normalized.includes("session")) {
-    return "云端会话已过期，请刷新账户授权后继续。";
+    return "云端会话已过期，请重新连接账户后继续。";
   }
   if (normalized.includes("expired") && normalized.includes("offline")) {
     return "离线授权已过期，请连接云端后继续。";
@@ -1822,7 +1679,7 @@ function localizeUiMessage(message: string): string {
   ) {
     return "网络连接暂不可用，请检查网络后重试。";
   }
-  if (normalized.includes("device")) return "设备授权请求未能完成，请刷新账户后重试。";
+  if (normalized.includes("device")) return "设备授权请求未能完成，请重新连接账户后重试。";
   if (normalized.includes("request") || normalized.includes("account")) {
     return "账户请求未能完成，请检查信息或稍后重试。";
   }

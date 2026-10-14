@@ -3,10 +3,14 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { resolveDesktopBuildConfiguration } from "./desktop-build-config.mjs";
+import {
+  loadDesktopBuildEnvironment,
+  resolveDesktopBuildConfiguration,
+} from "./desktop-build-config.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const configuration = resolveDesktopBuildConfiguration(process.env);
+const environment = await loadDesktopBuildEnvironment(appRoot, process.env);
+const configuration = resolveDesktopBuildConfiguration(environment);
 const mainOutput = path.join(appRoot, "dist", "main");
 const preloadOutput = path.join(appRoot, "dist", "preload");
 await rm(mainOutput, { recursive: true, force: true });
@@ -29,7 +33,7 @@ await build({
   minify: configuration.purpose !== "development",
   sourcemap:
     configuration.purpose === "development" ||
-    process.env.CAELUSH_DESKTOP_INCLUDE_SOURCEMAPS === "true",
+    environment.CAELUSH_DESKTOP_INCLUDE_SOURCEMAPS === "true",
   define,
 });
 
@@ -45,5 +49,5 @@ await build({
 });
 
 process.stdout.write(
-  `Desktop Main built (purpose ${configuration.purpose}, channel ${configuration.channel}; offline keys: ${String(Object.keys(configuration.offlinePublicKeys).length)}).\n`,
+  `Desktop Main built (purpose ${configuration.purpose}, channel ${configuration.channel}, Cloud ${configuration.cloudOrigin}; offline keys: ${String(Object.keys(configuration.offlinePublicKeys).length)}).\n`,
 );

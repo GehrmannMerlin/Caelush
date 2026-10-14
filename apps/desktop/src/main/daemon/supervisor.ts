@@ -128,6 +128,8 @@ export interface DesktopChildProcess extends EventEmitter {
 
 export interface DesktopDaemonSupervisorOptions {
   readonly profileManager: Pick<ProfileManager, "selectForUser">;
+  /** AppData root used by ProfileManager; forwarded to Daemon for Profile binding checks. */
+  readonly profileLocalAppDataDirectory?: string;
   /** Electron Main's DPAPI credential authority. No Daemon-side fallback is used in Desktop mode. */
   readonly credentialVault: MainCredentialVaultPort;
   /** Must finish before a Desktop generation can open its Profile database. */
@@ -435,7 +437,11 @@ export class DesktopDaemonSupervisor {
     const resources = await this.options.resolveResources();
     const generationId = randomUUID();
     let bootstrapSecret = randomBytes(32).toString("base64url");
-    const environment = childEnvironment(this.processEnvironment, profile.rootDirectory);
+    const environment = childEnvironment(
+      this.processEnvironment,
+      profile.rootDirectory,
+      this.options.profileLocalAppDataDirectory,
+    );
     const child = (this.options.spawnDaemon ?? spawnDaemonChild)(
       resources,
       profile.rootDirectory,
@@ -931,8 +937,12 @@ export class DesktopDaemonSupervisor {
 function childEnvironment(
   source: NodeJS.ProcessEnv,
   profileRootDirectory: string,
+  profileLocalAppDataDirectory?: string,
 ): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = { ...source, CAELUSH_HOME: profileRootDirectory };
+  if (profileLocalAppDataDirectory !== undefined) {
+    environment.CAELUSH_DESKTOP_PROFILE_LOCAL_APPDATA = profileLocalAppDataDirectory;
+  }
   for (const key of [
     "CAELUSH_DESKTOP_MODE",
     "CAELUSH_DESKTOP_HOST_TOKEN",

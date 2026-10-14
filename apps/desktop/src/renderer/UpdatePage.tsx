@@ -75,7 +75,6 @@ export function UpdatePage() {
             <Download size={19} />
           </span>
           <div>
-            <p className="eyebrow">CAELUSH 桌面端</p>
             <h3 id="update-status-heading">软件更新</h3>
             <p className="update-current-version">
               当前版本{" "}
@@ -128,7 +127,6 @@ export function UpdatePage() {
                     </div>
                     {selectedRelease && (
                       <article className="update-release-detail">
-                        <p className="eyebrow">版本 {selectedRelease.version} 更新内容</p>
                         <pre>{selectedRelease.releaseNotes || "此版本没有填写更新说明。"}</pre>
                       </article>
                     )}
@@ -235,7 +233,6 @@ function UpdatePageSkeleton() {
         <div className="update-status-copy">
           <span className="skeleton-block update-skeleton-symbol" />
           <div className="update-skeleton-title-group">
-            <span className="skeleton-block update-skeleton-eyebrow" />
             <span className="skeleton-block update-skeleton-title" />
             <span className="skeleton-block update-skeleton-version" />
           </div>

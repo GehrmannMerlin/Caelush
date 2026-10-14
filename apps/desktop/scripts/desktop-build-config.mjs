@@ -1,10 +1,36 @@
 import { isIP } from "node:net";
 import { X509Certificate } from "node:crypto";
 import { Buffer } from "node:buffer";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { URL } from "node:url";
+import { parseEnv } from "node:util";
 const BUILD_PURPOSES = new Set(["development", "internal-test", "production"]);
 const CHANNELS = new Set(["dev", "beta", "stable"]);
 const INTERNAL_TEST_KEY_ID_PREFIX = "d6_test_";
+
+export async function loadDesktopBuildEnvironment(appRoot, environment) {
+  if (
+    environment.NODE_ENV === "production" ||
+    environment.CAELUSH_DESKTOP_CHANNEL === "stable" ||
+    (environment.CAELUSH_DESKTOP_BUILD_PURPOSE !== undefined &&
+      environment.CAELUSH_DESKTOP_BUILD_PURPOSE !== "development")
+  ) {
+    return environment;
+  }
+
+  let contents;
+  try {
+    contents = await readFile(path.join(appRoot, ".env.development.local"), "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return environment;
+    throw error;
+  }
+  const local = Object.fromEntries(
+    Object.entries(parseEnv(contents)).filter(([key]) => key.startsWith("CAELUSH_")),
+  );
+  return { ...local, ...environment };
+}
 
 export function resolveDesktopBuildConfiguration(environment) {
   const channel = environment.CAELUSH_DESKTOP_CHANNEL ?? "dev";
