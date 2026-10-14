@@ -171,7 +171,7 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
         createElement(ContextUsageRing, { usage: props.contextUsage ?? null }),
         props.permissionSelector ?? null,
       ),
-      createElement("span", { className: "prompt-hint" }, "Enter 发送 · Shift + Enter 换行"),
+      createElement("span", { className: "prompt-hint", "aria-hidden": true }),
       props.modelPicker ?? null,
       createElement(PromptSubmitButton, {
         disabled: props.disabled,

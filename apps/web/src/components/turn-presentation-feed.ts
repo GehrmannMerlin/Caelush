@@ -130,9 +130,7 @@ export function SessionConversation(props: SessionConversationProps): ReactEleme
 
   useEffect(() => {
     const conversation = conversationRef.current;
-    const scrollContainer =
-      conversation?.closest<HTMLElement>(".workspace-column") ??
-      conversation?.closest<HTMLElement>(".session-scroll");
+    const scrollContainer = conversation?.closest<HTMLElement>(".session-scroll");
     if (scrollContainer === null || scrollContainer === undefined) return;
     const updateNearBottom = (): void => {
       nearBottom.current =
@@ -153,9 +151,7 @@ export function SessionConversation(props: SessionConversationProps): ReactEleme
       () => {
         const conversation = conversationRef.current;
         if (conversation?.isConnected !== true) return;
-        const scrollContainer =
-          conversation.closest<HTMLElement>(".workspace-column") ??
-          conversation.closest<HTMLElement>(".session-scroll");
+        const scrollContainer = conversation.closest<HTMLElement>(".session-scroll");
         if (scrollContainer === null || scrollContainer === undefined) return;
         scrollContainer.scrollTop = scrollContainer.scrollHeight;
       },

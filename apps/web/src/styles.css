@@ -6912,6 +6912,10 @@ body {
   white-space: nowrap;
 }
 
+.prompt-composer-footer .prompt-hint:empty {
+  min-height: 1.4em;
+}
+
 .prompt-composer-footer .model-picker {
   min-width: 0;
   max-width: min(15rem, 36cqw);
