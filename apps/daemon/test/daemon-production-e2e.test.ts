@@ -122,6 +122,9 @@ describe("daemon production composition E2E", () => {
       preset: { id: "FULL_ACCESS", expectedVersion: 1 },
       limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 10_000 },
     });
+    expect(run.contextBudgetPolicy).toMatchObject({ version: "ADAPTIVE_V1" });
+    expect(run.contextBudgetPolicy?.outputReserveTokens).toBeGreaterThan(0);
+    expect(run.contextBudgetPolicy?.safetyReserveTokens).toBeGreaterThan(0);
     await client.startRun(run.id);
 
     let settled = await client.getRun(run.id);
@@ -183,6 +186,7 @@ describe("daemon production composition E2E", () => {
     await expect(reopenedClient.getRun(run.id)).resolves.toMatchObject({
       status: "COMPLETED",
       finalResult: { type: "NORMAL_COMPLETION", text: "The requested note is ready." },
+      contextBudgetPolicy: run.contextBudgetPolicy,
     });
   }, 20_000);
 

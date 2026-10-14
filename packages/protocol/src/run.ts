@@ -30,6 +30,16 @@ export type RunStatus = z.infer<typeof RunStatusSchema>;
 export const RunCompletionContractSchema = z.literal("NATURAL_V1");
 export type RunCompletionContract = z.infer<typeof RunCompletionContractSchema>;
 
+/** Immutable per-Run input/output reserve policy used by the Agent Context Engine. */
+export const ContextBudgetPolicySnapshotSchema = z
+  .object({
+    version: z.literal("ADAPTIVE_V1"),
+    outputReserveTokens: z.number().int().safe().positive(),
+    safetyReserveTokens: z.number().int().safe().positive(),
+  })
+  .strict();
+export type ContextBudgetPolicySnapshot = z.infer<typeof ContextBudgetPolicySnapshotSchema>;
+
 /**
  * A normal execution result. It records the exact final text and the model Step that produced it;
  * it makes no claim that project tests or independent verification passed.
@@ -62,6 +72,8 @@ export const AgentRunSchema = z
     runtime: RuntimeRefSchema,
     /** Optional only while legacy persisted Runs are decoded during migration. */
     securityPolicy: RunSecurityPolicySnapshotV1Schema.optional(),
+    /** Optional only for historical Runs that retain the legacy context budget behavior. */
+    contextBudgetPolicy: ContextBudgetPolicySnapshotSchema.optional(),
     permissionProfile: PermissionProfileSchema,
     approvalPolicy: ApprovalPolicySchema,
     limits: RunLimitsSchema,
@@ -80,5 +92,6 @@ export type AgentRun = z.infer<typeof AgentRunSchema>;
 /** New Run writes must use the immutable policy-bound shape; legacy decoding stays migration-only. */
 export const CurrentAgentRunSchema = AgentRunSchema.extend({
   securityPolicy: RunSecurityPolicySnapshotV1Schema,
+  contextBudgetPolicy: ContextBudgetPolicySnapshotSchema,
 });
 export type CurrentAgentRun = z.infer<typeof CurrentAgentRunSchema>;

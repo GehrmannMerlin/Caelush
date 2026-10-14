@@ -19,6 +19,7 @@ import { createLocalProjectInspector } from "@caelush/coding-agent";
 import { createAIError, createAISubsystem, createCacheResolver, isJsonObject } from "@caelush/ai";
 import type { ProviderStreamPolicy } from "./config.js";
 import { createInterruptedToolHistoryService } from "./services/interrupted-tool-history.js";
+import type { RunContextBudgetPolicyResolver } from "./services/run-service.js";
 import { createModelTransportRecoveryPort } from "./providers/model-transport-recovery.js";
 import {
   createDaemonApiAdapters,
@@ -54,6 +55,7 @@ import {
   createControlHookRegistryBuilder,
   createControlHookRunner,
   createContextContributionPipeline,
+  createContextRequestOverheadEstimator,
   createModelTurnExecutor,
   STANDARD_AGENT_MESSAGE_CODECS,
   STANDARD_AGENT_MESSAGE_PROJECTORS,
@@ -417,6 +419,7 @@ export interface DaemonComposition {
   ) => DaemonTurnIdentity;
   readonly approvals: Pick<CaelushStorage["approvals"], "listPendingByRun">;
   readonly modelCanonicalizer: DaemonModelCanonicalizer;
+  readonly contextBudgetPolicyResolver: RunContextBudgetPolicyResolver;
   readonly securityCapabilityService: SecurityCapabilityService;
   readonly runSecurityPromptProjector: RunSecurityPromptProjector;
   readonly info: DaemonInfo;
@@ -1015,6 +1018,43 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   const executionConfigResolver = {
     resolve: (run) => baseResolver.resolve(run),
   } satisfies RunExecutionConfigResolver;
+  const contextRequestOverheadEstimator = createContextRequestOverheadEstimator();
+  const contextBudgetPolicyResolver: RunContextBudgetPolicyResolver = {
+    async resolve(run) {
+      const model = ai.models.resolve(run.model);
+      const config = await executionConfigResolver.resolve(run);
+      const preferredOutputCeiling = Math.min(
+        config.modelSettings?.maxOutputTokens ?? model.limits.maxOutputTokens,
+        model.limits.maxOutputTokens,
+      );
+      const outputReserveTokens = Math.min(
+        preferredOutputCeiling,
+        16_384,
+        Math.max(1, Math.floor(model.limits.contextWindowTokens * 0.08)),
+      );
+      const safetyReserveTokens = Math.min(
+        4_096,
+        Math.max(1, Math.floor(model.limits.contextWindowTokens * 0.01)),
+      );
+      const requestOverheadTokens = contextRequestOverheadEstimator.estimate({
+        model,
+        tools: activeToolRegistry.modelSpecs(),
+      }).totalTokens;
+      const effectiveInputLimitTokens =
+        model.limits.contextWindowTokens -
+        outputReserveTokens -
+        safetyReserveTokens -
+        requestOverheadTokens;
+      if (!Number.isSafeInteger(effectiveInputLimitTokens) || effectiveInputLimitTokens <= 0) {
+        throw new RangeError("Context budget reserves and request overhead leave no input budget.");
+      }
+      return Object.freeze({
+        version: "ADAPTIVE_V1" as const,
+        outputReserveTokens,
+        safetyReserveTokens,
+      });
+    },
+  };
   const agentExecution: RunAgentExecutionContextFactory = {
     async resolve(run) {
       const config = await executionConfigResolver.resolve(run);
@@ -1241,6 +1281,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     resolveTurnIdentity,
     approvals: options.storage.approvals,
     modelCanonicalizer,
+    contextBudgetPolicyResolver,
     securityCapabilityService,
     runSecurityPromptProjector,
     info,

@@ -543,6 +543,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         ? {}
         : { desktopHost: { hostToken: options.desktopHost.hostToken } }),
       modelCanonicalizer: composition.modelCanonicalizer,
+      contextBudgetPolicyResolver: composition.contextBudgetPolicyResolver,
       aiConfiguration,
       securityCapabilityService: composition.securityCapabilityService,
       transcript: new SessionTranscriptService({

@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { RunExecutionConflictError, RunExecutionInvariantError } from "@caelush/agent";
 import type { AIMessage } from "@caelush/ai";
 import type { RunContinuationCheckpoint } from "@caelush/agent";
@@ -21,6 +24,8 @@ import {
   type DurableEventDraft,
 } from "@caelush/core";
 import { openCaelushStorage } from "../src/index.js";
+import { openCaelushDatabase } from "../src/database.js";
+import { migrateCaelushDatabase } from "../src/migrate.js";
 import { makeRun, makeSession, makeState, makeStep } from "./support/fixtures.js";
 import { projectedRunMessages } from "./support/projected-run-messages.js";
 import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
@@ -151,6 +156,63 @@ const CANONICAL_CONVERSATION: readonly AIMessage[] = [
 ];
 
 describe("SqliteRunExecutionStore canonical/durable compatibility", () => {
+  it("keeps a historical Run without a context policy executable and durable", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "caelush-legacy-run-policy-"));
+    const databasePath = join(directory, "caelush.db");
+    const database = await openCaelushDatabase({ path: databasePath });
+    await migrateCaelushDatabase(database);
+    const storage = await openCaelushStorage({ path: databasePath });
+    try {
+      const session = makeSession();
+      const { contextBudgetPolicy: _contextBudgetPolicy, ...pendingRun } = makeRun(session.id);
+      const run = AgentRunSchema.parse({
+        ...pendingRun,
+        status: "RUNNING" as const,
+        startedAt: createTimestampMs(110),
+      });
+      const state = makeState(pendingRun, {
+        status: "RUNNING",
+        startedAt: createTimestampMs(110),
+      });
+      const step = makeStep(run.id, { id: createStepId(), status: "COMPLETED" });
+      await storage.sessions.insert(session);
+      database.client
+        .prepare(
+          `INSERT INTO agent_runs
+            (id, session_id, protocol_version, status, created_at_ms, started_at_ms, finished_at_ms, data_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          run.id,
+          session.id,
+          1,
+          "PENDING",
+          run.createdAt,
+          null,
+          null,
+          JSON.stringify(pendingRun),
+        );
+
+      await storage.execution.commit({
+        run,
+        state,
+        expectedStateRevision: null,
+        expectedContinuationRevision: null,
+        stepWrites: [{ operation: "INSERT", step }],
+        messagesToAppend: [],
+        events: [event(run.id, session.id, 110)],
+      });
+
+      const loaded = await storage.execution.load(run.id);
+      expect(loaded?.run.status).toBe("RUNNING");
+      expect(loaded?.run.contextBudgetPolicy).toBeUndefined();
+    } finally {
+      await storage.close();
+      await database.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("writes new conversation messages only through the V2 record path", async () => {
     const { storage, session, run, state, step } = await runningFixture();
     const messages = testRunMessageAuthority();

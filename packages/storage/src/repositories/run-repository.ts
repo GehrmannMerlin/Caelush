@@ -1,4 +1,5 @@
 import {
+  AgentRunSchema,
   CurrentAgentRunSchema,
   type AgentRun,
   type RunId,
@@ -97,7 +98,7 @@ function matchesOptional(actual: number | undefined, stored: number | null): boo
 }
 
 function decodeRun(row: RunRow): AgentRun {
-  const run = decodeProtocol(CurrentAgentRunSchema, row.data_json, {
+  const run = decodeProtocol(AgentRunSchema, row.data_json, {
     entityType: "AgentRun",
     entityId: row.id,
     table: "agent_runs",
@@ -230,8 +231,19 @@ export class SqliteRunRepository implements RunRepository {
   }
 
   async update(run: AgentRun): Promise<void> {
-    const currentRun = CurrentAgentRunSchema.parse(run);
-    const dataJson = encodeProtocol(CurrentAgentRunSchema, currentRun, {
+    const stored = this.database.client
+      .prepare("SELECT data_json FROM agent_runs WHERE id = ?")
+      .get(run.id) as { data_json: string } | undefined;
+    if (stored === undefined) throw new StorageNotFoundError("AgentRun", run.id);
+    const previous = decodeProtocol(AgentRunSchema, stored.data_json, {
+      entityType: "AgentRun",
+      entityId: run.id,
+      table: "agent_runs",
+    });
+    const schema =
+      previous.contextBudgetPolicy === undefined ? AgentRunSchema : CurrentAgentRunSchema;
+    const currentRun = schema.parse(run);
+    const dataJson = encodeProtocol(schema, currentRun, {
       entityType: "AgentRun",
       entityId: run.id,
       table: "agent_runs",

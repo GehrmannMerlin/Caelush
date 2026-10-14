@@ -89,6 +89,11 @@ export function makeRun(
     permissionProfile,
     approvalPolicy,
     limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
+    contextBudgetPolicy: {
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 16_384,
+      safetyReserveTokens: 4_096,
+    },
     createdAt: createTimestampMs(100),
     ...overrides,
     securityPolicy:

@@ -25,6 +25,13 @@ async function makeApp() {
     runs: storage.runs,
     eventHub: { watch: async function* () {} } as never,
     eventNotifier: { notifyCommitted: () => undefined },
+    contextBudgetPolicyResolver: {
+      resolve: async () => ({
+        version: "ADAPTIVE_V1" as const,
+        outputReserveTokens: 16_384,
+        safetyReserveTokens: 4_096,
+      }),
+    },
     securityCapabilityService: new SecurityCapabilityService({
       processSandboxProviders: [
         {
