@@ -183,6 +183,40 @@ export class SqliteBudgetLedgerRepository {
     this.transition(runId, kind, ownerId, "RESERVED", "IN_FLIGHT", startedAt, undefined);
   }
 
+  async updateInFlightLLMReservation(
+    runId: RunId,
+    ownerId: string,
+    input: {
+      readonly reservedInputTokens: number;
+      readonly reservedOutputTokens: number;
+      readonly reservedCostMicros: number;
+    },
+  ): Promise<void> {
+    for (const [label, value] of Object.entries(input)) {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        throw new RangeError(`${label} must be a non-negative safe integer.`);
+      }
+    }
+    const result = this.database.client
+      .prepare(
+        `UPDATE run_budget_entries
+         SET reserved_input_tokens = ?, reserved_output_tokens = ?, reserved_cost_micros = ?
+         WHERE run_id = ? AND kind = 'LLM_ATTEMPT' AND owner_id = ? AND state = 'IN_FLIGHT'`,
+      )
+      .run(
+        input.reservedInputTokens,
+        input.reservedOutputTokens,
+        input.reservedCostMicros,
+        runId,
+        ownerId,
+      );
+    if (result.changes !== 1) {
+      throw new BudgetLedgerInvariantError(
+        "Only the in-flight LLM Step reservation can be updated for recovery.",
+      );
+    }
+  }
+
   async settle(
     runId: RunId,
     kind: BudgetEntryKind,

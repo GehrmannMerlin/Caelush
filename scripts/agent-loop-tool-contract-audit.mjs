@@ -98,11 +98,17 @@ async function runCase({ isGit }) {
       limit: 256,
     });
     const invocations = await storage.toolInvocations.listByRun(run.id);
+    const llmAttemptsByStep = new Map();
+    for (const event of events) {
+      if (event.type !== "llm.started" || event.stepId === undefined) continue;
+      llmAttemptsByStep.set(event.stepId, (llmAttemptsByStep.get(event.stepId) ?? 0) + 1);
+    }
     return {
       workspace: isGit ? "GIT" : "NON_GIT",
       exposedTools: composition.toolRegistry.names(),
       status: result.status,
       llmTurns: events.filter((event) => event.type === "llm.started").length,
+      maxLlmAttemptsPerStep: Math.max(0, ...llmAttemptsByStep.values()),
       toolInvocations: invocations.map((invocation) => ({
         toolName: invocation.toolName,
         status: invocation.status,

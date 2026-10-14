@@ -163,6 +163,8 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
         // call on a request the budget authority never approved.
         request = decision.request;
       }
+      const initialOutputCeiling =
+        request.settings?.maxOutputTokens ?? input.model.limits.maxOutputTokens;
 
       /* 3. The durable boundary. Only a successful commit may open provider I/O. */
       if (dependencies.modelTurnBoundary !== undefined) {
@@ -200,6 +202,30 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
         context = recovered.context;
         recovery = "FORCED_CONTEXT_RECOVERY";
         request = buildRequest(requestBuilder, input, context);
+        if (dependencies.modelAdmission !== undefined) {
+          let decision: ModelRequestAdmissionDecision;
+          try {
+            decision = await dependencies.modelAdmission.admitRecovery({
+              identity: input.identity,
+              turn: input.turn,
+              request,
+              initialOutputCeiling,
+            });
+          } catch {
+            return failed(input.turn, toInternalFailure(), appended, receipt(context, recovery));
+          }
+          if (input.signal.aborted) return cancelled(input.turn, receipt(context, recovery));
+          if (decision.kind === "BLOCKED") {
+            return {
+              kind: "FAILED",
+              turn: input.turn,
+              error: toBudgetAgentError(decision.block),
+              messagesToAppend: [...appended],
+              context: receipt(context, recovery),
+            };
+          }
+          request = decision.request;
+        }
         execution = await executeTurn(dependencies.modelTurnExecutor, input, request, context);
       }
 

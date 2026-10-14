@@ -40,9 +40,12 @@ describe("real DeepSeek Agent Loop product-entry audit", () => {
     expect(result.stdout).not.toMatch(/private prompt|private output|hidden reasoning|Bearer\s+/iu);
     const parsed = JSON.parse(result.stdout) as {
       status: string;
-      results?: Array<{ llmTurns?: number }>;
+      results?: Array<{ llmTurns?: number; maxLlmAttemptsPerStep?: number }>;
     };
     expect(parsed.status).toBe("COMPLETED");
-    for (const item of parsed.results ?? []) expect(item.llmTurns ?? 0).toBeLessThanOrEqual(12);
+    for (const item of parsed.results ?? []) {
+      expect(item.llmTurns ?? 0).toBeLessThanOrEqual(12);
+      expect(item.maxLlmAttemptsPerStep ?? 0).toBeLessThanOrEqual(2);
+    }
   }, 180_000);
 });

@@ -565,6 +565,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       createProviderInvocationAccountingObserver({
         storage: options.storage,
         runId: input.identity.runId as RunId,
+        stepId: input.turn.stepId,
         purpose: "MAIN_AGENT",
         clock,
       }),
@@ -1386,6 +1387,7 @@ export interface PromptCacheUsageSample {
 export function createProviderInvocationAccountingObserver(input: {
   readonly storage: CaelushStorage;
   readonly runId: RunId;
+  readonly stepId?: import("@caelush/protocol").StepId;
   readonly purpose: PromptCacheRequestPurpose;
   readonly clock: { now(): TimestampMs };
 }): AIInvocationAccountingObserver {
@@ -1407,6 +1409,7 @@ export function createProviderInvocationAccountingObserver(input: {
       await input.storage.providerInvocationUsage.observe({
         callId: LLMCallIdSchema.parse(String(identity.callId)),
         runId: input.runId,
+        ...(input.stepId === undefined ? {} : { stepId: input.stepId }),
         purpose: input.purpose,
         providerId: identity.providerId,
         modelId: identity.model.model,

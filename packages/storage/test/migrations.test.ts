@@ -3,7 +3,14 @@ import { cp, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { deriveLegacyAgentMessageId, hashPromptSurfaceContent } from "@caelush/agent";
-import { AgentRunSchema, createRunId, createSessionId, createWorkspaceId } from "@caelush/protocol";
+import {
+  AgentRunSchema,
+  createLLMCallId,
+  createRunId,
+  createSessionId,
+  createStepId,
+  createWorkspaceId,
+} from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { StorageMigrationError } from "../src/errors.js";
@@ -159,8 +166,20 @@ describe("committed storage migrations", () => {
       // Phase 5F, the Workspace Registry, Runtime AI Management, scoped Prompt Surface anchors,
       // and Prompt Surface V3 state are represented in the published migration ledger.
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 24,
+        count: 25,
       });
+
+      const providerUsageColumns = sqlite
+        .prepare("PRAGMA table_info('provider_invocation_usage')")
+        .all() as Array<{ name: string; notnull: number }>;
+      expect(providerUsageColumns.map(({ name }) => name)).toContain("step_id");
+      expect(providerUsageColumns.find(({ name }) => name === "step_id")?.notnull).toBe(0);
+      const providerUsageIndexes = sqlite
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
+        .all() as Array<{ name: string }>;
+      expect(providerUsageIndexes.map(({ name }) => name)).toContain(
+        "provider_invocation_usage_run_step_order_idx",
+      );
 
       // The final schema contains only the durable Message V2 envelope and payload.
       const columns = sqlite.prepare("PRAGMA table_info('agent_messages')").all() as Array<{
@@ -237,7 +256,8 @@ describe("committed storage migrations", () => {
         entry.name === "20261008100000_prompt_surface_v3" ||
         entry.name === "20261008120000_private_replay" ||
         entry.name === "20261008140000_cache_usage_accounting" ||
-        entry.name === "20261008160000_provider_invocation_usage"
+        entry.name === "20261008160000_provider_invocation_usage" ||
+        entry.name === "20261014170000_provider_invocation_step_identity"
       )
         continue;
       await cp(
@@ -307,7 +327,7 @@ describe("committed storage migrations", () => {
         ]),
       );
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 24,
+        count: 25,
       });
       expect(
         sqlite
@@ -325,6 +345,77 @@ describe("committed storage migrations", () => {
       });
     } finally {
       sqlite.close();
+    }
+  });
+
+  it("adds nullable Step attribution without losing historical Provider invocation rows", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-provider-usage-step-upgrade-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "caelush.db");
+    const priorMigrationsFolder = path.join(directory, "prior-drizzle");
+    await mkdir(priorMigrationsFolder);
+    const publishedFolders = await readdir(getCaelushMigrationsFolder(), {
+      withFileTypes: true,
+    });
+    for (const entry of publishedFolders) {
+      if (
+        !entry.isDirectory() ||
+        entry.name === "20261014170000_provider_invocation_step_identity"
+      ) {
+        continue;
+      }
+      await cp(
+        path.join(getCaelushMigrationsFolder(), entry.name),
+        path.join(priorMigrationsFolder, entry.name),
+        { recursive: true },
+      );
+    }
+
+    const priorDatabase = await openCaelushDatabase({ path: databasePath });
+    const sessionId = createSessionId();
+    const run = AgentRunSchema.parse(makeRun(sessionId, { status: "COMPLETED" }));
+    const callId = createLLMCallId();
+    try {
+      migratePublishedStorage(priorDatabase, priorMigrationsFolder);
+      finalizeAgentMessages(priorDatabase, priorMigrationsFolder);
+      finalizeRunSecurityPolicies(priorDatabase);
+      priorDatabase.client
+        .prepare(
+          "INSERT INTO agent_sessions (id, protocol_version, created_at_ms, updated_at_ms, data_json) VALUES (?, 1, 1, 1, '{}')",
+        )
+        .run(sessionId);
+      priorDatabase.client
+        .prepare(
+          "INSERT INTO agent_runs (id, session_id, protocol_version, status, created_at_ms, data_json) VALUES (?, ?, 1, 'COMPLETED', 1, ?)",
+        )
+        .run(run.id, sessionId, JSON.stringify(run));
+      priorDatabase.client
+        .prepare(
+          `INSERT INTO provider_invocation_usage
+           (call_id, run_id, purpose, status, provider_id, model_id, api, continuity_group,
+            request_fingerprint, observed_at_ms, settled_at_ms, input_tokens, output_tokens)
+           VALUES (?, ?, 'MAIN_AGENT', 'FAILED', 'deepseek', 'deepseek-chat', 'openai-compatible',
+                   ?, ?, 10, 11, 12, 3)`,
+        )
+        .run(callId, run.id, "a".repeat(64), "b".repeat(64));
+    } finally {
+      priorDatabase.close();
+    }
+
+    const upgraded = await openCaelushStorage({ path: databasePath });
+    try {
+      await expect(upgraded.providerInvocationUsage.get(callId)).resolves.toMatchObject({
+        callId,
+        runId: run.id,
+        status: "FAILED",
+        inputTokens: 12,
+        outputTokens: 3,
+      });
+      await expect(
+        upgraded.providerInvocationUsage.listByRunStep(run.id, createStepId()),
+      ).resolves.toEqual([]);
+    } finally {
+      await upgraded.close();
     }
   });
 

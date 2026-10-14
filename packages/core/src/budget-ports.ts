@@ -46,6 +46,12 @@ export interface RunBudgetPort {
     readonly step: AgentStep;
     readonly admission: RunLLMBudgetAdmissionInput;
   }): Promise<RunLLMBudgetAdmission>;
+  admitLLMRecovery(input: {
+    readonly run: AgentRun;
+    readonly step: AgentStep;
+    readonly admission: RunLLMBudgetAdmissionInput;
+    readonly initialOutputCeiling: number;
+  }): Promise<RunLLMBudgetAdmission>;
   settleLLM(input: {
     readonly runId: RunId;
     readonly stepId: StepId;

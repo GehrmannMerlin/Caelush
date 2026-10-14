@@ -811,6 +811,7 @@ describe("production ADVANCE_AGENT settlement", () => {
               limit: 100,
             };
           },
+          admitLLMRecovery: async () => ({ kind: "UNAVAILABLE", reason: "TOKEN_ESTIMATE" }),
           settleLLM: async () => ({ kind: "SETTLED" }),
         },
       },

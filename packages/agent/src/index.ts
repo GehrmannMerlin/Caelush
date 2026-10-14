@@ -439,6 +439,7 @@ export type {
   ModelRequestAdmissionDecision,
   ModelRequestAdmissionInput,
   ModelRequestAdmissionPort,
+  ModelRequestRecoveryAdmissionInput,
 } from "./loop/ports/model-request-admission.js";
 export type {
   ModelTurnBoundaryInput,

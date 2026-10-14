@@ -1836,6 +1836,42 @@ export class RunController {
           throw error;
         }
       },
+      admitRecovery: async ({ request, initialOutputCeiling }) => {
+        try {
+          const estimatedInputTokens = this.dependencies.tokenEstimator?.estimate(request);
+          const admission = await budget.admitLLMRecovery({
+            run,
+            step,
+            initialOutputCeiling,
+            admission: {
+              ...(estimatedInputTokens === undefined ? {} : { estimatedInputTokens }),
+              ...(request.settings?.maxOutputTokens === undefined
+                ? {}
+                : { configuredMaxOutputTokens: request.settings.maxOutputTokens }),
+            },
+          });
+          if (admission.kind !== "ALLOWED") {
+            observation.admissionBlock = toBudgetBlock(admission);
+            return { kind: "BLOCKED", reason: "BUDGET", block: toFrozenBudgetBlock(admission) };
+          }
+          if (admission.effectiveMaxOutputTokens === undefined) {
+            return { kind: "ALLOWED", request };
+          }
+          return {
+            kind: "ALLOWED",
+            request: {
+              ...request,
+              settings: {
+                ...request.settings,
+                maxOutputTokens: admission.effectiveMaxOutputTokens,
+              },
+            },
+          };
+        } catch (error) {
+          observation.admissionError = error;
+          throw error;
+        }
+      },
     };
   }
 

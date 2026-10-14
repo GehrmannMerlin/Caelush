@@ -429,6 +429,7 @@ export {
   BudgetManager,
   type LLMBudgetAdmission,
   type LLMBudgetAdmissionInput,
+  type LLMRecoveryBudgetAdmissionInput,
   type ModelPricingSnapshot,
   type RunBudgetSnapshot,
   type ToolBudgetAdmission,

@@ -74,6 +74,12 @@ export interface ModelRequestAdmissionInput {
   readonly request: AIModelRequest;
 }
 
+/** A one-time context-overflow recovery admission for the same durable Step. */
+export interface ModelRequestRecoveryAdmissionInput extends ModelRequestAdmissionInput {
+  /** The numeric output ceiling approved for the original provider attempt. */
+  readonly initialOutputCeiling: number;
+}
+
 /**
  * The frozen admission port.
  *
@@ -85,6 +91,9 @@ export interface ModelRequestAdmissionInput {
  */
 export interface ModelRequestAdmissionPort {
   admit(input: ModelRequestAdmissionInput): Promise<ModelRequestAdmissionDecision>;
+
+  /** Re-admit one rebuilt request without creating another durable Step reservation. */
+  admitRecovery(input: ModelRequestRecoveryAdmissionInput): Promise<ModelRequestAdmissionDecision>;
 }
 
 /**

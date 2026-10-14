@@ -19,11 +19,16 @@ import {
   type ModelPricingSnapshot,
   type PricingResolver,
   type RunLLMBudgetAdmissionInput,
+  type LLMRecoveryBudgetAdmissionInput,
   type ModelUsage as BudgetModelUsage,
   type RunBudgetPort,
 } from "@caelush/core";
 import type { AgentBudgetBlock, ToolBudgetAdmissionPort } from "@caelush/agent";
 import { SqliteBudgetLedgerRepository } from "./budget-ledger-repository.js";
+import {
+  SqliteProviderInvocationUsageStore,
+  type ProviderInvocationUsageRecord,
+} from "./provider-invocation-usage-store.js";
 import type { CaelushDatabase } from "./database.js";
 import { decodeProtocol } from "./codec.js";
 
@@ -89,12 +94,15 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
   private readonly tokenEstimator: LLMTokenEstimator;
   private readonly clock: { now(): TimestampMs };
   private readonly ledger: SqliteBudgetLedgerRepository;
+  private readonly providerUsage: SqliteProviderInvocationUsageStore;
+  private readonly recoveryAdmissions = new Set<string>();
 
   constructor(
     private readonly database: CaelushDatabase,
     private readonly options: SqliteRunBudgetPortOptions = {},
   ) {
     this.ledger = new SqliteBudgetLedgerRepository(database);
+    this.providerUsage = new SqliteProviderInvocationUsageStore(database);
     this.clock = options.clock ?? { now: () => Date.now() as TimestampMs };
     this.tokenEstimator = options.tokenEstimator ?? createDefaultLLMTokenEstimator();
   }
@@ -225,6 +233,109 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
   }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
     return this.admitLLMForOwner({ ...input, ownerId: input.step.id, kind: "LLM_ATTEMPT" });
   }
+
+  async admitLLMRecovery(input: {
+    readonly run: AgentRun;
+    readonly step: AgentStep;
+    readonly admission: RunLLMBudgetAdmissionInput;
+    readonly initialOutputCeiling: number;
+  }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
+    const ownerKey = `${input.run.id}:${input.step.id}`;
+    if (this.recoveryAdmissions.has(ownerKey)) {
+      return { kind: "UNAVAILABLE", reason: "TOKEN_ESTIMATE" };
+    }
+    this.recoveryAdmissions.add(ownerKey);
+
+    const entry = await this.ledger.get(input.run.id, "LLM_ATTEMPT", input.step.id);
+    if (entry?.state !== "IN_FLIGHT") return { kind: "UNAVAILABLE", reason: "TOKEN_ESTIMATE" };
+    const estimatedInputTokens = input.admission.estimatedInputTokens;
+    if (estimatedInputTokens === undefined) {
+      if (input.run.limits.maxTokens !== undefined || input.run.limits.maxCost !== undefined) {
+        return { kind: "UNAVAILABLE", reason: "TOKEN_ESTIMATE" };
+      }
+    }
+
+    const stepInvocations = await this.providerUsage.listByRunStep(input.run.id, input.step.id);
+    const billing = await this.classifyRecoveryBilling(input.run.id, stepInvocations);
+    const hasActiveLimits =
+      input.run.limits.maxTokens !== undefined || input.run.limits.maxCost !== undefined;
+    if (billing.kind === "UNKNOWN" && hasActiveLimits) {
+      return { kind: "UNAVAILABLE", reason: "TOKEN_ESTIMATE" };
+    }
+    if (stepInvocations.length > 1) return { kind: "UNAVAILABLE", reason: "TOKEN_ESTIMATE" };
+
+    const pricing = pricingFromReservation(entry);
+    if (input.run.limits.maxCost !== undefined && pricing === undefined) {
+      return { kind: "UNAVAILABLE", reason: "PRICING" };
+    }
+    const knownInputTokens = billing.kind === "KNOWN" ? billing.inputTokens : 0;
+    const knownOutputTokens = billing.kind === "KNOWN" ? billing.outputTokens : 0;
+    const knownCostMicros =
+      billing.kind !== "KNOWN" || pricing === undefined
+        ? 0
+        : safeAdd(
+            costMicrosForTokens(knownInputTokens, pricing.inputMicrosPerMillionTokens),
+            costMicrosForTokens(knownOutputTokens, pricing.outputMicrosPerMillionTokens),
+            "Known recovery cost",
+          );
+    const snapshot = await this.ledger.snapshot(input.run.id);
+    const decisionSnapshot = {
+      toolCallsConsumed: snapshot.toolCallsConsumed,
+      toolCallsReserved: snapshot.toolCallsReserved,
+      tokensConsumed: safeAdd(
+        snapshot.tokensConsumed,
+        safeAdd(knownInputTokens, knownOutputTokens, "Known recovery usage"),
+        "Recovery token accounting",
+      ),
+      tokensReserved: subtractReserved(
+        snapshot.tokensReserved,
+        entry.reservedInputTokens + entry.reservedOutputTokens,
+      ),
+      costMicrosConsumed: safeAdd(snapshot.costMicrosConsumed, knownCostMicros, "Recovery cost"),
+      costMicrosReserved: subtractReserved(snapshot.costMicrosReserved, entry.reservedCostMicros),
+    };
+    const decision = this.manager.admitLLMRecovery({
+      limits: input.run.limits,
+      snapshot: decisionSnapshot,
+      estimatedInputTokens: estimatedInputTokens ?? 0,
+      initialOutputCeiling: input.initialOutputCeiling,
+      ...(input.admission.configuredMaxOutputTokens === undefined
+        ? {}
+        : { configuredMaxOutputTokens: input.admission.configuredMaxOutputTokens }),
+      ...(pricing === undefined ? {} : { pricing }),
+    } satisfies LLMRecoveryBudgetAdmissionInput);
+    if (decision.kind === "EXCEEDED" || decision.kind === "UNAVAILABLE") return decision;
+
+    const conservativeUnknown = billing.kind === "UNKNOWN";
+    const priorReservedInput = conservativeUnknown ? entry.reservedInputTokens : knownInputTokens;
+    const priorReservedOutput = conservativeUnknown
+      ? entry.reservedOutputTokens
+      : knownOutputTokens;
+    const priorReservedCost = conservativeUnknown ? entry.reservedCostMicros : knownCostMicros;
+    await this.ledger.updateInFlightLLMReservation(input.run.id, input.step.id, {
+      reservedInputTokens: safeAdd(
+        priorReservedInput,
+        decision.reservedInputTokens,
+        "Recovery input reservation",
+      ),
+      reservedOutputTokens: safeAdd(
+        priorReservedOutput,
+        decision.reservedOutputTokens,
+        "Recovery output reservation",
+      ),
+      reservedCostMicros: safeAdd(
+        priorReservedCost,
+        decision.reservedCostMicros,
+        "Recovery cost reservation",
+      ),
+    });
+    return {
+      kind: "ALLOWED",
+      ...(decision.effectiveMaxOutputTokens === undefined
+        ? {}
+        : { effectiveMaxOutputTokens: decision.effectiveMaxOutputTokens }),
+    };
+  }
   async admitVerificationLLM(input: {
     readonly run: AgentRun;
     readonly ownerId: string;
@@ -298,6 +409,33 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
     };
   }
 
+  private async classifyRecoveryBilling(
+    runId: RunId,
+    stepInvocations: readonly ProviderInvocationUsageRecord[],
+  ): Promise<RecoveryBillingClassification> {
+    if (stepInvocations.length === 0) {
+      const runInvocations = await this.providerUsage.listByRun(runId);
+      const hasUnattributedMainAgentCall = runInvocations.some(
+        (invocation) => invocation.purpose === "MAIN_AGENT" && invocation.stepId === undefined,
+      );
+      return hasUnattributedMainAgentCall ? { kind: "UNKNOWN" } : { kind: "NOT_CHARGED" };
+    }
+    if (stepInvocations.length !== 1) return { kind: "UNKNOWN" };
+    const invocation = stepInvocations[0]!;
+    if (
+      invocation.status === "OBSERVED" ||
+      invocation.inputTokens === undefined ||
+      invocation.outputTokens === undefined
+    ) {
+      return { kind: "UNKNOWN" };
+    }
+    return {
+      kind: "KNOWN",
+      inputTokens: invocation.inputTokens,
+      outputTokens: invocation.outputTokens,
+    };
+  }
+
   async settleLLM(input: {
     readonly runId: RunId;
     readonly stepId: StepId;
@@ -339,7 +477,19 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
     if (entry === null || entry.state === "SETTLED" || entry.state === "CONSERVATIVE") {
       return this.checkPostSettlementBudget(input.runId);
     }
-    const normalized = normalizeLLMUsageForBudget(input.usage, {
+    let usage = input.usage;
+    let providerCallId = input.providerCallId;
+    if (input.kind === "LLM_ATTEMPT") {
+      const invocations = await this.providerUsage.listByRunStep(
+        input.runId,
+        input.ownerId as StepId,
+      );
+      if (invocations.length > 0) {
+        usage = aggregateKnownInvocationUsage(invocations);
+        providerCallId = invocations.length === 1 ? invocations[0]?.callId : undefined;
+      }
+    }
+    const normalized = normalizeLLMUsageForBudget(usage, {
       reservedTotalTokens: entry.reservedInputTokens + entry.reservedOutputTokens,
     });
     if (
@@ -372,7 +522,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
       ...(normalized.reasoningTokens === undefined
         ? {}
         : { reasoningTokens: normalized.reasoningTokens }),
-      ...(input.providerCallId === undefined ? {} : { providerCallId: input.providerCallId }),
+      ...(providerCallId === undefined ? {} : { providerCallId }),
       settledAt: input.settledAt,
     });
     return this.checkPostSettlementBudget(input.runId);
@@ -487,6 +637,101 @@ function pricingColumns(pricing: ModelPricingSnapshot) {
     inputRateMicrosPerMillion: pricing.inputMicrosPerMillionTokens,
     outputRateMicrosPerMillion: pricing.outputMicrosPerMillionTokens,
   } as const;
+}
+
+type RecoveryBillingClassification =
+  | { readonly kind: "NOT_CHARGED" }
+  | { readonly kind: "KNOWN"; readonly inputTokens: number; readonly outputTokens: number }
+  | { readonly kind: "UNKNOWN" };
+
+function pricingFromReservation(
+  entry: Awaited<ReturnType<SqliteBudgetLedgerRepository["get"]>>,
+): ModelPricingSnapshot | undefined {
+  if (
+    entry?.pricingSnapshotId === undefined ||
+    entry.inputRateMicrosPerMillion === undefined ||
+    entry.outputRateMicrosPerMillion === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    id: entry.pricingSnapshotId,
+    currency: "USD",
+    inputMicrosPerMillionTokens: entry.inputRateMicrosPerMillion,
+    outputMicrosPerMillionTokens: entry.outputRateMicrosPerMillion,
+  };
+}
+
+function safeAdd(left: number, right: number, label: string): number {
+  if (
+    !Number.isSafeInteger(left) ||
+    left < 0 ||
+    !Number.isSafeInteger(right) ||
+    right < 0 ||
+    left > Number.MAX_SAFE_INTEGER - right
+  ) {
+    throw new RangeError(`${label} is outside the safe integer range.`);
+  }
+  return left + right;
+}
+
+function subtractReserved(total: number, owned: number): number {
+  if (owned > total) throw new Error("The Step reservation is missing from the Run snapshot.");
+  return total - owned;
+}
+
+function aggregateKnownInvocationUsage(
+  invocations: readonly ProviderInvocationUsageRecord[],
+): BudgetModelUsage | undefined {
+  if (
+    invocations.some(
+      (invocation) =>
+        invocation.status === "OBSERVED" ||
+        invocation.inputTokens === undefined ||
+        invocation.outputTokens === undefined,
+    )
+  ) {
+    return undefined;
+  }
+  try {
+    const inputTokens = invocations.reduce(
+      (sum, invocation) => safeAdd(sum, invocation.inputTokens!, "Provider input usage"),
+      0,
+    );
+    const outputTokens = invocations.reduce(
+      (sum, invocation) => safeAdd(sum, invocation.outputTokens!, "Provider output usage"),
+      0,
+    );
+    const totalTokens = safeAdd(inputTokens, outputTokens, "Provider total usage");
+    const aggregateOptional = (
+      key:
+        | "cacheHitInputTokens"
+        | "cacheMissInputTokens"
+        | "cacheWriteInputTokens"
+        | "reasoningTokens",
+    ): number | undefined => {
+      if (invocations.some((invocation) => invocation[key] === undefined)) return undefined;
+      return invocations.reduce(
+        (sum, invocation) => safeAdd(sum, invocation[key]!, `Provider ${key}`),
+        0,
+      );
+    };
+    const cachedInputTokens = aggregateOptional("cacheHitInputTokens");
+    const cacheMissInputTokens = aggregateOptional("cacheMissInputTokens");
+    const cacheWriteInputTokens = aggregateOptional("cacheWriteInputTokens");
+    const reasoningTokens = aggregateOptional("reasoningTokens");
+    return {
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+      ...(cacheMissInputTokens === undefined ? {} : { cacheMissInputTokens }),
+      ...(cacheWriteInputTokens === undefined ? {} : { cacheWriteInputTokens }),
+      ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /**

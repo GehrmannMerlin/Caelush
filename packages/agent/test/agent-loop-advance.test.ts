@@ -19,6 +19,7 @@ import type {
   ContextPrepareInput,
   ModelRequestAdmissionDecision,
   ModelRequestAdmissionInput,
+  ModelRequestRecoveryAdmissionInput,
   ModelTurnBoundaryInput,
   ModelTurnBoundaryPort,
   ModelTurnExecutionResult,
@@ -200,6 +201,9 @@ function loopWith(options: {
   readonly turns?: ReturnType<typeof modelTurns>;
   readonly admission?: {
     admit: (input: ModelRequestAdmissionInput) => Promise<ModelRequestAdmissionDecision>;
+    admitRecovery?: (
+      input: ModelRequestRecoveryAdmissionInput,
+    ) => Promise<ModelRequestAdmissionDecision>;
   };
   readonly boundary?: ModelTurnBoundaryPort;
 }) {
@@ -211,7 +215,15 @@ function loopWith(options: {
     decisionClassifier: createAgentDecisionClassifier(),
     ...(options.admission === undefined
       ? {}
-      : { modelAdmission: { admit: options.admission.admit } as never }),
+      : {
+          modelAdmission: {
+            admit: options.admission.admit,
+            admitRecovery:
+              options.admission.admitRecovery ??
+              ((input: ModelRequestRecoveryAdmissionInput) =>
+                Promise.resolve(allowedModelAdmission(input.request))),
+          } as never,
+        }),
     ...(options.boundary === undefined ? {} : { modelTurnBoundary: options.boundary }),
   });
 }
@@ -606,6 +618,151 @@ describe("AgentLoop.advance() admission and boundary inputs", () => {
 });
 
 describe("AgentLoop.advance() context overflow recovery", () => {
+  it("requires a separately admitted recovery request and preserves the initial output ceiling", async () => {
+    let recoveryInput: ModelRequestRecoveryAdmissionInput | undefined;
+    const turns = modelTurns([
+      {
+        kind: "FAILED",
+        error: { code: "CONTEXT_OVERFLOW", message: "too big", retryable: false },
+      },
+      { kind: "COMPLETED", result: turnResult({ text: "must not execute" }) },
+    ]);
+    const result = await loopWith({
+      turns,
+      admission: {
+        admit: async ({ request }) =>
+          allowedModelAdmission({
+            ...request,
+            settings: { ...request.settings, maxOutputTokens: 17 },
+          }),
+        admitRecovery: async (input) => {
+          recoveryInput = input;
+          return {
+            kind: "BLOCKED",
+            reason: "BUDGET",
+            block: { kind: "EXCEEDED", dimension: "TOKENS", accounted: 100, limit: 100 },
+          };
+        },
+      },
+    }).advance(advanceInput());
+
+    expect(recoveryInput).toMatchObject({ turn: TURN, initialOutputCeiling: 17 });
+    expect(recoveryInput?.request.settings?.maxOutputTokens).toBeUndefined();
+    expect(turns.callCount()).toBe(1);
+    expect(result.kind).toBe("FAILED");
+    if (result.kind !== "FAILED") throw new Error("expected blocked recovery");
+    expect(result.error.code).toBe("BUDGET_EXCEEDED");
+  });
+
+  it("executes only the request returned by recovery admission", async () => {
+    const turns = modelTurns([
+      {
+        kind: "FAILED",
+        error: { code: "CONTEXT_OVERFLOW", message: "too big", retryable: false },
+      },
+      { kind: "COMPLETED", result: turnResult({ text: "recovered" }) },
+    ]);
+    let recoveryInput: ModelRequestRecoveryAdmissionInput | undefined;
+    const result = await loopWith({
+      turns,
+      admission: {
+        admit: async ({ request }) => allowedModelAdmission(request),
+        admitRecovery: async (input) => {
+          recoveryInput = input;
+          return allowedModelAdmission({
+            ...input.request,
+            settings: { ...input.request.settings, maxOutputTokens: 23 },
+          });
+        },
+      },
+    }).advance(advanceInput());
+
+    expect(result.kind).toBe("FINAL_CANDIDATE");
+    expect(recoveryInput?.initialOutputCeiling).toBe(MODEL.limits.maxOutputTokens);
+    expect(turns.requests()[1]).toMatchObject({ settings: { maxOutputTokens: 23 } });
+  });
+
+  it("keeps the accepted Tool-result batch closed during one overflow recovery", async () => {
+    const results = [
+      {
+        role: "tool" as const,
+        toolCallId: "call_a",
+        toolName: "read_file",
+        content: "a",
+        isError: false,
+      },
+      {
+        role: "tool" as const,
+        toolCallId: "call_b",
+        toolName: "read_file",
+        content: "b",
+        isError: false,
+      },
+    ];
+    const turns = modelTurns([
+      {
+        kind: "FAILED",
+        error: { code: "CONTEXT_OVERFLOW", message: "too big", retryable: false },
+      },
+      { kind: "COMPLETED", result: turnResult({ text: "done" }) },
+    ]);
+    const context = contextEngine({
+      onPrepare: () => prepared({ messages: results }),
+    });
+
+    const outcome = await loopWith({ turns, context }).advance(
+      advanceInput({
+        input: {
+          kind: "TOOL_RESULTS",
+          sourceStepId: TURN.stepId,
+          pendingDecision: {
+            type: "TOOL_CALLS_REQUESTED",
+            modelTurn: {
+              callId: "llm_0195f3a0-0000-7000-8000-000000000000",
+              model: MODEL.ref,
+              finishReason: "TOOL_CALLS",
+              assistantMessage: {
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool-call",
+                    toolCallId: "call_a",
+                    toolName: "read_file",
+                    input: { path: "a.ts" },
+                  },
+                  {
+                    type: "tool-call",
+                    toolCallId: "call_b",
+                    toolName: "read_file",
+                    input: { path: "b.ts" },
+                  },
+                ],
+              },
+            },
+            toolRequests: [
+              { externalCallId: "call_a", toolName: "read_file", args: { path: "a.ts" } },
+              { externalCallId: "call_b", toolName: "read_file", args: { path: "b.ts" } },
+            ],
+          },
+          toolResultMessageIds: [agentMessageId("result-call_a"), agentMessageId("result-call_b")],
+        },
+      }),
+    );
+
+    expect(outcome.kind).toBe("FINAL_CANDIDATE");
+    expect(turns.callCount()).toBe(2);
+    expect(context.inputs().map(({ mode }) => mode)).toEqual(["NORMAL", "FORCED_RECOVERY"]);
+    for (const request of turns.requests() as Array<{ messages: readonly unknown[] }>) {
+      const toolResults = request.messages.filter(
+        (message) => typeof message === "object" && message !== null && "toolCallId" in message,
+      );
+      expect(toolResults).toHaveLength(2);
+      expect(toolResults).toEqual(results);
+    }
+    if (outcome.kind !== "FINAL_CANDIDATE") throw new Error("expected final candidate");
+    expect(outcome.messagesToAppend.map((message) => message.role)).toEqual(["assistant"]);
+  });
+
   it("performs exactly one forced recovery and one extra provider attempt", async () => {
     let attempt = 0;
     const turns = modelTurns(() => {

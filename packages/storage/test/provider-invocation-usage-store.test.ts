@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { createLLMCallId, createTimestampMs } from "@caelush/protocol";
+import { createLLMCallId, createStepId, createTimestampMs } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/storage.js";
 import { makeRun, makeSession } from "./support/fixtures.js";
@@ -23,9 +23,11 @@ describe("SqliteProviderInvocationUsageStore", () => {
     const session = makeSession();
     const run = makeRun(session.id, { status: "RUNNING", startedAt: createTimestampMs(10) });
     const callId = createLLMCallId();
+    const stepId = createStepId();
     const identity = {
       callId,
       runId: run.id,
+      stepId,
       purpose: "VERIFICATION_LLM" as const,
       providerId: "deepseek",
       modelId: "deepseek-chat",
@@ -60,6 +62,7 @@ describe("SqliteProviderInvocationUsageStore", () => {
       await expect(reopened.providerInvocationUsage.observe(identity)).resolves.toMatchObject({
         callId,
         runId: run.id,
+        stepId,
         purpose: "VERIFICATION_LLM",
         status: "COMPLETE",
         totalTokens: 17_328,
@@ -70,6 +73,11 @@ describe("SqliteProviderInvocationUsageStore", () => {
         cacheWriteInputTokens: 100,
         reasoningTokens: 500,
       });
+      await expect(
+        reopened.providerInvocationUsage.listByRunStep(run.id, stepId),
+      ).resolves.toMatchObject([
+        { callId, stepId, status: "COMPLETE", inputTokens: 16_017, outputTokens: 1_311 },
+      ]);
       await expect(
         reopened.providerInvocationUsage.settle({
           callId,
@@ -113,6 +121,38 @@ describe("SqliteProviderInvocationUsageStore", () => {
       expect(JSON.stringify(rawRows)).not.toContain("reasoning_content");
     } finally {
       sqlite.close();
+    }
+  });
+
+  it("keeps historical observations without a Step readable but out of Step-scoped billing", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "caelush-provider-usage-legacy-step-"));
+    directories.push(directory);
+    const storage = await openCaelushStorage({ path: join(directory, "usage.sqlite") });
+    try {
+      const session = makeSession();
+      const run = makeRun(session.id, { status: "RUNNING", startedAt: createTimestampMs(10) });
+      await storage.sessions.insert(session);
+      await storage.runs.insert(run);
+      const identity = {
+        callId: createLLMCallId(),
+        runId: run.id,
+        purpose: "MAIN_AGENT" as const,
+        providerId: "deepseek",
+        modelId: "deepseek-chat",
+        api: "openai-compatible",
+        continuityGroup: "a".repeat(64),
+        requestFingerprint: "b".repeat(64),
+        observedAt: createTimestampMs(20),
+      };
+
+      await expect(storage.providerInvocationUsage.observe(identity)).resolves.not.toHaveProperty(
+        "stepId",
+      );
+      await expect(
+        storage.providerInvocationUsage.listByRunStep(run.id, createStepId()),
+      ).resolves.toEqual([]);
+    } finally {
+      await storage.close();
     }
   });
 
