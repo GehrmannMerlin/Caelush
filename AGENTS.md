@@ -244,6 +244,31 @@ Phase 11B rules:
 
 ## Development rules
 
+### Change delivery workflow
+
+- At the start of an implementation or bug-fix task, inspect the current branch,
+  upstream, and `git status --short --branch`. Preserve pre-existing user changes
+  and stage only files that belong to the requested task.
+- Identify the owning layer and whether the request affects the shared Web/Desktop
+  workbench or a host-specific integration. For a bug, reproduce it and add a
+  focused regression test before changing behavior. For multi-step work, record
+  a concise plan and keep each change reviewable.
+- Run the narrowest relevant checks while working, then the applicable final
+  validation below. Inspect the complete staged diff and run `git diff --check`
+  before committing; do not include generated outputs or temporary task notes.
+- For implementation and bug-fix requests, make logically grouped Conventional
+  Commits and push them to the current branch's configured upstream by default
+  after validation. The canonical branch is currently `main` tracking
+  `origin/main`. Diagnosis-only tasks do not create commits or pushes. Respect an
+  explicit local-only instruction. Never force-push or rewrite history.
+- After pushing, verify that the remote branch points at the pushed commit and
+  inspect the corresponding GitHub Actions result when available. Report failed
+  checks with their exact job/step and distinguish them from checks that passed;
+  do not describe a failed or skipped workflow as green.
+- A Git push is not a deployment. Do not restart cloud services, publish
+  releases, or run deployment workflows unless the request explicitly includes
+  those actions.
+
 ### Shared Web/Desktop maintenance
 
 - `apps/web` owns the shared Agent workbench loaded by both Web and Desktop.
