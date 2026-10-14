@@ -5,11 +5,15 @@ export type ContextPressureTrigger =
   | "PROACTIVE_PRESSURE"
   | "EMERGENCY_PRESSURE"
   | "SELECTION_PRESSURE"
+  | "HISTORY_SELECTION_PRESSURE"
   | "FORCED_PROVIDER_OVERFLOW";
 
 export interface ContextPressureInput {
+  /** Complete materialized message input estimate, before request overhead. */
   readonly estimatedInputTokens: number;
+  readonly selectedPlanningTokens: number;
   readonly mandatoryTokens: number;
+  readonly historySelectionPressure: boolean;
   readonly effectiveInputLimitTokens: number;
   readonly proactiveCompactionTokens: number;
   readonly emergencyCompactionTokens: number;
@@ -41,12 +45,16 @@ export function createContextPressureEvaluator(): ContextPressureEvaluator {
       assertPressureInput(input);
       const state = classifyState(input.estimatedInputTokens, input);
       const trigger = classifyTrigger(state, input);
+      const shouldCompact =
+        input.mode === "FORCED_RECOVERY" ||
+        input.estimatedInputTokens >= input.effectiveInputLimitTokens ||
+        input.historySelectionPressure;
       return Object.freeze({
         state,
         trigger,
         pressureRatio: input.estimatedInputTokens / input.effectiveInputLimitTokens,
-        shouldCompact: trigger !== "NONE" && input.hasCompressibleHistory,
-        targetPostCompactionTokens: Math.floor(input.proactiveCompactionTokens * HYSTERESIS_RATIO),
+        shouldCompact: shouldCompact && input.hasCompressibleHistory,
+        targetPostCompactionTokens: Math.floor(input.effectiveInputLimitTokens * HYSTERESIS_RATIO),
         targetRecentTailTokens: input.targetRecentTailTokens,
         minRecentTailTokens: input.minRecentTailTokens,
       });
@@ -69,6 +77,10 @@ function classifyTrigger(
 ): ContextPressureTrigger {
   if (input.mode === "FORCED_RECOVERY") return "FORCED_PROVIDER_OVERFLOW";
   if (input.mandatoryTokens > input.effectiveInputLimitTokens) return "SELECTION_PRESSURE";
+  if (input.historySelectionPressure) return "HISTORY_SELECTION_PRESSURE";
+  if (input.estimatedInputTokens >= input.effectiveInputLimitTokens) {
+    return state === "EMERGENCY" ? "EMERGENCY_PRESSURE" : "PROACTIVE_PRESSURE";
+  }
   if (state === "EMERGENCY") return "EMERGENCY_PRESSURE";
   if (state === "PROACTIVE") return "PROACTIVE_PRESSURE";
   return "NONE";
@@ -76,7 +88,11 @@ function classifyTrigger(
 
 function assertPressureInput(input: ContextPressureInput): void {
   assertNonNegativeSafeInteger(input.estimatedInputTokens, "estimatedInputTokens");
+  assertNonNegativeSafeInteger(input.selectedPlanningTokens, "selectedPlanningTokens");
   assertNonNegativeSafeInteger(input.mandatoryTokens, "mandatoryTokens");
+  if (input.mandatoryTokens > input.selectedPlanningTokens) {
+    throw new RangeError("Mandatory planning tokens must not exceed selected planning tokens.");
+  }
   assertPositiveSafeInteger(input.effectiveInputLimitTokens, "effectiveInputLimitTokens");
   assertNonNegativeSafeInteger(input.proactiveCompactionTokens, "proactiveCompactionTokens");
   assertNonNegativeSafeInteger(input.emergencyCompactionTokens, "emergencyCompactionTokens");
@@ -96,6 +112,9 @@ function assertPressureInput(input: ContextPressureInput): void {
   }
   if (typeof input.hasCompressibleHistory !== "boolean") {
     throw new TypeError("hasCompressibleHistory must be boolean.");
+  }
+  if (typeof input.historySelectionPressure !== "boolean") {
+    throw new TypeError("historySelectionPressure must be boolean.");
   }
 }
 

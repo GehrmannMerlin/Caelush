@@ -36,6 +36,7 @@ export function createContextCompactionCoordinator(
   return Object.freeze({
     async compact(request: ContextCompactionRequest): Promise<ContextCompactionOutcome> {
       throwIfAborted(request.signal);
+      assertTokenEstimate(request.estimatedInputTokensBefore, "estimatedInputTokensBefore");
       const previousCheckpoint =
         options.latest.kind === "V2" ? options.latest.checkpoint : undefined;
       const plan = options.dependencies.planner.plan({
@@ -143,7 +144,7 @@ export function createContextCompactionCoordinator(
           : { previousCheckpointId: incremental.previousCheckpoint.checkpointId }),
         sourceRange: incremental.cumulativeSourceRange,
         structuredCheckpoint,
-        tokensBefore: plan.estimatedTokensBefore,
+        tokensBefore: request.estimatedInputTokensBefore,
         tokensAfter: 0,
         modelRef,
         summaryPromptVersion,
@@ -165,7 +166,14 @@ export function createContextCompactionCoordinator(
         ? options.dependencies.tentativeRebuilder.rebuild(rebuildInput)
         : options.tentativeRebuild({ checkpointId, degraded, input: rebuildInput }));
       throwIfAborted(request.signal);
-      if (rebuild.estimatedInputTokens > request.policy.effectiveInputLimitTokens) {
+      assertTokenEstimate(rebuild.estimatedInputTokens, "estimatedInputTokensAfter");
+      const actualFreedTokens = request.estimatedInputTokensBefore - rebuild.estimatedInputTokens;
+      const softTargetTokens = Math.floor(request.policy.effectiveInputLimitTokens * 0.8);
+      if (
+        rebuild.estimatedInputTokens > request.policy.effectiveInputLimitTokens ||
+        (rebuild.estimatedInputTokens > softTargetTokens &&
+          actualFreedTokens < request.policy.outputReserveTokens)
+      ) {
         return { kind: "NOT_APPLICABLE", reason: "INSUFFICIENT_GAIN" };
       }
 
@@ -191,13 +199,20 @@ export function createContextCompactionCoordinator(
         receipt: {
           reason: request.reason,
           checkpoint: checkpointRef(committed.checkpoint),
-          tokensBefore: plan.estimatedTokensBefore,
+          tokensBefore: request.estimatedInputTokensBefore,
           tokensAfter: committed.checkpoint.tokensAfter,
+          actualFreedTokens,
           degraded,
         },
       };
     },
   });
+}
+
+function assertTokenEstimate(value: unknown, label: string): asserts value is number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new RangeError(`${label} must be a non-negative safe integer.`);
+  }
 }
 
 function createStructuredCheckpoint(input: {

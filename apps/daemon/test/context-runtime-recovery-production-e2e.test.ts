@@ -110,7 +110,6 @@ describe("Context Runtime production recovery E2E", () => {
       lastRecoveryStages: [
         "DEFER_LOW_RETRIEVABLE",
         "REDUCE_OPTIONAL_SOURCES",
-        "COMPACT_HISTORY",
         "TIGHTEN_RECENT_TAIL",
       ],
     });
@@ -162,8 +161,8 @@ describe("Context Runtime production recovery E2E", () => {
       const usage = await storage.contextUsage.getByRun(run.id);
       expect(usage?.compactionCount).toBe(0);
       const currentSurfaceEpoch = await storage.promptSurface.getCurrent(run.id);
-      // This fixture tried the COMPACT_HISTORY recovery stage but produced no durable checkpoint,
-      // so the existing prompt epoch correctly remains compatible without a reset.
+      // This fixture has no closed history eligible for compaction, so forced recovery keeps the
+      // existing prompt epoch compatible without scheduling a history checkpoint.
       expect(currentSurfaceEpoch?.resetReason).toBe("INITIAL");
       const currentSurface =
         currentSurfaceEpoch === undefined

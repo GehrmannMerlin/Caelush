@@ -86,6 +86,7 @@ export interface ContextPlan {
   readonly budget: ContextBudgetSnapshot;
   readonly pressure: ContextPressureState;
   readonly requiresCompaction: boolean;
+  readonly historySelectionPressure: boolean;
 }
 
 export interface ContextPolicy {

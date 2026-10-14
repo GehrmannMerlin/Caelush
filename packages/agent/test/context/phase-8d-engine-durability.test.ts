@@ -84,6 +84,7 @@ function fixture(
   options: {
     readonly materializer?: ContextMaterializer;
     readonly authority?: (call: number) => Record<string, string>;
+    readonly model?: ModelDescriptor;
     readonly policy?: {
       readonly outputReserveTokens?: number;
       readonly safetyReserveTokens?: number;
@@ -113,7 +114,7 @@ function fixture(
     runId: currentRunId,
     turnId: currentTurnId,
     sequence: 10,
-    text: "current intent ".repeat(725),
+    text: "current intent ".repeat(500),
   });
   const conversation = snapshot(
     [
@@ -232,10 +233,16 @@ function fixture(
     documentBuilder: createContextDocumentBuilder(),
     materializer: options.materializer ?? {
       async materialize({ prepared }) {
+        const conversation = prepared.conversationMessages
+          .map(({ message }) => JSON.stringify(message.content))
+          .join("|");
         return [
           {
             role: "system",
-            content: prepared.document.sections.map((section) => section.text).join("|"),
+            content: [
+              ...prepared.document.sections.map((section) => section.text),
+              conversation,
+            ].join("|"),
           },
         ];
       },
@@ -252,7 +259,7 @@ function fixture(
     turn: { stepId: "step:phase-8d-engine" as never, sequence: 1 },
     conversation,
     input: { kind: "USER_INPUT", userMessageId: current.message.id },
-    model: MODEL,
+    model: options.model ?? MODEL,
     tools: [],
     mode: "NORMAL",
     signal: options.signal ?? new AbortController().signal,
@@ -280,7 +287,9 @@ function fixture(
 
 describe("Phase 8D tentative rebuild and durable fit", () => {
   it("rebuilds before commit and persists the materialized estimate, not retained planner tokens", async () => {
-    const fixtureState = fixture();
+    const fixtureState = fixture({
+      model: { ...MODEL, limits: { contextWindowTokens: 8_000, maxOutputTokens: 128 } },
+    });
     const result = await fixtureState.engine.prepare(fixtureState.input);
 
     expect(fixtureState.commitCalls).toBe(1);
@@ -309,11 +318,15 @@ describe("Phase 8D tentative rebuild and durable fit", () => {
     const materializer: ContextMaterializer = {
       async materialize({ prepared }) {
         documents.push(prepared.document.sections.map((section) => section.text).join("|"));
-        return [{ role: "system", content: "stable" }];
+        const conversation = prepared.conversationMessages
+          .map(({ message }) => JSON.stringify(message.content))
+          .join("|");
+        return [{ role: "system", content: `stable|${conversation}` }];
       },
     };
     const fixtureState = fixture({
       materializer,
+      model: { ...MODEL, limits: { contextWindowTokens: 8_000, maxOutputTokens: 128 } },
       authority: (call) => ({
         goal: call === 1 ? "authority-A" : call === 2 ? "authority-B" : "authority-C",
       }),
@@ -323,7 +336,8 @@ describe("Phase 8D tentative rebuild and durable fit", () => {
 
     expect(fixtureState.authorityCalls).toBe(3);
     expect(documents[0]).toContain("authority-A");
-    expect(documents[1]).toContain("authority-B");
+    expect(documents[1]).toContain("authority-A");
+    expect(documents[2]).toContain("authority-B");
     expect(documents.at(-1)).toContain("authority-C");
   });
 
@@ -332,16 +346,22 @@ describe("Phase 8D tentative rebuild and durable fit", () => {
     const materializer: ContextMaterializer = {
       async materialize({ prepared }) {
         selections.push(prepared.conversationMessages.map((message) => String(message.message.id)));
-        return [{ role: "system", content: "stable" }];
+        const conversation = prepared.conversationMessages
+          .map(({ message }) => JSON.stringify(message.content))
+          .join("|");
+        return [{ role: "system", content: `stable|${conversation}` }];
       },
     };
-    const fixtureState = fixture({ materializer });
+    const fixtureState = fixture({
+      materializer,
+      model: { ...MODEL, limits: { contextWindowTokens: 8_000, maxOutputTokens: 128 } },
+    });
 
     await fixtureState.engine.prepare(fixtureState.input);
 
-    expect(selections).toHaveLength(3);
+    expect(selections).toHaveLength(4);
     expect(selections[0]).toEqual(selections[1]);
-    expect(selections[1]).toEqual(selections[2]);
+    expect(selections[2]).toEqual(selections[3]);
     const userMessageId =
       fixtureState.input.input.kind === "USER_INPUT"
         ? fixtureState.input.input.userMessageId

@@ -36,6 +36,7 @@ export interface ContextCompactionReceipt {
   readonly checkpoint: ContextCheckpointRef;
   readonly tokensBefore: number;
   readonly tokensAfter: number;
+  readonly actualFreedTokens: number;
   readonly degraded: boolean;
 }
 

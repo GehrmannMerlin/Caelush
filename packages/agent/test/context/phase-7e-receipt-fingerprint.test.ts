@@ -75,6 +75,7 @@ function buildFacts(
     },
     pressure: "NORMAL",
     requiresCompaction: false,
+    historySelectionPressure: false,
   };
   const sourceResults: readonly ContextSourceResult[] = [
     {

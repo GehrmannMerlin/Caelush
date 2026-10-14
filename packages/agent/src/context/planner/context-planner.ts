@@ -51,6 +51,7 @@ interface HistoryMembership {
   readonly kind: ContextHistoryUnitKind;
   readonly openProtocol: boolean;
   readonly currentTurn: boolean;
+  readonly compactionEligible: boolean;
   readonly sequence: number;
 }
 
@@ -68,6 +69,7 @@ interface PlanningGroup {
   readonly mandatory: boolean;
   readonly pinned: boolean;
   readonly currentTurn: boolean;
+  readonly compactionEligible: boolean;
   readonly openProtocol: boolean;
 }
 
@@ -196,6 +198,10 @@ export function planContext(input: ContextPlannerInput): ContextPlan {
     )
     .sort((left, right) => compareStrings(left.itemId, right.itemId));
   const budget = createBudgetSnapshot(input.policy, mandatoryTokens, selectedTokens);
+  const historySelectionPressure = groupDecisions.some(
+    ({ group, disposition, reason }) =>
+      group.compactionEligible && disposition !== "SELECTED" && reason === "TOTAL_BUDGET",
+  );
 
   return Object.freeze({
     selectedItems: Object.freeze(selectedItems),
@@ -203,6 +209,7 @@ export function planContext(input: ContextPlannerInput): ContextPlan {
     budget,
     pressure: classifyContextPressure(selectedTokens, input.policy),
     requiresCompaction: selectedTokens > input.policy.effectiveInputLimitTokens,
+    historySelectionPressure,
   });
 }
 
@@ -238,6 +245,9 @@ export function assertContextPlan(value: unknown): asserts value is ContextPlan 
     }
   }
   if (candidate.budget.selectedTokens !== selectedTokens) {
+    throw new ContextPlanningError("INCONSISTENT_PLAN");
+  }
+  if (typeof candidate.historySelectionPressure !== "boolean") {
     throw new ContextPlanningError("INCONSISTENT_PLAN");
   }
   if (
@@ -308,6 +318,7 @@ function indexHistory(
         kind: unit.kind,
         openProtocol: unit.kind === "TOOL_PROTOCOL" && unit.status === "OPEN",
         currentTurn: ref.conversationTurnId === activeTurnId,
+        compactionEligible: unit.status === "CLOSED" && unit.compactionEligible,
         sequence: ref.sequence,
       });
     }
@@ -391,6 +402,7 @@ function buildGroups(
       mandatory: entries.some((entry) => isMandatory(entry)),
       pinned: entries.some((entry) => entry.item.retention === "PINNED"),
       currentTurn: entries.some((entry) => entry.history?.currentTurn === true),
+      compactionEligible: entries.some((entry) => entry.history?.compactionEligible === true),
       openProtocol: entries.some((entry) => entry.history?.openProtocol === true),
     } satisfies PlanningGroup;
   });

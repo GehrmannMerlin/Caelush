@@ -371,22 +371,56 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         collected,
         coverage.coveredMessageIds,
       );
-      const initialPlan = planner.plan({
-        items: sourceResults.flatMap((result) => result.items),
-        policy,
-        history: coverage.history,
-        currentTurnId: input.conversation.currentTurnId,
-        sourcePriorities: sourcePriorityMap(options.sourceRegistry),
-      });
       let activeCheckpoint = latestCheckpoint;
       let activeCoverage = coverage;
       let activeSources = sourceResults;
       let compactionReceipt: ContextCompactionReceipt | undefined;
       let compactionCount = 0;
+      const sourceCriticality = contextSourceCriticality(options.sourceRegistry.list());
+      const atomicGroupByItemId = contextHistoryAtomicGroups(history);
+      const authorities = await options.authorityProvider.snapshot({
+        identity: input.identity,
+        signal: input.signal,
+      });
+      throwIfAborted(input.signal);
+      const initialProjection = await buildPreparedProjectionWithoutCompaction({
+        contextInput: input,
+        policy,
+        sourceResults,
+        activeCoverage: coverage,
+        ...(latestCheckpoint?.checkpointId === undefined
+          ? {}
+          : { promptSurfaceCheckpointId: String(latestCheckpoint.checkpointId) }),
+        ...(latestCheckpoint === undefined
+          ? {}
+          : {
+              activeCheckpoint:
+                latestCheckpoint.schemaVersion === 2
+                  ? activeCheckpointProjection(latestCheckpoint)
+                  : { structuredCheckpoint: latestCheckpoint.structuredCheckpoint },
+            }),
+        authorities,
+        planner,
+        sourcePriorities: sourcePriorityMap(options.sourceRegistry),
+        rehydrator,
+        documentBuilder,
+        materializer: options.materializer,
+        receiptBuilder,
+        promptSurfaceStore: options.promptSurfaceStore,
+        ...(options.modelSettings === undefined ? {} : { modelSettings: options.modelSettings }),
+        ...(options.promptSurfaceEpochIdFactory === undefined
+          ? {}
+          : { promptSurfaceEpochIdFactory: options.promptSurfaceEpochIdFactory }),
+        tokenEstimator,
+        clock: options.clock,
+        persistPromptSurface: false,
+        compactionCount: 0,
+      });
       const pressure = pressureEvaluator.evaluate({
-        estimatedInputTokens:
-          initialPlan.budget.selectedTokens + policy.requestOverhead.totalTokens,
-        mandatoryTokens: initialPlan.budget.mandatoryTokens + policy.requestOverhead.totalTokens,
+        estimatedInputTokens: initialProjection.audit.report.estimatedInputTokens,
+        selectedPlanningTokens: initialProjection.plan.budget.selectedTokens,
+        mandatoryTokens: initialProjection.plan.budget.mandatoryTokens,
+        historySelectionPressure: initialProjection.plan.historySelectionPressure,
         effectiveInputLimitTokens: policy.effectiveInputLimitTokens,
         proactiveCompactionTokens: policy.proactiveCompactionTokens,
         emergencyCompactionTokens: policy.emergencyCompactionTokens,
@@ -397,8 +431,6 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           (unit) => unit.status === "CLOSED" && unit.compactionEligible,
         ),
       });
-      const sourceCriticality = contextSourceCriticality(options.sourceRegistry.list());
-      const atomicGroupByItemId = contextHistoryAtomicGroups(history);
       const recoveryPlan = recoveryPlanner.plan({
         mode: input.mode,
         pressure,
@@ -412,11 +444,6 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           ? recoveryPlan.actions.filter((action) => action !== "EXHAUSTED")
           : [];
       if (recoveryPlan.actions.includes("COMPACT_HISTORY")) {
-        const replayAuthorities = await options.authorityProvider.snapshot({
-          identity: input.identity,
-          signal: input.signal,
-        });
-        throwIfAborted(input.signal);
         const replayProjection = await buildPreparedProjectionWithoutCompaction({
           contextInput: input,
           policy: withRecoveryTailPolicy(policy, recoveryPlan),
@@ -428,7 +455,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           ...(activeCheckpoint === undefined || activeCheckpoint.schemaVersion !== 2
             ? {}
             : { activeCheckpoint: activeCheckpointProjection(activeCheckpoint) }),
-          authorities: replayAuthorities,
+          authorities,
           planner,
           sourcePriorities: sourcePriorityMap(options.sourceRegistry),
           rehydrator,
@@ -448,6 +475,47 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           atomicGroupByItemId,
           compactionCount: 0,
         });
+        const beforeCompactionProjection =
+          input.mode === "FORCED_RECOVERY"
+            ? await buildPreparedProjectionWithoutCompaction({
+                contextInput: input,
+                policy: withRecoveryTailPolicy(policy, recoveryPlan),
+                sourceResults: activeSources,
+                activeCoverage,
+                ...(activeCheckpoint?.checkpointId === undefined
+                  ? {}
+                  : { promptSurfaceCheckpointId: String(activeCheckpoint.checkpointId) }),
+                ...(activeCheckpoint === undefined
+                  ? {}
+                  : {
+                      activeCheckpoint:
+                        activeCheckpoint.schemaVersion === 2
+                          ? activeCheckpointProjection(activeCheckpoint)
+                          : { structuredCheckpoint: activeCheckpoint.structuredCheckpoint },
+                    }),
+                authorities,
+                planner,
+                sourcePriorities: sourcePriorityMap(options.sourceRegistry),
+                rehydrator,
+                documentBuilder,
+                materializer: options.materializer,
+                receiptBuilder,
+                promptSurfaceStore: options.promptSurfaceStore,
+                ...(options.modelSettings === undefined
+                  ? {}
+                  : { modelSettings: options.modelSettings }),
+                ...(options.promptSurfaceEpochIdFactory === undefined
+                  ? {}
+                  : { promptSurfaceEpochIdFactory: options.promptSurfaceEpochIdFactory }),
+                tokenEstimator,
+                clock: options.clock,
+                persistPromptSurface: false,
+                recoveryPlan,
+                sourceCriticality,
+                atomicGroupByItemId,
+                compactionCount: 0,
+              })
+            : initialProjection;
         const replayProjectionIsComplete = promptProjectionPreservesUncoveredModelMessages({
           conversationMessages: input.conversation.turns.flatMap((turn) => turn.messages),
           selectedMessages: replayProjection.selectedMessages,
@@ -493,7 +561,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         const coordinator = createContextCompactionCoordinator({
           dependencies: composition.dependencies,
           latest: latestState,
-          createEvents: ({ request, plan, checkpoint, degraded }) =>
+          createEvents: ({ request, checkpoint, degraded }) =>
             options.compactionEvents === undefined || options.eventIdFactory === undefined
               ? []
               : [
@@ -502,7 +570,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                     turn: input.turn,
                     checkpoint,
                     reason: request.reason,
-                    tokensBefore: plan.estimatedTokensBefore,
+                    tokensBefore: request.estimatedInputTokensBefore,
                     tokensAfter: checkpoint.tokensAfter,
                     degraded,
                     eventId: options.eventIdFactory.create(),
@@ -527,6 +595,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                 replayPrefixFingerprint: createContextSummaryReplayPrefixFingerprint(replayPrefix),
               }),
           reason,
+          estimatedInputTokensBefore: beforeCompactionProjection.audit.report.estimatedInputTokens,
           signal: input.signal,
         });
         if (outcome.kind === "COMPACTED") {
@@ -544,11 +613,14 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         }
       }
       const finalPolicy = withRecoveryTailPolicy(policy, recoveryPlan);
-      const authorities = await options.authorityProvider.snapshot({
-        identity: input.identity,
-        signal: input.signal,
-      });
-      throwIfAborted(input.signal);
+      const finalAuthorities =
+        compactionCount === 0
+          ? authorities
+          : await options.authorityProvider.snapshot({
+              identity: input.identity,
+              signal: input.signal,
+            });
+      if (compactionCount > 0) throwIfAborted(input.signal);
       const finalProjection = await buildPreparedProjectionWithoutCompaction({
         contextInput: input,
         policy: finalPolicy,
@@ -565,7 +637,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                   ? activeCheckpointProjection(activeCheckpoint)
                   : { structuredCheckpoint: activeCheckpoint.structuredCheckpoint },
             }),
-        authorities,
+        authorities: finalAuthorities,
         planner,
         sourcePriorities: sourcePriorityMap(options.sourceRegistry),
         rehydrator,

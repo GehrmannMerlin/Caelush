@@ -22,8 +22,9 @@ const request = {
   },
   conversation: {} as never,
   history: {} as never,
-  policy: { effectiveInputLimitTokens: 100 } as never,
+  policy: { effectiveInputLimitTokens: 100, outputReserveTokens: 20 } as never,
   model: { ref: { provider: "test", model: "phase-8e" } } as never,
+  estimatedInputTokensBefore: 80,
   reason: "PROACTIVE_PRESSURE",
   signal: new AbortController().signal,
 } satisfies ContextCompactionRequest;
@@ -229,6 +230,60 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
       reason: "INSUFFICIENT_GAIN",
     });
     expect(commitCalls).toBe(0);
+  });
+
+  it("requires the fitted candidate to meet the soft target or free the output reserve", async () => {
+    let commitCalls = 0;
+    const coordinator = createContextCompactionCoordinator({
+      dependencies: dependencies(
+        { plan: () => plan },
+        {
+          tentativeRebuilder: {
+            rebuild: async () => ({ estimatedInputTokens: 90, retainedMessageIds: [] }),
+          },
+          commit: {
+            commit: async ({ checkpoint, events }) => {
+              commitCalls += 1;
+              return {
+                checkpoint: { ...checkpoint, schemaVersion: 2 as const },
+                events: events as never,
+              };
+            },
+          },
+        },
+      ),
+      latest: { kind: "NONE" },
+    });
+
+    await expect(
+      coordinator.compact({ ...request, estimatedInputTokensBefore: 100 }),
+    ).resolves.toEqual({
+      kind: "NOT_APPLICABLE",
+      reason: "INSUFFICIENT_GAIN",
+    });
+    expect(commitCalls).toBe(0);
+  });
+
+  it("records actual freed tokens and accepts reserve-sized gain above the soft target", async () => {
+    const coordinator = createContextCompactionCoordinator({
+      dependencies: dependencies(
+        { plan: () => plan },
+        {
+          tentativeRebuilder: {
+            rebuild: async () => ({ estimatedInputTokens: 90, retainedMessageIds: [] }),
+          },
+        },
+      ),
+      latest: { kind: "NONE" },
+    });
+
+    const result = await coordinator.compact({ ...request, estimatedInputTokensBefore: 120 });
+
+    expect(result).toMatchObject({
+      kind: "COMPACTED",
+      checkpoint: { tokensBefore: 120, tokensAfter: 90 },
+      receipt: { tokensBefore: 120, tokensAfter: 90, actualFreedTokens: 30 },
+    });
   });
 
   it("propagates summarizer infrastructure failures without fallback or commit", async () => {

@@ -212,6 +212,8 @@ export interface ContextCompactionRequest {
   readonly history: ContextHistoryIndex;
   readonly policy: ContextPolicy;
   readonly model: ModelDescriptor;
+  /** Full materialized input estimate immediately before tentative compaction. */
+  readonly estimatedInputTokensBefore: number;
   /** Present only when the current Context can prove a complete compatible replay prefix. */
   readonly replayPrefix?: ContextSummaryReplayPrefix;
   readonly replayPrefixFingerprint?: string;

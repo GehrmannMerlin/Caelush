@@ -238,6 +238,85 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     ).rejects.toThrow(RangeError);
   });
 
+  it("keeps complete closed history at a high warning ratio without compacting it", async () => {
+    const historicalRunId = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a";
+    const currentRunId = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9c";
+    const historicalTurnId = turnIdFor(historicalRunId);
+    const currentTurnId = turnIdFor(currentRunId);
+    const historical = turn(
+      [
+        userMessage({
+          runId: historicalRunId,
+          turnId: historicalTurnId,
+          sequence: 1,
+          text: "Keep this closed history available.",
+        }),
+        assistantMessage({
+          runId: historicalRunId,
+          turnId: historicalTurnId,
+          sequence: 2,
+          text: "This history is eligible for compaction only when the budget needs it.",
+        }),
+      ],
+      { runId: historicalRunId, status: "CLOSED" },
+    );
+    const current = userMessage({
+      runId: currentRunId,
+      turnId: currentTurnId,
+      sequence: 1,
+      text: "Current request. ".repeat(100),
+    });
+    const conversation = snapshot(
+      [historical, turn([current], { runId: currentRunId, openedAt: 2 })],
+      { runId: currentRunId },
+    );
+    const identity = {
+      runId: currentRunId as never,
+      sessionId: conversation.sessionId,
+      goal: "current goal",
+    };
+    const baseInput = {
+      identity,
+      turn: { stepId: "step:high-warning-pressure" as never, sequence: 1 },
+      conversation,
+      input: { kind: "USER_INPUT" as const, userMessageId: current.message.id },
+      tools: [],
+      mode: "NORMAL" as const,
+      signal: new AbortController().signal,
+    };
+    const measured = await createTestContextEngine().prepare({
+      ...baseInput,
+      model: { ...MODEL, limits: { contextWindowTokens: 20_000, maxOutputTokens: 128 } },
+    });
+    const effectiveInputLimitTokens = Math.floor(measured.report.estimatedInputTokens / 0.9);
+    const warningModel = {
+      ...MODEL,
+      limits: {
+        contextWindowTokens:
+          effectiveInputLimitTokens +
+          measured.report.requestOverheadTokens +
+          measured.requestBudget.outputReserveTokens +
+          measured.requestBudget.safetyReserveTokens,
+        maxOutputTokens: 128,
+      },
+    };
+
+    const prepared = await createTestContextEngine().prepare({ ...baseInput, model: warningModel });
+
+    const usageRatio =
+      prepared.report.estimatedInputTokens / prepared.report.effectiveInputLimitTokens;
+    expect(usageRatio).toBeGreaterThanOrEqual(0.75);
+    expect(usageRatio).toBeLessThan(1);
+    expect(prepared.report.pressure).toBe(usageRatio >= 0.9 ? "EMERGENCY" : "PROACTIVE");
+    expect(prepared.report.compactionCount).toBe(0);
+    expect(
+      prepared.messages.some(
+        (message) =>
+          message.role === "user" && message.content === "Keep this closed history available.",
+      ),
+    ).toBe(true);
+  });
+
   it("prepares semantic sources through one final materialization and persists one audit fact set", async () => {
     const current = userMessage({ text: "current intent" });
     const conversation = snapshot([turn([current])]);
