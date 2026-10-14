@@ -108,7 +108,7 @@ export async function verifyPackagedDesktopResources(
 export function resolveDesktopWebRoot(layout: DesktopResourceLayout): string {
   return layout.packaged
     ? path.join(layout.resourcesPath, "web", "desktop")
-    : path.resolve(layout.appPath, "..", "web", "dist", "desktop");
+    : path.resolve(layout.appPath, ".stage", "web");
 }
 
 async function verifyPackagedDesktopResourcesOnce(

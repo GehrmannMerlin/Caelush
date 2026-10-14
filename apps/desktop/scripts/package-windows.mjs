@@ -314,7 +314,7 @@ async function stageVerifiedResources() {
   const nodeSource = path.join(APP_ROOT, ".stage", "daemon", "node.exe");
   const helperSource = path.join(APP_ROOT, ".stage", "daemon", "user-terminal-helper.mjs");
   const ptySource = path.join(APP_ROOT, ".stage", "daemon", "node_modules", "node-pty");
-  const webSource = path.join(REPOSITORY_ROOT, "apps", "web", "dist", "desktop");
+  const webSource = path.join(APP_ROOT, ".stage", "web");
   const runnerSource = path.join(REPOSITORY_ROOT, "release-artifacts", "sandbox");
 
   await mkdir(path.dirname(daemonPackage), { recursive: true });

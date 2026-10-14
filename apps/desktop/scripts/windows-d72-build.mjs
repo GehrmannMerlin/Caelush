@@ -98,7 +98,7 @@ for (const version of ["0.1.0", "0.1.1"]) {
   const web = path.join(stage, "web", "desktop");
   assert.equal(path.dirname(web), path.join(stage, "web"));
   await rm(web, { recursive: true, force: true });
-  await cp(path.join(repository, "apps", "web", "dist", "desktop"), web, { recursive: true });
+  await cp(path.join(repository, "apps", "desktop", ".stage", "web"), web, { recursive: true });
   const daemonPackage = path.join(stage, "daemon", "runtime", "package.json");
   const daemon = JSON.parse(await readFile(daemonPackage, "utf8"));
   daemon.version = version;

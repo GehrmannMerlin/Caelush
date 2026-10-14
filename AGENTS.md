@@ -244,6 +244,31 @@ Phase 11B rules:
 
 ## Development rules
 
+### Shared Web/Desktop maintenance
+
+- `apps/web` owns the shared Agent workbench loaded by both Web and Desktop.
+  Shared behavior, reusable components, and shared design tokens update both
+  hosts by default. A requirement naming one host does not fork shared logic.
+- Desktop account screens, updates, window controls, and native workspace
+  integrations stay host-specific. Resolve the versioned preload bridge in
+  `apps/web/src/host/desktop-integration.ts` and pass optional narrow actions
+  into presentation components; do not scatter URL/global bridge checks.
+- Skill/MCP, sessions, messages, model selection, and Tool domain behavior use
+  the shared daemon/Kernel path. Native affordances adapt that path without
+  creating another registry, executor, or Run state machine.
+- Before expanding a large UI file, inspect mixed responsibilities, repeated
+  markup/styles, and host coupling. Extract cohesive reusable components when
+  there is a demonstrated boundary, and preserve their behavior with focused
+  tests. Avoid file-size-driven or speculative component frameworks.
+- Shared UI changes require Web and Desktop-mode verification. Host-specific
+  changes require that host's relevant checks. Fix bugs at their owning layer.
+- Desktop `dev` builds then launches; `start` uses existing artifacts. Only
+  explicit packaging commands create installers. Keep runtime caches bounded
+  and development data separate from rebuildable output; see
+  `apps/desktop/README.md` for commands and cleanup scope.
+
+### Implementation
+
 - Make the smallest change that satisfies the request and preserve existing
   architecture decisions. Do not implement a future phase early.
 - For behavior changes, write or update a focused test first, observe the

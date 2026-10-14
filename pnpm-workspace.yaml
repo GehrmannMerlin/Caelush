@@ -1,6 +1,8 @@
 packages:
   - apps/*
   - packages/*
+# Keep build/start deterministic; dependency installation is an explicit step.
+verifyDepsBeforeRun: false
 allowBuilds:
   electron-winstaller: false
   esbuild: true
