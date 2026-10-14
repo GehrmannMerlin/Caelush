@@ -141,7 +141,7 @@ function usageStore(): ContextUsageStorePort & { readonly values: ContextUsageSn
   };
 }
 
-function createTestContextEngine() {
+function createTestContextEngine(requestBudget?: PreparedModelContext["requestBudget"]) {
   const tokenEstimator = createUtf8HeuristicTokenEstimator();
   const registry = createContextSourceRegistryBuilder()
     .register({
@@ -160,6 +160,7 @@ function createTestContextEngine() {
 
   return createV2ContextEngine({
     promptSurfaceStore: createPromptSurfaceMemoryStore(),
+    ...(requestBudget === undefined ? {} : { requestBudget }),
     sourceRegistry: registry,
     checkpointRepository: checkpointRepository(),
     authorityProvider: {
@@ -191,6 +192,52 @@ function createTestContextEngine() {
 }
 
 describe("Phase 7F production-capable Agent ContextEngine", () => {
+  it("carries and verifies the Run's adaptive request budget", async () => {
+    const current = userMessage({ text: "current intent" });
+    const prepared = await createTestContextEngine({
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 128,
+      safetyReserveTokens: 20,
+    }).prepare({
+      identity: { runId: createRunId(), sessionId: createSessionId(), goal: "current goal" },
+      turn: { stepId: "step:adaptive-budget" as never, sequence: 1 },
+      conversation: snapshot([turn([current])]),
+      input: { kind: "USER_INPUT", userMessageId: current.message.id },
+      model: MODEL,
+      tools: [],
+      mode: "NORMAL",
+      signal: new AbortController().signal,
+    });
+
+    expect(prepared.requestBudget).toEqual({
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 128,
+      safetyReserveTokens: 20,
+    });
+    expect(Object.isFrozen(prepared.requestBudget)).toBe(true);
+    expect(prepared.report.effectiveInputLimitTokens).toBe(1_845);
+  });
+
+  it("rejects a Run budget snapshot that no longer matches model and tool limits", async () => {
+    const current = userMessage({ text: "current intent" });
+    await expect(
+      createTestContextEngine({
+        version: "ADAPTIVE_V1",
+        outputReserveTokens: 127,
+        safetyReserveTokens: 20,
+      }).prepare({
+        identity: { runId: createRunId(), sessionId: createSessionId(), goal: "current goal" },
+        turn: { stepId: "step:adaptive-budget-mismatch" as never, sequence: 1 },
+        conversation: snapshot([turn([current])]),
+        input: { kind: "USER_INPUT", userMessageId: current.message.id },
+        model: MODEL,
+        tools: [],
+        mode: "NORMAL",
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow(RangeError);
+  });
+
   it("prepares semantic sources through one final materialization and persists one audit fact set", async () => {
     const current = userMessage({ text: "current intent" });
     const conversation = snapshot([turn([current])]);

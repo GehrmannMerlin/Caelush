@@ -68,6 +68,11 @@ describe("Context Runtime production E2E", () => {
       preset: { id: "FULL_ACCESS", expectedVersion: 1 },
       limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 10_000 },
     });
+    expect(run.contextBudgetPolicy).toMatchObject({
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 8_192,
+      safetyReserveTokens: 1_280,
+    });
     await client.startRun(run.id);
     let settled = await client.getRun(run.id);
     for (let attempt = 0; attempt < 80 && !isTerminal(settled.status); attempt += 1) {
@@ -82,6 +87,9 @@ describe("Context Runtime production E2E", () => {
       lastBuildAt: expect.any(Number),
       lastBuildStatus: "SUCCESS",
     });
+    expect(usage.effectiveInputLimitTokens).toBeLessThanOrEqual(
+      usage.rawContextWindowTokens - 8_192 - 1_280,
+    );
     expect(provider.calls).toBeGreaterThanOrEqual(2);
   }, 20_000);
 });

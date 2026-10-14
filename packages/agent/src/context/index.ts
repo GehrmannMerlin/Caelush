@@ -347,8 +347,14 @@ export type { ContextPlanningErrorCode } from "./planner/context-planning-errors
 export { assertContextPlan, createContextPlanner, planContext } from "./planner/context-planner.js";
 export type { ContextPlanner, ContextPlannerInput } from "./planner/context-planner.js";
 
-export { classifyContextPressure, createContextPolicy } from "./policy/context-policy.js";
+export {
+  classifyContextPressure,
+  createContextPolicy,
+  resolveAdaptiveContextBudget,
+} from "./policy/context-policy.js";
 export type {
+  AdaptiveContextBudget,
+  AdaptiveContextBudgetInput,
   ContextBudgetSnapshot,
   ContextItemDecision,
   ContextItemDecisionReason,

@@ -133,8 +133,15 @@ interface FrozenToolObservationPolicySnapshot {
   readonly maxObservationBatchTokens: number;
 }
 
+interface FrozenContextRequestBudget {
+  readonly version: "ADAPTIVE_V1" | "LEGACY_FULL_OUTPUT_V1";
+  readonly outputReserveTokens: number;
+  readonly safetyReserveTokens: number;
+}
+
 interface FrozenPreparedModelContext {
   readonly messages: readonly AIMessage[];
+  readonly requestBudget: FrozenContextRequestBudget;
   readonly report: FrozenContextBuildReport;
   readonly observationPolicy: FrozenToolObservationPolicySnapshot;
   readonly checkpoint?: ContextCheckpointRef;
@@ -292,7 +299,12 @@ type PreparedContextExact = Expect<Equal<PreparedModelContext, FrozenPreparedMod
 type PreparedContextKeys = Expect<
   Equal<
     Keys<PreparedModelContext>,
-    "messages" | "report" | "observationPolicy" | "checkpoint" | "contextFingerprint"
+    | "messages"
+    | "requestBudget"
+    | "report"
+    | "observationPolicy"
+    | "checkpoint"
+    | "contextFingerprint"
   >
 >;
 
@@ -503,6 +515,7 @@ const AGENT_EXACTNESS_MARKERS = [
   "ContextBuildReport",
   "ContextBuildContribution",
   "ToolObservationPolicySnapshot",
+  "ContextRequestBudget",
   "PreparedModelContext",
   "ModelRequestAdmissionInput",
   "ModelRequestAdmissionDecision",

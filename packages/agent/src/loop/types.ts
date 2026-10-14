@@ -234,6 +234,13 @@ export interface ToolObservationPolicySnapshot {
   readonly maxObservationBatchTokens: number;
 }
 
+/** The immutable output and safety reserve carried by one prepared Context. */
+export interface ContextRequestBudget {
+  readonly version: "ADAPTIVE_V1" | "LEGACY_FULL_OUTPUT_V1";
+  readonly outputReserveTokens: number;
+  readonly safetyReserveTokens: number;
+}
+
 /** A durable context checkpoint reference owned by the Context target path. */
 export type { ContextCheckpointRef } from "../context/compaction/context-compaction-contracts.js";
 
@@ -247,6 +254,9 @@ export type { ContextCheckpointRef } from "../context/compaction/context-compact
  */
 export interface PreparedModelContext {
   readonly messages: readonly AIMessage[];
+
+  /** The policy used to prepare this context and bound its model request. */
+  readonly requestBudget: ContextRequestBudget;
 
   /** Durable message IDs selected by this exact Context plan, in ledger order. */
   readonly selectedMessageIds?: readonly string[];

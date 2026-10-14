@@ -225,6 +225,11 @@ async function request(
   ];
   const context: PreparedModelContext = {
     messages,
+    requestBudget: {
+      version: "LEGACY_FULL_OUTPUT_V1",
+      outputReserveTokens: MODEL.limits.maxOutputTokens,
+      safetyReserveTokens: 0,
+    },
     report: CONTEXT_REPORT,
     observationPolicy: OBSERVATION_POLICY,
     contextFingerprint: "sha256:materialized-wire-context",

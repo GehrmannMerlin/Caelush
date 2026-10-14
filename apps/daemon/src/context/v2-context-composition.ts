@@ -114,6 +114,15 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
   return createV2ContextEngine({
     promptSurfaceStore: options.promptSurfaceStore,
     ...(input.modelSettings === undefined ? {} : { modelSettings: input.modelSettings }),
+    ...(input.run.contextBudgetPolicy === undefined
+      ? {}
+      : {
+          requestBudget: {
+            version: input.run.contextBudgetPolicy.version,
+            outputReserveTokens: input.run.contextBudgetPolicy.outputReserveTokens,
+            safetyReserveTokens: input.run.contextBudgetPolicy.safetyReserveTokens,
+          },
+        }),
     sourceRegistry: sources,
     checkpointRepository: options.storage.contextCheckpointsV2,
     authorityProvider,

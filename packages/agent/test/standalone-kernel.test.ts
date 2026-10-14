@@ -156,7 +156,16 @@ function fakeContextEngine(): {
         // The engine contributes the turn's own user text and nothing else: there is no project,
         // no workspace and no file to consult.
         const messages = [{ role: "user" as const, content: "fixture" }];
-        return Promise.resolve({ messages, report: REPORT, observationPolicy: POLICY });
+        return Promise.resolve({
+          messages,
+          requestBudget: {
+            version: "LEGACY_FULL_OUTPUT_V1",
+            outputReserveTokens: 100,
+            safetyReserveTokens: 0,
+          },
+          report: REPORT,
+          observationPolicy: POLICY,
+        });
       },
     },
     inputs: () => inputs,

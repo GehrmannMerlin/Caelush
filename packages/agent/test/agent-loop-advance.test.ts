@@ -103,6 +103,11 @@ const POLICY: ToolObservationPolicySnapshot = {
 function prepared(partial: Partial<PreparedModelContext> = {}): PreparedModelContext {
   return {
     messages: [{ role: "user", content: "prepared" }],
+    requestBudget: {
+      version: "LEGACY_FULL_OUTPUT_V1",
+      outputReserveTokens: MODEL.limits.maxOutputTokens,
+      safetyReserveTokens: 0,
+    },
     report: REPORT,
     observationPolicy: POLICY,
     ...partial,

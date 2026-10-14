@@ -93,6 +93,7 @@ import type { ContextMaterializer } from "../materializer/context-materializer.j
 import { createContextPlanner, type ContextPlanner } from "../planner/context-planner.js";
 import {
   createContextPolicy,
+  resolveAdaptiveContextBudget,
   type ContextPlan,
   type ContextPolicyOptions,
 } from "../policy/context-policy.js";
@@ -127,7 +128,11 @@ import {
 import { AGENT_CONTEXT_SOURCE_IDS } from "../source/source-ids.js";
 import type { ContextCheckpointRef } from "../compaction/context-compaction-contracts.js";
 import { ContextExhaustedError } from "../planner/context-planning-errors.js";
-import type { AgentExecutionIdentity, AgentTurnRef } from "../../loop/types.js";
+import type {
+  AgentExecutionIdentity,
+  AgentTurnRef,
+  ContextRequestBudget,
+} from "../../loop/types.js";
 import { createContextItemId } from "../item/context-item.js";
 import { createSourceResult, estimateContextTokens } from "../source/generic-provider-helpers.js";
 import { createContextCompactionCoordinator } from "../compaction/context-compaction-coordinator.js";
@@ -200,6 +205,8 @@ export interface V2ContextEngineOptions {
   readonly promptSurfaceStore: PromptSurfaceStorePort;
   /** Provider-neutral settings used only to freeze the model-input cache identity. */
   readonly modelSettings?: AIModelSettings;
+  /** Persisted Run policy. Missing or legacy snapshots retain historical full-output behavior. */
+  readonly requestBudget?: ContextRequestBudget;
   readonly promptSurfaceEpochIdFactory?: { create(): string };
   readonly sourceRegistry: ContextSourceRegistry;
   readonly checkpointRepository: ContextCheckpointRepositoryPort;
@@ -288,20 +295,56 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         model: input.model,
         tools: input.tools,
       });
+      const adaptiveBudget =
+        options.requestBudget?.version === "ADAPTIVE_V1"
+          ? resolveAdaptiveContextBudget({
+              contextWindowTokens: input.model.limits.contextWindowTokens,
+              maxOutputTokens: input.model.limits.maxOutputTokens,
+              ...(options.modelSettings?.maxOutputTokens === undefined
+                ? {}
+                : { configuredOutputCeiling: options.modelSettings.maxOutputTokens }),
+              requestOverheadTokens: requestOverhead.totalTokens,
+            })
+          : undefined;
+      if (
+        adaptiveBudget !== undefined &&
+        (options.requestBudget?.outputReserveTokens !== adaptiveBudget.outputReserveTokens ||
+          options.requestBudget.safetyReserveTokens !== adaptiveBudget.safetyReserveTokens)
+      ) {
+        throw new RangeError(
+          "Persisted adaptive context budget does not match the resolved model limits and settings.",
+        );
+      }
+      const configuredPolicyOptions =
+        input.mode === "FORCED_RECOVERY" && options.forcedObservationPolicy !== undefined
+          ? { ...options.policy, ...options.forcedObservationPolicy }
+          : options.policy;
+      const policyOptions =
+        adaptiveBudget === undefined
+          ? configuredPolicyOptions
+          : {
+              ...configuredPolicyOptions,
+              outputReserveTokens: adaptiveBudget.outputReserveTokens,
+              safetyReserveTokens: adaptiveBudget.safetyReserveTokens,
+            };
       const policy = createContextPolicy({
         model: input.model,
         tools: input.tools,
         requestOverhead,
-        ...(input.mode === "FORCED_RECOVERY" && options.forcedObservationPolicy !== undefined
-          ? {
-              options: {
-                ...options.policy,
-                ...options.forcedObservationPolicy,
-              },
-            }
-          : options.policy === undefined
-            ? {}
-            : { options: options.policy }),
+        ...(policyOptions === undefined ? {} : { options: policyOptions }),
+      });
+      if (
+        adaptiveBudget !== undefined &&
+        policy.effectiveInputLimitTokens !== adaptiveBudget.effectiveInputLimitTokens
+      ) {
+        throw new RangeError("Adaptive context policy produced an inconsistent input limit.");
+      }
+      const requestBudget: ContextRequestBudget = Object.freeze({
+        ...(options.requestBudget ?? {
+          version: "LEGACY_FULL_OUTPUT_V1" as const,
+          outputReserveTokens: policy.outputReserveTokens,
+          safetyReserveTokens: policy.safetyReserveTokens,
+        }),
       });
       throwIfAborted(input.signal);
 
@@ -556,6 +599,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       throwIfAborted(input.signal);
       return Object.freeze({
         messages: finalProjection.materializedMessages,
+        requestBudget,
         selectedMessageIds: Object.freeze(
           finalProjection.selectedMessages.map(({ message }) => String(message.id)),
         ),

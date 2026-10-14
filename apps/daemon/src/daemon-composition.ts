@@ -56,6 +56,7 @@ import {
   createControlHookRunner,
   createContextContributionPipeline,
   createContextRequestOverheadEstimator,
+  resolveAdaptiveContextBudget,
   createModelTurnExecutor,
   STANDARD_AGENT_MESSAGE_CODECS,
   STANDARD_AGENT_MESSAGE_PROJECTORS,
@@ -1023,35 +1024,22 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     async resolve(run) {
       const model = ai.models.resolve(run.model);
       const config = await executionConfigResolver.resolve(run);
-      const preferredOutputCeiling = Math.min(
-        config.modelSettings?.maxOutputTokens ?? model.limits.maxOutputTokens,
-        model.limits.maxOutputTokens,
-      );
-      const outputReserveTokens = Math.min(
-        preferredOutputCeiling,
-        16_384,
-        Math.max(1, Math.floor(model.limits.contextWindowTokens * 0.08)),
-      );
-      const safetyReserveTokens = Math.min(
-        4_096,
-        Math.max(1, Math.floor(model.limits.contextWindowTokens * 0.01)),
-      );
       const requestOverheadTokens = contextRequestOverheadEstimator.estimate({
         model,
         tools: activeToolRegistry.modelSpecs(),
       }).totalTokens;
-      const effectiveInputLimitTokens =
-        model.limits.contextWindowTokens -
-        outputReserveTokens -
-        safetyReserveTokens -
-        requestOverheadTokens;
-      if (!Number.isSafeInteger(effectiveInputLimitTokens) || effectiveInputLimitTokens <= 0) {
-        throw new RangeError("Context budget reserves and request overhead leave no input budget.");
-      }
+      const budget = resolveAdaptiveContextBudget({
+        contextWindowTokens: model.limits.contextWindowTokens,
+        maxOutputTokens: model.limits.maxOutputTokens,
+        ...(config.modelSettings?.maxOutputTokens === undefined
+          ? {}
+          : { configuredOutputCeiling: config.modelSettings.maxOutputTokens }),
+        requestOverheadTokens,
+      });
       return Object.freeze({
         version: "ADAPTIVE_V1" as const,
-        outputReserveTokens,
-        safetyReserveTokens,
+        outputReserveTokens: budget.outputReserveTokens,
+        safetyReserveTokens: budget.safetyReserveTokens,
       });
     },
   };
