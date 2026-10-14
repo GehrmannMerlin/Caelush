@@ -539,6 +539,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     let capturedRehydrationAuthority: string | undefined;
     let authoritySnapshotCount = 0;
     const authoritySnapshotPhases: string[] = [];
+    let latestCheckpoint: ContextCheckpointRecordV2 | undefined;
     const authority: ContextAuthorityProviderPort = {
       async snapshot() {
         authoritySnapshotCount += 1;
@@ -557,7 +558,22 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
         id: AGENT_CONTEXT_SOURCE_IDS.checkpoint,
         priority: 30,
         criticality: "REQUIRED",
-        provider: createCheckpointContextSourceProvider(),
+        provider: createCheckpointContextSourceProvider({
+          loader: {
+            async load({ identity }) {
+              const checkpoint = latestCheckpoint;
+              if (checkpoint === undefined || String(identity.runId) !== String(historicalRunId)) {
+                return undefined;
+              }
+              return {
+                checkpointId: String(checkpoint.checkpointId),
+                sourceRef: `checkpoint:${String(checkpoint.checkpointId)}`,
+                version: "checkpoint-v2",
+                checkpoint: checkpoint.structuredCheckpoint,
+              };
+            },
+          },
+        }),
       })
       .register({
         id: AGENT_CONTEXT_SOURCE_IDS.corePolicy,
@@ -570,6 +586,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     const committed: { eventCount: number } = { eventCount: 0 };
     let commitAttempts = 0;
     let commitShouldFail = false;
+    let promptSurfaceResetBeforeCheckpointCommit = false;
     let summaryTargetTokens: number | undefined;
     let summaryPurpose: unknown;
     let summaryCacheEligibility: unknown;
@@ -585,7 +602,10 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       async collect(input) {
         expect(summaryFinished).toBe(true);
         expect(commitFinished).toBe(false);
-        expect(input.sourceRange).toMatchObject({ firstSequence: 1, lastSequence: 2 });
+        expect(input.sourceRange.firstSequence).toBeGreaterThan(0);
+        expect(input.sourceRange.lastSequence).toBeGreaterThanOrEqual(
+          input.sourceRange.firstSequence,
+        );
         return createDeterministicCompactionFacts({
           readFiles: ["packages/agent/src/context/engine/context-engine.ts"],
           changedFiles: ["packages/agent/src/context/engine/context-engine.ts"],
@@ -598,14 +618,19 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       },
     };
     const existingCheckpoint = checkpointForMessage(historical[0]!);
+    latestCheckpoint = existingCheckpoint;
     let commitFinished = false;
     let notificationObservedAfterCommit = false;
     const compactionCommit: ContextCompactionCommitPort = {
       async commit(input) {
         commitAttempts += 1;
+        const surfaceBeforeCommit = promptSurfaceStore.inspect(input.runId);
+        promptSurfaceResetBeforeCheckpointCommit =
+          surfaceBeforeCommit?.resetReason === "COMPACTION_COMMITTED";
         if (commitShouldFail) throw new Error("durable summary commit unavailable");
         committed.eventCount = input.events.length;
         const checkpoint = Object.freeze({ ...input.checkpoint, schemaVersion: 2 as const });
+        latestCheckpoint = checkpoint;
         commitFinished = true;
         verificationState = "NEW";
         return {
@@ -620,7 +645,20 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     const engine = createV2ContextEngine({
       promptSurfaceStore,
       sourceRegistry: registry,
-      checkpointRepository: checkpointRepository(existingCheckpoint),
+      checkpointRepository: {
+        async create() {
+          return latestCheckpoint;
+        },
+        async getLatestByRun(runId) {
+          return String(runId) === String(historicalRunId) ? latestCheckpoint : undefined;
+        },
+        async getById() {
+          return latestCheckpoint;
+        },
+        async listByRun(runId) {
+          return String(runId) === String(historicalRunId) ? [latestCheckpoint] : [];
+        },
+      },
       authorityProvider: authority,
       usageStore: usage,
       compactionCommit,
@@ -761,6 +799,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     expect(summarySourceSequences).toEqual([2]);
     expect(summarySourceRange).toMatchObject({ firstSequence: 1, lastSequence: 2 });
     expect(notificationObservedAfterCommit).toBe(true);
+    expect(promptSurfaceResetBeforeCheckpointCommit).toBe(false);
     expect(capturedRehydrationAuthority).toBe("NEW");
     expect(
       prepared.messages.some(
@@ -793,16 +832,75 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       ),
     ).toBe(true);
 
+    await engine.prepare({
+      identity: runIdentity,
+      turn: { stepId: "step:phase-7f-compaction" as never, sequence: 1 },
+      conversation: warmConversation,
+      input: { kind: "USER_INPUT", userMessageId: current.message.id },
+      model: { ...MODEL, limits: { contextWindowTokens: 4_000, maxOutputTokens: 128 } },
+      tools: [],
+      mode: "NORMAL",
+      signal: new AbortController().signal,
+    });
+    expect(summaryCallCount).toBe(1);
+    expect(commitAttempts).toBe(1);
+    expect(
+      promptSurfaceStore.inspectEpochs(runIdentity.runId).map(({ resetReason }) => resetReason),
+    ).toEqual(["INITIAL", "COMPACTION_COMMITTED"]);
+    expect(promptSurfaceStore.inspect(runIdentity.runId)?.resetReason).toBe("COMPACTION_COMMITTED");
+
     const committedSurface = promptSurfaceStore.inspect(runIdentity.runId);
+    const failedCompactionRunId = createRunId();
+    const failedCompactionCurrentRunId = createRunId();
+    const failedCompactionTurnId = turnIdFor(failedCompactionRunId);
+    const failedCompactionCurrentTurnId = turnIdFor(failedCompactionCurrentRunId);
+    const failedCompactionHistory = [
+      userMessage({
+        runId: failedCompactionRunId,
+        turnId: failedCompactionTurnId,
+        sequence: 1,
+        text: "historical intent ".repeat(40),
+      }),
+      userMessage({
+        runId: failedCompactionRunId,
+        turnId: failedCompactionTurnId,
+        sequence: 2,
+        text: "historical evidence ".repeat(20),
+      }),
+    ];
+    const failedCompactionCurrent = userMessage({
+      runId: failedCompactionCurrentRunId,
+      turnId: failedCompactionCurrentTurnId,
+      sequence: 10,
+      text: "current intent ".repeat(180),
+    });
+    const failedCompactionConversation = snapshot(
+      [
+        turn(failedCompactionHistory, {
+          runId: failedCompactionRunId,
+          status: "CLOSED",
+        }),
+        turn([failedCompactionCurrent], {
+          runId: failedCompactionCurrentRunId,
+          openedAt: 2,
+        }),
+      ],
+      { runId: failedCompactionCurrentRunId },
+    );
+    const failedCompactionIdentity = {
+      runId: failedCompactionRunId,
+      sessionId: createSessionId(),
+      goal: "current goal",
+    };
     commitShouldFail = true;
     commitFinished = false;
     summaryFinished = false;
     await expect(
       engine.prepare({
-        identity: runIdentity,
+        identity: failedCompactionIdentity,
         turn: { stepId: "step:phase-7f-compaction" as never, sequence: 1 },
-        conversation: warmConversation,
-        input: { kind: "USER_INPUT", userMessageId: current.message.id },
+        conversation: failedCompactionConversation,
+        input: { kind: "USER_INPUT", userMessageId: failedCompactionCurrent.message.id },
         model: { ...MODEL, limits: { contextWindowTokens: 4_000, maxOutputTokens: 128 } },
         tools: [],
         mode: "FORCED_RECOVERY",
@@ -810,6 +908,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       }),
     ).rejects.toThrow("durable summary commit unavailable");
     expect(commitAttempts).toBe(2);
+    expect(promptSurfaceStore.inspect(failedCompactionIdentity.runId)).toBeUndefined();
     expect(promptSurfaceStore.inspect(runIdentity.runId)).toEqual(committedSurface);
   });
 });

@@ -6,11 +6,13 @@ import {
   STAGE8_LIMITS,
   Stage8PreflightSchema,
   createStage8AttemptCheckpoint,
+  evaluateStage8ExitGate,
   appendStage8LivenessSample,
   projectSafeProviderStatus,
   recordStage8ProviderSample,
   recordStage8ToolInvocation,
   recordStage8Compaction,
+  summarizeStage8Attempt,
   writeStage8CheckpointAtomic,
 } from "../../../scripts/stage8-long-run-audit.mjs";
 import { projectPromptCacheSegments } from "../src/daemon-composition.js";
@@ -209,6 +211,95 @@ describe("Stage 8 long-run audit local fixtures", () => {
     expect(state.scoredMainCallCount).toBe(1);
     expect(state.auxiliaryCallCount).toBe(1);
     expect(state.costStatus).toBe("RECONCILED");
+  });
+
+  it("reports full and warm MAIN_AGENT cache use, unexplained prefix misses, compression frequency, and all-purpose cost", () => {
+    let state = createStage8AttemptCheckpoint({ attemptId: "attempt-1" });
+    state = recordStage8ProviderSample(state, {
+      purpose: "MAIN_AGENT",
+      outcome: "SUCCESS",
+      usage: usage({ hitTokens: 950, missTokens: 50, expectedReusablePrefixTokens: 950 }),
+    });
+    state = recordStage8ProviderSample(state, {
+      purpose: "MAIN_AGENT",
+      outcome: "SUCCESS",
+      usage: usage({ hitTokens: 900, missTokens: 100, expectedReusablePrefixTokens: 950 }),
+    });
+    state = recordStage8ProviderSample(state, {
+      purpose: "COMPACTION",
+      outcome: "SUCCESS",
+      usage: usage({ hitTokens: 10, missTokens: 90, expectedReusablePrefixTokens: 0 }),
+    });
+    state = recordStage8Compaction(state, {
+      sequence: 19,
+      reason: "PROACTIVE_PRESSURE",
+      tokensBefore: 80_000,
+      tokensAfter: 32_000,
+      epochBeforeFingerprint: "a".repeat(64),
+      epochAfterFingerprint: "c".repeat(64),
+    });
+
+    const report = summarizeStage8Attempt(state);
+    expect(report).toMatchObject({
+      fullRunMainAgent: {
+        requestCount: 2,
+        hitTokens: 1_850,
+        accountedTokens: 2_000,
+        hitRate: 0.925,
+      },
+      warmMainAgent: {
+        requestCount: 1,
+        hitTokens: 900,
+        accountedTokens: 1_000,
+        hitRate: 0.9,
+      },
+      unexplainedPrefixMissTokens: 50,
+      compactionFrequency: 0.5,
+      providerCallCount: 3,
+      mainCallCount: 2,
+      auxiliaryCallCount: 1,
+      compactionCount: 1,
+      totalCostNanoUsd: state.samples
+        .reduce((total, sample) => total + BigInt(sample.costNanoUsd ?? "0"), 0n)
+        .toString(),
+    });
+  });
+
+  it("keeps the production cache gate inclusive of the cold MAIN_AGENT call", () => {
+    let state = createStage8AttemptCheckpoint({ attemptId: "attempt-1" });
+    state = recordStage8ProviderSample(state, {
+      purpose: "MAIN_AGENT",
+      outcome: "SUCCESS",
+      usage: usage({ hitTokens: 0, missTokens: 1_000, expectedReusablePrefixTokens: 0 }),
+    });
+    for (let index = 0; index < 3; index += 1) {
+      state = recordStage8ProviderSample(state, {
+        purpose: "MAIN_AGENT",
+        outcome: "SUCCESS",
+        usage: usage(),
+      });
+    }
+    state = recordStage8Compaction(state, {
+      sequence: 19,
+      reason: "PROACTIVE_PRESSURE",
+      tokensBefore: 80_000,
+      tokensAfter: 32_000,
+      epochBeforeFingerprint: "a".repeat(64),
+      epochAfterFingerprint: "c".repeat(64),
+    });
+    for (let index = 0; index < 3; index += 1) {
+      state = recordStage8ProviderSample(state, {
+        purpose: "MAIN_AGENT",
+        outcome: "SUCCESS",
+        usage: usage({ epochFingerprint: "c".repeat(64), resetReason: "COMPACTION_COMMITTED" }),
+      });
+    }
+    state.terminalState = "COMPLETED";
+
+    const report = summarizeStage8Attempt(state);
+    expect(report.warmMainAgent.hitRate).toBeGreaterThan(0.9);
+    expect(report.fullRunMainAgent.hitRate).toBeLessThan(0.9);
+    expect(evaluateStage8ExitGate(state)).toBe(false);
   });
 
   it("assigns calls around the durable compaction boundary and requires three scored samples per side", () => {
@@ -657,7 +748,9 @@ describe("Stage 8 long-run audit local fixtures", () => {
         tokensAfter: 32_000,
         degraded: false,
       }),
-      event(5, "run.completed", { result: { type: "VERIFIED_COMPLETION" } }),
+      event(5, "run.failed", {
+        error: { code: "MODEL_ERROR", details: { modelOutputFailure: "OUTPUT_TRUNCATED" } },
+      }),
     ];
     let usageIndex = 0;
     let state = createStage8AttemptCheckpoint({ attemptId: "attempt-1" });
@@ -684,13 +777,14 @@ describe("Stage 8 long-run audit local fixtures", () => {
       mainCallCount: 1,
       toolInvocationCount: 1,
       compactionCount: 1,
-      terminalState: "COMPLETED",
+      terminalState: "FAILED",
       compaction: {
         sequence: 4,
         reason: "PROACTIVE_PRESSURE",
         tokensBefore: 80_000,
         tokensAfter: 32_000,
       },
+      outputTruncationCount: 1,
     });
     expect(JSON.stringify(result)).not.toContain("private-checkpoint-id");
   });

@@ -114,7 +114,7 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
   return createV2ContextEngine({
     promptSurfaceStore: options.promptSurfaceStore,
     ...(input.modelSettings === undefined ? {} : { modelSettings: input.modelSettings }),
-    ...(input.run.contextBudgetPolicy === undefined
+    ...(input.run.contextBudgetPolicy?.version !== "ADAPTIVE_V1"
       ? {}
       : {
           requestBudget: {

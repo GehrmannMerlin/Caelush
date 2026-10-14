@@ -37,7 +37,8 @@ export const ContextBudgetPolicySnapshotSchema = z
     outputReserveTokens: z.number().int().safe().positive(),
     safetyReserveTokens: z.number().int().safe().positive(),
   })
-  .strict();
+  .strict()
+  .or(z.object({ version: z.literal("LEGACY_FULL_OUTPUT_V1") }).strict());
 export type ContextBudgetPolicySnapshot = z.infer<typeof ContextBudgetPolicySnapshotSchema>;
 
 /**

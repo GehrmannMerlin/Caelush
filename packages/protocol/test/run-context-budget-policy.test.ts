@@ -88,4 +88,19 @@ describe("Run context budget policy snapshot", () => {
     expect(CurrentAgentRunSchema.safeParse(baseRun).success).toBe(false);
     expect(AgentRunSchema.safeParse(baseRun).success).toBe(true);
   });
+
+  it("accepts a closed legacy policy on new Runs while the adaptive cache gate is inconclusive", () => {
+    expect(
+      CurrentAgentRunSchema.safeParse({
+        ...baseRun,
+        contextBudgetPolicy: { version: "LEGACY_FULL_OUTPUT_V1" },
+      }).success,
+    ).toBe(true);
+    expect(
+      CurrentAgentRunSchema.safeParse({
+        ...baseRun,
+        contextBudgetPolicy: { version: "LEGACY_FULL_OUTPUT_V1", outputReserveTokens: 1 },
+      }).success,
+    ).toBe(false);
+  });
 });

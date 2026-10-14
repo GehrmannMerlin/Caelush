@@ -467,12 +467,17 @@ function projectError(error: {
   readonly message: string;
   readonly retryable: boolean;
   readonly phase?: string | undefined;
+  readonly details?: Readonly<Record<string, unknown>> | undefined;
 }) {
+  const modelOutputFailure = error.details?.["modelOutputFailure"];
   return {
     code: error.code,
     message: nonEmptyText(error.message, "Operation failed"),
     retryable: error.retryable,
     ...(error.phase === undefined ? {} : { phase: error.phase }),
+    ...(modelOutputFailure === "OUTPUT_TRUNCATED"
+      ? { details: { modelOutputFailure: "OUTPUT_TRUNCATED" as const } }
+      : {}),
   };
 }
 

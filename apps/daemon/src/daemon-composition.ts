@@ -103,6 +103,7 @@ import {
   type RunId,
   type TimestampMs,
   type ContextUsageProjection,
+  type ContextBudgetPolicySnapshot,
   type CacheMetricsV2,
   type PromptCachePurposeUsage,
   type PromptCacheRequestPurpose,
@@ -309,6 +310,8 @@ export interface DaemonCompositionOptions {
   readonly eventQueuePolicy?: SubscriberQueuePolicy;
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
+  /** ADAPTIVE_V1 remains opt-in until the paired real-provider cache gate passes. */
+  readonly contextBudgetPolicyVersion?: ContextBudgetPolicySnapshot["version"];
   /** Finite Gateway watchdog overrides; omitted values use production defaults. */
   readonly providerStreamPolicy?: Partial<ProviderStreamPolicy>;
   /** Environment is read on every credential resolution; it is never serialized. */
@@ -1023,6 +1026,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   const contextRequestOverheadEstimator = createContextRequestOverheadEstimator();
   const contextBudgetPolicyResolver: RunContextBudgetPolicyResolver = {
     async resolve(run) {
+      if (options.contextBudgetPolicyVersion !== "ADAPTIVE_V1") {
+        return Object.freeze({ version: "LEGACY_FULL_OUTPUT_V1" as const });
+      }
       const model = ai.models.resolve(run.model);
       const config = await executionConfigResolver.resolve(run);
       const requestOverheadTokens = contextRequestOverheadEstimator.estimate({

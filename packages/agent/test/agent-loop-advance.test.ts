@@ -395,6 +395,11 @@ describe("AgentLoop.advance() failure classification", () => {
       if (result.kind !== "FAILED") throw new Error("expected failure");
       expect(result.error.code).toBe("MODEL_ERROR");
       expect(result.error.retryable).toBe(false);
+      if (finishReason === "LENGTH") {
+        expect(result.error.details).toEqual({ modelOutputFailure: "OUTPUT_TRUNCATED" });
+      } else {
+        expect(result.error.details).toBeUndefined();
+      }
       // The provider answered, so the settled turn travels with the failure.
       expect(result.modelTurn?.finishReason).toBe(finishReason);
       expect(result.turn).toEqual(TURN);

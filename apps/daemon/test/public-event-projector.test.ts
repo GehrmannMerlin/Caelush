@@ -145,7 +145,7 @@ describe("DefaultPublicEventProjector", () => {
     expect(projector.project(makeEvent(type, payload, { visibility }))).toBeNull();
   });
 
-  it("projects errors without details, causes, provider responses, or credential-bearing text", () => {
+  it("projects only the safe output-truncation classification from error details", () => {
     const event = makeEvent("run.failed", {
       error: {
         code: "MODEL_ERROR",
@@ -153,6 +153,7 @@ describe("DefaultPublicEventProjector", () => {
         retryable: true,
         phase: "LLM",
         details: {
+          modelOutputFailure: "OUTPUT_TRUNCATED",
           endpoint: "https://secret.example.test/v1",
           authorization: "Bearer raw-token",
           providerResponse: { apiKey: "raw-api-key" },
@@ -169,6 +170,7 @@ describe("DefaultPublicEventProjector", () => {
         message: "provider failed Authorization: Bearer [REDACTED]",
         retryable: true,
         phase: "LLM",
+        details: { modelOutputFailure: "OUTPUT_TRUNCATED" },
       },
     });
     expect(JSON.stringify(projected)).not.toContain("raw-token");

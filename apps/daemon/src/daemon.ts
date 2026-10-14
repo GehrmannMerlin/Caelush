@@ -6,7 +6,11 @@ import type {
   ToolFeedbackContributionBudget,
   ToolFeedbackContributionRegistration,
 } from "@caelush/coding-agent";
-import { DaemonInfoSchema, type ClientModelSelection } from "@caelush/protocol";
+import {
+  DaemonInfoSchema,
+  type ClientModelSelection,
+  type ContextBudgetPolicySnapshot,
+} from "@caelush/protocol";
 import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
 import { createReplayProtection, type ReplayKeyProvider } from "@caelush/security";
 import { LocalRuntime, type ProcessSandboxProvider } from "@caelush/runtime";
@@ -234,6 +238,7 @@ export interface DaemonOptions {
   readonly logger?: boolean;
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
+  readonly contextBudgetPolicyVersion?: ContextBudgetPolicySnapshot["version"];
   readonly environment?: Readonly<Record<string, string | undefined>>;
   /** Private Desktop authority injection; standard hosts keep the SQLite/environment adapter. */
   readonly credentialAuthority?: RuntimeProviderCredentialAuthority;
@@ -455,6 +460,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       runtime,
       ...(options.providers === undefined ? {} : { providers: options.providers }),
       ...(options.defaultModel === undefined ? {} : { defaultModel: options.defaultModel }),
+      ...(options.contextBudgetPolicyVersion === undefined
+        ? {}
+        : { contextBudgetPolicyVersion: options.contextBudgetPolicyVersion }),
       ...(options.credentialAuthority === undefined
         ? {}
         : { credentialAuthority: options.credentialAuthority }),

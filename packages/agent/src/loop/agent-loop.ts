@@ -3,6 +3,7 @@ import type { AIMessage } from "@caelush/ai";
 import type { ContextEnginePort, ContextPrepareMode } from "./context/context-engine-port.js";
 import type { AgentDecisionClassifier } from "./decision/decision-classifier.js";
 import { toAgentModelTurn } from "./decision/decision.js";
+import { AgentModelOutputError } from "./decision/decision-error.js";
 import { AgentTurnInputError, assertAgentTurnInput } from "./history/conversation-history.js";
 import type {
   ModelRequestAdmissionDecision,
@@ -258,17 +259,21 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
         return decision.type === "TOOL_CALLS_REQUESTED"
           ? { kind: "TOOL_REQUESTS", ...base, decision }
           : { kind: "FINAL_CANDIDATE", ...base, decision };
-      } catch {
+      } catch (error) {
         // The provider turn *did* complete: the model answered and the answer was unusable.
         // Reporting it as a failed provider attempt would lose that distinction, which is why
         // the settled turn travels with the failure.
         const modelTurn = toAgentModelTurn(execution.result);
         const failure = toInternalFailure();
+        const agentError = toAgentError(failure);
         return {
           kind: "FAILED",
           turn: input.turn,
           ...(modelTurn === undefined ? {} : { modelTurn }),
-          error: toAgentError(failure),
+          error:
+            error instanceof AgentModelOutputError && error.reason === "OUTPUT_TRUNCATED"
+              ? { ...agentError, details: { modelOutputFailure: "OUTPUT_TRUNCATED" } }
+              : agentError,
           messagesToAppend: [...appended],
           context: contextReceipt,
           ...(execution.result.usage === undefined ? {} : { usage: execution.result.usage }),
