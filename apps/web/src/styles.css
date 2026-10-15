@@ -7760,3 +7760,338 @@ body {
     --session-scroll-gutter: 14px;
   }
 }
+
+/* Compact task-process feed; all rules stay inside the task disclosure. */
+.turn-presentation-process {
+  --turn-process-ink: #34363d;
+  --turn-process-muted: #6b6d75;
+  --turn-process-subtle: #888b94;
+  --turn-process-line: #e1e3e7;
+  --turn-process-panel: #f5f6f7;
+  --turn-process-accent: var(--web-blue-600, #2563eb);
+  font-family: "Segoe UI", system-ui, "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  color: var(--turn-process-ink);
+}
+
+.turn-presentation-process .turn-presentation-body {
+  gap: 12px;
+  padding: 12px 0 4px;
+}
+
+.turn-presentation-process .turn-presentation-item--commentary {
+  margin: 0;
+  padding: 0;
+  color: var(--turn-process-ink);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.turn-presentation-process
+  .turn-presentation-item--commentary
+  + .turn-presentation-item--commentary {
+  margin-top: 0;
+}
+
+.turn-presentation-process .turn-presentation-item--commentary .assistant-markdown {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.turn-presentation-process
+  .turn-presentation-item--commentary
+  .assistant-markdown
+  :is(p, ul, ol, blockquote, table, pre) {
+  margin-block: 0.35em;
+}
+
+.turn-presentation-process .turn-presentation-model-drafts,
+.turn-presentation-process .turn-presentation-live {
+  display: contents;
+}
+
+.turn-presentation-process .turn-presentation-model-draft {
+  margin: 0;
+  padding: 0;
+  color: var(--turn-process-ink);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.turn-presentation-process .turn-presentation-item--verification {
+  padding: 2px 0;
+  border: 0;
+}
+
+.turn-presentation-process .turn-presentation-live-item {
+  margin: 0;
+  color: var(--turn-process-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.turn-presentation-process .turn-presentation-tool-entry {
+  min-width: 0;
+  color: var(--turn-process-muted, #6b6d75);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.turn-presentation-process .turn-presentation-tool-row {
+  display: flex;
+  min-width: 0;
+  min-height: 25px;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 3px 2px 0;
+  border-radius: 5px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.turn-presentation-process .turn-presentation-tool-row::-webkit-details-marker,
+.turn-presentation-process .turn-presentation-tool-row::marker {
+  display: none;
+}
+
+.turn-presentation-process .turn-presentation-tool-row:hover {
+  background: rgb(15 23 42 / 3%);
+}
+
+.turn-presentation-process .turn-presentation-tool-row:focus-visible {
+  background: var(--web-blue-050, #f5f8ff);
+  outline: 2px solid color-mix(in srgb, var(--turn-process-accent) 48%, transparent);
+  outline-offset: 2px;
+}
+
+.turn-presentation-process .turn-presentation-tool-icon {
+  flex: 0 0 16px;
+  color: var(--turn-process-muted, #6b6d75);
+  stroke-width: 1.7;
+}
+
+.turn-presentation-process .turn-presentation-tool-entry--failed .turn-presentation-tool-icon,
+.turn-presentation-process .turn-presentation-tool-entry--failed .turn-presentation-tool-action,
+.turn-presentation-process .turn-presentation-tool-entry--failed .turn-presentation-tool-state {
+  color: var(--web-danger, #cf3f52);
+}
+
+.turn-presentation-process .turn-presentation-tool-entry--cancelled .turn-presentation-tool-icon {
+  color: var(--turn-process-subtle, #888b94);
+}
+
+.turn-presentation-process .turn-presentation-tool-entry--cancelled .turn-presentation-tool-state {
+  color: var(--turn-process-subtle, #888b94);
+}
+
+.turn-presentation-process .turn-presentation-tool-action {
+  flex: 0 0 auto;
+  color: var(--turn-process-muted, #6b6d75);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.turn-presentation-process .turn-presentation-tool-entry--failed .turn-presentation-tool-action {
+  color: var(--web-danger, #cf3f52);
+}
+
+.turn-presentation-process .turn-presentation-tool-subject {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--turn-process-ink, #34363d);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turn-presentation-process .turn-presentation-tool-edit-counts {
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.turn-presentation-process .turn-presentation-tool-state {
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.turn-presentation-process .turn-presentation-tool-active {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--turn-process-accent, #2563eb);
+  animation: turn-presentation-active-dot 1.4s ease-in-out infinite;
+}
+
+.turn-presentation-process .turn-presentation-tool-chevron {
+  flex: 0 0 15px;
+  margin-left: auto;
+  color: var(--turn-process-subtle, #888b94);
+  opacity: 0;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.turn-presentation-process .turn-presentation-tool-row:hover .turn-presentation-tool-chevron,
+.turn-presentation-process
+  .turn-presentation-tool-row:focus-visible
+  .turn-presentation-tool-chevron,
+.turn-presentation-process .turn-presentation-tool-entry[open] .turn-presentation-tool-chevron {
+  opacity: 1;
+}
+
+.turn-presentation-process .turn-presentation-tool-entry[open] .turn-presentation-tool-chevron {
+  transform: rotate(180deg);
+}
+
+.turn-presentation-process .turn-presentation-tool-details-content {
+  min-width: 0;
+  margin: 4px 0 2px 24px;
+  padding: 10px 12px;
+  border: 1px solid var(--turn-process-line, #e1e3e7);
+  border-radius: 8px;
+  background: var(--turn-process-panel, #f5f6f7);
+  color: var(--turn-process-muted, #6b6d75);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.turn-presentation-process .turn-presentation-tool-result,
+.turn-presentation-process .turn-presentation-tool-change-summary {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.turn-presentation-process .turn-presentation-tool-change-summary {
+  margin-top: 6px;
+}
+
+.turn-presentation-process .turn-presentation-tool-detail-label {
+  margin: 0 0 4px;
+  color: var(--turn-process-muted, #6b6d75);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.turn-presentation-process .turn-presentation-tool-command,
+.turn-presentation-process .turn-presentation-tool-output {
+  max-height: 210px;
+  overflow: auto;
+  margin: 0 0 8px;
+  padding: 8px 9px;
+  border: 1px solid var(--turn-process-line, #e1e3e7);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--turn-process-ink, #34363d);
+  font:
+    12px/1.5 ui-monospace,
+    "Cascadia Code",
+    "SFMono-Regular",
+    Consolas,
+    monospace;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.turn-presentation-process .turn-presentation-tool-output {
+  margin-bottom: 0;
+  color: #555a64;
+}
+
+.turn-presentation-process .turn-presentation-preview {
+  max-height: 210px;
+  margin-top: 7px;
+  background: #fff;
+  color: #555a64;
+  font-size: 12px;
+}
+
+.turn-presentation-process .turn-presentation-tool-effects {
+  margin: 6px 0 0;
+  color: var(--turn-process-muted, #6b6d75);
+  font-size: 12px;
+}
+
+.turn-presentation-process .turn-presentation-tool-effect {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  white-space: normal;
+}
+
+.turn-presentation-process .turn-presentation-tool-effect-kind {
+  color: var(--turn-process-subtle, #888b94);
+}
+
+.turn-presentation-process .turn-presentation-tool-effect-additions {
+  color: #16804a;
+}
+
+.turn-presentation-process .turn-presentation-tool-effect-deletions {
+  color: #bf3c44;
+}
+
+.turn-presentation-process .turn-presentation-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 7px 0 0;
+}
+
+.turn-presentation-process .turn-presentation-facts > div {
+  display: flex;
+  gap: 4px;
+}
+
+.turn-presentation-process .turn-presentation-facts dt,
+.turn-presentation-process .turn-presentation-facts dd {
+  margin: 0;
+}
+
+.turn-presentation-process .turn-presentation-facts dt {
+  color: var(--turn-process-subtle, #888b94);
+}
+
+@keyframes turn-presentation-active-dot {
+  50% {
+    opacity: 0.38;
+  }
+}
+
+@media (hover: none) {
+  .turn-presentation-process .turn-presentation-tool-chevron {
+    opacity: 0.6;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turn-presentation-process .turn-presentation-tool-active {
+    animation: none;
+  }
+
+  .turn-presentation-process .turn-presentation-tool-chevron {
+    transition: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .turn-presentation-process .turn-presentation-body {
+    gap: 10px;
+    padding-top: 10px;
+  }
+
+  .turn-presentation-process .turn-presentation-tool-row {
+    gap: 6px;
+  }
+
+  .turn-presentation-process .turn-presentation-tool-action,
+  .turn-presentation-process .turn-presentation-tool-subject {
+    font-size: 13px;
+  }
+
+  .turn-presentation-process .turn-presentation-tool-details-content {
+    margin-left: 20px;
+    padding: 8px;
+  }
+}

@@ -293,6 +293,7 @@ export class SessionPresentationService {
       title: result === undefined ? invocationPresentation.title : resultPresentation.title,
       summary: result === undefined ? invocationPresentation.summary : resultPresentation.summary,
       facts: [
+        { key: "调用", value: invocationPresentation.summary.slice(0, 512) },
         { key: "状态", value: translateToolStatus(invocation.status) },
         { key: "风险", value: translateRisk(invocation.riskLevel) },
       ],

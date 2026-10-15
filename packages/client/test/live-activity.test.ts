@@ -48,6 +48,42 @@ function transient(
 }
 
 describe("LiveActivity projection", () => {
+  it("retains the safe invocation summary after live Tool text changes to its result", () => {
+    let state = reduceLiveActivityEvent(
+      createInitialLiveActivityState(runId),
+      durableEvent(
+        "tool.requested",
+        { invocationId, toolName: "exec_command", riskLevel: "LOW" },
+        1,
+        100,
+        { title: "执行命令", summary: "npm run dev" },
+      ),
+    );
+    state = reduceLiveActivityEvent(
+      state,
+      durableEvent("tool.started", { invocationId, toolName: "exec_command" }, 2, 101, {
+        title: "执行命令",
+        summary: "npm run dev",
+      }),
+    );
+    state = reduceLiveActivityEvent(
+      state,
+      durableEvent(
+        "tool.completed",
+        { invocationId, observationId: "obs_0195f3a0-0000-7000-8000-000000000000" },
+        3,
+        102,
+        { title: "执行命令", summary: "进程仍在运行" },
+      ),
+    );
+
+    expect(state.activities[0]).toMatchObject({
+      invocation: "npm run dev",
+      text: "进程仍在运行",
+      toolPhase: "COMPLETED",
+    });
+  });
+
   it("reconciles durable Tool lifecycle events into one invocation-scoped activity", () => {
     let state = reduceLiveActivityEvent(
       createInitialLiveActivityState(runId),
@@ -753,6 +789,7 @@ function durableEvent(
   payload: Record<string, unknown>,
   sequence: number,
   timestamp = 100,
+  presentation?: { readonly title: string; readonly summary: string },
 ) {
   return PublicRunEventSchema.parse({
     eventId: createEventId(),
@@ -765,6 +802,7 @@ function durableEvent(
     type.startsWith("transport.")
       ? { stepId }
       : {}),
+    ...presentation,
     timestamp,
     visibility: "USER_VISIBLE",
     durability: { kind: "DURABLE", version: 1, sequence },

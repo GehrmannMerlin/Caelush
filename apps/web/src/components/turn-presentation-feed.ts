@@ -30,6 +30,7 @@ import {
   CircleX,
   LoaderCircle,
 } from "lucide-react";
+import { toolPresentationCategory } from "@caelush/protocol";
 import caelushLogo from "../assets/logo/caelush-logo.png";
 import {
   browserFrameScheduler,
@@ -38,6 +39,7 @@ import {
 } from "../application/frame-publication-scheduler.js";
 import { projectTurnPresentation } from "../application/turn-presentation-view-model.js";
 import { ModelWaitNotice, usePresentationNow } from "./model-wait-presentation.js";
+import { LiveOutputEntry, ToolActivityEntry } from "./tool-activity-entry.js";
 
 const AssistantMarkdown = lazy(async () => {
   const module = await import("./assistant-markdown.js");
@@ -362,22 +364,39 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
         : [],
     ),
   );
-  const processActivities = liveActivities.filter(
-    (activity) =>
-      activity.kind !== "MODEL_TEXT" &&
-      !(
-        activity.kind === "TOOL_ACTIVITY" &&
-        activity.toolInvocationId !== undefined &&
-        presentationItems.some(
-          (item) =>
-            item.kind === "TOOL" &&
-            item.toolInvocationId === activity.toolInvocationId &&
-            item.runId === activity.runId &&
-            (activity.conversationTurnId === undefined ||
-              item.conversationTurnId === activity.conversationTurnId),
-        )
-      ),
-  );
+  const processActivities = liveActivities.filter((activity) => {
+    if (activity.kind === "MODEL_TEXT" || activity.kind === "TOOL_OUTPUT") return false;
+    if (
+      activity.kind === "TOOL_ACTIVITY" &&
+      activity.toolInvocationId !== undefined &&
+      presentationItems.some(
+        (item) =>
+          item.kind === "TOOL" &&
+          item.toolInvocationId === activity.toolInvocationId &&
+          item.runId === activity.runId &&
+          (activity.conversationTurnId === undefined ||
+            item.conversationTurnId === activity.conversationTurnId),
+      )
+    ) {
+      return false;
+    }
+    if (activity.kind !== "SHELL_OUTPUT" || activity.invocationId === undefined) return true;
+    const durableToolAlreadyProjected = presentationItems.some(
+      (item) =>
+        item.kind === "TOOL" &&
+        item.runId === activity.runId &&
+        item.toolInvocationId === activity.invocationId &&
+        (activity.conversationTurnId === undefined ||
+          item.conversationTurnId === activity.conversationTurnId),
+    );
+    const liveCommandIsVisible = liveActivities.some(
+      (candidate) =>
+        candidate.kind === "TOOL_ACTIVITY" &&
+        candidate.toolName === "exec_command" &&
+        candidate.toolInvocationId === activity.invocationId,
+    );
+    return !durableToolAlreadyProjected && !liveCommandIsVisible;
+  });
   const finalAnswers =
     viewModel?.finalAnswerItems ??
     durableAssistantItems.filter(
@@ -556,53 +575,58 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
                       : { "data-conversation-turn-id": props.conversationTurnId }),
                   },
                   processActivities.map((activity) =>
-                    createElement(
-                      "div",
-                      {
-                        className: `turn-presentation-live-item turn-presentation-live-item--${activity.status.toLowerCase()}`,
-                        key: activity.id,
-                        ...(activity.kind === "TOOL_ACTIVITY"
-                          ? { "data-tool-category": activity.category }
-                          : {}),
-                        ...(activity.kind === "TOOL_ACTIVITY" &&
-                        activity.toolInvocationId !== undefined
-                          ? { "data-tool-invocation-id": activity.toolInvocationId }
-                          : {}),
-                        title: activity.text,
-                        ...(activity.conversationTurnId === undefined
-                          ? {}
-                          : { "data-conversation-turn-id": activity.conversationTurnId }),
-                      },
-                      createElement(
-                        "span",
-                        {
-                          className: "turn-presentation-live-mark",
-                          "aria-label": `状态：${liveActivityStatusLabel(activity.status)}`,
-                        },
-                        renderLiveActivityStatusIcon(activity.status),
-                      ),
-                      createElement("span", null, liveActivityText(activity)),
-                      activity.kind === "TOOL_ACTIVITY" && activity.effects !== undefined
-                        ? createElement(
-                            "ul",
+                    activity.kind === "TOOL_ACTIVITY" || activity.kind === "TOOL_PREPARATION"
+                      ? createElement(ToolActivityEntry, {
+                          key: activity.id,
+                          id: activity.id,
+                          toolName: activity.toolName ?? "unknown_tool",
+                          category:
+                            activity.category ??
+                            toolPresentationCategory(activity.toolName ?? "unknown_tool"),
+                          status: activity.status === "ACTIVE" ? "STREAMING" : activity.status,
+                          ...("toolPhase" in activity ? { phase: activity.toolPhase } : {}),
+                          title: activity.title ?? toolCategoryTitle(activity.category),
+                          summary: activity.text,
+                          invocation:
+                            activity.kind === "TOOL_ACTIVITY" ? activity.invocation : undefined,
+                          facts: [],
+                          effects: activity.effects ?? [],
+                          ...liveToolOutputPreview(activity, liveActivities),
+                          toolInvocationId: activity.toolInvocationId,
+                          conversationTurnId: activity.conversationTurnId,
+                          live: true,
+                        })
+                      : activity.kind === "SHELL_OUTPUT" || activity.kind === "PROCESS_OUTPUT"
+                        ? createElement(LiveOutputEntry, {
+                            key: activity.id,
+                            id: activity.id,
+                            kind: activity.kind,
+                            status: activity.status,
+                            text: activity.text,
+                            conversationTurnId: activity.conversationTurnId,
+                          })
+                        : createElement(
+                            "div",
                             {
-                              className: "turn-presentation-tool-effects",
-                              "aria-label": "文件变化",
+                              className: `turn-presentation-live-item turn-presentation-live-item--${activity.status.toLowerCase()}`,
+                              key: activity.id,
+                              title: activity.text,
+                              ...(activity.conversationTurnId === undefined
+                                ? {}
+                                : {
+                                    "data-conversation-turn-id": activity.conversationTurnId,
+                                  }),
                             },
-                            activity.effects.map((effect, index) =>
-                              createElement(
-                                "li",
-                                {
-                                  key: `${activity.id}:effect:${index}`,
-                                  className: "turn-presentation-tool-effect",
-                                  title: formatToolEffect(effect),
-                                },
-                                renderToolEffect(effect),
-                              ),
+                            createElement(
+                              "span",
+                              {
+                                className: "turn-presentation-live-mark",
+                                "aria-label": `状态：${liveActivityStatusLabel(activity.status)}`,
+                              },
+                              renderLiveActivityStatusIcon(activity.status),
                             ),
-                          )
-                        : null,
-                    ),
+                            createElement("span", null, liveActivityText(activity)),
+                          ),
                   ),
                 ),
             createElement(ModelWaitNotice, {
@@ -682,78 +706,22 @@ function renderItem(
     case "TOOL": {
       const effects = "effects" in item ? item.effects : [];
       const category = "category" in item ? item.category : undefined;
-      return createElement(
-        "article",
-        {
-          className: `turn-presentation-item turn-presentation-item--tool turn-presentation-item--${item.status.toLowerCase()}`,
-          key: item.id,
-          ...(category === undefined ? {} : { "data-tool-category": category }),
-          "data-tool-invocation-id": item.toolInvocationId,
-        },
-        createElement(
-          "span",
-          { className: "turn-presentation-mark", "aria-hidden": true },
-          renderPresentationStatusIcon(item.status),
-        ),
-        createElement(
-          "div",
-          { className: "turn-presentation-item-main" },
-          createElement(
-            "p",
-            { className: "turn-presentation-item-label" },
-            "phase" in item ? durableToolTitle(item.title, item.phase) : item.title,
-          ),
-          createElement("p", { className: "turn-presentation-item-text" }, item.summary),
-          effects.length === 0
-            ? null
-            : createElement(
-                "ul",
-                { className: "turn-presentation-tool-effects", "aria-label": "文件变化" },
-                effects.map((effect, index) =>
-                  createElement(
-                    "li",
-                    {
-                      key: `${item.id}:effect:${index}`,
-                      title: formatToolEffect(effect),
-                      className: "turn-presentation-tool-effect",
-                    },
-                    renderToolEffect(effect),
-                  ),
-                ),
-              ),
-          item.facts.length === 0 && item.preview === undefined
-            ? null
-            : createElement(
-                "details",
-                { className: "turn-presentation-tool-details" },
-                createElement("summary", null, "查看工具详情"),
-                createElement(
-                  "div",
-                  { className: "turn-presentation-tool-details-content" },
-                  item.facts.length === 0
-                    ? null
-                    : createElement(
-                        "div",
-                        { className: "turn-presentation-facts" },
-                        item.facts.map((fact) =>
-                          createElement(
-                            "span",
-                            { key: `${item.id}:${fact.key}` },
-                            `${fact.key}：${fact.value}`,
-                          ),
-                        ),
-                      ),
-                  item.preview === undefined
-                    ? null
-                    : createElement(
-                        "pre",
-                        { className: "turn-presentation-preview" },
-                        item.preview,
-                      ),
-                ),
-              ),
-        ),
-      );
+      return createElement(ToolActivityEntry, {
+        id: item.id,
+        key: item.id,
+        toolName: item.toolName,
+        ...(category === undefined ? {} : { category }),
+        status: item.status,
+        ...("phase" in item ? { phase: item.phase } : {}),
+        title: item.title,
+        summary: item.summary,
+        invocation: item.facts.find((fact) => fact.key === "调用")?.value,
+        facts: item.facts,
+        effects,
+        ...("preview" in item && item.preview !== undefined ? { preview: item.preview } : {}),
+        toolInvocationId: item.toolInvocationId,
+        conversationTurnId: item.conversationTurnId,
+      });
     }
     case "VERIFICATION":
       return createElement(
@@ -818,6 +786,44 @@ function assistantLabel(phase: "COMMENTARY" | "FINAL_ANSWER" | "UNKNOWN"): strin
   }
 }
 
+function liveToolOutputPreview(
+  activity: LiveActivity,
+  activities: readonly LiveActivity[],
+): { readonly preview?: string } {
+  if (
+    activity.kind !== "TOOL_ACTIVITY" ||
+    activity.toolName !== "exec_command" ||
+    activity.toolInvocationId === undefined
+  ) {
+    return {};
+  }
+  const outputs = activities
+    .filter(
+      (candidate) =>
+        candidate.kind === "SHELL_OUTPUT" && candidate.invocationId === activity.toolInvocationId,
+    )
+    .slice()
+    .sort((left, right) => left.id.localeCompare(right.id));
+  if (outputs.length === 0) return {};
+  const text = outputs
+    .map((output) => {
+      const stream = output.id.endsWith(":stderr") ? "stderr" : "stdout";
+      return `[${stream}]\n${output.text}`;
+    })
+    .join("\n");
+  return { preview: boundLiveOutputPreview(text) };
+}
+
+function boundLiveOutputPreview(text: string): string {
+  const maxCodeUnits = 8 * 1024;
+  let bounded = "";
+  for (const character of text) {
+    if (bounded.length + character.length > maxCodeUnits) break;
+    bounded += character;
+  }
+  return bounded.length === text.length ? bounded : `${bounded}\n[输出已截断]`;
+}
+
 function liveActivityLabel(activity: LiveActivity): string {
   if (activity.kind === "TOOL_ACTIVITY") {
     const title = activity.title ?? toolCategoryTitle(activity.category);
@@ -877,97 +883,6 @@ function toolCategoryTitle(category: LiveActivity["category"]): string {
     default:
       return "使用工具";
   }
-}
-
-function durableToolTitle(
-  title: string,
-  phase: import("@caelush/protocol").ToolPresentationPhase,
-): string {
-  switch (phase) {
-    case "REQUESTED":
-      return `正在调用${title}`;
-    case "WAITING_APPROVAL":
-      return `等待批准：${title}`;
-    case "RUNNING":
-      return `正在${title}`;
-    case "COMPLETED":
-    case "FAILED":
-    case "CANCELLED":
-      return title;
-  }
-}
-
-interface ToolEffectPresentation {
-  readonly path: string;
-  readonly changeLabel: string;
-  readonly additions?: number;
-  readonly deletions?: number;
-}
-
-function toolEffectPresentation(
-  effect: import("@caelush/protocol").ToolPresentationEffect,
-): ToolEffectPresentation | undefined {
-  if (effect.type !== "FILE_CHANGE") return undefined;
-  const changeLabel =
-    effect.changeType === "CREATED"
-      ? "新建"
-      : effect.changeType === "MODIFIED"
-        ? "修改"
-        : effect.changeType === "DELETED"
-          ? "删除"
-          : "移动";
-  const path =
-    effect.changeType === "MOVED" && effect.fromPath !== undefined
-      ? `${effect.fromPath} → ${effect.path}`
-      : effect.path;
-  return {
-    path,
-    changeLabel,
-    ...(effect.additions === undefined || effect.additions === 0
-      ? {}
-      : { additions: effect.additions }),
-    ...(effect.deletions === undefined || effect.deletions === 0
-      ? {}
-      : { deletions: effect.deletions }),
-  };
-}
-
-function formatToolEffect(effect: import("@caelush/protocol").ToolPresentationEffect): string {
-  const presentation = toolEffectPresentation(effect);
-  if (presentation === undefined) return "";
-  const counts = [
-    presentation.additions === undefined ? undefined : `+${presentation.additions}`,
-    presentation.deletions === undefined ? undefined : `-${presentation.deletions}`,
-  ]
-    .filter((value): value is string => value !== undefined)
-    .join(" ");
-  return `${presentation.path}　${presentation.changeLabel}${counts.length === 0 ? "" : `　${counts}`}`;
-}
-
-function renderToolEffect(
-  effect: import("@caelush/protocol").ToolPresentationEffect,
-): ReactElement | null {
-  const presentation = toolEffectPresentation(effect);
-  if (presentation === undefined) return null;
-  return createElement(
-    "span",
-    { className: "turn-presentation-tool-effect-content" },
-    `${presentation.path}　${presentation.changeLabel}`,
-    presentation.additions === undefined
-      ? null
-      : createElement(
-          "span",
-          { className: "turn-presentation-tool-effect-additions" },
-          `　+${presentation.additions}`,
-        ),
-    presentation.deletions === undefined
-      ? null
-      : createElement(
-          "span",
-          { className: "turn-presentation-tool-effect-deletions" },
-          `${presentation.additions === undefined ? "　" : " "}-${presentation.deletions}`,
-        ),
-  );
 }
 
 function liveActivityStatusLabel(

@@ -280,7 +280,7 @@ describe("SessionConversation V3 rendering", () => {
     const turnThreeStart = html.indexOf('data-conversation-turn-id="turn-three"');
     expect(turnOneMarkup).not.toContain("turn-presentation-live-item");
     expect(turnTwoMarkup).not.toContain("turn-presentation-live-item");
-    expect(html.slice(turnThreeStart)).toContain("turn-presentation-live-item");
+    expect(html.slice(turnThreeStart)).toContain("turn-presentation-tool-entry--live");
     expect(html.slice(turnThreeStart)).toContain("正在编辑文件");
     expect(html.slice(turnThreeStart)).toContain("正在等待模型响应");
     expect(html.lastIndexOf("prompt-composer")).toBeGreaterThan(finalTwo);

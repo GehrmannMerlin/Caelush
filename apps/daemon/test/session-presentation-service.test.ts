@@ -235,6 +235,7 @@ describe("SessionPresentationService", () => {
       category: "READ",
       phase: "COMPLETED",
       effects: [],
+      facts: expect.arrayContaining([{ key: "调用", value: "读取 src/index.ts" }]),
     });
     expect(tool.preview).toBe("安全预览");
     expect(JSON.stringify(tool)).not.toContain("must-not-leak");

@@ -51,6 +51,8 @@ export interface LiveActivity {
   readonly category?: ToolPresentationCategory;
   readonly toolPhase?: ToolPresentationPhase;
   readonly title?: string;
+  /** Safe, bounded ToolPresentationPort summary captured before lifecycle text becomes a result. */
+  readonly invocation?: string;
   readonly approvalId?: string;
   readonly processId?: string;
   readonly effects?: readonly ToolPresentationEffect[];
@@ -255,6 +257,7 @@ function projectToolLifecycleEvent(
           category: toolPresentationCategory(event.payload.toolName),
           toolPhase: "REQUESTED",
           title: event.title ?? toolTitle(event.payload.toolName),
+          ...(event.summary === undefined ? {} : { invocation: event.summary }),
           text: event.summary ?? "正在请求工具执行",
           status: "ACTIVE",
           streamKey: `durable:${event.runId}`,
@@ -289,6 +292,7 @@ function projectToolLifecycleEvent(
       );
       const toolName = event.payload.toolName ?? existing?.toolName;
       if (toolName === undefined) return activities;
+      const invocation = event.summary ?? existing?.invocation;
       return upsertToolActivity(activities, {
         ...existing,
         id: `tool-activity:${event.payload.invocationId}`,
@@ -298,6 +302,7 @@ function projectToolLifecycleEvent(
         category: toolPresentationCategory(toolName),
         toolPhase: "RUNNING",
         title: event.title ?? existing?.title ?? toolTitle(toolName),
+        ...(invocation === undefined ? {} : { invocation }),
         text: event.summary ?? existing?.text ?? "工具正在运行",
         status: "ACTIVE",
         streamKey: existing?.streamKey ?? `durable:${event.runId}`,

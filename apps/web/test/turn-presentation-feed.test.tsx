@@ -86,6 +86,7 @@ function presentation(): SessionTurnPresentationResponse {
         facts: [
           { key: "状态", value: "已完成" },
           { key: "风险", value: "低风险" },
+          { key: "调用", value: "读取 src/index.ts" },
         ],
         preview: "安全预览",
       },
@@ -116,6 +117,237 @@ function presentation(): SessionTurnPresentationResponse {
 }
 
 describe("TurnPresentationFeed", () => {
+  it("renders a semantic tool row and keeps its safe invocation in collapsed details", () => {
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed presentation={presentation()} isActive={false} />,
+    );
+    const toolRow = html.match(/<details class="turn-presentation-tool-entry[^>]*>/u)?.[0] ?? "";
+
+    expect(html).toContain('data-tool-name="read_file"');
+    expect(html).toContain("lucide-file-text");
+    expect(html).toContain("已读取");
+    expect(html).toContain("src/index.ts");
+    expect(html).not.toContain("查看工具详情");
+    expect(toolRow).not.toContain(" open");
+    expect(html).toContain('aria-label="查看已读取详情"');
+    expect(html).toContain("安全预览");
+  });
+
+  it("uses a stable semantic icon for every built-in Coding Tool", () => {
+    const tools = [
+      ["read_file", "READ", "lucide-file-text"],
+      ["list_directory", "SEARCH", "lucide-folder-open"],
+      ["find_files", "SEARCH", "lucide-file-search"],
+      ["search_text", "SEARCH", "lucide-search"],
+      ["apply_patch", "EDIT", "lucide-pencil"],
+      ["exec_command", "COMMAND", "lucide-square-terminal"],
+      ["write_stdin", "PROCESS", "lucide-terminal"],
+      ["stop_process", "PROCESS", "lucide-circle-stop"],
+      ["git_status", "GIT", "lucide-git-branch"],
+      ["git_diff", "GIT", "lucide-git-compare-arrows"],
+    ] as const;
+    const html = renderToStaticMarkup(
+      <SessionConversation
+        presentation={{
+          capabilityVersion: 3,
+          turns: [
+            {
+              runId,
+              conversationTurnId: "turn-builtins",
+              runStatus: "COMPLETED",
+              openedAt: 1,
+              highWatermark: tools.length,
+              items: tools.map(([toolName, category], ordinal) => ({
+                id: `${toolName}:presentation`,
+                runId,
+                conversationTurnId: "turn-builtins",
+                ordinal,
+                status: "COMPLETED" as const,
+                createdAt: ordinal + 1,
+                kind: "TOOL" as const,
+                toolInvocationId: createToolInvocationId(),
+                toolName,
+                category,
+                phase: "COMPLETED" as const,
+                title: toolName,
+                summary: "工具结果",
+                facts: [{ key: "调用", value: "安全摘要" }],
+                effects: [],
+              })),
+            },
+          ],
+        }}
+      />,
+    );
+
+    for (const [, , icon] of tools) expect(html).toContain(icon);
+  });
+
+  it("renders an edit icon, changed file and line counts together", () => {
+    const html = renderToStaticMarkup(
+      <SessionConversation
+        presentation={{
+          capabilityVersion: 3,
+          turns: [
+            {
+              runId,
+              conversationTurnId: "turn-edit",
+              runStatus: "COMPLETED",
+              openedAt: 1,
+              highWatermark: 1,
+              items: [
+                {
+                  id: "edit:presentation",
+                  runId,
+                  conversationTurnId: "turn-edit",
+                  ordinal: 0,
+                  status: "COMPLETED",
+                  createdAt: 1,
+                  kind: "TOOL",
+                  toolInvocationId,
+                  toolName: "apply_patch",
+                  category: "EDIT",
+                  phase: "COMPLETED",
+                  title: "编辑文件",
+                  summary: "补丁已应用（修改 1 个文件）",
+                  facts: [{ key: "调用", value: "应用已验证的工作区补丁" }],
+                  effects: [
+                    {
+                      type: "FILE_CHANGE",
+                      path: "src/assistant.ts",
+                      changeType: "MODIFIED",
+                      additions: 7,
+                      deletions: 1,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(html).toContain("lucide-pencil");
+    expect(html).toContain("已编辑");
+    expect(html).toContain("src/assistant.ts");
+    expect(html).toContain("+7");
+    expect(html).toContain("-1");
+    expect(html).not.toContain("lucide-circle-check");
+    expect(html).toContain("补丁已应用（修改 1 个文件）");
+  });
+
+  it("uses a terminal icon for a running command and exposes the command only in its disclosure", () => {
+    const html = renderToStaticMarkup(
+      <SessionConversation
+        presentation={{
+          capabilityVersion: 3,
+          turns: [
+            {
+              runId,
+              conversationTurnId: "turn-command",
+              runStatus: "COMPLETED",
+              openedAt: 1,
+              highWatermark: 1,
+              items: [
+                {
+                  id: "command:presentation",
+                  runId,
+                  conversationTurnId: "turn-command",
+                  ordinal: 0,
+                  status: "COMPLETED",
+                  createdAt: 1,
+                  kind: "TOOL",
+                  toolInvocationId,
+                  toolName: "exec_command",
+                  category: "COMMAND",
+                  phase: "COMPLETED",
+                  title: "执行命令",
+                  summary: "进程已退出（退出码 0）",
+                  facts: [
+                    { key: "调用", value: "pnpm build" },
+                    { key: "状态", value: "已完成" },
+                  ],
+                  effects: [],
+                  preview: "All matched files use Prettier code style!",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+    const toolRow = html.match(/<details class="turn-presentation-tool-entry[^>]*>/u)?.[0] ?? "";
+
+    expect(html).toContain("lucide-square-terminal");
+    expect(html).toContain("已运行");
+    expect(html).toContain("Shell");
+    expect(html).toContain("pnpm build");
+    expect(html).toContain("All matched files use Prettier code style!");
+    expect(html).toContain('class="turn-presentation-tool-output"');
+    expect(toolRow).not.toContain(" open");
+  });
+
+  it("keeps the command and folds streamed output into its live tool disclosure", () => {
+    const initial = createInitialLiveActivityState(runId);
+    const html = renderToStaticMarkup(
+      <SessionConversation
+        presentation={{
+          capabilityVersion: 3,
+          turns: [
+            {
+              runId,
+              conversationTurnId: "turn-live-command",
+              runStatus: "RUNNING",
+              openedAt: 1,
+              highWatermark: 0,
+              items: [],
+            },
+          ],
+        }}
+        activeRun={{ id: runId, status: "RUNNING" }}
+        liveActivity={{
+          ...initial,
+          activities: [
+            {
+              id: `tool-activity:${toolInvocationId}`,
+              kind: "TOOL_ACTIVITY",
+              status: "COMPLETED",
+              toolPhase: "COMPLETED",
+              toolInvocationId,
+              toolName: "exec_command",
+              category: "COMMAND",
+              title: "执行命令",
+              invocation: "npm run dev",
+              text: "进程仍在运行",
+              streamKey: "durable:run",
+              streamSequence: 0,
+              runId,
+            },
+            {
+              id: "tool-output:command:stdout",
+              kind: "SHELL_OUTPUT",
+              status: "COMPLETED",
+              invocationId: toolInvocationId,
+              text: "VITE ready at http://localhost:5173",
+              streamKey: "shell:command:stdout",
+              streamSequence: 1,
+              runId,
+            },
+          ],
+        }}
+      />,
+    );
+    const toolRow =
+      html.match(/<details class="turn-presentation-tool-entry[^>]*>[\s\S]*?<\/details>/u)?.[0] ??
+      "";
+
+    expect(toolRow).toContain("npm run dev");
+    expect(toolRow).toContain("VITE ready at http://localhost:5173");
+    expect(toolRow).toContain("进程仍在运行");
+    expect(html).not.toContain("turn-presentation-output-entry");
+  });
+
   it("renders a live non-streaming Tool as an invocation activity and durable file effects", () => {
     const liveActivity = {
       ...createInitialLiveActivityState(runId),
@@ -304,8 +536,9 @@ describe("TurnPresentationFeed", () => {
       />,
     );
 
-    expect(html).toContain("正在准备编辑文件");
-    expect(html).toContain('title="正在准备编辑文件"');
+    expect(html).toContain('data-tool-name="apply_patch"');
+    expect(html).toContain("lucide-pencil");
+    expect(html).toContain("正在编辑文件");
     expect(html).not.toContain("*** Begin Patch");
     expect(html).not.toContain("secret-value-123");
     expect(html).not.toContain("apiKey");
@@ -730,15 +963,16 @@ describe("TurnPresentationFeed", () => {
     }
   });
 
-  it("uses the open-source circular success icon for completed durable Tool rows", () => {
+  it("keeps the Tool's semantic icon after a completed durable invocation", () => {
     const html = renderToStaticMarkup(
       <TurnPresentationFeed presentation={presentation()} isActive={false} />,
     );
+    const toolRow =
+      html.match(/<details class="turn-presentation-tool-entry[^>]*>[\s\S]*?<\/details>/u)?.[0] ??
+      "";
 
-    expect(html).toContain("lucide-circle-check");
-    expect(html).not.toContain(
-      'turn-presentation-item--completed"><span class="turn-presentation-mark"><svg class="lucide lucide-check',
-    );
+    expect(toolRow).toContain("lucide-file-text");
+    expect(toolRow).not.toContain("lucide-circle-check");
   });
 
   it("spins only active live rows and renders explicit completed, failed, and cancelled outcomes", () => {
@@ -796,12 +1030,16 @@ describe("TurnPresentationFeed", () => {
 
     expect(html.match(/turn-presentation-spinner/g)).toBeNull();
     expect(html).not.toContain('aria-label="状态：进行中"');
-    expect(html).toContain('aria-label="状态：已完成"');
-    expect(html).toContain('aria-label="状态：失败"');
-    expect(html).toContain('aria-label="状态：已取消"');
-    expect(html).toContain("lucide-circle-check");
-    expect(html).toContain("lucide-circle-x");
-    expect(html).toContain("lucide-circle-minus");
+    expect(html).toContain(
+      'class="turn-presentation-tool-entry turn-presentation-tool-entry--completed',
+    );
+    expect(html).toContain('data-output-kind="PROCESS_OUTPUT"');
+    expect(html).toContain(
+      "turn-presentation-output-entry turn-presentation-tool-entry--cancelled",
+    );
+    expect(html).toContain("lucide-terminal");
+    expect(html).toContain("用户取消");
+    expect(html).not.toContain("执行失败");
   });
 
   it("renders active and completed model text in the process disclosure alongside other live activity", () => {
