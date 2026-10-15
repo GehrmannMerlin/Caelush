@@ -14,13 +14,13 @@ async function readJson(url: URL) {
 }
 
 describe("Cloud OpenAPI v1 contract guard", () => {
-  it("validates the contract-first API and all thirteen required operations", async () => {
+  it("validates the reviewed Cloud API and all seventeen required operations", async () => {
     const document = JSON.parse(await readFile(DEFAULT_CLOUD_OPENAPI_PATH, "utf8")) as Record<
       string,
       unknown
     >;
     expect(validateCloudOpenApi(document)).toEqual([]);
-    expect(Object.keys(REQUIRED_CLOUD_OPERATIONS)).toHaveLength(13);
+    expect(Object.values(REQUIRED_CLOUD_OPERATIONS).flat()).toHaveLength(17);
   });
 
   it("marks Cloud tokens for trusted Main custody without misusing writeOnly", async () => {

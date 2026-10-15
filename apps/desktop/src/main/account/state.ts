@@ -30,6 +30,26 @@ export const SafeAccountSchema = z
 export const SafeDeviceSchema = DeviceViewSchema;
 export const SafeDeviceListItemSchema = DeviceViewSchema;
 
+export const DesktopAccountProfileSchema = z
+  .object({
+    email: z.email().max(320),
+    emailVerified: z.boolean(),
+    displayName: z
+      .string()
+      .min(1)
+      .max(64)
+      .refine((value) => Array.from(value).length <= 32)
+      .refine((value) => !/[\p{Cc}\p{Cs}\u2028\u2029]/u.test(value)),
+    avatarRevision: z.string().min(1).max(64).nullable(),
+    avatarBytes: z
+      .custom<Uint8Array<ArrayBufferLike>>((value) => value instanceof Uint8Array)
+      .refine((value) => value.byteLength <= 1024 * 1024)
+      .nullable(),
+    updatedAt: z.string().datetime({ offset: true }).nullable(),
+    canEdit: z.boolean(),
+  })
+  .strict();
+
 export const AccountStateSchema = z
   .object({
     status: AccountStatusSchema,
@@ -71,6 +91,7 @@ export const AccountStateSchema = z
 export type AccountStatus = z.infer<typeof AccountStatusSchema>;
 export type SafeAccount = z.infer<typeof SafeAccountSchema>;
 export type SafeDevice = z.infer<typeof SafeDeviceSchema>;
+export type DesktopAccountProfile = z.infer<typeof DesktopAccountProfileSchema>;
 export type AccountState = z.infer<typeof AccountStateSchema>;
 
 export function createInitialAccountState(status: AccountStatus = "INITIALIZING"): AccountState {

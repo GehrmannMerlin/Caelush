@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   AcceptedResponseSchema,
+  AccountProfileResponseSchema,
+  AccountProfileUpdateInputSchema,
   AccountResponseSchema,
   ApiErrorResponseSchema,
   AuthResultSchema,
@@ -14,6 +16,8 @@ import {
   ResetPasswordRequestSchema,
   VerifyEmailRequestSchema,
   type AcceptedResponse,
+  type AccountProfile,
+  type AccountProfileUpdateInput,
   type AccountView,
   type AuthResult,
   type ChangePasswordRequest,
@@ -29,6 +33,8 @@ import {
 } from "./schemas.js";
 
 const MAX_RESPONSE_BYTES = 256 * 1024;
+const MAX_AVATAR_RESPONSE_BYTES = 1024 * 1024;
+const MAX_AVATAR_REQUEST_BYTES = 5 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 12_000;
 
 export type CloudFailureCode =
@@ -171,6 +177,150 @@ export class CloudAccountClient {
     return value.account;
   }
 
+  async getAccountProfile(accessToken: string, signal: AbortSignal): Promise<AccountProfile> {
+    const value = await this.request("GET", "/account/me/profile", AccountProfileResponseSchema, {
+      bearer: accessToken,
+      signal,
+      expectedStatus: 200,
+    });
+    return value.profile;
+  }
+
+  async updateAccountProfile(
+    input: AccountProfileUpdateInput,
+    accessToken: string,
+    signal: AbortSignal,
+  ): Promise<AccountProfile> {
+    const validated = validate(AccountProfileUpdateInputSchema, input);
+    const body = new FormData();
+    body.set("displayName", validated.displayName);
+    body.set("removeAvatar", String(validated.removeAvatar));
+    if (validated.avatar !== undefined) {
+      if (validated.avatar.bytes.byteLength > MAX_AVATAR_REQUEST_BYTES) {
+        throw new CloudClientError("REQUEST_INVALID", "The avatar file exceeds 5 MiB.");
+      }
+      body.set(
+        "avatar",
+        new Blob([validated.avatar.bytes.slice().buffer as ArrayBuffer], {
+          type: validated.avatar.contentType,
+        }),
+        "avatar",
+      );
+      body.set("cropX", String(validated.avatar.crop.x));
+      body.set("cropY", String(validated.avatar.crop.y));
+      body.set("cropWidth", String(validated.avatar.crop.width));
+      body.set("cropHeight", String(validated.avatar.crop.height));
+    }
+    const value = await this.request("PATCH", "/account/me/profile", AccountProfileResponseSchema, {
+      body,
+      bearer: accessToken,
+      signal,
+      expectedStatus: 200,
+    });
+    return value.profile;
+  }
+
+  async getAccountAvatar(
+    accessToken: string,
+    signal: AbortSignal,
+    expectedRevision?: string,
+  ): Promise<Uint8Array> {
+    if (accessToken.length < 32 || accessToken.length > 8192) {
+      throw new CloudClientError(
+        "AUTH_TOKEN_INVALID",
+        "The online session is no longer available.",
+      );
+    }
+    const url = new URL("/v1/account/me/profile/avatar", this.baseUrl);
+    const headers = new Headers({ Accept: "image/webp", Authorization: `Bearer ${accessToken}` });
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.timeoutMs);
+    const abortFromCaller = () => controller.abort();
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", abortFromCaller, { once: true });
+    let response: Response;
+    try {
+      response = await this.fetcher(url, {
+        method: "GET",
+        headers,
+        signal: controller.signal,
+        redirect: "error",
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      });
+    } catch (error) {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", abortFromCaller);
+      if (signal.aborted) throw new CloudClientError("CANCELLED", "The request was cancelled.");
+      if (timedOut || isAbortError(error)) {
+        throw new CloudClientError(
+          "NETWORK_TIMEOUT",
+          "Cloud did not respond before the request timed out.",
+          true,
+        );
+      }
+      throw new CloudClientError("NETWORK_UNAVAILABLE", "Cloud is currently unreachable.", true);
+    }
+    clearTimeout(timeout);
+    signal.removeEventListener("abort", abortFromCaller);
+    if (!response.ok) {
+      const errorText = await readBoundedText(response);
+      let value: unknown;
+      try {
+        value = parseCloudJson(errorText);
+      } catch {
+        throw new CloudClientError(
+          "CLOUD_RESPONSE_INVALID",
+          "Cloud returned an invalid error response.",
+          false,
+          response.status,
+        );
+      }
+      const parsedError = ApiErrorResponseSchema.safeParse(value);
+      if (!parsedError.success) {
+        throw new CloudClientError(
+          "CLOUD_RESPONSE_INVALID",
+          "Cloud returned an invalid error response.",
+          false,
+          response.status,
+        );
+      }
+      const { code, message, retryable } = parsedError.data.error;
+      throw new CloudClientError(code, message, retryable, response.status);
+    }
+    if (
+      response.status !== 200 ||
+      response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !==
+        "image/webp" ||
+      (expectedRevision !== undefined &&
+        response.headers.get("etag")?.replace(/^W\//u, "").replace(/^"|"$/gu, "") !==
+          expectedRevision)
+    ) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new CloudClientError(
+        "CLOUD_RESPONSE_INVALID",
+        "Cloud returned an invalid avatar response.",
+        false,
+        response.status,
+      );
+    }
+    const bytes = await readBoundedBytes(response, MAX_AVATAR_RESPONSE_BYTES);
+    if (!isWebp(bytes)) {
+      throw new CloudClientError(
+        "CLOUD_RESPONSE_INVALID",
+        "Cloud returned an invalid avatar image.",
+        false,
+        response.status,
+      );
+    }
+    return bytes;
+  }
+
   listDevices(accessToken: string, signal: AbortSignal): Promise<DeviceListResponse> {
     return this.request("GET", "/account/devices?limit=100", DeviceListResponseSchema, {
       bearer: accessToken,
@@ -200,7 +350,7 @@ export class CloudAccountClient {
   }
 
   private async request<T>(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PATCH" | "DELETE",
     path: string,
     schema: z.ZodType<T>,
     options: {
@@ -212,7 +362,9 @@ export class CloudAccountClient {
   ): Promise<T> {
     const url = new URL(`/v1${path}`, this.baseUrl);
     const headers = new Headers({ Accept: "application/json" });
-    if (options.body !== undefined) headers.set("Content-Type", "application/json");
+    if (options.body !== undefined && !(options.body instanceof FormData)) {
+      headers.set("Content-Type", "application/json");
+    }
     if (options.bearer !== undefined) {
       if (options.bearer.length < 32 || options.bearer.length > 8192) {
         throw new CloudClientError(
@@ -238,7 +390,11 @@ export class CloudAccountClient {
       response = await this.fetcher(url, {
         method,
         headers,
-        ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+        ...(options.body === undefined
+          ? {}
+          : {
+              body: options.body instanceof FormData ? options.body : JSON.stringify(options.body),
+            }),
         signal: controller.signal,
         redirect: "error",
         cache: "no-store",
@@ -406,6 +562,70 @@ async function readBoundedText(response: Response): Promise<string> {
   }
 }
 
+async function readBoundedBytes(response: Response, limit: number): Promise<Uint8Array> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > limit) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new CloudClientError(
+      "CLOUD_RESPONSE_INVALID",
+      "Cloud returned a response that exceeds its size limit.",
+      false,
+      response.status,
+    );
+  }
+  if (response.body === null) {
+    throw new CloudClientError(
+      "CLOUD_RESPONSE_INVALID",
+      "Cloud returned an empty response.",
+      false,
+      response.status,
+    );
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel().catch(() => undefined);
+        throw new CloudClientError(
+          "CLOUD_RESPONSE_INVALID",
+          "Cloud returned a response that exceeds its size limit.",
+          false,
+          response.status,
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const result = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
+function isWebp(bytes: Uint8Array): boolean {
+  return (
+    bytes.byteLength >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  );
+}
+
 function parseCloudJson(text: string): unknown {
   // Cloud DTOs use only safe integers; the strict parser also preserves duplicate-key evidence.
   return parseStrictJson(text);
@@ -415,8 +635,11 @@ function parseStrictJson(source: string): unknown {
   const length = source.length;
   let position = 0;
   const whitespace = () => {
-    while (position < length && /[\u0009\u000a\u000d\u0020]/.test(source[position] ?? ""))
+    while (position < length) {
+      const code = source.charCodeAt(position);
+      if (code !== 0x09 && code !== 0x0a && code !== 0x0d && code !== 0x20) break;
       position += 1;
+    }
   };
   const string = (): string => {
     if (source[position] !== '"') throw new Error("invalid");

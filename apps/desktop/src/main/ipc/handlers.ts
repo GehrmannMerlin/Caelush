@@ -1,13 +1,15 @@
+import { open } from "node:fs/promises";
 import { setImmediate } from "node:timers";
-import { BrowserWindow, ipcMain, type IpcMain, type IpcMainInvokeEvent } from "electron";
+import { BrowserWindow, dialog, ipcMain, type IpcMain, type IpcMainInvokeEvent } from "electron";
 import { z } from "zod";
 import { WorkspaceIdSchema } from "@caelush/protocol";
 import { AccountController, AccountOperationError } from "../account/controller.js";
-import { AccountStateSchema } from "../account/state.js";
+import { AccountStateSchema, DesktopAccountProfileSchema } from "../account/state.js";
 import type { AccountState } from "../account/state.js";
 import type { DesktopLegacyDataImporter } from "../migration/legacy-data-import.js";
 import {
   AcceptedResponseSchema,
+  AccountProfileUpdateInputSchema,
   DeviceRevocationResponseSchema,
   DeviceViewSchema,
   OperationSucceededResponseSchema,
@@ -36,6 +38,9 @@ export const IPC_CHANNELS = Object.freeze({
     refreshNow: "caelush:account:refresh-now",
     listDevices: "caelush:account:list-devices",
     revokeDevice: "caelush:account:revoke-device",
+    getProfile: "caelush:account:get-profile",
+    updateProfile: "caelush:account:update-profile",
+    selectAvatar: "caelush:account:select-avatar",
   }),
   window: Object.freeze({
     minimize: "caelush:window:minimize",
@@ -113,6 +118,15 @@ const ChangePasswordInput = z
   })
   .strict();
 const RevokeDeviceInput = z.object({ deviceId: z.uuid() }).strict();
+const SelectedAvatarSchema = z
+  .object({
+    mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]),
+    bytes: z
+      .instanceof(Uint8Array)
+      .refine((bytes) => bytes.byteLength > 0 && bytes.byteLength <= 5 * 1024 * 1024),
+  })
+  .strict();
+const AccountProfileUpdateInput = AccountProfileUpdateInputSchema;
 const AcceptedOutput = AcceptedResponseSchema;
 const SuccessOutput = OperationSucceededResponseSchema;
 const ConnectedOutput = z.object({ connected: z.literal(true) }).strict();
@@ -269,6 +283,7 @@ const SubscribedOutput = z.object({ subscribed: z.boolean() }).strict();
 const AcknowledgedOutput = z.object({ acknowledged: z.literal(true) }).strict();
 const UpdatedOutput = z.object({ updated: z.literal(true) }).strict();
 const MAX_IPC_INPUT_BYTES = 20 * 1024;
+const MAX_PROFILE_IPC_INPUT_BYTES = 5 * 1024 * 1024 + 20 * 1024;
 export const IPC_OPERATION_TIMEOUT_MS = 15_000;
 export const LEGACY_IMPORT_OPERATION_TIMEOUT_MS = 2 * 60 * 60_000;
 const PRE_AUTHENTICATED_STATES = new Set([
@@ -380,6 +395,7 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
     allowedStates?: ReadonlySet<string>,
     timeoutMs = IPC_OPERATION_TIMEOUT_MS,
     callerPolicy: IpcCallerPolicy = "LOGIN",
+    maxInputBytes = MAX_IPC_INPUT_BYTES,
   ) => {
     main.handle(channel, async (event: IpcMainInvokeEvent, rawInput: unknown) => {
       const abort = new AbortController();
@@ -407,7 +423,7 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
       }, timeoutMs);
       try {
         assertTrustedCaller(event, options.window, options.rendererTrust, callerPolicy);
-        validateInputSize(rawInput);
+        validateInputSize(rawInput, maxInputBytes);
         const input = inputSchema.safeParse(rawInput);
         if (!input.success) {
           throw new AccountOperationError(
@@ -640,6 +656,59 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
       return result;
     },
     new Set(["AUTHENTICATED_ONLINE"]),
+  );
+  register(
+    account.getProfile,
+    NoInput,
+    DesktopAccountProfileSchema,
+    (_input, signal) => options.controller.getProfile(signal),
+    AUTHORIZED_STATES,
+  );
+  register(
+    account.updateProfile,
+    AccountProfileUpdateInput,
+    DesktopAccountProfileSchema,
+    (input, signal) => options.controller.updateProfile(input, signal),
+    new Set(["AUTHENTICATED_ONLINE"]),
+    IPC_OPERATION_TIMEOUT_MS,
+    "LOGIN",
+    MAX_PROFILE_IPC_INPUT_BYTES,
+  );
+  register(
+    account.selectAvatar,
+    NoInput,
+    SelectedAvatarSchema.nullable(),
+    async () => {
+      const selected = await dialog.showOpenDialog(options.window, {
+        title: "选择头像图片",
+        properties: ["openFile"],
+        filters: [{ name: "头像图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+      });
+      if (selected.canceled || selected.filePaths[0] === undefined) return null;
+      const handle = await open(selected.filePaths[0], "r");
+      try {
+        const metadata = await handle.stat();
+        if (!metadata.isFile() || metadata.size < 1 || metadata.size > 5 * 1024 * 1024) {
+          throw new AccountOperationError(
+            "AVATAR_FILE_INVALID",
+            "头像文件必须是 5 MB 以内的 PNG、JPEG 或 WebP 图片。",
+          );
+        }
+        const bytes = new Uint8Array(await handle.readFile());
+        const mimeType = detectAvatarMimeType(bytes);
+        if (mimeType === null) {
+          throw new AccountOperationError(
+            "AVATAR_FILE_INVALID",
+            "请选择有效的 PNG、JPEG 或 WebP 图片。",
+          );
+        }
+        return { mimeType, bytes };
+      } finally {
+        await handle.close();
+      }
+    },
+    new Set(["AUTHENTICATED_ONLINE"]),
+    IPC_OPERATION_TIMEOUT_MS,
   );
 
   if (options.legacyImporter !== undefined) {
@@ -1112,18 +1181,59 @@ function isTrustedUrl(source: string, trust: DesktopRendererTrust): boolean {
   }
 }
 
-function validateInputSize(value: unknown): void {
+function validateInputSize(value: unknown, limit = MAX_IPC_INPUT_BYTES): void {
   if (value === undefined) return;
   let encoded: string;
+  let binaryBytes = 0;
   try {
-    encoded = JSON.stringify(value);
+    encoded = JSON.stringify(value, (_key, entry: unknown) => {
+      if (entry instanceof ArrayBuffer) {
+        binaryBytes += entry.byteLength;
+        return { binaryBytes: entry.byteLength };
+      }
+      if (ArrayBuffer.isView(entry)) {
+        binaryBytes += entry.byteLength;
+        return { binaryBytes: entry.byteLength };
+      }
+      return entry;
+    });
   } catch {
     throw new AccountOperationError("IPC_INPUT_INVALID", "The desktop request input is invalid.");
   }
-  if (Buffer.byteLength(encoded, "utf8") > MAX_IPC_INPUT_BYTES) {
+  if (Buffer.byteLength(encoded, "utf8") + binaryBytes > limit) {
     throw new AccountOperationError(
       "IPC_INPUT_TOO_LARGE",
       "The desktop request exceeds its size limit.",
     );
   }
+}
+
+function detectAvatarMimeType(bytes: Uint8Array): "image/png" | "image/jpeg" | "image/webp" | null {
+  if (
+    bytes.byteLength >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  )
+    return "image/png";
+  if (bytes.byteLength >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
+    return "image/jpeg";
+  if (
+    bytes.byteLength >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  )
+    return "image/webp";
+  return null;
 }

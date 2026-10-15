@@ -1,6 +1,7 @@
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { app, BrowserWindow, dialog, protocol, safeStorage, session } from "electron";
 import { AccountController } from "./account/controller.js";
+import { DesktopAccountAvatarCache } from "./account/avatar-cache.js";
 import type { AccountState } from "./account/state.js";
 import { CloudAccountClient } from "./cloud/client.js";
 import { DpapiVault } from "./credentials/vault.js";
@@ -106,6 +107,11 @@ if (!singleInstance) {
     vault,
     cloud,
     trustedOfflinePublicKeys: trustedOfflineKeys(),
+    avatarCache: new DesktopAccountAvatarCache(join(app.getPath("userData"), "account-avatars"), {
+      encrypt: async (clearText) => new Uint8Array(await safeStorage.encryptStringAsync(clearText)),
+      decrypt: async (cipherText) =>
+        (await safeStorage.decryptStringAsync(Buffer.from(cipherText))).result,
+    }),
   });
   const providerCredentialVault = new ProviderCredentialVault(vault);
   const providerCredentialMigrator = new DesktopProviderCredentialMigrator({

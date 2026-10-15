@@ -3,6 +3,8 @@ import { performance } from "node:perf_hooks";
 import { CloudClientError } from "../cloud/client.js";
 import type {
   AcceptedResponse,
+  AccountProfile,
+  AccountProfileUpdateInput,
   AccountView,
   AuthResult,
   ChangePasswordRequest,
@@ -17,6 +19,7 @@ import type {
 } from "../cloud/schemas.js";
 import {
   ACTIVE_ACCOUNT_INDEX_KEY,
+  normalizeStoredDisplayName,
   getOrCreateDeviceIdentity,
   identityFromRecord,
   parseStoredAccountRecord,
@@ -37,7 +40,14 @@ import {
   type AccountStatus,
   type SafeAccount,
   type SafeDevice,
+  type DesktopAccountProfile,
 } from "./state.js";
+
+export interface AccountAvatarCachePort {
+  read(userId: string, revision: string): Promise<Uint8Array | null>;
+  write(userId: string, revision: string, bytes: Uint8Array): Promise<void>;
+  clear(userId: string): Promise<void>;
+}
 
 export interface CloudAccountPort {
   register(input: RegisterRequest, signal: AbortSignal): Promise<AcceptedResponse>;
@@ -62,6 +72,17 @@ export interface CloudAccountPort {
     accessToken: string,
     signal: AbortSignal,
   ): Promise<DeviceRevocationResponse>;
+  getAccountProfile(accessToken: string, signal: AbortSignal): Promise<AccountProfile>;
+  updateAccountProfile(
+    input: AccountProfileUpdateInput,
+    accessToken: string,
+    signal: AbortSignal,
+  ): Promise<AccountProfile>;
+  getAccountAvatar(
+    accessToken: string,
+    signal: AbortSignal,
+    expectedRevision?: string,
+  ): Promise<Uint8Array>;
 }
 
 export interface AccountControllerOptions {
@@ -70,6 +91,7 @@ export interface AccountControllerOptions {
   readonly trustedOfflinePublicKeys: Readonly<Record<string, Uint8Array>>;
   readonly now?: () => Date;
   readonly monotonicNow?: () => number;
+  readonly avatarCache?: AccountAvatarCachePort;
 }
 
 interface OnlineSession {
@@ -185,6 +207,15 @@ export class AccountController {
           return;
         }
         const record = parseStoredAccountRecord(rawRecord);
+        if (
+          rawRecord !== null &&
+          typeof rawRecord === "object" &&
+          !Array.isArray(rawRecord) &&
+          "schemaVersion" in rawRecord &&
+          rawRecord.schemaVersion === 1
+        ) {
+          await this.options.vault.set(accountKey, record);
+        }
         const identity = identityFromRecord(record);
         this.assertBoundIdentity(record);
         this.setState(this.accountState("REFRESHING", record, null));
@@ -472,6 +503,166 @@ export class AccountController {
         throw toOperationError(error);
       }
     });
+  }
+
+  getProfile(signal: AbortSignal): Promise<DesktopAccountProfile> {
+    return this.exclusive(async () => {
+      const online = this.state.status === "AUTHENTICATED_ONLINE";
+      if (!online && this.state.status !== "AUTHORIZED_OFFLINE") {
+        throw new AccountOperationError(
+          "ACCOUNT_STATE_INVALID",
+          "Profile information is not available in the current account state.",
+        );
+      }
+      const record = await this.currentStoredAccount();
+      if (online) {
+        try {
+          const profile = await this.options.cloud.getAccountProfile(
+            this.requireOnlineToken(),
+            signal,
+          );
+          const updated = await this.persistProfile(record, profile);
+          const avatarBytes = await this.loadOnlineAvatar(updated.userId, profile, signal);
+          return projectDesktopProfile(updated, avatarBytes, true);
+        } catch (error) {
+          if (!isOfflineTransportFailure(error)) throw toOperationError(error);
+        }
+      }
+      const cached = await this.currentStoredAccount();
+      const avatarBytes =
+        cached.avatarRevision === null ||
+        cached.userId === null ||
+        this.options.avatarCache === undefined
+          ? null
+          : await this.options.avatarCache
+              .read(cached.userId, cached.avatarRevision)
+              .catch(() => null);
+      return projectDesktopProfile(cached, avatarBytes, false);
+    });
+  }
+
+  updateProfile(
+    input: AccountProfileUpdateInput,
+    signal: AbortSignal,
+  ): Promise<DesktopAccountProfile> {
+    return this.exclusive(async () => {
+      const token = this.requireOnlineToken();
+      if (this.state.status !== "AUTHENTICATED_ONLINE") {
+        throw new AccountOperationError(
+          "ACCOUNT_STATE_INVALID",
+          "Profile changes require an online account connection.",
+        );
+      }
+      let displayName: string;
+      try {
+        displayName = normalizeStoredDisplayName(input.displayName);
+      } catch {
+        throw new AccountOperationError(
+          "PROFILE_DISPLAY_NAME_INVALID",
+          "展示名必须为 1–32 个 Unicode 字符，且不能包含控制字符。",
+        );
+      }
+      const record = await this.currentStoredAccount();
+      try {
+        const profile = await this.options.cloud.updateAccountProfile(
+          { ...input, displayName },
+          token,
+          signal,
+        );
+        const updated = await this.persistProfile(record, profile);
+        if (profile.avatarRevision === null) {
+          if (updated.userId !== null) {
+            await this.options.avatarCache?.clear(updated.userId).catch(() => undefined);
+          }
+        } else if (updated.userId !== null) {
+          try {
+            const bytes = await this.options.cloud.getAccountAvatar(
+              token,
+              signal,
+              profile.avatarRevision,
+            );
+            await this.options.avatarCache?.write(updated.userId, profile.avatarRevision, bytes);
+          } catch {
+            // Cloud owns the saved profile; local portrait caching is best-effort.
+          }
+        }
+        const avatarBytes =
+          profile.avatarRevision === null ||
+          updated.userId === null ||
+          this.options.avatarCache === undefined
+            ? null
+            : await this.options.avatarCache
+                .read(updated.userId, profile.avatarRevision)
+                .catch(() => null);
+        return projectDesktopProfile(updated, avatarBytes, true);
+      } catch (error) {
+        throw toOperationError(error);
+      }
+    });
+  }
+
+  private async currentStoredAccount(): Promise<StoredAccountRecord> {
+    if (this.activeAccountKey === null) {
+      throw new AccountOperationError(
+        "ACCOUNT_STATE_INVALID",
+        "The active account is unavailable.",
+      );
+    }
+    const value = await this.options.vault.get(this.activeAccountKey);
+    if (value === null) {
+      throw new AccountOperationError(
+        "ACCOUNT_RECORD_INVALID",
+        "The saved account record is missing.",
+      );
+    }
+    return parseStoredAccountRecord(value);
+  }
+
+  private async persistProfile(
+    record: StoredAccountRecord,
+    profile: AccountProfile,
+  ): Promise<StoredAccountRecord> {
+    if (record.userId === null || record.userId !== this.state.account?.userId) {
+      throw new AccountOperationError(
+        "ACCOUNT_BINDING_INVALID",
+        "The profile does not match the active account.",
+      );
+    }
+    const updated = {
+      ...record,
+      displayName: normalizeStoredDisplayName(profile.displayName),
+      avatarRevision: profile.avatarRevision,
+      profileUpdatedAt: profile.updatedAt,
+    } satisfies StoredAccountRecord;
+    if (this.activeAccountKey !== null)
+      await this.options.vault.set(this.activeAccountKey, updated);
+    return updated;
+  }
+
+  private async loadOnlineAvatar(
+    userId: string | null,
+    profile: AccountProfile,
+    signal: AbortSignal,
+  ): Promise<Uint8Array | null> {
+    if (
+      profile.avatarRevision === null ||
+      userId === null ||
+      this.options.avatarCache === undefined
+    )
+      return null;
+    const cached = await this.options.avatarCache
+      .read(userId, profile.avatarRevision)
+      .catch(() => null);
+    if (cached !== null) return cached;
+    const bytes = await this.options.cloud.getAccountAvatar(
+      this.requireOnlineToken(),
+      signal,
+      profile.avatarRevision,
+    );
+    await this.options.avatarCache
+      .write(userId, profile.avatarRevision, bytes)
+      .catch(() => undefined);
+    return bytes;
   }
 
   private async consumeRefreshToken(
@@ -917,6 +1108,22 @@ function safeAccountProjection(account: AccountView): SafeAccount {
     emailVerified: account.emailVerified,
     entitlements: account.entitlements.map(({ code, enabled }) => ({ code, enabled })),
     createdAt: account.createdAt,
+  };
+}
+
+function projectDesktopProfile(
+  record: StoredAccountRecord,
+  avatarBytes: Uint8Array | null,
+  canEdit: boolean,
+): DesktopAccountProfile {
+  return {
+    email: record.accountEmail,
+    emailVerified: record.emailVerified,
+    displayName: record.displayName,
+    avatarRevision: record.avatarRevision,
+    avatarBytes,
+    updatedAt: record.profileUpdatedAt,
+    canEdit,
   };
 }
 

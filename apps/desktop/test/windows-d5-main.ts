@@ -1103,7 +1103,7 @@ async function seedOfflineAccount(
     input.deviceId,
   );
   const record: StoredAccountRecord = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     normalizedEmail: input.email,
     userId: input.userId,
     emailVerified: true,
@@ -1122,6 +1122,9 @@ async function seedOfflineAccount(
     lastAcceptedTime: now,
     entitlements: [{ code: "CAELUSH_DESKTOP_BASIC", enabled: true }],
     accountEmail: input.email,
+    displayName: input.email.split("@", 1)[0] ?? "Caelush 用户",
+    avatarRevision: null,
+    profileUpdatedAt: now,
   };
   const key = accountVaultKey(input.email);
   await selectedVault.set(key, record);

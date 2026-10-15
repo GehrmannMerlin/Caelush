@@ -154,4 +154,74 @@ describe("Cloud Account Client", () => {
     ).rejects.toBeInstanceOf(CloudClientError);
     expect(() => new CloudAccountClient("http://192.0.2.1:8000")).toThrow(CloudClientError);
   });
+
+  it("keeps profile data separate from auth and bounds authenticated avatar downloads", async () => {
+    const profile = {
+      requestId: "8cdb5a7b-c72a-48f8-af16-8ec4e5fdc604",
+      profile: {
+        displayName: "Caelush User",
+        avatarRevision: "f709e9ab-ef3a-4cfb-a8ad-05ddf245a120",
+        updatedAt: "2026-01-01T12:00:00Z",
+      },
+    };
+    const avatar = new Uint8Array([
+      0x52, 0x49, 0x46, 0x46, 0x04, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+    ]);
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/avatar")) {
+        return new Response(avatar, {
+          status: 200,
+          headers: {
+            "content-type": "image/webp",
+            etag: `"${profile.profile.avatarRevision}"`,
+          },
+        });
+      }
+      if (init?.method === "PATCH") return new Response(JSON.stringify(profile), { status: 200 });
+      return new Response(JSON.stringify(profile), { status: 200 });
+    });
+    const cloud = new CloudAccountClient("https://cloud.example.test", { fetcher });
+    const signal = new AbortController().signal;
+
+    const received = await cloud.getAccountProfile("a".repeat(32), signal);
+    expect(received).toEqual(profile.profile);
+    await cloud.updateAccountProfile(
+      {
+        displayName: "😀".repeat(32),
+        removeAvatar: false,
+        avatar: {
+          bytes: new Uint8Array([1, 2, 3]),
+          contentType: "image/png",
+          crop: { x: 0, y: 0, width: 1, height: 1 },
+        },
+      },
+      "a".repeat(32),
+      signal,
+    );
+    const [patchInput, patchInit] = fetcher.mock.calls[1] ?? [];
+    expect(String(patchInput)).toBe("https://cloud.example.test/v1/account/me/profile");
+    expect(new Headers((patchInit as RequestInit).headers).get("authorization")).toBe(
+      `Bearer ${"a".repeat(32)}`,
+    );
+    expect(new Headers((patchInit as RequestInit).headers).has("content-type")).toBe(false);
+    expect((patchInit as RequestInit).body).toBeInstanceOf(FormData);
+    expect(((patchInit as RequestInit).body as FormData).get("displayName")).toBe("😀".repeat(32));
+    await expect(
+      cloud.updateAccountProfile(
+        { displayName: "😀".repeat(33), removeAvatar: false },
+        "a".repeat(32),
+        signal,
+      ),
+    ).rejects.toMatchObject({ code: "REQUEST_INVALID" });
+
+    await expect(
+      cloud.getAccountAvatar("a".repeat(32), signal, profile.profile.avatarRevision),
+    ).resolves.toEqual(avatar);
+    expect(fetcher.mock.calls.map(([input]) => new URL(String(input)).pathname)).toEqual([
+      "/v1/account/me/profile",
+      "/v1/account/me/profile",
+      "/v1/account/me/profile/avatar",
+    ]);
+  });
 });

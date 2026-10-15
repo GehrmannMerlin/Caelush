@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { UpdatePage } from "./UpdatePage.js";
+import { AccountProfileScreen } from "./components/account-profile-screen.js";
 import {
   ArrowLeft,
   ArrowRight,
@@ -21,14 +22,15 @@ import {
   ShieldCheck,
   Unplug,
 } from "lucide-react";
-import type { AccountState, SafeDevice } from "../main/account/state.js";
+import type { AccountState, DesktopAccountProfile, SafeDevice } from "../main/account/state.js";
+import type { AccountProfileUpdateInput } from "../main/cloud/schemas.js";
 import type {
   LegacyDataImportSummary,
   LegacyImportProgress,
 } from "../shared/legacy-data-contract.js";
 
 type AuthScreen = "login" | "register" | "verify" | "forgot" | "reset";
-type AccountScreen = "home" | "security" | "updates";
+type AccountScreen = "home" | "profile" | "updates";
 type AppScreen = AuthScreen | AccountScreen | "agent-starting";
 
 const brandTitlePrefix = Array.from("让灵感 ");
@@ -68,6 +70,9 @@ export function DesktopApp() {
   const agentLaunchRetryStarted = useRef(false);
   const [devices, setDevices] = useState<readonly SafeDevice[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
+  const [profile, setProfile] = useState<DesktopAccountProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
   const [legacySummary, setLegacySummary] = useState<LegacyDataImportSummary | null>(null);
   const [legacyLoading, setLegacyLoading] = useState(false);
   const [legacyDismissed, setLegacyDismissed] = useState(false);
@@ -94,7 +99,7 @@ export function DesktopApp() {
     !accountRouteRequested &&
     !reconnectingOffline &&
     (authScreenOpen || screen === "agent-starting");
-  const activeView: AccountScreen = screen === "security" || screen === "updates" ? screen : "home";
+  const activeView: AccountScreen = screen === "profile" || screen === "updates" ? screen : "home";
   const retryAgentStartup = useCallback(async () => {
     setAgentRetrying(true);
     setFeedback(null);
@@ -140,10 +145,34 @@ export function DesktopApp() {
   }, []);
 
   useEffect(() => {
+    if (!authenticated || activeView !== "profile") {
+      if (!authenticated) setProfile(null);
+      return;
+    }
+    let active = true;
+    setProfileLoading(true);
+    setProfileLoadError(null);
+    void window.caelushDesktop.account
+      .getProfile()
+      .then((value) => {
+        if (active) setProfile(value);
+      })
+      .catch((error) => {
+        if (active) setProfileLoadError(errorMessage(error));
+      })
+      .finally(() => {
+        if (active) setProfileLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeView, authenticated, accountState.account?.userId]);
+
+  useEffect(() => {
     if (!authenticated) {
       agentNavigationStarted.current = false;
       setScreen((current) =>
-        current === "security" || current === "updates" || current === "agent-starting"
+        current === "profile" || current === "updates" || current === "agent-starting"
           ? "login"
           : current,
       );
@@ -417,6 +446,15 @@ export function DesktopApp() {
         newPassword={newPassword}
         setCurrentPassword={setCurrentPassword}
         setNewPassword={setNewPassword}
+        profile={profile}
+        profileLoading={profileLoading}
+        profileLoadError={profileLoadError}
+        onSelectAvatar={() => window.caelushDesktop.account.selectAvatar()}
+        onSaveProfile={async (input) => {
+          const updated = await window.caelushDesktop.account.updateProfile(input);
+          setProfile(updated);
+          return updated;
+        }}
       />
     ) : (
       <AuthShell
@@ -795,7 +833,7 @@ function AuthShell(props: {
 }
 
 function AccountLoadingScreen(props: { view: AccountScreen }) {
-  const navigation = ["home", "security", "updates"] as const;
+  const navigation = ["home", "profile", "updates"] as const;
   return (
     <main
       className="account-layout account-layout--loading"
@@ -831,9 +869,9 @@ function AccountLoadingScreen(props: { view: AccountScreen }) {
 }
 
 function AccountPageSkeleton(props: { view: AccountScreen }) {
-  if (props.view === "security") {
+  if (props.view === "profile") {
     return (
-      <div className="security-stack" aria-hidden="true">
+      <div className="account-profile-stack" aria-hidden="true">
         <section className="table-panel account-skeleton-panel">
           <div className="account-skeleton-panel-heading">
             <div>
@@ -852,7 +890,21 @@ function AccountPageSkeleton(props: { view: AccountScreen }) {
             <span className="skeleton-block account-skeleton-submit" />
           </div>
         </section>
-        <span className="skeleton-block account-skeleton-security-note" />
+        <section className="table-panel account-skeleton-panel">
+          <div className="account-skeleton-panel-heading">
+            <span className="skeleton-block account-skeleton-section-title" />
+            <span className="skeleton-block account-skeleton-icon-large" />
+          </div>
+          <div className="account-skeleton-form">
+            {[0, 1].map((item) => (
+              <div className="account-skeleton-field" key={item}>
+                <span className="skeleton-block account-skeleton-label" />
+                <span className="skeleton-block account-skeleton-input" />
+              </div>
+            ))}
+            <span className="skeleton-block account-skeleton-submit" />
+          </div>
+        </section>
       </div>
     );
   }
@@ -954,6 +1006,14 @@ function AccountHome(props: {
   newPassword: string;
   setCurrentPassword(value: string): void;
   setNewPassword(value: string): void;
+  profile: DesktopAccountProfile | null;
+  profileLoading: boolean;
+  profileLoadError: string | null;
+  onSelectAvatar(): Promise<{
+    readonly mimeType: "image/png" | "image/jpeg" | "image/webp";
+    readonly bytes: Uint8Array;
+  } | null>;
+  onSaveProfile(input: AccountProfileUpdateInput): Promise<DesktopAccountProfile>;
 }) {
   const { accountState } = props;
   const offline = accountState.status === "AUTHORIZED_OFFLINE";
@@ -968,10 +1028,10 @@ function AccountHome(props: {
           <MonitorCog size={16} /> 总览
         </button>
         <button
-          className={`side-nav ${props.activeView === "security" ? "is-current" : ""}`}
-          onClick={() => props.onNavigate("security")}
+          className={`side-nav ${props.activeView === "profile" ? "is-current" : ""}`}
+          onClick={() => props.onNavigate("profile")}
         >
-          <KeyRound size={16} /> 安全设置
+          <BadgeCheck size={16} /> 个人信息
         </button>
         <button
           className={`side-nav ${props.activeView === "updates" ? "is-current" : ""}`}
@@ -997,8 +1057,8 @@ function AccountHome(props: {
             <h2>
               {props.activeView === "home"
                 ? "总览"
-                : props.activeView === "security"
-                  ? "安全设置"
+                : props.activeView === "profile"
+                  ? "个人信息"
                   : "检查更新"}
             </h2>
           </div>
@@ -1022,10 +1082,15 @@ function AccountHome(props: {
               onResumeLegacy={props.onResumeLegacy}
             />
           )}
-          {props.activeView === "security" && (
-            <SecuritySettings
+          {props.activeView === "profile" && (
+            <AccountProfileScreen
+              profile={props.profile}
+              loading={props.profileLoading}
+              loadError={props.profileLoadError}
               online={!offline}
               busy={props.busy}
+              onSelectAvatar={props.onSelectAvatar}
+              onSave={props.onSaveProfile}
               currentPassword={props.currentPassword}
               newPassword={props.newPassword}
               setCurrentPassword={props.setCurrentPassword}
@@ -1438,83 +1503,6 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
-
-function SecuritySettings(props: {
-  online: boolean;
-  busy: boolean;
-  currentPassword: string;
-  newPassword: string;
-  setCurrentPassword(value: string): void;
-  setNewPassword(value: string): void;
-  onChangePassword(event: FormEvent<HTMLFormElement>): void;
-}) {
-  return (
-    <div className="security-stack">
-      <section className="table-panel password-panel">
-        <div className="table-heading">
-          <div>
-            <h3>修改密码</h3>
-            <p>修改密码后，其他已登录的账户会话将会失效。</p>
-          </div>
-          <KeyRound size={18} />
-        </div>
-        {!props.online && <MessageBox message="请先连接云端，再修改账户密码。" tone="info" />}
-        <form className="password-change-form" onSubmit={props.onChangePassword}>
-          <label className="field-label" htmlFor="current-password">
-            当前密码
-          </label>
-          <div className="input-wrap">
-            <LockKeyhole size={16} />
-            <input
-              id="current-password"
-              type="password"
-              autoComplete="current-password"
-              minLength={1}
-              maxLength={1024}
-              required
-              value={props.currentPassword}
-              onChange={(event) => props.setCurrentPassword(event.target.value)}
-            />
-          </div>
-          <label className="field-label" htmlFor="new-password">
-            新密码
-          </label>
-          <div className="input-wrap">
-            <KeyRound size={16} />
-            <input
-              id="new-password"
-              type="password"
-              autoComplete="new-password"
-              minLength={1}
-              maxLength={1024}
-              required
-              value={props.newPassword}
-              onChange={(event) => props.setNewPassword(event.target.value)}
-            />
-          </div>
-          <button
-            className="primary-button compact-primary"
-            type="submit"
-            disabled={!props.online || props.busy}
-          >
-            {props.busy ? <LoaderCircle size={15} className="spin" /> : null} 修改密码{" "}
-            <ArrowRight size={15} />
-          </button>
-        </form>
-      </section>
-      <section className="security-note">
-        <ShieldCheck size={18} />
-        <div>
-          <b>凭据存储</b>
-          <span>
-            刷新凭据、设备签名密钥和离线授权均通过当前 Windows
-            用户配置加密。访问凭据仅保存在主进程内存中。
-          </span>
-        </div>
-      </section>
-    </div>
-  );
 }
 
 function EmailField(props: { value: string; onChange(value: string): void }) {

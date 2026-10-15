@@ -20,6 +20,9 @@ const channels = {
     refreshNow: "caelush:account:refresh-now",
     listDevices: "caelush:account:list-devices",
     revokeDevice: "caelush:account:revoke-device",
+    getProfile: "caelush:account:get-profile",
+    updateProfile: "caelush:account:update-profile",
+    selectAvatar: "caelush:account:select-avatar",
   },
   window: {
     minimize: "caelush:window:minimize",
@@ -196,6 +199,20 @@ const accountApi: DesktopApi["account"] = {
       .then((result) =>
         unwrapIpcResult<Awaited<ReturnType<DesktopApi["account"]["revokeDevice"]>>>(result),
       ),
+  getProfile: async () =>
+    unwrapIpcResult<Awaited<ReturnType<DesktopApi["account"]["getProfile"]>>>(
+      await electron.ipcRenderer.invoke(channels.account.getProfile),
+    ),
+  updateProfile: (input) =>
+    electron.ipcRenderer
+      .invoke(channels.account.updateProfile, input)
+      .then((result) =>
+        unwrapIpcResult<Awaited<ReturnType<DesktopApi["account"]["updateProfile"]>>>(result),
+      ),
+  selectAvatar: async () =>
+    unwrapIpcResult<Awaited<ReturnType<DesktopApi["account"]["selectAvatar"]>>>(
+      await electron.ipcRenderer.invoke(channels.account.selectAvatar),
+    ),
 };
 
 const legacyDataApi: DesktopApi["legacyData"] = {

@@ -5,6 +5,12 @@ const UtcDateTimeSchema = z.string().datetime({ offset: true });
 const EmailSchema = z.email().max(320);
 const PasswordSchema = z.string().min(1).max(1024);
 const KeyIdSchema = z.string().regex(/^[A-Za-z0-9._-]{1,64}$/);
+const DisplayNameSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .refine((value) => Array.from(value).length <= 32)
+  .refine((value) => !/[\p{Cc}\p{Cs}\u2028\u2029]/u.test(value));
 
 export const CloudErrorCodes = [
   "REQUEST_INVALID",
@@ -113,6 +119,42 @@ export const OperationSucceededResponseSchema = z
 export const AccountResponseSchema = z
   .object({ requestId: UuidSchema, account: AccountViewSchema })
   .strict();
+export const AccountProfileSchema = z
+  .object({
+    displayName: DisplayNameSchema.refine((value) => value === value.normalize("NFC").trim()),
+    avatarRevision: z.string().min(1).max(64).nullable(),
+    updatedAt: UtcDateTimeSchema,
+  })
+  .strict();
+export const AccountProfileResponseSchema = z
+  .object({ requestId: UuidSchema, profile: AccountProfileSchema })
+  .strict();
+export const AccountProfileUpdateInputSchema = z
+  .object({
+    displayName: DisplayNameSchema,
+    removeAvatar: z.boolean(),
+    avatar: z
+      .object({
+        bytes: z.instanceof(Uint8Array).refine((bytes) => bytes.byteLength <= 5 * 1024 * 1024),
+        contentType: z.enum(["image/png", "image/jpeg", "image/webp"]),
+        crop: z
+          .object({
+            x: z.number().finite().min(0).max(1),
+            y: z.number().finite().min(0).max(1),
+            width: z.number().finite().gt(0).max(1),
+            height: z.number().finite().gt(0).max(1),
+          })
+          .strict(),
+      })
+      .strict()
+      .refine(
+        (avatar) =>
+          avatar.crop.x + avatar.crop.width <= 1 && avatar.crop.y + avatar.crop.height <= 1,
+      )
+      .optional(),
+  })
+  .strict()
+  .refine((input) => !input.removeAvatar || input.avatar === undefined);
 export const DeviceListResponseSchema = z
   .object({
     requestId: UuidSchema,
@@ -156,6 +198,8 @@ export const ChangePasswordRequestSchema = z
 export type CloudErrorCode = (typeof CloudErrorCodes)[number];
 export type AccountEntitlement = z.infer<typeof AccountEntitlementSchema>;
 export type AccountView = z.infer<typeof AccountViewSchema>;
+export type AccountProfile = z.infer<typeof AccountProfileSchema>;
+export type AccountProfileUpdateInput = z.infer<typeof AccountProfileUpdateInputSchema>;
 export type DeviceView = z.infer<typeof DeviceViewSchema>;
 export type OfflineGrantEnvelope = z.infer<typeof OfflineGrantEnvelopeSchema>;
 export type AuthTokens = z.infer<typeof AuthTokensSchema>;

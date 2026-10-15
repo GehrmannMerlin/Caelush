@@ -3,8 +3,8 @@
   "info": {
     "title": "Caelush Cloud API",
     "version": "1.0.0",
-    "description": "Contract-first public API baseline for the independent Caelush Cloud service. This is not generated from or validated against a running FastAPI service.",
-    "x-caelush-contract-status": "CONTRACT_FIRST_D0-B"
+    "description": "D0-B Cloud API V1 baseline with the reviewed authenticated account-profile extension. Login, refresh, and AccountView contracts remain unchanged.",
+    "x-caelush-contract-status": "D0-B_PLUS_ACCOUNT_PROFILE"
   },
   "servers": [
     {
@@ -544,6 +544,372 @@
             "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
+      }
+    },
+    "/v1/desktop/releases": {
+      "get": {
+        "tags": [
+          "Desktop Update"
+        ],
+        "summary": "List published Desktop release notes",
+        "description": "Returns bounded release notes for published and retired Desktop releases. Installer URLs, hashes, signatures, and draft release metadata are never included.",
+        "operationId": "listDesktopReleaseHistory",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopReleaseHistoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Temporarily unavailable service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "parameters": [
+          {
+            "name": "platform",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "windows"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "x64"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "dev",
+                "beta",
+                "stable"
+              ]
+            }
+          }
+        ],
+        "x-caelush-authentication": "NONE_PUBLIC_RELEASE_HISTORY",
+        "x-caelush-idempotency": "Safe bounded read of published release-note metadata.",
+        "x-caelush-security": [
+          "Returns only published or retired release notes",
+          "Never returns artifact URLs, hashes, signatures, or draft metadata",
+          "Release history does not authorize downloads"
+        ]
+      }
+    },
+    "/v1/account/me/profile": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Read the authenticated account profile",
+        "operationId": "getCurrentAccountProfile",
+        "responses": {
+          "200": {
+            "description": "Account profile projection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountProfileResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Access credential is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Temporarily unavailable service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AccessToken": []
+          }
+        ],
+        "x-caelush-authentication": "BEARER_ACCESS_TOKEN",
+        "x-caelush-security": [
+          "Return only the authenticated account's profile",
+          "Do not return object keys, public avatar URLs, or COS credentials"
+        ],
+        "x-caelush-idempotency": "Safe read; returns only the authenticated account profile."
+      },
+      "patch": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Update the authenticated account profile",
+        "operationId": "updateCurrentAccountProfile",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_updateCurrentAccountProfile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated account profile.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountProfileResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Profile request headers are invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Access credential is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Profile request body is too large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Profile or avatar input is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Avatar storage is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AccessToken": []
+          }
+        ],
+        "x-caelush-authentication": "BEARER_ACCESS_TOKEN",
+        "x-caelush-idempotency": "The display name is last-write-wins; avatar replacement creates a fresh private object.",
+        "x-caelush-security": [
+          "Update only the authenticated account's profile",
+          "Normalize and validate all image bytes before storing a private WebP object",
+          "Do not return object keys, public avatar URLs, or COS credentials"
+        ]
+      }
+    },
+    "/v1/account/me/profile/avatar": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Read the authenticated account avatar",
+        "operationId": "getCurrentAccountAvatar",
+        "responses": {
+          "200": {
+            "description": "Private account avatar.",
+            "content": {
+              "image/webp": {}
+            }
+          },
+          "304": {
+            "description": "Avatar is unchanged."
+          },
+          "401": {
+            "description": "Access credential is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The account has no avatar.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Avatar storage is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AccessToken": []
+          }
+        ],
+        "x-caelush-authentication": "BEARER_ACCESS_TOKEN",
+        "x-caelush-security": [
+          "Read only the authenticated account's private avatar",
+          "Never expose a public or signed COS URL",
+          "Use avatarRevision as a private revalidation ETag"
+        ],
+        "x-caelush-idempotency": "Safe private read; revision ETag supports revalidation."
       }
     }
   },
@@ -1554,6 +1920,198 @@
             "writeOnly": true
           }
         }
+      },
+      "DesktopReleaseHistoryItem": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "maxLength": 256,
+            "title": "Version"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "beta",
+              "stable"
+            ],
+            "title": "Channel"
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Publishedat",
+            "description": "Publication time in UTC."
+          },
+          "releaseNotes": {
+            "type": "string",
+            "maxLength": 16384,
+            "title": "Releasenotes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "channel",
+          "publishedAt",
+          "releaseNotes"
+        ],
+        "title": "DesktopReleaseHistoryItem"
+      },
+      "DesktopReleaseHistoryResponse": {
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Requestid",
+            "description": "Transport correlation only."
+          },
+          "releases": {
+            "items": {
+              "$ref": "#/components/schemas/DesktopReleaseHistoryItem"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Releases"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "requestId",
+          "releases"
+        ],
+        "title": "DesktopReleaseHistoryResponse"
+      },
+      "AccountProfile": {
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Displayname"
+          },
+          "avatarRevision": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatarrevision"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updatedat"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "displayName",
+          "avatarRevision",
+          "updatedAt"
+        ],
+        "title": "AccountProfile"
+      },
+      "AccountProfileResponse": {
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Requestid"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/AccountProfile"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "requestId",
+          "profile"
+        ],
+        "title": "AccountProfileResponse"
+      },
+      "Body_updateCurrentAccountProfile": {
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "maxLength": 256,
+            "title": "Displayname"
+          },
+          "avatar": {
+            "anyOf": [
+              {
+                "type": "string",
+                "contentMediaType": "application/octet-stream"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar"
+          },
+          "cropX": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cropx"
+          },
+          "cropY": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cropy"
+          },
+          "cropWidth": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cropwidth"
+          },
+          "cropHeight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cropheight"
+          },
+          "removeAvatar": {
+            "type": "boolean",
+            "title": "Removeavatar",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "displayName"
+        ],
+        "title": "Body_updateCurrentAccountProfile"
       }
     }
   },

@@ -144,26 +144,30 @@ UUIDs. Every successful response contains `requestId`. Error responses use
 stable public error codes, never database exceptions or internal stack traces.
 Authentication failures must not reveal whether an account exists.
 
-The routes and their purposes are frozen below. DTO fields, exact status codes,
-pagination, rate limits, idempotency, and retry fields are not specified here;
-each remains `DEFERRED — D0-B CONTRACT DETAIL` until the Cloud OpenAPI contract
-is designed and reviewed.
+The routes and their purposes are frozen below. Existing auth, device, and
+release DTO details remain governed by their prior contracts. Profile DTOs,
+status behavior, media types, and private-avatar constraints are defined by the
+reviewed account-profile extension in the OpenAPI document.
 
-| Method and path                         | Request body                              | Successful response                                            | Authentication                                | Error behavior                                              | Authority            | Round |
-| --------------------------------------- | ----------------------------------------- | -------------------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------- | -------------------- | ----- |
-| `POST /v1/auth/register`                | Registration DTO — deferred               | `requestId` plus verification-pending result — fields deferred | No existing Access Token                      | Generic non-enumerating account response; stable code       | Cloud Auth           | D1-A  |
-| `POST /v1/auth/verify-email`            | Verification DTO — deferred               | `requestId` plus account/session result — fields deferred      | Verification proof; representation deferred   | Stable code; no account enumeration                         | Cloud Auth           | D1-A  |
-| `POST /v1/auth/resend-verification`     | Resend DTO — deferred                     | `requestId` plus generic accepted result                       | No Access Token requirement frozen            | Same public result for known/unknown addresses              | Cloud Auth           | D1-A  |
-| `POST /v1/auth/login`                   | Login DTO — deferred                      | `requestId` and auth lifecycle result — fields deferred        | No existing Access Token                      | Generic non-enumerating failure                             | Cloud Auth           | D1-A  |
-| `POST /v1/auth/refresh`                 | Refresh DTO — deferred                    | `requestId` and rotated auth result — fields deferred          | Refresh proof; exact placement deferred       | Stable code; revoke/rotation semantics D2-A                 | Cloud Auth           | D2-A  |
-| `POST /v1/auth/logout`                  | Logout DTO — deferred                     | `requestId` and logout result                                  | Auth/session proof — exact mechanism deferred | Stable code; idempotency deferred                           | Cloud Auth           | D2-A  |
-| `POST /v1/auth/forgot-password`         | Recovery DTO — deferred                   | `requestId` and generic accepted result                        | No Access Token                               | Same public result for known/unknown addresses              | Cloud Auth           | D1-B  |
-| `POST /v1/auth/reset-password`          | Reset DTO — deferred                      | `requestId` and result                                         | Reset proof; representation deferred          | Stable code; no account enumeration                         | Cloud Auth           | D1-B  |
-| `POST /v1/auth/change-password`         | Password-change DTO — deferred            | `requestId` and result                                         | Auth/session proof — exact mechanism deferred | Stable code; never return internal password-provider errors | Cloud Auth           | D1-B  |
-| `GET /v1/account/me`                    | None                                      | `requestId` plus account projection — fields deferred          | Access Token in Bearer form                   | Stable unauthorized/forbidden code                          | Cloud Account        | D1-A  |
-| `GET /v1/account/devices`               | None; pagination deferred                 | `requestId` plus device projections — fields deferred          | Access Token in Bearer form                   | Stable code; no other account data                          | Cloud Device Session | D2-A  |
-| `DELETE /v1/account/devices/{deviceId}` | None unless later OpenAPI requires a body | `requestId` plus revocation result                             | Access Token in Bearer form                   | Stable code; account/device ownership is enforced in Cloud  | Cloud Device Session | D2-A  |
-| `GET /v1/desktop/update-policy`         | Query/platform fields deferred            | `requestId` plus signed policy projection — fields deferred    | Exact public/authenticated policy deferred    | Stable code; no internal release-store errors               | Cloud Release Policy | D7-A  |
+| Method and path                         | Request body                                                   | Successful response                                            | Authentication                                | Error behavior                                              | Authority             | Round |
+| --------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------- | --------------------- | ----- |
+| `POST /v1/auth/register`                | Registration DTO — deferred                                    | `requestId` plus verification-pending result — fields deferred | No existing Access Token                      | Generic non-enumerating account response; stable code       | Cloud Auth            | D1-A  |
+| `POST /v1/auth/verify-email`            | Verification DTO — deferred                                    | `requestId` plus account/session result — fields deferred      | Verification proof; representation deferred   | Stable code; no account enumeration                         | Cloud Auth            | D1-A  |
+| `POST /v1/auth/resend-verification`     | Resend DTO — deferred                                          | `requestId` plus generic accepted result                       | No Access Token requirement frozen            | Same public result for known/unknown addresses              | Cloud Auth            | D1-A  |
+| `POST /v1/auth/login`                   | Login DTO — deferred                                           | `requestId` and auth lifecycle result — fields deferred        | No existing Access Token                      | Generic non-enumerating failure                             | Cloud Auth            | D1-A  |
+| `POST /v1/auth/refresh`                 | Refresh DTO — deferred                                         | `requestId` and rotated auth result — fields deferred          | Refresh proof; exact placement deferred       | Stable code; revoke/rotation semantics D2-A                 | Cloud Auth            | D2-A  |
+| `POST /v1/auth/logout`                  | Logout DTO — deferred                                          | `requestId` and logout result                                  | Auth/session proof — exact mechanism deferred | Stable code; idempotency deferred                           | Cloud Auth            | D2-A  |
+| `POST /v1/auth/forgot-password`         | Recovery DTO — deferred                                        | `requestId` and generic accepted result                        | No Access Token                               | Same public result for known/unknown addresses              | Cloud Auth            | D1-B  |
+| `POST /v1/auth/reset-password`          | Reset DTO — deferred                                           | `requestId` and result                                         | Reset proof; representation deferred          | Stable code; no account enumeration                         | Cloud Auth            | D1-B  |
+| `POST /v1/auth/change-password`         | Password-change DTO — deferred                                 | `requestId` and result                                         | Auth/session proof — exact mechanism deferred | Stable code; never return internal password-provider errors | Cloud Auth            | D1-B  |
+| `GET /v1/account/me`                    | None                                                           | Existing account projection; unchanged by profile extension    | Access Token in Bearer form                   | Stable unauthorized/forbidden code                          | Cloud Account         | D1-A  |
+| `GET /v1/account/me/profile`            | None                                                           | `requestId` plus display name, avatar revision, update time    | Access Token in Bearer form                   | Stable code; only the authenticated account's profile       | Cloud Account Profile | D0-B+ |
+| `PATCH /v1/account/me/profile`          | Multipart display name, optional image/crop, or avatar removal | `requestId` plus updated profile projection                    | Access Token in Bearer form                   | Strict fields; 5 MiB source limit; private COS object only  | Cloud Account Profile | D0-B+ |
+| `GET /v1/account/me/profile/avatar`     | Optional `If-None-Match` revision                              | Private WebP bytes, at most 1 MiB; supports `304`              | Access Token in Bearer form                   | Owner-only read; no public URL or object key                | Cloud Account Profile | D0-B+ |
+| `GET /v1/account/devices`               | None; pagination deferred                                      | `requestId` plus device projections — fields deferred          | Access Token in Bearer form                   | Stable code; no other account data                          | Cloud Device Session  | D2-A  |
+| `DELETE /v1/account/devices/{deviceId}` | None unless later OpenAPI requires a body                      | `requestId` plus revocation result                             | Access Token in Bearer form                   | Stable code; account/device ownership is enforced in Cloud  | Cloud Device Session  | D2-A  |
+| `GET /v1/desktop/update-policy`         | Query/platform fields deferred                                 | `requestId` plus signed policy projection — fields deferred    | Exact public/authenticated policy deferred    | Stable code; no internal release-store errors               | Cloud Release Policy  | D7-A  |
+| `GET /v1/desktop/releases`              | Bounded release-history query                                  | `requestId` plus release-history page                          | Exact public/authenticated policy deferred    | Stable code; no internal release-store errors               | Cloud Release Policy  | D7-A  |
 
 ### 4.1 Authentication lifecycle
 
@@ -185,13 +189,13 @@ The Renderer-facing namespace set is closed to `account`, `window`, `workspace`,
 The names below are the frozen V1 capability inventory; DTO field shapes are
 deferred when no source design currently defines them.
 
-| Namespace   | Methods                                                                                                      | Schema and state boundary                                                                                                                                                                                                                                                           | Planned owner/round                              |
-| ----------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| `account`   | `getState`, `register`, `login`, `logout`, `resendVerification`, `refreshNow`, `listDevices`, `revokeDevice` | Each call gets its own strict schema. Return safe account state and operation results only; never return Access/Refresh Tokens, device private keys, or Offline Grant signing material. Auth state controls which calls are accepted. DTO fields: `DEFERRED — D0-B CONTRACT DETAIL` | Main Account Client; D3-B, with Cloud APIs D1/D2 |
-| `window`    | `minimize`, `maximizeOrRestore`, `close`, `getPlatform`                                                      | No arbitrary window IDs or Electron objects; current window/state is resolved by Main. Inputs and result DTOs deferred                                                                                                                                                              | Main Window lifecycle; D3-A                      |
-| `workspace` | `chooseDirectory`, `openInEditor`, `listEditors`                                                             | Selection/open operations are bounded to explicit user action and current workspace policy. No arbitrary file read/write API or shell. Path/editor DTO details deferred                                                                                                             | Main adapter; D5-A/D5-C                          |
-| `browser`   | `createLease`, `navigate`, `goBack`, `goForward`, `reload`, `closeLease`                                     | Calls operate on an opaque Browser Guest lease owned by Main; no raw WebContents, cookies, history, or page DOM is returned to Cloud. URL policy and DTO fields deferred                                                                                                            | Main Browser Guest lifecycle; D5-B               |
-| `update`    | `getState`, `check`, `download`, `install`                                                                   | State is a bounded progress/result projection. Download/install accept no arbitrary URL or file path. Install is allowed only for the verified manifest/artifact pair. DTO fields deferred                                                                                          | Main Update Coordinator; D7-A/D7-B               |
+| Namespace   | Methods                                                                                                                                                     | Schema and state boundary                                                                                                                                                                                                                                                  | Planned owner/round                       |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `account`   | `getState`, `register`, `login`, `logout`, `resendVerification`, `refreshNow`, `listDevices`, `revokeDevice`, `getProfile`, `updateProfile`, `selectAvatar` | Each call gets its own strict schema. Profile output contains only safe display data and bounded portrait bytes, never tokens, local file paths, device keys, or Offline Grant signing material. Avatar file selection stays in Main and requires an explicit user action. | Main Account Client; profile routes D0-B+ |
+| `window`    | `minimize`, `maximizeOrRestore`, `close`, `getPlatform`                                                                                                     | No arbitrary window IDs or Electron objects; current window/state is resolved by Main. Inputs and result DTOs deferred                                                                                                                                                     | Main Window lifecycle; D3-A               |
+| `workspace` | `chooseDirectory`, `openInEditor`, `listEditors`                                                                                                            | Selection/open operations are bounded to explicit user action and current workspace policy. No arbitrary file read/write API or shell. Path/editor DTO details deferred                                                                                                    | Main adapter; D5-A/D5-C                   |
+| `browser`   | `createLease`, `navigate`, `goBack`, `goForward`, `reload`, `closeLease`                                                                                    | Calls operate on an opaque Browser Guest lease owned by Main; no raw WebContents, cookies, history, or page DOM is returned to Cloud. URL policy and DTO fields deferred                                                                                                   | Main Browser Guest lifecycle; D5-B        |
+| `update`    | `getState`, `check`, `download`, `install`                                                                                                                  | State is a bounded progress/result projection. Download/install accept no arbitrary URL or file path. Install is allowed only for the verified manifest/artifact pair. DTO fields deferred                                                                                 | Main Update Coordinator; D7-A/D7-B        |
 
 IPC enforcement rules:
 
@@ -451,19 +455,22 @@ Prompt Cache fingerprints.
 
 The contract-first OpenAPI 3.1 document is
 [`cloud-api-v1.openapi.json`](./cloud-api-v1.openapi.json). It defines the
-frozen 13-operation surface:
+17-operation surface, including the reviewed account-profile extension:
 
-| Area                   | Operations                                                                                         |
-| ---------------------- | -------------------------------------------------------------------------------------------------- |
-| Registration and login | `POST /v1/auth/register`, `/verify-email`, `/resend-verification`, `/login`, `/refresh`, `/logout` |
-| Password recovery      | `POST /v1/auth/forgot-password`, `/reset-password`, `/change-password`                             |
-| Account and devices    | `GET /v1/account/me`, `GET /v1/account/devices`, `DELETE /v1/account/devices/{deviceId}`           |
-| Desktop update policy  | `GET /v1/desktop/update-policy`                                                                    |
+| Area                   | Operations                                                                                                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Registration and login | `POST /v1/auth/register`, `/verify-email`, `/resend-verification`, `/login`, `/refresh`, `/logout`                                                                                |
+| Password recovery      | `POST /v1/auth/forgot-password`, `/reset-password`, `/change-password`                                                                                                            |
+| Account and devices    | `GET /v1/account/me`, profile `GET/PATCH /v1/account/me/profile`, private `GET /v1/account/me/profile/avatar`, `GET /v1/account/devices`, `DELETE /v1/account/devices/{deviceId}` |
+| Desktop update policy  | `GET /v1/desktop/update-policy`                                                                                                                                                   |
+| Desktop releases       | `GET /v1/desktop/releases`                                                                                                                                                        |
 
-Successful response bodies include a UUID `requestId`. Errors use a stable
+Successful JSON response bodies include a UUID `requestId`. Errors use a stable
 `CloudError` code, safe bounded message, retryability flag, and `requestId`;
-database exceptions and stack traces are never response data. Inputs and
-outputs are UTF-8 JSON; all timestamps are RFC 3339 UTC; identities are UUIDs.
+database exceptions and stack traces are never response data. JSON inputs and
+outputs are UTF-8; the authenticated avatar read returns a bounded WebP binary
+body. Profile updates use bounded multipart form data. All timestamps are RFC
+3339 UTC; identities are UUIDs.
 Production Cloud requests use HTTPS and access tokens use the Bearer header.
 Registration, verification resend, and password-recovery responses do not
 reveal whether an email address is registered or verified. Refresh tokens are
@@ -481,12 +488,13 @@ whether a local Agent action may execute. Cloud receives no workspace files or
 paths, Sessions, Messages, Runs, Tool data, model prompts/outputs, Provider
 keys, Prompt Cache material/fingerprints, terminal I/O, or browser history,
 cookies, or page content. The API intentionally defines no Agent execution,
-chat synchronization, file upload, or prompt telemetry route.
+chat synchronization, Agent file upload, or prompt telemetry route. Avatar
+upload is limited to the authenticated account-profile resource and never
+returns a public COS URL or object key.
 
-The OpenAPI document is a contract-first D0-B design, not output generated by
-or proof of a running FastAPI service. Fields that were not specified by an
-earlier source design are called out in the OpenAPI descriptions and remain
-subject to owner review during D1/D2 implementation. D1-A–D1-C own Cloud auth;
+The OpenAPI document records the D0-B Cloud baseline and reviewed account-
+profile extension. It does not prove a particular deployment is running.
+D1-A–D1-C own Cloud auth;
 D2-A–D2-B own device, refresh-session, and offline-grant implementation. The
 compatibility checker rejects endpoint/method removal, contract semantics or
 authentication changes, request additions that become required, response
@@ -590,17 +598,17 @@ unit tests.
 
 ### Deferred Implementation Map
 
-| Round     | Sole primary responsibility                                        | D0-B status                                                                                                                           |
-| --------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| D0-B      | Version source, protocol detail, Desktop capability, build graph   | Contract and static checks frozen; runtime features deferred                                                                          |
-| D0-C      | Windows Electron/Node/SQLite/PTY/SSE technical POC                 | Must prove clean Windows x64 launch, runtime/native compatibility, SSE and process lifecycle                                          |
-| D1-A–D1-C | Cloud identity/authentication foundation                           | Implement the OpenAPI auth surface in the independent Cloud repository; add contract compatibility tests                              |
-| D2-A–D2-B | Devices, Refresh and offline authorization                         | Implement UUID device/session ownership, token rotation/replay handling, and device-bound signed grants                               |
-| D3-A–D3-B | Electron shell, Preload, login state machine                       | Implement the frozen five Preload namespaces and per-method DTO/sender/state checks                                                   |
-| D4-A–D4-D | Profile, Host Token, proxy, Provider Key and legacy data migration | Implement private bootstrap/Host Token/process generation, profile isolation, proxy, Key migration and backup-safe import             |
-| D5        | Workspace panels, files, user terminal, Browser Guest and editors  | Single-round Desktop-only integration through reviewed Main APIs and existing Daemon authority; see the D5 capability extension above |
-| D6-A–D6-B | Windows install and upgrade compatibility                          | Implement Desktop Resource Manifest, native resource staging, installer packaging and migration-safe upgrades                        |
+| Round     | Sole primary responsibility                                        | D0-B status                                                                                                                                 |
+| --------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| D0-B      | Version source, protocol detail, Desktop capability, build graph   | Contract and static checks frozen; runtime features deferred                                                                                |
+| D0-C      | Windows Electron/Node/SQLite/PTY/SSE technical POC                 | Must prove clean Windows x64 launch, runtime/native compatibility, SSE and process lifecycle                                                |
+| D1-A–D1-C | Cloud identity/authentication foundation                           | Implement the OpenAPI auth surface in the independent Cloud repository; add contract compatibility tests                                    |
+| D2-A–D2-B | Devices, Refresh and offline authorization                         | Implement UUID device/session ownership, token rotation/replay handling, and device-bound signed grants                                     |
+| D3-A–D3-B | Electron shell, Preload, login state machine                       | Implement the frozen five Preload namespaces and per-method DTO/sender/state checks                                                         |
+| D4-A–D4-D | Profile, Host Token, proxy, Provider Key and legacy data migration | Implement private bootstrap/Host Token/process generation, profile isolation, proxy, Key migration and backup-safe import                   |
+| D5        | Workspace panels, files, user terminal, Browser Guest and editors  | Single-round Desktop-only integration through reviewed Main APIs and existing Daemon authority; see the D5 capability extension above       |
+| D6-A–D6-B | Windows install and upgrade compatibility                          | Implement Desktop Resource Manifest, native resource staging, installer packaging and migration-safe upgrades                               |
 | D7-A–D7-C | Cloud release policy and Desktop auto-update                       | Implement signer custody/rotation, policy-manifest-artifact matching, download, integrity, selected trust profile and safe install boundary |
-| D8-A–D8-B | Production deployment, security acceptance and stable release      | Deploy Cloud, complete independent security acceptance, and only then claim stable `1.0.0`                                            |
+| D8-A–D8-B | Production deployment, security acceptance and stable release      | Deploy Cloud, complete independent security acceptance, and only then claim stable `1.0.0`                                                  |
 
 No D0-C or later implementation is performed by this addendum.

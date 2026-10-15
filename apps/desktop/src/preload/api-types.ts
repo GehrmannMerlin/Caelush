@@ -1,8 +1,9 @@
-import type { AccountState, SafeDevice } from "../main/account/state.js";
+import type { AccountState, DesktopAccountProfile, SafeDevice } from "../main/account/state.js";
 import type {
   AcceptedResponse,
   DeviceRevocationResponse,
   OperationSucceededResponse,
+  AccountProfileUpdateInput,
 } from "../main/cloud/schemas.js";
 import type {
   LegacyDataImportResult,
@@ -49,6 +50,12 @@ export interface DesktopApi {
     refreshNow(): Promise<AccountState>;
     listDevices(): Promise<readonly SafeDevice[]>;
     revokeDevice(input: { readonly deviceId: string }): Promise<DeviceRevocationResponse>;
+    getProfile(): Promise<DesktopAccountProfile>;
+    updateProfile(input: AccountProfileUpdateInput): Promise<DesktopAccountProfile>;
+    selectAvatar(): Promise<{
+      readonly mimeType: "image/png" | "image/jpeg" | "image/webp";
+      readonly bytes: Uint8Array;
+    } | null>;
   };
   readonly window: {
     minimize(): Promise<{ readonly minimized: true }>;

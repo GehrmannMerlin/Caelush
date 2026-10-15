@@ -13,20 +13,25 @@ export const DEFAULT_CLOUD_OPENAPI_PATH = path.join(
 );
 
 export const REQUIRED_CLOUD_OPERATIONS = Object.freeze({
-  "/v1/auth/register": ["post", "registerAccount"],
-  "/v1/auth/verify-email": ["post", "verifyEmailAddress"],
-  "/v1/auth/resend-verification": ["post", "resendEmailVerification"],
-  "/v1/auth/login": ["post", "login"],
-  "/v1/auth/refresh": ["post", "refreshSession"],
-  "/v1/auth/logout": ["post", "logoutSession"],
-  "/v1/auth/forgot-password": ["post", "requestPasswordReset"],
-  "/v1/auth/reset-password": ["post", "resetPassword"],
-  "/v1/auth/change-password": ["post", "changePassword"],
-  "/v1/account/me": ["get", "getCurrentAccount"],
-  "/v1/account/devices": ["get", "listAccountDevices"],
-  "/v1/account/devices/{deviceId}": ["delete", "revokeAccountDevice"],
-  "/v1/desktop/update-policy": ["get", "getDesktopUpdatePolicy"],
-  "/v1/desktop/releases": ["get", "listDesktopReleaseHistory"],
+  "/v1/auth/register": [["post", "registerAccount"]],
+  "/v1/auth/verify-email": [["post", "verifyEmailAddress"]],
+  "/v1/auth/resend-verification": [["post", "resendEmailVerification"]],
+  "/v1/auth/login": [["post", "login"]],
+  "/v1/auth/refresh": [["post", "refreshSession"]],
+  "/v1/auth/logout": [["post", "logoutSession"]],
+  "/v1/auth/forgot-password": [["post", "requestPasswordReset"]],
+  "/v1/auth/reset-password": [["post", "resetPassword"]],
+  "/v1/auth/change-password": [["post", "changePassword"]],
+  "/v1/account/me": [["get", "getCurrentAccount"]],
+  "/v1/account/me/profile": [
+    ["get", "getCurrentAccountProfile"],
+    ["patch", "updateCurrentAccountProfile"],
+  ],
+  "/v1/account/me/profile/avatar": [["get", "getCurrentAccountAvatar"]],
+  "/v1/account/devices": [["get", "listAccountDevices"]],
+  "/v1/account/devices/{deviceId}": [["delete", "revokeAccountDevice"]],
+  "/v1/desktop/update-policy": [["get", "getDesktopUpdatePolicy"]],
+  "/v1/desktop/releases": [["get", "listDesktopReleaseHistory"]],
 });
 
 const REQUIRED_SCHEMA_NAMES = [
@@ -34,6 +39,8 @@ const REQUIRED_SCHEMA_NAMES = [
   "CloudError",
   "ApiErrorResponse",
   "AccountView",
+  "AccountProfile",
+  "AccountProfileResponse",
   "DeviceView",
   "AccountEntitlement",
   "AuthTokens",
@@ -75,8 +82,8 @@ export function validateCloudOpenApi(document) {
   if (!isRecord(document.info) || document.info.version !== "1.0.0") {
     errors.push("info.version must be the Cloud contract version 1.0.0.");
   }
-  if (document.info?.["x-caelush-contract-status"] !== "CONTRACT_FIRST_D0-B") {
-    errors.push("The contract-first D0-B status marker is required.");
+  if (document.info?.["x-caelush-contract-status"] !== "D0-B_PLUS_ACCOUNT_PROFILE") {
+    errors.push("The reviewed account-profile extension status marker is required.");
   }
   if (document["x-caelush-api-base-path"] !== "/v1") {
     errors.push("x-caelush-api-base-path must be /v1.");
@@ -98,15 +105,17 @@ export function validateCloudOpenApi(document) {
     }
     const expected = REQUIRED_CLOUD_OPERATIONS[pathName];
     const actualMethods = Object.keys(paths[pathName]).filter((key) => HTTP_METHODS.has(key));
-    if (actualMethods.length !== 1 || actualMethods[0] !== expected[0]) {
-      errors.push(`${pathName}: expected only ${expected[0].toUpperCase()} for this endpoint.`);
+    const expectedMethods = expected.map(([method]) => method).sort();
+    if (stableJson(actualMethods.sort()) !== stableJson(expectedMethods)) {
+      errors.push(`${pathName}: expected methods ${expectedMethods.join(", ").toUpperCase()}.`);
     }
   }
 
   const operationIds = new Set();
-  for (const [pathName, [method, expectedOperationId]] of Object.entries(
-    REQUIRED_CLOUD_OPERATIONS,
-  )) {
+  const expectedOperations = Object.entries(REQUIRED_CLOUD_OPERATIONS).flatMap(
+    ([pathName, operations]) => operations.map((operation) => [pathName, ...operation]),
+  );
+  for (const [pathName, method, expectedOperationId] of expectedOperations) {
     const pathItem = paths[pathName];
     const operation = isRecord(pathItem) ? pathItem[method] : undefined;
     if (!isRecord(operation)) {
@@ -245,22 +254,48 @@ function validateOperation(document, pathName, method, operation, errors) {
   ) {
     errors.push(`${prefix}: at least one x-caelush-security rule is required.`);
   }
-  if (method === "post" && pathName !== "/v1/auth/logout" && !isRecord(operation.requestBody)) {
-    errors.push(`${prefix}: a JSON requestBody is required.`);
+  if (
+    (method === "post" && pathName !== "/v1/auth/logout") ||
+    (method === "patch" && pathName === "/v1/account/me/profile")
+  ) {
+    if (!isRecord(operation.requestBody)) errors.push(`${prefix}: a requestBody is required.`);
   }
   if (isRecord(operation.requestBody)) {
     const body = resolveObjectRef(document, operation.requestBody);
-    const schema = body?.content?.["application/json"]?.schema;
+    const mediaType = method === "patch" ? "multipart/form-data" : "application/json";
+    const schema = body?.content?.[mediaType]?.schema;
     if (body?.required !== true || schema === undefined) {
-      errors.push(`${prefix}: requestBody must be required and define application/json.`);
+      errors.push(`${prefix}: requestBody must be required and define ${mediaType}.`);
     }
     const resolvedSchema = resolveObjectRef(document, schema);
     if (
       isRecord(resolvedSchema) &&
       resolvedSchema.type === "object" &&
+      mediaType === "application/json" &&
       resolvedSchema.additionalProperties !== false
     ) {
       errors.push(`${prefix}: request object schema must reject unrecognized fields.`);
+    }
+    if (pathName === "/v1/account/me/profile" && method === "patch") {
+      const properties = isRecord(resolvedSchema?.properties) ? resolvedSchema.properties : {};
+      const expectedFields = [
+        "displayName",
+        "avatar",
+        "cropX",
+        "cropY",
+        "cropWidth",
+        "cropHeight",
+        "removeAvatar",
+      ];
+      if (stableJson(Object.keys(properties).sort()) !== stableJson(expectedFields.sort())) {
+        errors.push(`${prefix}: multipart profile fields do not match the reviewed allowlist.`);
+      }
+      if (
+        !Array.isArray(resolvedSchema?.required) ||
+        !resolvedSchema.required.includes("displayName")
+      ) {
+        errors.push(`${prefix}: multipart profile request must require displayName.`);
+      }
     }
   }
   if (!isRecord(operation.responses)) {
@@ -271,6 +306,12 @@ function validateOperation(document, pathName, method, operation, errors) {
   if (successCodes.length === 0) errors.push(`${prefix}: a successful HTTP response is required.`);
   for (const status of successCodes) {
     const response = resolveObjectRef(document, operation.responses[status]);
+    if (pathName === "/v1/account/me/profile/avatar" && status === "200") {
+      if (!isRecord(response?.content) || !Object.hasOwn(response.content, "image/webp")) {
+        errors.push(`${prefix}: avatar response 200 must use image/webp.`);
+      }
+      continue;
+    }
     const schema = response?.content?.["application/json"]?.schema;
     const resolvedSchema = resolveObjectRef(document, schema);
     if (
@@ -317,6 +358,18 @@ function validateComponents(document, errors) {
     )
   ) {
     errors.push("CloudError must require code, message, retryable, and requestId.");
+  }
+  const accountProfile = schemas.AccountProfile;
+  const accountProfileProperties = isRecord(accountProfile?.properties)
+    ? accountProfile.properties
+    : {};
+  const accountProfileRequired = new Set(
+    Array.isArray(accountProfile?.required) ? accountProfile.required : [],
+  );
+  for (const field of ["displayName", "avatarRevision", "updatedAt"]) {
+    if (!accountProfileRequired.has(field) || !Object.hasOwn(accountProfileProperties, field)) {
+      errors.push(`AccountProfile must require ${field}.`);
+    }
   }
   const authTokens = schemas.AuthTokens;
   const authTokenProperties = isRecord(authTokens?.properties) ? authTokens.properties : {};

@@ -70,6 +70,9 @@ describe("online account refresh", () => {
       changePassword: vi.fn(),
       listDevices: vi.fn(),
       revokeDevice: vi.fn(),
+      getAccountProfile: vi.fn(),
+      updateAccountProfile: vi.fn(),
+      getAccountAvatar: vi.fn(),
     } satisfies CloudAccountPort;
     const controller = new AccountController({ vault, cloud, trustedOfflinePublicKeys: {} });
     await controller.initialize();

@@ -3,7 +3,7 @@ import { OfflineGrantError, publicKeyRawFromPrivate } from "../offline/grant.js"
 import { DpapiVault } from "./vault.js";
 
 export const ACTIVE_ACCOUNT_INDEX_KEY = "0".repeat(64);
-const DEVICE_RECORD_VERSION = 1;
+const DEVICE_RECORD_VERSION = 2;
 
 export interface DeviceIdentity {
   readonly privateKey: KeyObject;
@@ -13,7 +13,7 @@ export interface DeviceIdentity {
 }
 
 export interface StoredAccountRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly normalizedEmail: string;
   readonly userId: string | null;
   readonly emailVerified: boolean;
@@ -32,6 +32,9 @@ export interface StoredAccountRecord {
   readonly lastAcceptedTime: string | null;
   readonly entitlements: readonly { readonly code: string; readonly enabled: boolean }[];
   readonly accountEmail: string;
+  readonly displayName: string;
+  readonly avatarRevision: string | null;
+  readonly profileUpdatedAt: string | null;
 }
 
 export function accountVaultKey(email: string): string {
@@ -87,11 +90,15 @@ export async function getOrCreateDeviceIdentity(
       lastAcceptedTime: null,
       entitlements: [],
       accountEmail: normalizedEmail,
+      displayName: defaultDisplayName(normalizedEmail),
+      avatarRevision: null,
+      profileUpdatedAt: null,
     };
     await vault.set(accountKey, record);
     return { accountKey, record, identity };
   }
   const record = parseStoredAccountRecord(stored, normalizedEmail);
+  if (isRecord(stored) && stored.schemaVersion === 1) await vault.set(accountKey, record);
   const identity = identityFromRecord(record);
   return { accountKey, record, identity };
 }
@@ -134,7 +141,10 @@ export function parseStoredAccountRecord(
   value: unknown,
   expectedEmail?: string,
 ): StoredAccountRecord {
-  if (!isRecord(value) || value.schemaVersion !== DEVICE_RECORD_VERSION) {
+  if (
+    !isRecord(value) ||
+    (value.schemaVersion !== 1 && value.schemaVersion !== DEVICE_RECORD_VERSION)
+  ) {
     throw new OfflineGrantError("ACCOUNT_RECORD_INVALID", "The saved account record is damaged.");
   }
   const requiredString = (name: string): string => {
@@ -159,6 +169,13 @@ export function parseStoredAccountRecord(
   const lastTrustedServerTime = nullableString("lastTrustedServerTime");
   const lastAcceptedTime = nullableString("lastAcceptedTime");
   const createdAt = nullableString("createdAt");
+  const displayName =
+    value.schemaVersion === 1
+      ? defaultDisplayName(accountEmail)
+      : normalizeStoredDisplayName(value.displayName);
+  const avatarRevision = value.schemaVersion === 1 ? null : nullableString("avatarRevision");
+  const profileUpdatedAt =
+    value.schemaVersion === 1 ? createdAt : nullableString("profileUpdatedAt");
   const refreshToken = nullableString("refreshToken");
   const offlineGrant = value.offlineGrant;
   const entitlements = value.entitlements;
@@ -172,6 +189,8 @@ export function parseStoredAccountRecord(
     (deviceLastSeenAt !== null && !validDateString(deviceLastSeenAt)) ||
     (sessionId !== null && !isUuid(sessionId)) ||
     (createdAt !== null && !validDateString(createdAt)) ||
+    (profileUpdatedAt !== null && !validDateString(profileUpdatedAt)) ||
+    (avatarRevision !== null && (avatarRevision.length < 1 || avatarRevision.length > 64)) ||
     (lastTrustedServerTime !== null && !validDateString(lastTrustedServerTime)) ||
     (lastAcceptedTime !== null && !validDateString(lastAcceptedTime)) ||
     typeof value.emailVerified !== "boolean" ||
@@ -190,7 +209,7 @@ export function parseStoredAccountRecord(
     throw new OfflineGrantError("ACCOUNT_RECORD_INVALID", "The saved account record is damaged.");
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: DEVICE_RECORD_VERSION,
     normalizedEmail,
     userId,
     emailVerified: value.emailVerified,
@@ -209,7 +228,36 @@ export function parseStoredAccountRecord(
     lastAcceptedTime,
     entitlements: entitlements as StoredAccountRecord["entitlements"],
     accountEmail,
+    displayName,
+    avatarRevision,
+    profileUpdatedAt,
   };
+}
+
+export function defaultDisplayName(email: string): string {
+  const localPart = Array.from(email.normalize("NFC").split("@", 1)[0]?.trim() ?? "")
+    .slice(0, 32)
+    .join("");
+  try {
+    return normalizeStoredDisplayName(localPart);
+  } catch {
+    return "Caelush 用户";
+  }
+}
+
+export function normalizeStoredDisplayName(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new OfflineGrantError("ACCOUNT_RECORD_INVALID", "The saved account record is damaged.");
+  }
+  const normalized = value.normalize("NFC").trim();
+  if (
+    Array.from(normalized).length < 1 ||
+    Array.from(normalized).length > 32 ||
+    /[\p{Cc}\p{Cs}\u2028\u2029]/u.test(normalized)
+  ) {
+    throw new OfflineGrantError("ACCOUNT_RECORD_INVALID", "The saved account record is damaged.");
+  }
+  return normalized;
 }
 
 export function writeActiveAccount(vault: DpapiVault, accountKey: string): Promise<void> {

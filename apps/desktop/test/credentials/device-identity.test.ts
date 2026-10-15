@@ -36,4 +36,26 @@ describe("local device identity", () => {
     expect(repeated.identity.publicKeyBase64Url).toBe(first.identity.publicKeyBase64Url);
     expect(anotherAccount.identity.publicKeyBase64Url).not.toBe(first.identity.publicKeyBase64Url);
   });
+
+  it("migrates a version-one record to a cached profile without replacing device identity", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "caelush-device-test-"));
+    roots.push(root);
+    const vault = new DpapiVault(path.join(root, "vault.bin"), storage);
+    await vault.initialize();
+    const created = await getOrCreateDeviceIdentity(vault, "Person@example.test");
+    const legacyRecord = { ...created.record, schemaVersion: 1 } as Record<string, unknown>;
+    delete legacyRecord.displayName;
+    delete legacyRecord.avatarRevision;
+    delete legacyRecord.profileUpdatedAt;
+    await vault.set(created.accountKey, legacyRecord);
+
+    const migrated = await getOrCreateDeviceIdentity(vault, "person@example.test");
+    const persisted = await vault.get(created.accountKey);
+
+    expect(migrated.record.schemaVersion).toBe(2);
+    expect(migrated.record.displayName).toBe("person");
+    expect(migrated.record.avatarRevision).toBeNull();
+    expect(migrated.identity.publicKeyBase64Url).toBe(created.identity.publicKeyBase64Url);
+    expect(persisted).toMatchObject({ schemaVersion: 2, displayName: "person" });
+  });
 });
