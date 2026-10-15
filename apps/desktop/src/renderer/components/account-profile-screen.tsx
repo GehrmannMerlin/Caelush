@@ -451,7 +451,13 @@ function CropViewport(props: {
   const imageHeight = (dimensions?.height ?? size) * scale;
 
   useEffect(() => {
-    setDimensions(null);
+    const image = imageRef.current;
+    // A cached image can finish loading before this source-change effect runs.
+    setDimensions(
+      image?.complete && image.naturalWidth > 0 && image.naturalHeight > 0
+        ? { width: image.naturalWidth, height: image.naturalHeight }
+        : null,
+    );
     setOffset({ x: 0, y: 0 });
   }, [props.sourceUrl]);
 
