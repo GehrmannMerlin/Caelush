@@ -1,4 +1,5 @@
 import { useState, type ChangeEvent, type ReactElement } from "react";
+import { createPortal } from "react-dom";
 import type { PermissionPresetSelection } from "@caelush/protocol";
 import {
   fullAccessConfirmationCopy,
@@ -104,22 +105,26 @@ export function PermissionSelector(props: PermissionSelectorProps): ReactElement
           {props.error}
         </p>
       )}
-      {pendingConfirmation === undefined ? null : (
-        <div className="permission-selector-confirmation" role="dialog" aria-modal="true">
-          <h2>确认完全权限</h2>
-          {fullAccessConfirmationCopy().map((line) => (
-            <p key={line}>{line}</p>
-          ))}
-          <div className="permission-selector-confirmation-actions">
-            <button type="button" onClick={() => setPendingConfirmation(undefined)}>
-              取消
-            </button>
-            <button type="button" onClick={confirmFullAccess}>
-              确认使用完全权限
-            </button>
-          </div>
-        </div>
-      )}
+      {pendingConfirmation === undefined
+        ? null
+        : createPortal(
+            // Keep this outside the query-container composer so fixed positioning uses the viewport.
+            <div className="permission-selector-confirmation" role="dialog" aria-modal="true">
+              <h2>确认完全权限</h2>
+              {fullAccessConfirmationCopy().map((line) => (
+                <p key={line}>{line}</p>
+              ))}
+              <div className="permission-selector-confirmation-actions">
+                <button type="button" onClick={() => setPendingConfirmation(undefined)}>
+                  取消
+                </button>
+                <button type="button" onClick={confirmFullAccess}>
+                  确认使用完全权限
+                </button>
+              </div>
+            </div>,
+            document.body,
+          )}
     </div>
   );
 }
