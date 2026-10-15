@@ -50,6 +50,11 @@ export const DesktopAccountProfileSchema = z
   })
   .strict();
 
+export const DesktopSidebarProfileSchema = DesktopAccountProfileSchema.pick({
+  displayName: true,
+  avatarBytes: true,
+});
+
 export const AccountStateSchema = z
   .object({
     status: AccountStatusSchema,
@@ -92,6 +97,7 @@ export type AccountStatus = z.infer<typeof AccountStatusSchema>;
 export type SafeAccount = z.infer<typeof SafeAccountSchema>;
 export type SafeDevice = z.infer<typeof SafeDeviceSchema>;
 export type DesktopAccountProfile = z.infer<typeof DesktopAccountProfileSchema>;
+export type DesktopSidebarProfile = z.infer<typeof DesktopSidebarProfileSchema>;
 export type AccountState = z.infer<typeof AccountStateSchema>;
 
 export function createInitialAccountState(status: AccountStatus = "INITIALIZING"): AccountState {

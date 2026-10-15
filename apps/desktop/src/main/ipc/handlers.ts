@@ -4,7 +4,11 @@ import { BrowserWindow, dialog, ipcMain, type IpcMain, type IpcMainInvokeEvent }
 import { z } from "zod";
 import { WorkspaceIdSchema } from "@caelush/protocol";
 import { AccountController, AccountOperationError } from "../account/controller.js";
-import { AccountStateSchema, DesktopAccountProfileSchema } from "../account/state.js";
+import {
+  AccountStateSchema,
+  DesktopAccountProfileSchema,
+  DesktopSidebarProfileSchema,
+} from "../account/state.js";
 import type { AccountState } from "../account/state.js";
 import type { DesktopLegacyDataImporter } from "../migration/legacy-data-import.js";
 import {
@@ -39,6 +43,7 @@ export const IPC_CHANNELS = Object.freeze({
     listDevices: "caelush:account:list-devices",
     revokeDevice: "caelush:account:revoke-device",
     getProfile: "caelush:account:get-profile",
+    getSidebarProfile: "caelush:account:get-sidebar-profile",
     updateProfile: "caelush:account:update-profile",
     selectAvatar: "caelush:account:select-avatar",
   }),
@@ -663,6 +668,18 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
     DesktopAccountProfileSchema,
     (_input, signal) => options.controller.getProfile(signal),
     AUTHORIZED_STATES,
+  );
+  register(
+    account.getSidebarProfile,
+    NoInput,
+    DesktopSidebarProfileSchema,
+    async (_input, signal) => {
+      const profile = await options.controller.getProfile(signal);
+      return { displayName: profile.displayName, avatarBytes: profile.avatarBytes };
+    },
+    AUTHORIZED_STATES,
+    IPC_OPERATION_TIMEOUT_MS,
+    "AGENT",
   );
   register(
     account.updateProfile,

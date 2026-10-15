@@ -51,7 +51,10 @@ import { ModelPicker } from "./components/model-picker.js";
 import { PermissionSelector } from "./components/permission-selector.js";
 import { hasTurnPresentationItems } from "./components/turn-presentation-feed.js";
 import { observeDesktopPanelApi, type DesktopPanelApi } from "./host/desktop-panel-api.js";
-import { resolveClientHostIntegration } from "./host/desktop-integration.js";
+import {
+  resolveClientHostIntegration,
+  type DesktopSidebarProfile,
+} from "./host/desktop-integration.js";
 
 const WorkspaceDialog = lazy(async () => {
   const module = await import("./components/workspace-dialog.js");
@@ -111,7 +114,31 @@ export function WebHostApp(props: {
   const [workspaceActionError, setWorkspaceActionError] = useState<string | undefined>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [desktopPanelApi, setDesktopPanelApi] = useState<DesktopPanelApi | null>(null);
+  const [sidebarAccountProfile, setSidebarAccountProfile] = useState<DesktopSidebarProfile | null>(
+    null,
+  );
   const pendingDraftWorkspaceId = useRef<WorkspaceId | undefined>(undefined);
+
+  useEffect(() => {
+    const readSidebarProfile =
+      clientHost.kind === "DESKTOP" ? clientHost.account?.getSidebarProfile : undefined;
+    if (readSidebarProfile === undefined) {
+      setSidebarAccountProfile(null);
+      return undefined;
+    }
+
+    let active = true;
+    void readSidebarProfile()
+      .then((profile) => {
+        if (active) setSidebarAccountProfile(profile);
+      })
+      .catch(() => {
+        if (active) setSidebarAccountProfile(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [clientHost]);
 
   useEffect(() => {
     let active = true;
@@ -344,6 +371,7 @@ export function WebHostApp(props: {
     clientHost.kind === "DESKTOP"
       ? {
           accountHref: clientHost.account?.href,
+          accountProfile: sidebarAccountProfile ?? undefined,
           onCheckUpdates:
             clientHost.updates === undefined
               ? undefined

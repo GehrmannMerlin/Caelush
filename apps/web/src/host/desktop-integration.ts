@@ -4,6 +4,12 @@ export const CAELUSH_DESKTOP_PROTOCOL_VERSION = 1 as const;
 
 interface DesktopAccountBridge {
   readonly logout: () => Promise<{ readonly serverRevoked: boolean }>;
+  readonly getSidebarProfile?: (() => Promise<DesktopSidebarProfile>) | undefined;
+}
+
+export interface DesktopSidebarProfile {
+  readonly displayName: string;
+  readonly avatarBytes: Uint8Array | null;
 }
 
 export interface DesktopUpdateState {
@@ -44,6 +50,7 @@ export type ClientHostIntegration =
         | {
             readonly href: "caelush-login://app/?view=account";
             readonly logout: DesktopAccountBridge["logout"];
+            readonly getSidebarProfile?: DesktopAccountBridge["getSidebarProfile"];
           }
         | undefined;
       readonly updates?: { readonly check: DesktopUpdateBridge["check"] } | undefined;
@@ -74,6 +81,12 @@ export function resolveClientHostIntegration(
       ? {
           href: "caelush-login://app/?view=account" as const,
           logout: bridge.account.logout as DesktopAccountBridge["logout"],
+          ...(typeof bridge.account.getSidebarProfile === "function"
+            ? {
+                getSidebarProfile: bridge.account
+                  .getSidebarProfile as DesktopAccountBridge["getSidebarProfile"],
+              }
+            : {}),
         }
       : undefined;
   const updates =

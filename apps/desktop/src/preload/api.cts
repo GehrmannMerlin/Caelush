@@ -21,6 +21,7 @@ const channels = {
     listDevices: "caelush:account:list-devices",
     revokeDevice: "caelush:account:revoke-device",
     getProfile: "caelush:account:get-profile",
+    getSidebarProfile: "caelush:account:get-sidebar-profile",
     updateProfile: "caelush:account:update-profile",
     selectAvatar: "caelush:account:select-avatar",
   },
@@ -202,6 +203,10 @@ const accountApi: DesktopApi["account"] = {
   getProfile: async () =>
     unwrapIpcResult<Awaited<ReturnType<DesktopApi["account"]["getProfile"]>>>(
       await electron.ipcRenderer.invoke(channels.account.getProfile),
+    ),
+  getSidebarProfile: async () =>
+    unwrapIpcResult<Awaited<ReturnType<DesktopApi["account"]["getSidebarProfile"]>>>(
+      await electron.ipcRenderer.invoke(channels.account.getSidebarProfile),
     ),
   updateProfile: (input) =>
     electron.ipcRenderer

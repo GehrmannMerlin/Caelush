@@ -17,12 +17,16 @@ describe("client host integration", () => {
 
   it("projects only available version-one Desktop capabilities", async () => {
     const logout = vi.fn(async () => ({ serverRevoked: true }));
+    const getSidebarProfile = vi.fn(async () => ({
+      displayName: "霜华",
+      avatarBytes: new Uint8Array([65]),
+    }));
     const check = vi.fn(async () => ({ status: "IDLE" }));
 
     const integration = resolveClientHostIntegration({
       caelushDesktop: {
         protocolVersion: 1,
-        account: { logout },
+        account: { logout, getSidebarProfile },
         update: { check },
       },
     });
@@ -32,6 +36,7 @@ describe("client host integration", () => {
     expect(integration.loadingUi).toBe(true);
     expect(integration.account?.href).toBe("caelush-login://app/?view=account");
     await expect(integration.account?.logout()).resolves.toEqual({ serverRevoked: true });
+    expect(integration.account?.getSidebarProfile).toBe(getSidebarProfile);
     await expect(integration.updates?.check()).resolves.toEqual({ status: "IDLE" });
     expect(logout).toHaveBeenCalledOnce();
     expect(check).toHaveBeenCalledOnce();

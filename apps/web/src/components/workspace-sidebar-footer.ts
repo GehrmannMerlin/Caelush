@@ -3,6 +3,8 @@ import { LogOut, RefreshCw, Settings, SlidersHorizontal } from "lucide-react";
 
 export interface WorkspaceSidebarDesktopActions {
   readonly accountHref?: string | undefined;
+  readonly accountProfile?:
+    { readonly displayName: string; readonly avatarBytes: Uint8Array | null } | undefined;
   readonly onCheckUpdates?: (() => void) | undefined;
   readonly onLogout?: (() => void) | undefined;
 }
@@ -70,6 +72,12 @@ export function WorkspaceSidebarFooter(props: {
   const settingsControlRef = useRef<HTMLDivElement>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const { desktopActions } = props;
+  const accountName = desktopActions?.accountProfile?.displayName ?? "Caelush";
+  const avatarBytes = desktopActions?.accountProfile?.avatarBytes;
+  const avatarSource =
+    avatarBytes === null || avatarBytes === undefined || avatarBytes.length === 0
+      ? null
+      : avatarBytesToDataUrl(avatarBytes);
 
   useEffect(() => {
     if (!settingsMenuOpen) return undefined;
@@ -115,7 +123,14 @@ export function WorkspaceSidebarFooter(props: {
             className: "workspace-settings-button workspace-account-link",
             href: desktopActions.accountHref,
           },
-          createElement("span", null, "Desktop account"),
+          createElement(
+            "span",
+            { className: "workspace-account-avatar", "aria-hidden": true },
+            avatarSource === null
+              ? firstAccountCharacter(accountName)
+              : createElement("img", { src: avatarSource, alt: "" }),
+          ),
+          createElement("span", { className: "workspace-account-name" }, accountName),
         ),
     createElement(
       "div",
@@ -146,4 +161,19 @@ export function WorkspaceSidebarFooter(props: {
         : null,
     ),
   );
+}
+
+function avatarBytesToDataUrl(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 32 * 1024;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(
+      ...bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length)),
+    );
+  }
+  return `data:image/webp;base64,${btoa(binary)}`;
+}
+
+function firstAccountCharacter(value: string): string {
+  return Array.from(value.trim())[0]?.toLocaleUpperCase() ?? "C";
 }

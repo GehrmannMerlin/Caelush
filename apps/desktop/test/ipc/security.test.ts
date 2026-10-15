@@ -76,6 +76,15 @@ function fixture(
     })),
     login: vi.fn(),
     logout: vi.fn(async () => ({ serverRevoked: true })),
+    getProfile: vi.fn(async () => ({
+      email: "person@example.test",
+      emailVerified: true,
+      displayName: "韩吉衍",
+      avatarRevision: "revision-1",
+      avatarBytes: new Uint8Array([65, 66, 67]),
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      canEdit: true,
+    })),
     resendVerification: vi.fn(),
     verifyEmail: vi.fn(),
     forgotPassword: vi.fn(),
@@ -253,6 +262,42 @@ describe("Desktop IPC security boundary", () => {
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("IPC_CALLER_INVALID");
     test.dispose();
+  });
+
+  it("exposes only the saved sidebar profile to an authorized Agent main frame", async () => {
+    const test = fixture({ userId: "8d5cc9cb-f70d-4f5f-9d95-69c8e8eb8857" });
+    const getSidebarProfile = test.handlers.get("caelush:account:get-sidebar-profile");
+    expect(getSidebarProfile).toBeDefined();
+    if (getSidebarProfile === undefined) {
+      test.dispose();
+      return;
+    }
+
+    test.frame.url = "caelush-app://app/agent/";
+    expect(await getSidebarProfile(test.event(), undefined)).toEqual({
+      ok: true,
+      value: { displayName: "韩吉衍", avatarBytes: new Uint8Array([65, 66, 67]) },
+    });
+    expect(test.controller.getProfile).toHaveBeenCalledOnce();
+
+    test.frame.url = "caelush-login://app/";
+    expect(await getSidebarProfile(test.event(), undefined)).toMatchObject({
+      ok: false,
+      error: { code: "IPC_CALLER_INVALID" },
+    });
+    expect(test.controller.getProfile).toHaveBeenCalledOnce();
+    test.dispose();
+
+    const unauthorized = fixture();
+    unauthorized.frame.url = "caelush-app://app/agent/";
+    expect(
+      await unauthorized.handlers.get("caelush:account:get-sidebar-profile")?.(
+        unauthorized.event(),
+        undefined,
+      ),
+    ).toMatchObject({ ok: false, error: { code: "ACCOUNT_STATE_INVALID" } });
+    expect(unauthorized.controller.getProfile).not.toHaveBeenCalled();
+    unauthorized.dispose();
   });
 
   it("keeps Login-only IPC closed to the localhost development Agent host", async () => {

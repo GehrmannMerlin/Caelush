@@ -92,6 +92,7 @@ describe("WorkspaceSidebar", () => {
         onForgetWorkspace={vi.fn()}
         desktopActions={{
           accountHref: "caelush-login://app/?view=account",
+          accountProfile: { displayName: "霜华", avatarBytes: new Uint8Array([88]) },
           onCheckUpdates: vi.fn(),
           onLogout: vi.fn(),
         }}
@@ -99,7 +100,9 @@ describe("WorkspaceSidebar", () => {
     );
 
     expect(html).toContain('href="caelush-login://app/?view=account"');
-    expect(html).toContain("Desktop account");
+    expect(html).toContain("霜华");
+    expect(html).toContain('src="data:image/webp;base64,WA=="');
+    expect(html).not.toContain("Desktop account");
     expect(html).toContain('aria-label="桌面端账户与设置"');
   });
 

@@ -2566,8 +2566,36 @@ body {
   min-width: 0;
   min-height: 36px;
   overflow: hidden;
+  gap: 8px;
   padding: 0 9px;
   border-radius: 8px;
+}
+
+.workspace-sidebar-footer--desktop .workspace-account-avatar {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--web-sidebar-line);
+  color: var(--web-sidebar-ink);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.workspace-sidebar-footer--desktop .workspace-account-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+.workspace-sidebar-footer--desktop .workspace-account-name {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

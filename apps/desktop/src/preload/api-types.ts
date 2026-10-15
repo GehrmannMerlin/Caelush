@@ -1,4 +1,9 @@
-import type { AccountState, DesktopAccountProfile, SafeDevice } from "../main/account/state.js";
+import type {
+  AccountState,
+  DesktopAccountProfile,
+  DesktopSidebarProfile,
+  SafeDevice,
+} from "../main/account/state.js";
 import type {
   AcceptedResponse,
   DeviceRevocationResponse,
@@ -51,6 +56,7 @@ export interface DesktopApi {
     listDevices(): Promise<readonly SafeDevice[]>;
     revokeDevice(input: { readonly deviceId: string }): Promise<DeviceRevocationResponse>;
     getProfile(): Promise<DesktopAccountProfile>;
+    getSidebarProfile(): Promise<DesktopSidebarProfile>;
     updateProfile(input: AccountProfileUpdateInput): Promise<DesktopAccountProfile>;
     selectAvatar(): Promise<{
       readonly mimeType: "image/png" | "image/jpeg" | "image/webp";
