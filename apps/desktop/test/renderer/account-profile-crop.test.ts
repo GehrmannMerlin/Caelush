@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page } from "@playwright/test";
 import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { AccountProfileUpdateInputSchema } from "../../src/main/cloud/schemas.js";
 
 const desktopRoot = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -51,6 +52,7 @@ createRoot(document.getElementById("root")).render(
           displayName: input.displayName,
           removeAvatar: input.removeAvatar,
           avatar: input.avatar && {
+            bytes: Array.from(input.avatar.bytes),
             contentType: input.avatar.contentType,
             crop: input.avatar.crop,
           },
@@ -156,6 +158,40 @@ describe.skipIf(!existsSync(chromium.executablePath()))("account avatar cropping
     expect(await confirmAndSave()).toMatchObject({
       avatar: { crop: { x: 0, y: 0, width: 1, height: 1 } },
     });
+  });
+
+  it.each([
+    { width: 117, height: 117, crop: { x: 0, y: 0, width: 1, height: 1 } },
+    {
+      width: 1258,
+      height: 1244,
+      crop: { x: 7 / 1258, y: 0, width: 1244 / 1258, height: 1 },
+    },
+    {
+      width: 1244,
+      height: 1258,
+      crop: { x: 0, y: 7 / 1258, width: 1, height: 1244 / 1258 },
+    },
+  ])("submits an in-bounds crop for a $width x $height image", async ({ width, height, crop }) => {
+    await selectImage(width, height, true);
+    await page.getByRole("textbox", { name: "展示名", exact: true }).fill("霜华");
+    const confirm = page.getByRole("button", { name: "使用此头像", exact: true });
+    await expect.poll(() => confirm.isEnabled(), { timeout: 2_000 }).toBe(true);
+    await confirm.click();
+    await page.getByRole("button", { name: "保存更改", exact: true }).click();
+    await expect.poll(() => page.evaluate("window.avatarTest.saved")).not.toBeNull();
+    const saved = await page.evaluate("window.avatarTest.saved");
+
+    expect(
+      AccountProfileUpdateInputSchema.safeParse({
+        ...saved,
+        avatar: { ...saved.avatar, bytes: new Uint8Array(saved.avatar.bytes) },
+      }).success,
+    ).toBe(true);
+    expect(saved.displayName).toBe("霜华");
+    for (const coordinate of ["x", "y", "width", "height"] as const) {
+      expect(saved.avatar.crop[coordinate]).toBeCloseTo(crop[coordinate], 12);
+    }
   });
 
   it("keeps a zoomed rectangular image crop square in source pixels", async () => {

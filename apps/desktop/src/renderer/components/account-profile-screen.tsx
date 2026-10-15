@@ -470,8 +470,9 @@ function CropViewport(props: {
 
   useEffect(() => {
     if (dimensions === null) return;
-    const width = size / imageWidth;
-    const height = size / imageHeight;
+    // Scaling can round a covered axis just below the viewport size.
+    const width = Math.min(1, size / imageWidth);
+    const height = Math.min(1, size / imageHeight);
     props.onCrop({
       x: clamp(0.5 + (-offset.x - size / 2) / imageWidth, 0, 1 - width),
       y: clamp(0.5 + (-offset.y - size / 2) / imageHeight, 0, 1 - height),
