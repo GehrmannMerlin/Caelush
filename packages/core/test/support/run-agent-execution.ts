@@ -162,6 +162,11 @@ export function fakeContextEngine(
       preparations.push({ mode: input.mode, messages });
       return {
         messages,
+        requestBudget: {
+          version: "LEGACY_FULL_OUTPUT_V1",
+          outputReserveTokens: 0,
+          safetyReserveTokens: 0,
+        },
         report: overrides.report ?? defaultReport(input),
         observationPolicy: { maxSingleObservationTokens: 4_000, maxObservationBatchTokens: 12_000 },
       };

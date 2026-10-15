@@ -33,6 +33,56 @@ describe("RunRepository", () => {
     await database.close();
   });
 
+  it("round-trips the immutable context budget policy in the existing Run record", async () => {
+    const { database, sessions, runs } = await createRepositories();
+    const session = makeSession();
+    const run = makeRun(session.id, {
+      contextBudgetPolicy: {
+        version: "ADAPTIVE_V1",
+        outputReserveTokens: 16_384,
+        safetyReserveTokens: 4_096,
+      },
+    });
+    await sessions.insert(session);
+    await runs.insert(run);
+
+    expect(await runs.get(run.id)).toEqual(run);
+
+    await database.close();
+  });
+
+  it("decodes and updates historical Runs that do not have a context budget snapshot", async () => {
+    const { database, sessions, runs } = await createRepositories();
+    const session = makeSession();
+    const legacyRun = { ...makeRun(session.id) };
+    delete legacyRun.contextBudgetPolicy;
+    await sessions.insert(session);
+    database.client
+      .prepare(
+        `INSERT INTO agent_runs
+          (id, session_id, protocol_version, status, created_at_ms, started_at_ms, finished_at_ms, data_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        legacyRun.id,
+        legacyRun.sessionId,
+        1,
+        legacyRun.status,
+        legacyRun.createdAt,
+        null,
+        null,
+        JSON.stringify(legacyRun),
+      );
+
+    await expect(runs.get(legacyRun.id)).resolves.toEqual(legacyRun);
+    await runs.update({ ...legacyRun, status: "RUNNING" });
+    const updated = await runs.get(legacyRun.id);
+    expect(updated?.status).toBe("RUNNING");
+    expect(updated?.contextBudgetPolicy).toBeUndefined();
+
+    await database.close();
+  });
+
   it("requires the parent session and keeps update separate from insert", async () => {
     const { database, runs } = await createRepositories();
     const run = makeRun(makeSession().id);
@@ -145,8 +195,8 @@ describe("RunRepository.listRecoverable", () => {
     const second = await runs.listRecoverable({ limit: 3 });
     expect(first.map((run) => run.id)).toEqual(second.map((run) => run.id));
     expect(first).toHaveLength(3);
-    expect((await runs.listRecoverable({ statuses: [] }))).toEqual([]);
-    expect((await runs.listRecoverable({ limit: 0 }))).toEqual([]);
+    expect(await runs.listRecoverable({ statuses: [] })).toEqual([]);
+    expect(await runs.listRecoverable({ limit: 0 })).toEqual([]);
 
     await database.close();
   });

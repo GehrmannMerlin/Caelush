@@ -293,6 +293,7 @@ export { AgentSessionSchema } from "./session.js";
 export type { AgentSession } from "./session.js";
 export {
   AgentRunSchema,
+  ContextBudgetPolicySnapshotSchema,
   CurrentAgentRunSchema,
   NormalRunFinalResultSchema,
   RunCompletionContractSchema,
@@ -300,6 +301,7 @@ export {
 } from "./run.js";
 export type {
   AgentRun,
+  ContextBudgetPolicySnapshot,
   CurrentAgentRun,
   NormalRunFinalResult,
   RunCompletionContract,

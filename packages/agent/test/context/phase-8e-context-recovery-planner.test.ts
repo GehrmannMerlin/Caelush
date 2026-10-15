@@ -13,9 +13,9 @@ const policy = {
 } as ContextPolicy;
 
 const pressure = (shouldCompact: boolean): ContextPressureEvaluation => ({
-  state: shouldCompact ? "PROACTIVE" : "NORMAL",
-  trigger: shouldCompact ? "PROACTIVE_PRESSURE" : "NONE",
-  pressureRatio: shouldCompact ? 0.8 : 0.2,
+  state: shouldCompact ? "EMERGENCY" : "NORMAL",
+  trigger: shouldCompact ? "EMERGENCY_PRESSURE" : "NONE",
+  pressureRatio: shouldCompact ? 1 : 0.2,
   shouldCompact,
   targetPostCompactionTokens: 2_800,
   targetRecentTailTokens: policy.targetRecentTailTokens,
@@ -50,6 +50,24 @@ describe("Phase 8E ContextRecoveryPlanner", () => {
     ).toEqual(["COMPACT_HISTORY"]);
   });
 
+  it("does not compact for a high pressure warning below the hard input limit", () => {
+    const planner = createContextRecoveryPlanner();
+
+    expect(
+      planner.plan({
+        mode: "NORMAL",
+        pressure: {
+          ...pressure(false),
+          state: "EMERGENCY",
+          trigger: "EMERGENCY_PRESSURE",
+          pressureRatio: 0.95,
+        },
+        policy,
+        hasCompressibleHistory: true,
+      }).actions,
+    ).toEqual([]);
+  });
+
   it("returns the fixed FORCED action order with a smaller bounded tail", () => {
     const planner = createContextRecoveryPlanner();
 
@@ -72,5 +90,23 @@ describe("Phase 8E ContextRecoveryPlanner", () => {
       targetRecentTailTokens: 1_200,
       minRecentTailTokens: 500,
     });
+  });
+
+  it("does not schedule history compaction when there is no eligible history", () => {
+    const planner = createContextRecoveryPlanner();
+
+    expect(
+      planner.plan({
+        mode: "FORCED_RECOVERY",
+        pressure: pressure(true),
+        policy,
+        hasCompressibleHistory: false,
+      }).actions,
+    ).toEqual([
+      "DEFER_LOW_RETRIEVABLE",
+      "REDUCE_OPTIONAL_SOURCES",
+      "TIGHTEN_RECENT_TAIL",
+      "EXHAUSTED",
+    ]);
   });
 });

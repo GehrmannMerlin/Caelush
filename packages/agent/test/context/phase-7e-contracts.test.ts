@@ -87,6 +87,7 @@ describe("Phase 7E Agent-owned contracts", () => {
       },
       tokensBefore: 100,
       tokensAfter: 40,
+      actualFreedTokens: 60,
       degraded: false,
     };
     const receipt: ContextBuildReceipt = {

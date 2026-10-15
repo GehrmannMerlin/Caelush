@@ -37,7 +37,9 @@ const THRESHOLDS = {
 function pressureInput(overrides: Partial<ContextPressureInput> = {}): ContextPressureInput {
   return {
     estimatedInputTokens: 100,
+    selectedPlanningTokens: 100,
     mandatoryTokens: 100,
+    historySelectionPressure: false,
     mode: "NORMAL",
     hasCompressibleHistory: true,
     ...THRESHOLDS,
@@ -265,18 +267,36 @@ describe("Phase 8A pressure evaluator", () => {
   it.each([
     [750, "PROACTIVE"],
     [899, "PROACTIVE"],
-  ] as const)("reports %s as %s", (estimatedInputTokens, state) => {
+    [900, "EMERGENCY"],
+    [999, "EMERGENCY"],
+  ] as const)("reports %s as %s without compacting", (estimatedInputTokens, state) => {
     expect(evaluate({ estimatedInputTokens })).toMatchObject({
       state,
-      trigger: "PROACTIVE_PRESSURE",
-      shouldCompact: true,
+      trigger: state === "EMERGENCY" ? "EMERGENCY_PRESSURE" : "PROACTIVE_PRESSURE",
+      shouldCompact: false,
     });
   });
 
-  it.each([900, 901] as const)("reports %s as EMERGENCY", (estimatedInputTokens) => {
-    expect(evaluate({ estimatedInputTokens })).toMatchObject({
+  it("compacts at the complete message input limit", () => {
+    expect(evaluate({ estimatedInputTokens: 1_000 })).toMatchObject({
       state: "EMERGENCY",
       trigger: "EMERGENCY_PRESSURE",
+      pressureRatio: 1,
+      shouldCompact: true,
+      targetPostCompactionTokens: 800,
+    });
+  });
+
+  it("compacts below the limit when eligible history was excluded by total-budget selection", () => {
+    expect(
+      evaluate({
+        estimatedInputTokens: 400,
+        selectedPlanningTokens: 700,
+        historySelectionPressure: true,
+      }),
+    ).toMatchObject({
+      state: "NORMAL",
+      trigger: "HISTORY_SELECTION_PRESSURE",
       shouldCompact: true,
     });
   });
@@ -307,20 +327,21 @@ describe("Phase 8A pressure evaluator", () => {
     });
   });
 
-  it("reports mandatory selection pressure when protected input is over budget", () => {
+  it("reports mandatory selection pressure without compacting protected current input", () => {
     expect(
       evaluate({
         estimatedInputTokens: 800,
+        selectedPlanningTokens: 1_001,
         mandatoryTokens: 1_001,
       }),
     ).toMatchObject({
       state: "PROACTIVE",
       trigger: "SELECTION_PRESSURE",
-      shouldCompact: true,
+      shouldCompact: false,
     });
   });
 
-  it("computes the post-compaction hysteresis target without changing the tail target", () => {
+  it("computes the post-compaction target from the hard input limit without changing the tail", () => {
     expect(
       evaluate({
         proactiveCompactionTokens: 751,
@@ -328,7 +349,7 @@ describe("Phase 8A pressure evaluator", () => {
         minRecentTailTokens: 111,
       }),
     ).toMatchObject({
-      targetPostCompactionTokens: 600,
+      targetPostCompactionTokens: 800,
       targetRecentTailTokens: 333,
       minRecentTailTokens: 111,
     });

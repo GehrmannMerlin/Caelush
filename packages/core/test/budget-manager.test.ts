@@ -53,6 +53,26 @@ describe("BudgetManager", () => {
     ).toMatchObject({ kind: "EXCEEDED", dimension: "TOKENS" });
   });
 
+  it("limits an overflow recovery to the original output ceiling and remaining Run budget", () => {
+    const result = new BudgetManager().admitLLMRecovery({
+      limits: { ...limits, maxTokens: 10_000 },
+      snapshot: {
+        ...snapshot,
+        tokensConsumed: 9_500,
+      },
+      estimatedInputTokens: 400,
+      configuredMaxOutputTokens: 900,
+      initialOutputCeiling: 500,
+    });
+
+    expect(result).toMatchObject({
+      kind: "ALLOWED",
+      effectiveMaxOutputTokens: 100,
+      reservedInputTokens: 400,
+      reservedOutputTokens: 100,
+    });
+  });
+
   it("enforces token and cost limits together with conservative ceiling arithmetic", () => {
     const manager = new BudgetManager();
     const result = manager.admitLLM({

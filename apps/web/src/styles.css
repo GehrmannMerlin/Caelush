@@ -3245,7 +3245,7 @@ body {
   bottom: 36px;
   width: min(320px, calc(100vw - 32px));
   box-sizing: border-box;
-  padding: 14px;
+  padding: 12px 14px 13px;
   border: 1px solid #dce7f5;
   border-radius: 12px;
   background: #fff;
@@ -3306,7 +3306,7 @@ body {
 
 .context-inspector-progress {
   height: 7px;
-  margin: 13px 0 11px;
+  margin: 11px 0 10px;
   overflow: hidden;
   border-radius: 999px;
   background: #eaf0f7;
@@ -3352,6 +3352,11 @@ body {
   overflow-wrap: anywhere;
 }
 
+.context-inspector-capacity--window > strong {
+  color: #263b55;
+  font-weight: 650;
+}
+
 .context-inspector-capacity--remaining {
   margin-top: 4px;
 }
@@ -3364,8 +3369,8 @@ body {
 .context-inspector-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 13px;
-  padding-top: 12px;
+  margin-top: 11px;
+  padding-top: 10px;
   gap: 14px;
   border-top: 1px solid #edf2f8;
 }
@@ -3398,6 +3403,11 @@ body {
 
   .context-inspector-capacity {
     align-items: flex-start;
+  }
+
+  .context-inspector-capacity--window > strong,
+  .context-inspector-capacity--remaining > strong {
+    overflow-wrap: anywhere;
   }
 }
 

@@ -63,6 +63,11 @@ function run(sessionId: ReturnType<typeof createSessionId>, workspace: string) {
       expectedVersion: 1,
       createdAt: new Date(1).toISOString(),
     }),
+    contextBudgetPolicy: {
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 16_384,
+      safetyReserveTokens: 4_096,
+    },
     limits: { maxSteps: 1, maxToolCalls: 1, timeoutMs: 1000 },
     createdAt: 1,
     finishedAt: 2,

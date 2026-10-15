@@ -27,10 +27,17 @@ export interface ContextRecoveryPlanner {
   }): ContextRecoveryPlan;
 }
 
-const FORCED_ACTIONS = Object.freeze([
+const FORCED_ACTIONS_WITH_HISTORY = Object.freeze([
   "DEFER_LOW_RETRIEVABLE",
   "REDUCE_OPTIONAL_SOURCES",
   "COMPACT_HISTORY",
+  "TIGHTEN_RECENT_TAIL",
+  "EXHAUSTED",
+] as const satisfies readonly ContextRecoveryAction[]);
+
+const FORCED_ACTIONS_WITHOUT_HISTORY = Object.freeze([
+  "DEFER_LOW_RETRIEVABLE",
+  "REDUCE_OPTIONAL_SOURCES",
   "TIGHTEN_RECENT_TAIL",
   "EXHAUSTED",
 ] as const satisfies readonly ContextRecoveryAction[]);
@@ -44,7 +51,9 @@ export function createContextRecoveryPlanner(): ContextRecoveryPlanner {
       if (input.mode === "FORCED_RECOVERY") {
         return Object.freeze({
           stage: "FORCED",
-          actions: FORCED_ACTIONS,
+          actions: input.hasCompressibleHistory
+            ? FORCED_ACTIONS_WITH_HISTORY
+            : FORCED_ACTIONS_WITHOUT_HISTORY,
           targetRecentTailTokens: forcedTarget(input.policy),
           minRecentTailTokens: forcedMinimum(input.policy),
         });

@@ -85,6 +85,10 @@ function budget(
       calls.push("admitLLM");
       return { kind: "ALLOWED" };
     },
+    async admitLLMRecovery() {
+      calls.push("admitLLMRecovery");
+      return { kind: "ALLOWED" };
+    },
     async settleLLM() {
       calls.push("settleLLM");
     },

@@ -93,6 +93,7 @@ import type { ContextMaterializer } from "../materializer/context-materializer.j
 import { createContextPlanner, type ContextPlanner } from "../planner/context-planner.js";
 import {
   createContextPolicy,
+  resolveAdaptiveContextBudget,
   type ContextPlan,
   type ContextPolicyOptions,
 } from "../policy/context-policy.js";
@@ -127,7 +128,11 @@ import {
 import { AGENT_CONTEXT_SOURCE_IDS } from "../source/source-ids.js";
 import type { ContextCheckpointRef } from "../compaction/context-compaction-contracts.js";
 import { ContextExhaustedError } from "../planner/context-planning-errors.js";
-import type { AgentExecutionIdentity, AgentTurnRef } from "../../loop/types.js";
+import type {
+  AgentExecutionIdentity,
+  AgentTurnRef,
+  ContextRequestBudget,
+} from "../../loop/types.js";
 import { createContextItemId } from "../item/context-item.js";
 import { createSourceResult, estimateContextTokens } from "../source/generic-provider-helpers.js";
 import { createContextCompactionCoordinator } from "../compaction/context-compaction-coordinator.js";
@@ -200,6 +205,8 @@ export interface V2ContextEngineOptions {
   readonly promptSurfaceStore: PromptSurfaceStorePort;
   /** Provider-neutral settings used only to freeze the model-input cache identity. */
   readonly modelSettings?: AIModelSettings;
+  /** Persisted Run policy. Missing or legacy snapshots retain historical full-output behavior. */
+  readonly requestBudget?: ContextRequestBudget;
   readonly promptSurfaceEpochIdFactory?: { create(): string };
   readonly sourceRegistry: ContextSourceRegistry;
   readonly checkpointRepository: ContextCheckpointRepositoryPort;
@@ -288,20 +295,56 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         model: input.model,
         tools: input.tools,
       });
+      const adaptiveBudget =
+        options.requestBudget?.version === "ADAPTIVE_V1"
+          ? resolveAdaptiveContextBudget({
+              contextWindowTokens: input.model.limits.contextWindowTokens,
+              maxOutputTokens: input.model.limits.maxOutputTokens,
+              ...(options.modelSettings?.maxOutputTokens === undefined
+                ? {}
+                : { configuredOutputCeiling: options.modelSettings.maxOutputTokens }),
+              requestOverheadTokens: requestOverhead.totalTokens,
+            })
+          : undefined;
+      if (
+        adaptiveBudget !== undefined &&
+        (options.requestBudget?.outputReserveTokens !== adaptiveBudget.outputReserveTokens ||
+          options.requestBudget.safetyReserveTokens !== adaptiveBudget.safetyReserveTokens)
+      ) {
+        throw new RangeError(
+          "Persisted adaptive context budget does not match the resolved model limits and settings.",
+        );
+      }
+      const configuredPolicyOptions =
+        input.mode === "FORCED_RECOVERY" && options.forcedObservationPolicy !== undefined
+          ? { ...options.policy, ...options.forcedObservationPolicy }
+          : options.policy;
+      const policyOptions =
+        adaptiveBudget === undefined
+          ? configuredPolicyOptions
+          : {
+              ...configuredPolicyOptions,
+              outputReserveTokens: adaptiveBudget.outputReserveTokens,
+              safetyReserveTokens: adaptiveBudget.safetyReserveTokens,
+            };
       const policy = createContextPolicy({
         model: input.model,
         tools: input.tools,
         requestOverhead,
-        ...(input.mode === "FORCED_RECOVERY" && options.forcedObservationPolicy !== undefined
-          ? {
-              options: {
-                ...options.policy,
-                ...options.forcedObservationPolicy,
-              },
-            }
-          : options.policy === undefined
-            ? {}
-            : { options: options.policy }),
+        ...(policyOptions === undefined ? {} : { options: policyOptions }),
+      });
+      if (
+        adaptiveBudget !== undefined &&
+        policy.effectiveInputLimitTokens !== adaptiveBudget.effectiveInputLimitTokens
+      ) {
+        throw new RangeError("Adaptive context policy produced an inconsistent input limit.");
+      }
+      const requestBudget: ContextRequestBudget = Object.freeze({
+        ...(options.requestBudget ?? {
+          version: "LEGACY_FULL_OUTPUT_V1" as const,
+          outputReserveTokens: policy.outputReserveTokens,
+          safetyReserveTokens: policy.safetyReserveTokens,
+        }),
       });
       throwIfAborted(input.signal);
 
@@ -328,22 +371,56 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         collected,
         coverage.coveredMessageIds,
       );
-      const initialPlan = planner.plan({
-        items: sourceResults.flatMap((result) => result.items),
-        policy,
-        history: coverage.history,
-        currentTurnId: input.conversation.currentTurnId,
-        sourcePriorities: sourcePriorityMap(options.sourceRegistry),
-      });
       let activeCheckpoint = latestCheckpoint;
       let activeCoverage = coverage;
       let activeSources = sourceResults;
       let compactionReceipt: ContextCompactionReceipt | undefined;
       let compactionCount = 0;
+      const sourceCriticality = contextSourceCriticality(options.sourceRegistry.list());
+      const atomicGroupByItemId = contextHistoryAtomicGroups(history);
+      const authorities = await options.authorityProvider.snapshot({
+        identity: input.identity,
+        signal: input.signal,
+      });
+      throwIfAborted(input.signal);
+      const initialProjection = await buildPreparedProjectionWithoutCompaction({
+        contextInput: input,
+        policy,
+        sourceResults,
+        activeCoverage: coverage,
+        ...(latestCheckpoint?.checkpointId === undefined
+          ? {}
+          : { promptSurfaceCheckpointId: String(latestCheckpoint.checkpointId) }),
+        ...(latestCheckpoint === undefined
+          ? {}
+          : {
+              activeCheckpoint:
+                latestCheckpoint.schemaVersion === 2
+                  ? activeCheckpointProjection(latestCheckpoint)
+                  : { structuredCheckpoint: latestCheckpoint.structuredCheckpoint },
+            }),
+        authorities,
+        planner,
+        sourcePriorities: sourcePriorityMap(options.sourceRegistry),
+        rehydrator,
+        documentBuilder,
+        materializer: options.materializer,
+        receiptBuilder,
+        promptSurfaceStore: options.promptSurfaceStore,
+        ...(options.modelSettings === undefined ? {} : { modelSettings: options.modelSettings }),
+        ...(options.promptSurfaceEpochIdFactory === undefined
+          ? {}
+          : { promptSurfaceEpochIdFactory: options.promptSurfaceEpochIdFactory }),
+        tokenEstimator,
+        clock: options.clock,
+        persistPromptSurface: false,
+        compactionCount: 0,
+      });
       const pressure = pressureEvaluator.evaluate({
-        estimatedInputTokens:
-          initialPlan.budget.selectedTokens + policy.requestOverhead.totalTokens,
-        mandatoryTokens: initialPlan.budget.mandatoryTokens + policy.requestOverhead.totalTokens,
+        estimatedInputTokens: initialProjection.audit.report.estimatedInputTokens,
+        selectedPlanningTokens: initialProjection.plan.budget.selectedTokens,
+        mandatoryTokens: initialProjection.plan.budget.mandatoryTokens,
+        historySelectionPressure: initialProjection.plan.historySelectionPressure,
         effectiveInputLimitTokens: policy.effectiveInputLimitTokens,
         proactiveCompactionTokens: policy.proactiveCompactionTokens,
         emergencyCompactionTokens: policy.emergencyCompactionTokens,
@@ -354,8 +431,6 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           (unit) => unit.status === "CLOSED" && unit.compactionEligible,
         ),
       });
-      const sourceCriticality = contextSourceCriticality(options.sourceRegistry.list());
-      const atomicGroupByItemId = contextHistoryAtomicGroups(history);
       const recoveryPlan = recoveryPlanner.plan({
         mode: input.mode,
         pressure,
@@ -369,11 +444,6 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           ? recoveryPlan.actions.filter((action) => action !== "EXHAUSTED")
           : [];
       if (recoveryPlan.actions.includes("COMPACT_HISTORY")) {
-        const replayAuthorities = await options.authorityProvider.snapshot({
-          identity: input.identity,
-          signal: input.signal,
-        });
-        throwIfAborted(input.signal);
         const replayProjection = await buildPreparedProjectionWithoutCompaction({
           contextInput: input,
           policy: withRecoveryTailPolicy(policy, recoveryPlan),
@@ -385,7 +455,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           ...(activeCheckpoint === undefined || activeCheckpoint.schemaVersion !== 2
             ? {}
             : { activeCheckpoint: activeCheckpointProjection(activeCheckpoint) }),
-          authorities: replayAuthorities,
+          authorities,
           planner,
           sourcePriorities: sourcePriorityMap(options.sourceRegistry),
           rehydrator,
@@ -405,6 +475,47 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           atomicGroupByItemId,
           compactionCount: 0,
         });
+        const beforeCompactionProjection =
+          input.mode === "FORCED_RECOVERY"
+            ? await buildPreparedProjectionWithoutCompaction({
+                contextInput: input,
+                policy: withRecoveryTailPolicy(policy, recoveryPlan),
+                sourceResults: activeSources,
+                activeCoverage,
+                ...(activeCheckpoint?.checkpointId === undefined
+                  ? {}
+                  : { promptSurfaceCheckpointId: String(activeCheckpoint.checkpointId) }),
+                ...(activeCheckpoint === undefined
+                  ? {}
+                  : {
+                      activeCheckpoint:
+                        activeCheckpoint.schemaVersion === 2
+                          ? activeCheckpointProjection(activeCheckpoint)
+                          : { structuredCheckpoint: activeCheckpoint.structuredCheckpoint },
+                    }),
+                authorities,
+                planner,
+                sourcePriorities: sourcePriorityMap(options.sourceRegistry),
+                rehydrator,
+                documentBuilder,
+                materializer: options.materializer,
+                receiptBuilder,
+                promptSurfaceStore: options.promptSurfaceStore,
+                ...(options.modelSettings === undefined
+                  ? {}
+                  : { modelSettings: options.modelSettings }),
+                ...(options.promptSurfaceEpochIdFactory === undefined
+                  ? {}
+                  : { promptSurfaceEpochIdFactory: options.promptSurfaceEpochIdFactory }),
+                tokenEstimator,
+                clock: options.clock,
+                persistPromptSurface: false,
+                recoveryPlan,
+                sourceCriticality,
+                atomicGroupByItemId,
+                compactionCount: 0,
+              })
+            : initialProjection;
         const replayProjectionIsComplete = promptProjectionPreservesUncoveredModelMessages({
           conversationMessages: input.conversation.turns.flatMap((turn) => turn.messages),
           selectedMessages: replayProjection.selectedMessages,
@@ -450,7 +561,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         const coordinator = createContextCompactionCoordinator({
           dependencies: composition.dependencies,
           latest: latestState,
-          createEvents: ({ request, plan, checkpoint, degraded }) =>
+          createEvents: ({ request, checkpoint, degraded }) =>
             options.compactionEvents === undefined || options.eventIdFactory === undefined
               ? []
               : [
@@ -459,7 +570,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                     turn: input.turn,
                     checkpoint,
                     reason: request.reason,
-                    tokensBefore: plan.estimatedTokensBefore,
+                    tokensBefore: request.estimatedInputTokensBefore,
                     tokensAfter: checkpoint.tokensAfter,
                     degraded,
                     eventId: options.eventIdFactory.create(),
@@ -484,6 +595,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                 replayPrefixFingerprint: createContextSummaryReplayPrefixFingerprint(replayPrefix),
               }),
           reason,
+          estimatedInputTokensBefore: beforeCompactionProjection.audit.report.estimatedInputTokens,
           signal: input.signal,
         });
         if (outcome.kind === "COMPACTED") {
@@ -501,11 +613,14 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         }
       }
       const finalPolicy = withRecoveryTailPolicy(policy, recoveryPlan);
-      const authorities = await options.authorityProvider.snapshot({
-        identity: input.identity,
-        signal: input.signal,
-      });
-      throwIfAborted(input.signal);
+      const finalAuthorities =
+        compactionCount === 0
+          ? authorities
+          : await options.authorityProvider.snapshot({
+              identity: input.identity,
+              signal: input.signal,
+            });
+      if (compactionCount > 0) throwIfAborted(input.signal);
       const finalProjection = await buildPreparedProjectionWithoutCompaction({
         contextInput: input,
         policy: finalPolicy,
@@ -522,7 +637,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                   ? activeCheckpointProjection(activeCheckpoint)
                   : { structuredCheckpoint: activeCheckpoint.structuredCheckpoint },
             }),
-        authorities,
+        authorities: finalAuthorities,
         planner,
         sourcePriorities: sourcePriorityMap(options.sourceRegistry),
         rehydrator,
@@ -556,6 +671,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       throwIfAborted(input.signal);
       return Object.freeze({
         messages: finalProjection.materializedMessages,
+        requestBudget,
         selectedMessageIds: Object.freeze(
           finalProjection.selectedMessages.map(({ message }) => String(message.id)),
         ),
@@ -1563,15 +1679,6 @@ function samePromptSurfaceIdentity(left: PromptSurfaceEpoch, right: PromptSurfac
     left.stableHeadFingerprint === right.stableHeadFingerprint &&
     left.toolSchemaFingerprint === right.toolSchemaFingerprint &&
     left.cacheSettingsFingerprint === right.cacheSettingsFingerprint
-  );
-}
-
-function samePromptSurfaceAnchor(left: PromptSurfaceAnchor, right: PromptSurfaceAnchor): boolean {
-  return (
-    left.messageId === right.messageId &&
-    left.runId === right.runId &&
-    left.conversationTurnId === right.conversationTurnId &&
-    left.sequence === right.sequence
   );
 }
 

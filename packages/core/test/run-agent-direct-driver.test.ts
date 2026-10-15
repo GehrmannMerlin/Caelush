@@ -449,11 +449,11 @@ describe("production ADVANCE_AGENT settlement", () => {
   });
 
   it("lets a durable cancellation that wins at the final-candidate boundary prevent natural completion", async () => {
-    let store: MemoryExecutionStore | undefined;
+    const storeRef: { current?: MemoryExecutionStore } = {};
     const call = fakeFrozenModelTurnExecutor(async () => {
-      if (store === undefined) throw new Error("execution store is not ready");
-      const runId = store.snapshot.run.id;
-      await store.requestCancellation(runId, {
+      if (storeRef.current === undefined) throw new Error("execution store is not ready");
+      const runId = storeRef.current.snapshot.run.id;
+      await storeRef.current.requestCancellation(runId, {
         runId,
         cause: "USER_REQUESTED",
         requestedAt: createTimestampMs(20),
@@ -461,7 +461,7 @@ describe("production ADVANCE_AGENT settlement", () => {
       return turn({ text: "candidate after cancellation" });
     });
     const h = harness({ executor: call });
-    store = h.store;
+    storeRef.current = h.store;
 
     const result = await h.controller.start(h.store.snapshot.run.id);
 
@@ -811,6 +811,7 @@ describe("production ADVANCE_AGENT settlement", () => {
               limit: 100,
             };
           },
+          admitLLMRecovery: async () => ({ kind: "UNAVAILABLE", reason: "TOKEN_ESTIMATE" }),
           settleLLM: async () => ({ kind: "SETTLED" }),
         },
       },

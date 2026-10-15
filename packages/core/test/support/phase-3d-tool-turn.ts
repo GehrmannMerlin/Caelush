@@ -734,6 +734,11 @@ function policyContextEngine(policy?: {
     async prepare(input: ContextPrepareInput): Promise<PreparedModelContext> {
       return {
         messages: [...turnMessages(input)],
+        requestBudget: {
+          version: "LEGACY_FULL_OUTPUT_V1",
+          outputReserveTokens: 0,
+          safetyReserveTokens: 0,
+        },
         report: {
           estimatedInputTokens: 1,
           effectiveInputLimitTokens: input.model.limits.contextWindowTokens,

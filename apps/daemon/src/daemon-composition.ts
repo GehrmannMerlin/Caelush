@@ -19,6 +19,7 @@ import { createLocalProjectInspector } from "@caelush/coding-agent";
 import { createAIError, createAISubsystem, createCacheResolver, isJsonObject } from "@caelush/ai";
 import type { ProviderStreamPolicy } from "./config.js";
 import { createInterruptedToolHistoryService } from "./services/interrupted-tool-history.js";
+import type { RunContextBudgetPolicyResolver } from "./services/run-service.js";
 import { createModelTransportRecoveryPort } from "./providers/model-transport-recovery.js";
 import {
   createDaemonApiAdapters,
@@ -54,6 +55,8 @@ import {
   createControlHookRegistryBuilder,
   createControlHookRunner,
   createContextContributionPipeline,
+  createContextRequestOverheadEstimator,
+  resolveAdaptiveContextBudget,
   createModelTurnExecutor,
   STANDARD_AGENT_MESSAGE_CODECS,
   STANDARD_AGENT_MESSAGE_PROJECTORS,
@@ -100,6 +103,7 @@ import {
   type RunId,
   type TimestampMs,
   type ContextUsageProjection,
+  type ContextBudgetPolicySnapshot,
   type CacheMetricsV2,
   type PromptCachePurposeUsage,
   type PromptCacheRequestPurpose,
@@ -307,6 +311,8 @@ export interface DaemonCompositionOptions {
   readonly eventQueuePolicy?: SubscriberQueuePolicy;
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
+  /** ADAPTIVE_V1 remains opt-in until the paired real-provider cache gate passes. */
+  readonly contextBudgetPolicyVersion?: ContextBudgetPolicySnapshot["version"];
   /** Finite Gateway watchdog overrides; omitted values use production defaults. */
   readonly providerStreamPolicy?: Partial<ProviderStreamPolicy>;
   /** Environment is read on every credential resolution; it is never serialized. */
@@ -418,6 +424,7 @@ export interface DaemonComposition {
   ) => DaemonTurnIdentity;
   readonly approvals: Pick<CaelushStorage["approvals"], "listPendingByRun">;
   readonly modelCanonicalizer: DaemonModelCanonicalizer;
+  readonly contextBudgetPolicyResolver: RunContextBudgetPolicyResolver;
   readonly securityCapabilityService: SecurityCapabilityService;
   readonly runSecurityPromptProjector: RunSecurityPromptProjector;
   readonly info: DaemonInfo;
@@ -562,6 +569,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       createProviderInvocationAccountingObserver({
         storage: options.storage,
         runId: input.identity.runId as RunId,
+        stepId: input.turn.stepId,
         purpose: "MAIN_AGENT",
         clock,
       }),
@@ -1016,6 +1024,33 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   const executionConfigResolver = {
     resolve: (run) => baseResolver.resolve(run),
   } satisfies RunExecutionConfigResolver;
+  const contextRequestOverheadEstimator = createContextRequestOverheadEstimator();
+  const contextBudgetPolicyResolver: RunContextBudgetPolicyResolver = {
+    async resolve(run) {
+      if (options.contextBudgetPolicyVersion !== "ADAPTIVE_V1") {
+        return Object.freeze({ version: "LEGACY_FULL_OUTPUT_V1" as const });
+      }
+      const model = ai.models.resolve(run.model);
+      const config = await executionConfigResolver.resolve(run);
+      const requestOverheadTokens = contextRequestOverheadEstimator.estimate({
+        model,
+        tools: activeToolRegistry.modelSpecs(),
+      }).totalTokens;
+      const budget = resolveAdaptiveContextBudget({
+        contextWindowTokens: model.limits.contextWindowTokens,
+        maxOutputTokens: model.limits.maxOutputTokens,
+        ...(config.modelSettings?.maxOutputTokens === undefined
+          ? {}
+          : { configuredOutputCeiling: config.modelSettings.maxOutputTokens }),
+        requestOverheadTokens,
+      });
+      return Object.freeze({
+        version: "ADAPTIVE_V1" as const,
+        outputReserveTokens: budget.outputReserveTokens,
+        safetyReserveTokens: budget.safetyReserveTokens,
+      });
+    },
+  };
   const agentExecution: RunAgentExecutionContextFactory = {
     async resolve(run) {
       const config = await executionConfigResolver.resolve(run);
@@ -1242,6 +1277,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     resolveTurnIdentity,
     approvals: options.storage.approvals,
     modelCanonicalizer,
+    contextBudgetPolicyResolver,
     securityCapabilityService,
     runSecurityPromptProjector,
     info,
@@ -1311,6 +1347,12 @@ function projectV2ContextUsage(input: ContextUsageSnapshot) {
     rawContextWindowTokens: input.contextWindowTokens,
     effectiveInputLimitTokens,
     estimatedInputTokens,
+    ...(input.fullRequestInputEstimateTokens === undefined
+      ? {}
+      : {
+          fullRequestInputEstimateTokens: input.fullRequestInputEstimateTokens,
+          fullWindowUsedRatio: input.fullWindowUsedRatio,
+        }),
     usedRatio,
     remainingTokens,
     pressureState: input.pressureState,
@@ -1358,6 +1400,7 @@ export interface PromptCacheUsageSample {
 export function createProviderInvocationAccountingObserver(input: {
   readonly storage: CaelushStorage;
   readonly runId: RunId;
+  readonly stepId?: import("@caelush/protocol").StepId;
   readonly purpose: PromptCacheRequestPurpose;
   readonly clock: { now(): TimestampMs };
 }): AIInvocationAccountingObserver {
@@ -1379,6 +1422,7 @@ export function createProviderInvocationAccountingObserver(input: {
       await input.storage.providerInvocationUsage.observe({
         callId: LLMCallIdSchema.parse(String(identity.callId)),
         runId: input.runId,
+        ...(input.stepId === undefined ? {} : { stepId: input.stepId }),
         purpose: input.purpose,
         providerId: identity.providerId,
         modelId: identity.model.model,

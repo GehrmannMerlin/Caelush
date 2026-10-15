@@ -98,6 +98,11 @@ function makeRun(overrides: Record<string, unknown> = {}) {
     runtime: { id: "local", kind: "fixture" },
     permissionProfile,
     approvalPolicy,
+    contextBudgetPolicy: {
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 16_384,
+      safetyReserveTokens: 4_096,
+    },
     limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 86_400_000 },
     createdAt: createTimestampMs(1),
     startedAt: createTimestampMs(2),

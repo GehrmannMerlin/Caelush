@@ -122,6 +122,7 @@ describe("daemon production composition E2E", () => {
       preset: { id: "FULL_ACCESS", expectedVersion: 1 },
       limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 10_000 },
     });
+    expect(run.contextBudgetPolicy).toEqual({ version: "LEGACY_FULL_OUTPUT_V1" });
     await client.startRun(run.id);
 
     let settled = await client.getRun(run.id);
@@ -183,7 +184,43 @@ describe("daemon production composition E2E", () => {
     await expect(reopenedClient.getRun(run.id)).resolves.toMatchObject({
       status: "COMPLETED",
       finalResult: { type: "NORMAL_COMPLETION", text: "The requested note is ready." },
+      contextBudgetPolicy: run.contextBudgetPolicy,
     });
+  }, 20_000);
+
+  it("enables ADAPTIVE_V1 only when the daemon host explicitly opts into it", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "caelush-adaptive-budget-opt-in-e2e-"));
+    directory = workspacePath;
+    daemon = await startDaemon({
+      databasePath: join(workspacePath, "caelush.db"),
+      port: 0,
+      sseHeartbeatIntervalMs: 0,
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [new PlainAnswerProvider()],
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+      contextBudgetPolicyVersion: "ADAPTIVE_V1",
+    });
+    const client = new CaelushClient({ baseUrl: daemon.url });
+    const session = await client.createSession({
+      defaultWorkspace: { id: createWorkspaceId(), path: workspacePath },
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+    });
+    const workspace = session.defaultWorkspace;
+    if (workspace === undefined) throw new Error("test Workspace was not registered");
+
+    const run = await client.createRun(session.id, {
+      goal: "exercise the explicitly enabled adaptive budget",
+      workspace,
+      model: { provider: "fixture", model: "fixture-model" },
+      runtime: { id: "local", kind: "local" },
+      preset: { id: "FULL_ACCESS", expectedVersion: 1 },
+      limits: { maxSteps: 2, maxToolCalls: 2, timeoutMs: 10_000 },
+    });
+
+    expect(run.contextBudgetPolicy).toMatchObject({ version: "ADAPTIVE_V1" });
+    expect(run.contextBudgetPolicy?.outputReserveTokens).toBeGreaterThan(0);
+    expect(run.contextBudgetPolicy?.safetyReserveTokens).toBeGreaterThan(0);
   }, 20_000);
 
   it("executes tools, natural completion, and durable SSE replay through the client", async () => {

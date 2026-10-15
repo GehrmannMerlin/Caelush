@@ -113,6 +113,11 @@ function makeRun(workspacePath: string) {
     permissionProfile: "PROJECT_ACCESS",
     approvalPolicy: "ON_BOUNDARY",
     securityPolicy: makeSecurityPolicy("PROJECT_ACCESS", "ON_BOUNDARY"),
+    contextBudgetPolicy: {
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 16_384,
+      safetyReserveTokens: 4_096,
+    },
     limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 10_000 },
     createdAt: createTimestampMs(1),
   });

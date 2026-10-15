@@ -21,6 +21,7 @@ import { SessionTranscriptService } from "./services/session-transcript-service.
 import { SessionPresentationService } from "./services/session-presentation-service.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { RunService } from "./services/run-service.js";
+import type { RunContextBudgetPolicyResolver } from "./services/run-service.js";
 import { registerEventStreamRoute } from "./routes/events.js";
 import { registerExecutionRoutes, type DaemonExecutionSurface } from "./routes/execution.js";
 import { registerInfoRoute } from "./routes/info.js";
@@ -51,6 +52,7 @@ export interface DaemonDependencies {
   readonly execution?: DaemonExecutionSurface;
   readonly info?: DaemonInfo;
   readonly modelCanonicalizer?: DaemonModelCanonicalizer;
+  readonly contextBudgetPolicyResolver?: RunContextBudgetPolicyResolver;
   readonly transcript?: SessionTranscriptService;
   readonly presentation?: SessionPresentationService;
   readonly logger?: boolean;
@@ -117,6 +119,9 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
       ...(dependencies.modelCanonicalizer === undefined
         ? {}
         : { modelCanonicalizer: dependencies.modelCanonicalizer }),
+      ...(dependencies.contextBudgetPolicyResolver === undefined
+        ? {}
+        : { contextBudgetPolicyResolver: dependencies.contextBudgetPolicyResolver }),
       ...(dependencies.workspaceService === undefined
         ? {}
         : { workspaceService: dependencies.workspaceService }),

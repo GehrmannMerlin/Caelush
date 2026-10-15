@@ -107,6 +107,11 @@ function durableRun(status: AgentRun["status"], sessionId: AgentRun["sessionId"]
       expectedVersion: 1,
       createdAt: new Date(1).toISOString(),
     }),
+    contextBudgetPolicy: {
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 16_384,
+      safetyReserveTokens: 4_096,
+    },
     limits: { maxSteps: 3, maxToolCalls: 3, timeoutMs: 1_000 },
     resourcePolicy: RESOURCE_POLICY,
     createdAt: createTimestampMs(1),

@@ -1,6 +1,8 @@
 import {
   AgentRunSchema,
+  CurrentAgentRunSchema,
   type AgentSession,
+  type ContextBudgetPolicySnapshot,
   compatibilityLimitsForResourcePolicy,
   createEventId,
   createRunId,
@@ -48,6 +50,11 @@ export class SecurityPolicyRequestError extends Error {
   }
 }
 
+/** Daemon-owned resolver for the immutable context budget policy on a new Run. */
+export interface RunContextBudgetPolicyResolver {
+  resolve(run: AgentRun): Promise<ContextBudgetPolicySnapshot>;
+}
+
 export interface RunServiceOptions {
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
@@ -56,6 +63,7 @@ export interface RunServiceOptions {
   readonly modelCanonicalizer?: DaemonModelCanonicalizer;
   readonly workspaceService?: WorkspaceService;
   readonly securityCapabilityService?: Pick<SecurityCapabilityService, "getWorkspaceCapabilities">;
+  readonly contextBudgetPolicyResolver?: RunContextBudgetPolicyResolver;
   readonly eventNotifier?: Pick<RunEventNotifierPort, "notifyCommitted">;
   readonly eventFactory?: RunEventFactory;
   readonly eventIdFactory?: { readonly create: () => import("@caelush/protocol").EventId };
@@ -120,7 +128,7 @@ export class RunService {
     const workspace = await this.resolveWorkspace(session, input.workspace);
     const { preset, ...clientFields } = input;
     const securityPolicy = await this.resolveSecurityPolicy(workspace.id, preset);
-    const run = AgentRunSchema.parse({
+    const runDraft = AgentRunSchema.parse({
       id: this.createId(),
       sessionId,
       ...clientFields,
@@ -136,6 +144,11 @@ export class RunService {
       status: "PENDING",
       createdAt: this.now(),
     });
+    if (this.options.contextBudgetPolicyResolver === undefined) {
+      throw new Error("Context budget policy resolution is unavailable; the Run was not created.");
+    }
+    const contextBudgetPolicy = await this.options.contextBudgetPolicyResolver.resolve(runDraft);
+    const run = CurrentAgentRunSchema.parse({ ...runDraft, contextBudgetPolicy });
     const policyEvent = this.eventFactory.runSecurityPolicyBound(
       run,
       securityPolicy,

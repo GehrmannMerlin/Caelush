@@ -140,6 +140,7 @@ export const providerInvocationUsage = sqliteTable(
     runId: text("run_id")
       .notNull()
       .references(() => agentRuns.id, { onDelete: "cascade" }),
+    stepId: text("step_id"),
     purpose: text("purpose").notNull(),
     status: text("status").notNull(),
     providerId: text("provider_id").notNull(),
@@ -162,6 +163,12 @@ export const providerInvocationUsage = sqliteTable(
   (table) => [
     index("provider_invocation_usage_run_order_idx").on(
       table.runId,
+      table.observedAtMs,
+      table.callId,
+    ),
+    index("provider_invocation_usage_run_step_order_idx").on(
+      table.runId,
+      table.stepId,
       table.observedAtMs,
       table.callId,
     ),

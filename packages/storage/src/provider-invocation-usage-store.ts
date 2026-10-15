@@ -1,4 +1,10 @@
-import type { LLMCallId, PromptCacheRequestPurpose, RunId, TimestampMs } from "@caelush/protocol";
+import type {
+  LLMCallId,
+  PromptCacheRequestPurpose,
+  RunId,
+  StepId,
+  TimestampMs,
+} from "@caelush/protocol";
 import { StorageConflictError, StorageError } from "./errors.js";
 import type { CaelushDatabase } from "./database.js";
 
@@ -7,6 +13,7 @@ export type ProviderInvocationStatus = "OBSERVED" | "COMPLETE" | "FAILED" | "CAN
 export interface ProviderInvocationUsageRecord {
   readonly callId: LLMCallId;
   readonly runId: RunId;
+  readonly stepId?: StepId;
   readonly purpose: PromptCacheRequestPurpose;
   readonly status: ProviderInvocationStatus;
   readonly providerId: string;
@@ -30,6 +37,7 @@ export interface ProviderInvocationUsageRecord {
 export interface ProviderInvocationObservationInput {
   readonly callId: LLMCallId;
   readonly runId: RunId;
+  readonly stepId?: StepId;
   readonly purpose: PromptCacheRequestPurpose;
   readonly providerId: string;
   readonly modelId: string;
@@ -59,13 +67,14 @@ export class SqliteProviderInvocationUsageStore {
       this.database.client
         .prepare(
           `INSERT INTO provider_invocation_usage
-           (call_id, run_id, purpose, status, provider_id, model_id, api, continuity_group,
+           (call_id, run_id, step_id, purpose, status, provider_id, model_id, api, continuity_group,
             cache_epoch_id, prefix_fingerprint, request_fingerprint, observed_at_ms)
-           VALUES (?, ?, ?, 'OBSERVED', ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, 'OBSERVED', ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.callId,
           input.runId,
+          input.stepId ?? null,
           input.purpose,
           input.providerId,
           input.modelId,
@@ -147,11 +156,25 @@ export class SqliteProviderInvocationUsageStore {
       .all(runId) as unknown as ProviderInvocationRow[];
     return Object.freeze(rows.map(decode));
   }
+
+  async listByRunStep(
+    runId: RunId,
+    stepId: StepId,
+  ): Promise<readonly ProviderInvocationUsageRecord[]> {
+    const rows = this.database.client
+      .prepare(
+        `SELECT * FROM provider_invocation_usage
+         WHERE run_id = ? AND step_id = ? ORDER BY observed_at_ms ASC, call_id ASC`,
+      )
+      .all(runId, stepId) as unknown as ProviderInvocationRow[];
+    return Object.freeze(rows.map(decode));
+  }
 }
 
 interface ProviderInvocationRow {
   call_id: string;
   run_id: string;
+  step_id: string | null;
   purpose: string;
   status: string;
   provider_id: string;
@@ -179,6 +202,7 @@ function decode(row: ProviderInvocationRow): ProviderInvocationUsageRecord {
   return {
     callId: row.call_id as LLMCallId,
     runId: row.run_id as RunId,
+    ...(row.step_id === null ? {} : { stepId: row.step_id as StepId }),
     purpose: row.purpose,
     status: row.status,
     providerId: row.provider_id,
@@ -213,6 +237,7 @@ function sameObservation(
   return (
     existing.callId === input.callId &&
     existing.runId === input.runId &&
+    existing.stepId === input.stepId &&
     existing.purpose === input.purpose &&
     existing.providerId === input.providerId &&
     existing.modelId === input.modelId &&
@@ -253,6 +278,7 @@ function validateObservation(input: ProviderInvocationObservationInput): void {
   if (
     !isPurpose(input.purpose) ||
     !input.callId ||
+    (input.stepId !== undefined && !input.stepId) ||
     !input.providerId ||
     !input.modelId ||
     !input.api ||

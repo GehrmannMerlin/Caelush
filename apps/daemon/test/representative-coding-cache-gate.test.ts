@@ -18,6 +18,7 @@ import {
   modelMessageSource,
   NO_TOOL_RESULT_OBSERVATION,
   projectPromptSurface,
+  resolveAdaptiveContextBudget,
   toolFeedbackPolicySnapshot,
   toolMessageSource,
   userMessageSource,
@@ -238,6 +239,7 @@ function verifier(usage: Pick<ScriptedTurn, "inputTokens" | "cacheHitTokens"> = 
   return {
     kind: "VERIFICATION",
     text: JSON.stringify({ verdict: "PASS", summary: "verified" }),
+    reasoning: `${FIXTURE_REASONING_PREFIX}verification`,
     ...usage,
   };
 }
@@ -357,7 +359,7 @@ function composeFixture(input: {
   readonly toolResultCount?: { value: number };
   readonly clock: { now(): ReturnType<typeof createTimestampMs> };
 }): Promise<DaemonComposition> {
-  let observedToolResults = input.toolResultCount ?? { value: 0 };
+  const observedToolResults = input.toolResultCount ?? { value: 0 };
   return composeDaemon({
     storage: storage!,
     notifier: {
@@ -430,10 +432,25 @@ async function createRunForScenario(input: {
     permissionProfile: "FULL_ACCESS",
     approvalPolicy: "NEVER_ASK",
     limits: { maxSteps: 24, maxToolCalls: 12, timeoutMs: 90_000 },
+    contextBudgetPolicy: adaptiveContextBudgetPolicy(64_000, 2_048),
   });
   await storage!.sessions.insert(session);
   await storage!.runs.insert(run);
   return { session, run };
+}
+
+function adaptiveContextBudgetPolicy(contextWindowTokens: number, configuredOutputCeiling: number) {
+  const budget = resolveAdaptiveContextBudget({
+    contextWindowTokens,
+    maxOutputTokens: 16_384,
+    configuredOutputCeiling,
+    requestOverheadTokens: 0,
+  });
+  return {
+    version: "ADAPTIVE_V1" as const,
+    outputReserveTokens: budget.outputReserveTokens,
+    safetyReserveTokens: budget.safetyReserveTokens,
+  };
 }
 
 async function readSurface(runId: Parameters<CaelushStorage["promptSurface"]["getCurrent"]>[0]) {
@@ -468,17 +485,49 @@ function assertStableWireHeadAndToolOrder(
   const referenceMessages = reference["messages"] as readonly Record<string, unknown>[];
   const referenceSystem = referenceMessages.find((message) => message.role === "system");
   const referenceTools = JSON.stringify(reference["tools"]);
+  const referenceCapKeys = ["max_tokens", "max_completion_tokens"].filter((key) =>
+    Object.hasOwn(reference, key),
+  );
+  if (referenceCapKeys.length !== 1) {
+    throw new Error("C5 Provider request is missing a single output token cap.");
+  }
+  const referenceCapKey = referenceCapKeys[0];
+  if (referenceCapKey === undefined) throw new Error("C5 output token cap key is missing.");
+  const referenceOutputCap = reference[referenceCapKey];
+  if (!Number.isSafeInteger(referenceOutputCap) || (referenceOutputCap as number) < 1) {
+    throw new Error("C5 Provider request is missing a valid output token cap.");
+  }
   const referenceSettings = JSON.stringify(
-    Object.fromEntries(Object.entries(reference).filter(([key]) => key !== "messages")),
+    Object.fromEntries(
+      Object.entries(reference).filter(
+        ([key]) => key !== "messages" && key !== "max_tokens" && key !== "max_completion_tokens",
+      ),
+    ),
   );
 
+  let previousOutputCap = referenceOutputCap as number;
   for (const body of bodies) {
+    const capKeys = ["max_tokens", "max_completion_tokens"].filter((key) =>
+      Object.hasOwn(body, key),
+    );
+    expect(capKeys).toEqual([referenceCapKey]);
+    const outputCap = body[referenceCapKey];
+    if (!Number.isSafeInteger(outputCap) || (outputCap as number) < 1) {
+      throw new Error("C5 Provider request is missing a valid output token cap.");
+    }
+    expect(outputCap).toBeLessThanOrEqual(previousOutputCap);
+    previousOutputCap = outputCap as number;
     const messages = body["messages"] as readonly Record<string, unknown>[];
     expect(messages.find((message) => message.role === "system")).toEqual(referenceSystem);
     expect(JSON.stringify(body["tools"])).toBe(referenceTools);
     expect(
       JSON.stringify(
-        Object.fromEntries(Object.entries(body).filter(([key]) => key !== "messages")),
+        Object.fromEntries(
+          Object.entries(body).filter(
+            ([key]) =>
+              key !== "messages" && key !== "max_tokens" && key !== "max_completion_tokens",
+          ),
+        ),
       ),
     ).toBe(referenceSettings);
     assertToolExchangeOrder(messages);
@@ -762,6 +811,31 @@ describe("representative coding cache gate manifests", () => {
     expect(fingerprintRepresentativeScenario(changed)).not.toBe(
       fingerprintRepresentativeScenario(manifest),
     );
+  });
+
+  it("allows only a lower required wire output cap while keeping static cache identity unchanged", () => {
+    const body = (maxTokens: number, temperature = 0.2) => ({
+      messages: [
+        { role: "system", content: "stable coding instructions" },
+        { role: "user", content: "implement the fixed cache workload" },
+      ],
+      tools: [
+        { type: "function", function: { name: "read_file", parameters: { type: "object" } } },
+      ],
+      temperature,
+      reasoning_effort: "high",
+      max_tokens: maxTokens,
+    });
+
+    expect(() =>
+      assertStableWireHeadAndToolOrder([{ body: body(2_048) }, { body: body(1_024) }]),
+    ).not.toThrow();
+    expect(() =>
+      assertStableWireHeadAndToolOrder([{ body: body(1_024) }, { body: body(2_048) }]),
+    ).toThrow();
+    expect(() =>
+      assertStableWireHeadAndToolOrder([{ body: body(2_048) }, { body: body(1_024, 0.3) }]),
+    ).toThrow();
   });
 });
 
@@ -1558,6 +1632,7 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
       permissionProfile: "FULL_ACCESS",
       approvalPolicy: "NEVER_ASK",
       limits: { maxSteps: 12, maxToolCalls: 10, timeoutMs: 90_000 },
+      contextBudgetPolicy: adaptiveContextBudgetPolicy(64_000, 2_048),
     });
     await storage.runs.insert(crossRun);
     const crossRunUser = composition.messages.factory.createUser({
@@ -1658,6 +1733,7 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
       permissionProfile: "FULL_ACCESS",
       approvalPolicy: "NEVER_ASK",
       limits: { maxSteps: 4, maxToolCalls: 2, timeoutMs: 90_000 },
+      contextBudgetPolicy: adaptiveContextBudgetPolicy(8_192, 2_048),
     });
     await storage.runs.insert(compactionRun);
     const compactionUser = composition.messages.factory.createUser({

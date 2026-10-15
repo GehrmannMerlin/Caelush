@@ -60,6 +60,11 @@ function makeRun(maxSteps = 4, timeoutMs = 10_000) {
       ...securityPolicy,
       policyDigest: computeSecurityPolicyDigest(securityPolicy),
     },
+    contextBudgetPolicy: {
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 16_384,
+      safetyReserveTokens: 4_096,
+    },
     limits: { maxSteps, maxToolCalls: 4, timeoutMs },
     createdAt: createTimestampMs(1),
   });

@@ -15,6 +15,8 @@ const baseUsage: ContextUsageProjection = {
   effectiveInputLimitTokens: 800,
   estimatedInputTokens: 400,
   usedRatio: 0.5,
+  fullRequestInputEstimateTokens: 500,
+  fullWindowUsedRatio: 0.4166666666666667,
   remainingTokens: 400,
   pressureState: "NORMAL",
   compactionCount: 1,
@@ -151,18 +153,19 @@ const basePromptCache: PromptCacheUsage = {
 };
 
 describe("ContextUsageRing", () => {
-  it("renders a restrained accessible SVG ring using used ratio", () => {
+  it("renders total model-window usage while keeping input budget details separate", () => {
     const markup = renderToStaticMarkup(<ContextUsageRing usage={baseUsage} />);
     const inspectorMarkup = renderToStaticMarkup(<ContextInspector usage={baseUsage} />);
-    expect(markup).toContain('aria-label="工作上下文用量：50%"');
+    expect(markup).toContain('aria-label="工作上下文用量：42%"');
     expect(markup).toContain('viewBox="0 0 18 18"');
-    expect(markup).toContain('stroke-dashoffset="0.5"');
+    expect(markup).toContain('stroke-dashoffset="0.5833333333333333"');
     expect(markup).toContain("工作上下文");
     expect(inspectorMarkup).toContain('role="progressbar"');
-    expect(inspectorMarkup).toContain('aria-valuenow="50"');
-    expect(inspectorMarkup).toContain("50%");
-    expect(inspectorMarkup).toContain("400 / 800 tokens");
-    expect(inspectorMarkup).toContain("剩余");
+    expect(inspectorMarkup).toContain('aria-valuenow="42"');
+    expect(inspectorMarkup).toContain("42%");
+    expect(inspectorMarkup).toContain("500 / 1,200 tokens");
+    expect(inspectorMarkup).toContain("可用输入预算");
+    expect(inspectorMarkup).toContain("400 tokens");
     expect(inspectorMarkup).toContain("缓存命中率");
     expect(inspectorMarkup).toContain("上下文压缩");
     expect(inspectorMarkup).not.toContain("Current Turn");
@@ -171,10 +174,10 @@ describe("ContextUsageRing", () => {
 
   it("clamps invalid ratios to the visible 0%–100% ring range", () => {
     const overfull = renderToStaticMarkup(
-      <ContextUsageRing usage={{ ...baseUsage, usedRatio: 1.4 }} />,
+      <ContextUsageRing usage={{ ...baseUsage, fullWindowUsedRatio: 1.4 }} />,
     );
     const negative = renderToStaticMarkup(
-      <ContextUsageRing usage={{ ...baseUsage, usedRatio: -0.2 }} />,
+      <ContextUsageRing usage={{ ...baseUsage, fullWindowUsedRatio: -0.2 }} />,
     );
     expect(overfull).toContain('stroke-dashoffset="0"');
     expect(negative).toContain('stroke-dashoffset="1"');
@@ -218,19 +221,64 @@ describe("ContextUsageRing", () => {
   });
 
   it("keeps the popover focused on capacity, cache rate, and compactions", () => {
-    const legacy = renderToStaticMarkup(<ContextInspector usage={baseUsage} />);
+    const current = renderToStaticMarkup(<ContextInspector usage={baseUsage} />);
     const withAuxiliary = renderToStaticMarkup(
       <ContextInspector usage={{ ...baseUsage, promptCache: basePromptCache }} />,
     );
 
-    expect(legacy).toContain("工作上下文");
-    expect(legacy).toContain("50%");
+    expect(current).toContain("工作上下文");
+    expect(current).toContain("42%");
     expect(withAuxiliary).toContain("80.0%");
     expect(withAuxiliary).toContain("1 次");
     expect(withAuxiliary).toContain("正常");
     expect(withAuxiliary).not.toContain("压缩请求");
     expect(withAuxiliary).not.toContain("request");
     expect(withAuxiliary).not.toContain("Usage Coverage");
+  });
+
+  it("labels snapshots without full-window telemetry as legacy estimates", () => {
+    const legacy = renderToStaticMarkup(
+      <ContextInspector
+        usage={{
+          ...baseUsage,
+          fullRequestInputEstimateTokens: undefined,
+          fullWindowUsedRatio: undefined,
+          pressureState: "PROACTIVE",
+        }}
+      />,
+    );
+
+    expect(legacy).toContain("旧版估算");
+    expect(legacy).toContain("33%");
+    expect(legacy).toContain("400 / 1,200 tokens");
+    expect(legacy).toContain("接近上限");
+  });
+
+  it("clamps zero and overfull total-window ratios without changing pressure state", () => {
+    const zero = renderToStaticMarkup(
+      <ContextInspector
+        usage={{
+          ...baseUsage,
+          fullRequestInputEstimateTokens: 0,
+          fullWindowUsedRatio: 0,
+          pressureState: "PROACTIVE",
+        }}
+      />,
+    );
+    const overfull = renderToStaticMarkup(
+      <ContextUsageRing
+        usage={{
+          ...baseUsage,
+          fullRequestInputEstimateTokens: 1_500,
+          fullWindowUsedRatio: 1,
+        }}
+      />,
+    );
+
+    expect(zero).toContain("0%");
+    expect(zero).toContain("接近上限");
+    expect(overfull).toContain('aria-label="工作上下文用量：100%"');
+    expect(overfull).toContain('stroke-dashoffset="0"');
   });
 
   it("keeps the compact inspector usable on narrow screens", () => {

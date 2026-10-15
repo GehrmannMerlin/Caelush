@@ -24,6 +24,7 @@ import type {
   MissingToolInvocationEvidence,
 } from "@caelush/agent";
 import {
+  AgentRunSchema,
   CurrentAgentRunSchema,
   ObservationSchema,
   AgentStateSchema,
@@ -304,7 +305,17 @@ function assertNormalCompletionCommit(command: RunExecutionCommitView) {
 }
 
 function writeRun(client: CaelushDatabase["client"], run: RunExecutionCommitView["run"]): void {
-  const parsed = CurrentAgentRunSchema.parse(run);
+  const stored = client.prepare("SELECT data_json FROM agent_runs WHERE id = ?").get(run.id) as
+    { data_json: string } | undefined;
+  if (stored === undefined) throw new StorageError(`AgentRun ${run.id} was not found`);
+  const previous = decodeProtocol(AgentRunSchema, stored.data_json, {
+    entityType: "AgentRun",
+    entityId: run.id,
+    table: "agent_runs",
+  });
+  const schema =
+    previous.contextBudgetPolicy === undefined ? AgentRunSchema : CurrentAgentRunSchema;
+  const parsed = schema.parse(run);
   const result = client
     .prepare(
       `UPDATE agent_runs SET session_id = ?, protocol_version = ?, status = ?, created_at_ms = ?,
@@ -317,7 +328,7 @@ function writeRun(client: CaelushDatabase["client"], run: RunExecutionCommitView
       parsed.createdAt,
       parsed.startedAt ?? null,
       parsed.finishedAt ?? null,
-      encodeProtocol(CurrentAgentRunSchema, parsed, {
+      encodeProtocol(schema, parsed, {
         entityType: "AgentRun",
         entityId: parsed.id,
         table: "agent_runs",
@@ -924,7 +935,7 @@ export class SqliteRunExecutionStore
     command: RunVerifiedCompletionCommit,
   ): Promise<RunExecutionCommitResult> {
     const parsedResult = VerifiedRunFinalResultSchema.parse(command.finalResult);
-    const parsedRun = CurrentAgentRunSchema.parse({ ...command.run, finalResult: parsedResult });
+    const parsedRun = AgentRunSchema.parse({ ...command.run, finalResult: parsedResult });
     if (parsedRun.status !== "COMPLETED" || command.state.status !== "COMPLETED") {
       throw new RunExecutionInvariantError(
         "verified completion must settle Run and State to COMPLETED",
@@ -1014,7 +1025,7 @@ export class SqliteRunExecutionStore
       command.privateReplayWrites ?? [],
     );
     const plan = VerificationPlanSchema.parse(command.verificationPlan);
-    const parsedRun = CurrentAgentRunSchema.parse(command.run);
+    const parsedRun = AgentRunSchema.parse(command.run);
     if (
       parsedRun.status !== "VERIFYING" ||
       command.state.status !== "VERIFYING" ||

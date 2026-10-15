@@ -37,6 +37,11 @@ describe("SqliteMemoryExtractionJobRepository", () => {
       permissionProfile: "READ_ONLY",
       approvalPolicy: "ON_BOUNDARY",
       securityPolicy: makeSecurityPolicy(),
+      contextBudgetPolicy: {
+        version: "ADAPTIVE_V1",
+        outputReserveTokens: 16_384,
+        safetyReserveTokens: 4_096,
+      },
       limits: { maxSteps: 2, maxToolCalls: 2, timeoutMs: 1000 },
       createdAt: createTimestampMs(1),
       startedAt: createTimestampMs(2),

@@ -3,6 +3,7 @@ import type { AIMessage } from "@caelush/ai";
 import type { ContextEnginePort, ContextPrepareMode } from "./context/context-engine-port.js";
 import type { AgentDecisionClassifier } from "./decision/decision-classifier.js";
 import { toAgentModelTurn } from "./decision/decision.js";
+import { AgentModelOutputError } from "./decision/decision-error.js";
 import { AgentTurnInputError, assertAgentTurnInput } from "./history/conversation-history.js";
 import type {
   ModelRequestAdmissionDecision,
@@ -163,6 +164,8 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
         // call on a request the budget authority never approved.
         request = decision.request;
       }
+      const initialOutputCeiling =
+        request.settings?.maxOutputTokens ?? input.model.limits.maxOutputTokens;
 
       /* 3. The durable boundary. Only a successful commit may open provider I/O. */
       if (dependencies.modelTurnBoundary !== undefined) {
@@ -200,6 +203,30 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
         context = recovered.context;
         recovery = "FORCED_CONTEXT_RECOVERY";
         request = buildRequest(requestBuilder, input, context);
+        if (dependencies.modelAdmission !== undefined) {
+          let decision: ModelRequestAdmissionDecision;
+          try {
+            decision = await dependencies.modelAdmission.admitRecovery({
+              identity: input.identity,
+              turn: input.turn,
+              request,
+              initialOutputCeiling,
+            });
+          } catch {
+            return failed(input.turn, toInternalFailure(), appended, receipt(context, recovery));
+          }
+          if (input.signal.aborted) return cancelled(input.turn, receipt(context, recovery));
+          if (decision.kind === "BLOCKED") {
+            return {
+              kind: "FAILED",
+              turn: input.turn,
+              error: toBudgetAgentError(decision.block),
+              messagesToAppend: [...appended],
+              context: receipt(context, recovery),
+            };
+          }
+          request = decision.request;
+        }
         execution = await executeTurn(dependencies.modelTurnExecutor, input, request, context);
       }
 
@@ -232,17 +259,21 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
         return decision.type === "TOOL_CALLS_REQUESTED"
           ? { kind: "TOOL_REQUESTS", ...base, decision }
           : { kind: "FINAL_CANDIDATE", ...base, decision };
-      } catch {
+      } catch (error) {
         // The provider turn *did* complete: the model answered and the answer was unusable.
         // Reporting it as a failed provider attempt would lose that distinction, which is why
         // the settled turn travels with the failure.
         const modelTurn = toAgentModelTurn(execution.result);
         const failure = toInternalFailure();
+        const agentError = toAgentError(failure);
         return {
           kind: "FAILED",
           turn: input.turn,
           ...(modelTurn === undefined ? {} : { modelTurn }),
-          error: toAgentError(failure),
+          error:
+            error instanceof AgentModelOutputError && error.reason === "OUTPUT_TRUNCATED"
+              ? { ...agentError, details: { modelOutputFailure: "OUTPUT_TRUNCATED" } }
+              : agentError,
           messagesToAppend: [...appended],
           context: contextReceipt,
           ...(execution.result.usage === undefined ? {} : { usage: execution.result.usage }),

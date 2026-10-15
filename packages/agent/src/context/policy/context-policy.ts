@@ -34,6 +34,20 @@ export interface ContextPolicyInput {
 
 export type ContextPressureState = "NORMAL" | "PROACTIVE" | "EMERGENCY";
 
+export interface AdaptiveContextBudgetInput {
+  readonly contextWindowTokens: number;
+  readonly maxOutputTokens: number;
+  readonly configuredOutputCeiling?: number;
+  readonly requestOverheadTokens: number;
+}
+
+export interface AdaptiveContextBudget {
+  readonly outputReserveTokens: number;
+  readonly safetyReserveTokens: number;
+  readonly preferredOutputCeiling: number;
+  readonly effectiveInputLimitTokens: number;
+}
+
 export interface ContextBudgetSnapshot {
   readonly contextWindowTokens: number;
   readonly outputReserveTokens: number;
@@ -72,6 +86,7 @@ export interface ContextPlan {
   readonly budget: ContextBudgetSnapshot;
   readonly pressure: ContextPressureState;
   readonly requiresCompaction: boolean;
+  readonly historySelectionPressure: boolean;
 }
 
 export interface ContextPolicy {
@@ -107,6 +122,47 @@ const DEFAULTS = {
   maxObservationBatchRatio: 0.22,
   conversationCapTokens: 12_000,
 } as const;
+
+/** Resolve the per-Run reserves and effective message-input budget once. */
+export function resolveAdaptiveContextBudget(
+  input: AdaptiveContextBudgetInput,
+): AdaptiveContextBudget {
+  assertPositiveSafeInteger(input.contextWindowTokens, "contextWindowTokens");
+  assertPositiveSafeInteger(input.maxOutputTokens, "maxOutputTokens");
+  assertNonNegativeSafeInteger(input.requestOverheadTokens, "requestOverheadTokens");
+  if (input.configuredOutputCeiling !== undefined) {
+    assertPositiveSafeInteger(input.configuredOutputCeiling, "configuredOutputCeiling");
+  }
+
+  const preferredOutputCeiling = Math.min(
+    input.configuredOutputCeiling ?? input.maxOutputTokens,
+    input.maxOutputTokens,
+  );
+  const outputReserveTokens = Math.min(
+    preferredOutputCeiling,
+    16_384,
+    Math.max(1, Math.floor(input.contextWindowTokens * 0.08)),
+  );
+  const safetyReserveTokens = Math.min(
+    4_096,
+    Math.max(1, Math.floor(input.contextWindowTokens * 0.01)),
+  );
+  const effectiveInputLimitTokens =
+    input.contextWindowTokens -
+    outputReserveTokens -
+    safetyReserveTokens -
+    input.requestOverheadTokens;
+  if (effectiveInputLimitTokens <= 0) {
+    throw new RangeError("Context reserves and request overhead leave no positive input budget.");
+  }
+
+  return Object.freeze({
+    outputReserveTokens,
+    safetyReserveTokens,
+    preferredOutputCeiling,
+    effectiveInputLimitTokens,
+  });
+}
 
 export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
   const options = input.options ?? {};
@@ -238,6 +294,11 @@ function assertRatio(value: number, label: string): void {
 function assertNonNegativeSafeInteger(value: unknown, label: string): asserts value is number {
   if (!Number.isSafeInteger(value) || (value as number) < 0)
     throw new RangeError(`${label} must be a non-negative safe integer.`);
+}
+
+function assertPositiveSafeInteger(value: unknown, label: string): asserts value is number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0)
+    throw new RangeError(`${label} must be a positive safe integer.`);
 }
 
 export type { ToolObservationPolicySnapshot };

@@ -1,8 +1,10 @@
-import { createTimestampMs, type RunResourcePolicy } from "@caelush/protocol";
+import { createLLMCallId, createTimestampMs, type RunResourcePolicy } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushDatabase } from "../src/database.js";
 import { migrateCaelushDatabase } from "../src/migrate.js";
+import { SqliteBudgetLedgerRepository } from "../src/budget-ledger-repository.js";
 import { SqliteRunBudgetPort } from "../src/run-budget-port.js";
+import { SqliteProviderInvocationUsageStore } from "../src/provider-invocation-usage-store.js";
 import { SqliteRunRepository } from "../src/repositories/run-repository.js";
 import { SqliteSessionRepository } from "../src/repositories/session-repository.js";
 import { makeRun, makeSession, makeStep, makeState } from "./support/fixtures.js";
@@ -101,6 +103,187 @@ describe("SqliteRunBudgetPort", () => {
       outputTokens: 4,
       toolCalls: 0,
       cost: 0.000002,
+    });
+  });
+
+  it("admits one known-billed overflow recovery under the original token and cost reservation", async () => {
+    const database = await openCaelushDatabase({ path: ":memory:" });
+    databases.push(database);
+    await migrateCaelushDatabase(database);
+    const session = makeSession();
+    const run = makeRun(session.id, {
+      status: "RUNNING",
+      startedAt: createTimestampMs(100),
+      limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000, maxTokens: 20_000, maxCost: 0.02 },
+    });
+    await new SqliteSessionRepository(database).insert(session);
+    await new SqliteRunRepository(database).insert(run);
+    const pricing = {
+      id: "fixture-v1",
+      currency: "USD" as const,
+      inputMicrosPerMillionTokens: 1_000_000,
+      outputMicrosPerMillionTokens: 1_000_000,
+    };
+    const budget = new SqliteRunBudgetPort(database, {
+      pricing: { resolve: () => pricing },
+      clock: { now: () => createTimestampMs(101) },
+    });
+    const step = makeStep(run.id);
+    const admitted = await budget.admitLLM({
+      run,
+      step,
+      admission: { estimatedInputTokens: 100, configuredMaxOutputTokens: 18_900 },
+    });
+    expect(admitted).toMatchObject({ kind: "ALLOWED", effectiveMaxOutputTokens: 18_900 });
+
+    const usage = new SqliteProviderInvocationUsageStore(database);
+    const firstCallId = createLLMCallId();
+    await usage.observe(
+      providerObservation({ callId: firstCallId, runId: run.id, stepId: step.id }),
+    );
+    await usage.settle({
+      callId: firstCallId,
+      status: "FAILED",
+      settledAt: createTimestampMs(102),
+      totalTokens: 1_100,
+      inputTokens: 500,
+      outputTokens: 600,
+      cacheHitInputTokens: 100,
+      cacheMissInputTokens: 400,
+    });
+
+    const recovery = await budget.admitLLMRecovery({
+      run,
+      step,
+      initialOutputCeiling: 18_900,
+      admission: { estimatedInputTokens: 500, configuredMaxOutputTokens: 50_000 },
+    });
+    expect(recovery).toMatchObject({ kind: "ALLOWED", effectiveMaxOutputTokens: 18_400 });
+    const entryAfterRecoveryAdmission = await budgetLedger(
+      database,
+      run.id,
+      "LLM_ATTEMPT",
+      step.id,
+    );
+    expect(entryAfterRecoveryAdmission).toMatchObject({
+      state: "IN_FLIGHT",
+      reservedInputTokens: 1_000,
+      reservedOutputTokens: 19_000,
+      reservedCostMicros: 20_000,
+      pricingSnapshotId: "fixture-v1",
+    });
+    expect(await new SqliteBudgetLedgerRepository(database).listByRun(run.id)).toHaveLength(1);
+
+    const recoveryCallId = createLLMCallId();
+    await usage.observe(
+      providerObservation({ callId: recoveryCallId, runId: run.id, stepId: step.id }),
+    );
+    await usage.settle({
+      callId: recoveryCallId,
+      status: "COMPLETE",
+      settledAt: createTimestampMs(103),
+      totalTokens: 8_500,
+      inputTokens: 500,
+      outputTokens: 8_000,
+      cacheHitInputTokens: 200,
+      cacheMissInputTokens: 300,
+    });
+    await expect(
+      budget.admitLLMRecovery({
+        run,
+        step,
+        initialOutputCeiling: 18_900,
+        admission: { estimatedInputTokens: 500, configuredMaxOutputTokens: 50_000 },
+      }),
+    ).resolves.toMatchObject({ kind: "UNAVAILABLE" });
+
+    await budget.settleLLM({ runId: run.id, stepId: step.id, settledAt: createTimestampMs(104) });
+    expect(await budgetLedger(database, run.id, "LLM_ATTEMPT", step.id)).toMatchObject({
+      state: "SETTLED",
+      actualInputTokens: 1_000,
+      actualOutputTokens: 8_600,
+      actualCostMicros: 9_600,
+      cacheHitInputTokens: 300,
+      cacheMissInputTokens: 700,
+    });
+    await expect(
+      budget.settleLLM({ runId: run.id, stepId: step.id, settledAt: createTimestampMs(105) }),
+    ).resolves.toMatchObject({ kind: "SETTLED" });
+    expect(await new SqliteBudgetLedgerRepository(database).listByRun(run.id)).toHaveLength(1);
+  });
+
+  it("allows recovery when Gateway facts prove the first provider attempt never began", async () => {
+    const database = await openCaelushDatabase({ path: ":memory:" });
+    databases.push(database);
+    await migrateCaelushDatabase(database);
+    const session = makeSession();
+    const run = makeRun(session.id, {
+      status: "RUNNING",
+      startedAt: createTimestampMs(100),
+      limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000, maxTokens: 1_000 },
+    });
+    await new SqliteSessionRepository(database).insert(session);
+    await new SqliteRunRepository(database).insert(run);
+    const budget = new SqliteRunBudgetPort(database);
+    const step = makeStep(run.id);
+    await budget.admitLLM({
+      run,
+      step,
+      admission: { estimatedInputTokens: 100, configuredMaxOutputTokens: 800 },
+    });
+
+    await expect(
+      budget.admitLLMRecovery({
+        run,
+        step,
+        initialOutputCeiling: 800,
+        admission: { estimatedInputTokens: 200, configuredMaxOutputTokens: 800 },
+      }),
+    ).resolves.toMatchObject({ kind: "ALLOWED", effectiveMaxOutputTokens: 800 });
+    expect(await budgetLedger(database, run.id, "LLM_ATTEMPT", step.id)).toMatchObject({
+      state: "IN_FLIGHT",
+      reservedInputTokens: 200,
+      reservedOutputTokens: 800,
+    });
+  });
+
+  it("blocks recovery when a started provider attempt has unknown billing and keeps it conservative", async () => {
+    const database = await openCaelushDatabase({ path: ":memory:" });
+    databases.push(database);
+    await migrateCaelushDatabase(database);
+    const session = makeSession();
+    const run = makeRun(session.id, {
+      status: "RUNNING",
+      startedAt: createTimestampMs(100),
+      limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000, maxTokens: 1_000 },
+    });
+    await new SqliteSessionRepository(database).insert(session);
+    await new SqliteRunRepository(database).insert(run);
+    const budget = new SqliteRunBudgetPort(database);
+    const step = makeStep(run.id);
+    await budget.admitLLM({
+      run,
+      step,
+      admission: { estimatedInputTokens: 100, configuredMaxOutputTokens: 800 },
+    });
+    const callId = createLLMCallId();
+    const usage = new SqliteProviderInvocationUsageStore(database);
+    await usage.observe(providerObservation({ callId, runId: run.id, stepId: step.id }));
+    await usage.settle({ callId, status: "FAILED", settledAt: createTimestampMs(102) });
+
+    await expect(
+      budget.admitLLMRecovery({
+        run,
+        step,
+        initialOutputCeiling: 800,
+        admission: { estimatedInputTokens: 200, configuredMaxOutputTokens: 800 },
+      }),
+    ).resolves.toMatchObject({ kind: "UNAVAILABLE" });
+    await budget.settleLLM({ runId: run.id, stepId: step.id, settledAt: createTimestampMs(103) });
+    expect(await budgetLedger(database, run.id, "LLM_ATTEMPT", step.id)).toMatchObject({
+      state: "CONSERVATIVE",
+      reservedInputTokens: 100,
+      reservedOutputTokens: 800,
     });
   });
 
@@ -288,4 +471,21 @@ async function budgetLedger(
   return new (await import("../src/budget-ledger-repository.js")).SqliteBudgetLedgerRepository(
     database,
   ).get(runId, kind, ownerId);
+}
+
+function providerObservation(input: {
+  readonly callId: ReturnType<typeof createLLMCallId>;
+  readonly runId: ReturnType<typeof makeRun>["id"];
+  readonly stepId: ReturnType<typeof makeStep>["id"];
+}) {
+  return {
+    ...input,
+    purpose: "MAIN_AGENT" as const,
+    providerId: "deepseek",
+    modelId: "deepseek-chat",
+    api: "openai-compatible",
+    continuityGroup: "a".repeat(64),
+    requestFingerprint: "b".repeat(64),
+    observedAt: createTimestampMs(101),
+  };
 }

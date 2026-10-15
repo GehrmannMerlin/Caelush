@@ -83,6 +83,7 @@ export type {
   ContextCheckpointRef,
   ContextItemPriorityClass,
   ContextPressure,
+  ContextRequestBudget,
   PreparedModelContext,
   LegacyContextItem,
   ToolObservationPolicySnapshot,
@@ -97,6 +98,7 @@ export {
   AGENT_CONTEXT_SOURCE_IDS,
   assertContextPlan,
   classifyContextPressure,
+  resolveAdaptiveContextBudget,
   collectContextSources,
   ContextCurrentTurnTooLargeError,
   ContextExhaustedError,
@@ -184,6 +186,8 @@ export type {
   ContextContributionReport,
   ContextBuildReceipt,
   ContextBudgetSnapshot,
+  AdaptiveContextBudget,
+  AdaptiveContextBudgetInput,
   ContextCacheStability,
   ContextDocument,
   ContextDocumentBuilder,
@@ -435,6 +439,7 @@ export type {
   ModelRequestAdmissionDecision,
   ModelRequestAdmissionInput,
   ModelRequestAdmissionPort,
+  ModelRequestRecoveryAdmissionInput,
 } from "./loop/ports/model-request-admission.js";
 export type {
   ModelTurnBoundaryInput,

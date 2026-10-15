@@ -55,6 +55,7 @@ function plan(items: readonly ContextItem[]): ContextPlan {
     },
     pressure: "NORMAL",
     requiresCompaction: false,
+    historySelectionPressure: false,
   };
 }
 

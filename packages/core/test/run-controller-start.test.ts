@@ -450,6 +450,7 @@ describe("RunController.start", () => {
         accounted: 1,
         limit: 1,
       }),
+      admitLLMRecovery: async () => ({ kind: "UNAVAILABLE", reason: "TOKEN_ESTIMATE" }),
       settleLLM: async () => undefined,
     };
     const controller = new RunController({

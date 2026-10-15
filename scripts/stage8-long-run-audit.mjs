@@ -179,6 +179,7 @@ export function createStage8AttemptCheckpoint({ attemptId }) {
     postCompactionScoredMainCallCount: 0,
     toolInvocationCount: 0,
     unknownUsageCount: 0,
+    outputTruncationCount: 0,
     unexplainedResetCount: 0,
     duplicateSnapshotCount: 0,
     hiddenCallCount: 0,
@@ -737,6 +738,14 @@ export async function consumeStage8RunEvents({
       continue;
     }
 
+    if (
+      event.type === "run.failed" &&
+      event.payload?.error?.details?.modelOutputFailure === "OUTPUT_TRUNCATED" &&
+      state.outputTruncationCount !== null
+    ) {
+      state.outputTruncationCount = addCount(state.outputTruncationCount, 1);
+    }
+
     state.lastDurableEventSequence = sequence;
     if (event.type === "run.completed") state.terminalState = "COMPLETED";
     else if (event.type === "run.failed") state.terminalState = "FAILED";
@@ -1248,6 +1257,18 @@ export async function writeStage8CheckpointAtomic(path, previous, options = {}) 
 
 export function summarizeStage8Attempt(state) {
   const rates = stage8HitRates(state.samples);
+  const mainAgentSamples = state.samples.filter((sample) => sample.purpose === "MAIN_AGENT");
+  const fullRunMainAgent = summarizeMainAgentSamples(mainAgentSamples);
+  const warmMainAgent = summarizeMainAgentSamples(
+    mainAgentSamples.filter((sample) => sample.scoring !== "COLD_WARMUP"),
+  );
+  const unexplainedPrefixMissTokens = mainAgentSamples
+    .filter((sample) => sample.scoring !== "COLD_WARMUP" && sample.usage !== null)
+    .reduce(
+      (total, sample) =>
+        total + Math.max(sample.usage.expectedReusablePrefixTokens - sample.usage.hitTokens, 0),
+      0,
+    );
   const prefixValues = state.samples
     .filter((sample) => sample.scoring === "SCORED" && sample.prefixEfficiency !== null)
     .map((sample) => sample.prefixEfficiency);
@@ -1263,6 +1284,11 @@ export function summarizeStage8Attempt(state) {
     postCompactionScoredMainCallCount: state.postCompactionScoredMainCallCount,
     toolInvocationCount: state.toolInvocationCount,
     compactionCount: state.compactionCount,
+    compactionFrequency:
+      state.mainCallCount === 0 ? null : state.compactionCount / state.mainCallCount,
+    fullRunMainAgent,
+    warmMainAgent,
+    unexplainedPrefixMissTokens,
     overallBillingHitRate: rates.overall,
     preCompactionBillingHitRate: rates.pre,
     postCompactionBillingHitRate: rates.post,
@@ -1271,12 +1297,14 @@ export function summarizeStage8Attempt(state) {
     unexplainedResetCount: state.unexplainedResetCount,
     duplicateSnapshotCount: state.duplicateSnapshotCount,
     hiddenCallCount: state.hiddenCallCount,
+    outputTruncationCount: state.outputTruncationCount,
     totalInputTokens: state.totalInputTokens,
     totalOutputTokens: state.totalOutputTokens,
     totalHitTokens: state.totalHitTokens,
     totalMissTokens: state.totalMissTokens,
     totalWriteTokens: state.totalWriteTokens,
     totalCostNanoUsd: state.totalCostNanoUsd,
+    allPurposeTotalCostNanoUsd: state.totalCostNanoUsd,
     costStatus: state.costStatus,
     abortReason: state.abortReason,
     exitGatePassed: evaluateStage8ExitGate(state),
@@ -1285,6 +1313,9 @@ export function summarizeStage8Attempt(state) {
 
 export function evaluateStage8ExitGate(state) {
   const rates = stage8HitRates(state.samples);
+  const fullRunMainAgent = summarizeMainAgentSamples(
+    state.samples.filter((sample) => sample.purpose === "MAIN_AGENT"),
+  );
   const efficiencies = state.samples
     .filter((sample) => sample.scoring === "SCORED")
     .map((sample) => sample.prefixEfficiency);
@@ -1292,6 +1323,9 @@ export function evaluateStage8ExitGate(state) {
     state.abortReason === null &&
     state.terminalState === "COMPLETED" &&
     state.compactionCount >= 1 &&
+    fullRunMainAgent.hitRate !== null &&
+    fullRunMainAgent.hitRate > STAGE8_LIMITS.minimumBillingHitRateExclusive &&
+    fullRunMainAgent.accountedRequestCount === fullRunMainAgent.requestCount &&
     state.preCompactionScoredMainCallCount >= STAGE8_LIMITS.minimumSegmentSamples &&
     state.postCompactionScoredMainCallCount >= STAGE8_LIMITS.minimumSegmentSamples &&
     rates.overall !== null &&
@@ -1306,6 +1340,7 @@ export function evaluateStage8ExitGate(state) {
     ) &&
     state.costStatus === "RECONCILED" &&
     state.unknownUsageCount === 0 &&
+    state.outputTruncationCount === 0 &&
     state.unexplainedResetCount === 0 &&
     state.duplicateSnapshotCount === 0 &&
     state.hiddenCallCount === 0
@@ -1344,6 +1379,27 @@ function stage8HitRates(samples) {
     overall: rate(scored),
     pre: rate(scored.filter((sample) => sample.segment === "PRE_COMPACTION")),
     post: rate(scored.filter((sample) => sample.segment === "POST_COMPACTION")),
+  };
+}
+
+function summarizeMainAgentSamples(samples) {
+  let hitTokens = 0n;
+  let missTokens = 0n;
+  let accountedRequestCount = 0;
+  for (const sample of samples) {
+    if (sample.usage === null) continue;
+    hitTokens += BigInt(sample.usage.hitTokens);
+    missTokens += BigInt(sample.usage.missTokens);
+    accountedRequestCount += 1;
+  }
+  const accountedTokens = hitTokens + missTokens;
+  return {
+    requestCount: samples.length,
+    accountedRequestCount,
+    usageCoverage: samples.length === 0 ? null : accountedRequestCount / samples.length,
+    hitTokens: Number(hitTokens),
+    accountedTokens: Number(accountedTokens),
+    hitRate: accountedTokens === 0n ? null : Number(hitTokens) / Number(accountedTokens),
   };
 }
 
@@ -1589,18 +1645,26 @@ async function validateStage8AttemptWorkspace(attemptId, resume) {
 
 function parseStage8AttemptCheckpoint(value, attemptId) {
   const template = createStage8AttemptCheckpoint({ attemptId });
-  assertClosedRecord(value, new Set(Object.keys(template)), "Stage 8 checkpoint");
-  validateSafeCheckpoint(value);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("Stage 8 checkpoint is invalid.");
+  }
+  const normalized = {
+    ...value,
+    outputTruncationCount:
+      value.outputTruncationCount === undefined ? null : value.outputTruncationCount,
+  };
+  assertClosedRecord(normalized, new Set(Object.keys(template)), "Stage 8 checkpoint");
+  validateSafeCheckpoint(normalized);
   if (
-    value.schemaVersion !== 1 ||
-    value.attemptId !== attemptId ||
-    !Number.isSafeInteger(value.lastDurableEventSequence) ||
-    value.lastDurableEventSequence < 0 ||
-    !Array.isArray(value.samples) ||
-    value.samples.length > STAGE8_LIMITS.maxProviderCalls ||
-    !["NOT_STARTED", "IN_FLIGHT", "COMMITTED"].includes(value.sessionCreationStatus) ||
-    !["NOT_STARTED", "IN_FLIGHT", "COMMITTED"].includes(value.runCreationStatus) ||
-    !["NOT_STARTED", "IN_FLIGHT", "COMMITTED"].includes(value.executionStartStatus) ||
+    normalized.schemaVersion !== 1 ||
+    normalized.attemptId !== attemptId ||
+    !Number.isSafeInteger(normalized.lastDurableEventSequence) ||
+    normalized.lastDurableEventSequence < 0 ||
+    !Array.isArray(normalized.samples) ||
+    normalized.samples.length > STAGE8_LIMITS.maxProviderCalls ||
+    !["NOT_STARTED", "IN_FLIGHT", "COMMITTED"].includes(normalized.sessionCreationStatus) ||
+    !["NOT_STARTED", "IN_FLIGHT", "COMMITTED"].includes(normalized.runCreationStatus) ||
+    !["NOT_STARTED", "IN_FLIGHT", "COMMITTED"].includes(normalized.executionStartStatus) ||
     ![
       "UNKNOWN",
       "COMPLETED",
@@ -1609,8 +1673,10 @@ function parseStage8AttemptCheckpoint(value, attemptId) {
       "TIMEOUT",
       "MAX_STEPS_REACHED",
       "BUDGET_EXCEEDED",
-    ].includes(value.terminalState) ||
-    (value.abortReason !== null && typeof value.abortReason !== "string")
+    ].includes(normalized.terminalState) ||
+    (normalized.abortReason !== null && typeof normalized.abortReason !== "string") ||
+    (normalized.outputTruncationCount !== null &&
+      !Number.isSafeInteger(normalized.outputTruncationCount))
   ) {
     throw new TypeError("Stage 8 checkpoint fields are invalid.");
   }
@@ -1630,9 +1696,10 @@ function parseStage8AttemptCheckpoint(value, attemptId) {
     "totalMissTokens",
     "totalWriteTokens",
   ]) {
-    safeCount(value[field]);
+    safeCount(normalized[field]);
   }
-  return cloneState(value);
+  if (normalized.outputTruncationCount !== null) safeCount(normalized.outputTruncationCount);
+  return cloneState(normalized);
 }
 
 async function writeStage8AttemptReports(checkpoint, artifactPaths) {
@@ -1975,10 +2042,15 @@ function renderMarkdownSummary(report) {
     `- MAIN_AGENT calls: ${report.mainCallCount}`,
     `- Tool invocations: ${report.toolInvocationCount}`,
     `- Compactions: ${report.compactionCount}`,
-    `- Overall hit rate: ${report.overallBillingHitRate ?? "UNKNOWN"}`,
+    `- Compaction frequency per MAIN_AGENT call: ${report.compactionFrequency ?? "UNKNOWN"}`,
+    `- Full-run MAIN_AGENT hit rate (includes cold start): ${report.fullRunMainAgent.hitRate ?? "UNKNOWN"}`,
+    `- Warm MAIN_AGENT hit rate: ${report.warmMainAgent.hitRate ?? "UNKNOWN"}`,
+    `- Scored warm-segment hit rate: ${report.overallBillingHitRate ?? "UNKNOWN"}`,
+    `- Unexplained reusable-prefix misses: ${report.unexplainedPrefixMissTokens}`,
+    `- Output truncations: ${report.outputTruncationCount ?? "UNKNOWN"}`,
     `- Pre-compaction hit rate: ${report.preCompactionBillingHitRate ?? "UNKNOWN"}`,
     `- Post-compaction hit rate: ${report.postCompactionBillingHitRate ?? "UNKNOWN"}`,
-    `- Cost (nano-USD): ${report.totalCostNanoUsd} (${report.costStatus})`,
+    `- All-purpose cost (nano-USD): ${report.allPurposeTotalCostNanoUsd} (${report.costStatus})`,
     `- Exit gate: ${report.exitGatePassed ? "PASS" : "INCOMPLETE"}`,
     `- Abort reason: ${report.abortReason ?? "NONE"}`,
     "",

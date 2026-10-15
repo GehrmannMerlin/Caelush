@@ -37,6 +37,11 @@ export interface LLMBudgetAdmissionInput {
   readonly pricing?: ModelPricingSnapshot;
 }
 
+export interface LLMRecoveryBudgetAdmissionInput extends LLMBudgetAdmissionInput {
+  /** Original numeric output ceiling; recovery may reduce it but never increase it. */
+  readonly initialOutputCeiling: number;
+}
+
 export type ToolBudgetAdmission =
   | { readonly kind: "ALLOWED"; readonly reservedToolCalls: number }
   | {
@@ -141,6 +146,15 @@ export class BudgetManager {
     };
   }
 
+  admitLLMRecovery(input: LLMRecoveryBudgetAdmissionInput): LLMBudgetAdmission {
+    assertSafePositiveInteger(input.initialOutputCeiling, "initial output ceiling");
+    const configuredMaxOutputTokens = Math.min(
+      input.initialOutputCeiling,
+      input.configuredMaxOutputTokens ?? Number.MAX_SAFE_INTEGER,
+    );
+    return this.admitLLM({ ...input, configuredMaxOutputTokens });
+  }
+
   private tokenAllowance(input: LLMBudgetAdmissionInput):
     | {
         readonly kind: "ALLOWED";
@@ -215,6 +229,10 @@ export class BudgetManager {
 
 function assertSafeNonNegative(value: number, label: string): void {
   if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`${label} must be safe.`);
+}
+
+function assertSafePositiveInteger(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value < 1) throw new RangeError(`${label} must be safe.`);
 }
 
 function safeAdd(left: number, right: number, label: string): number {
