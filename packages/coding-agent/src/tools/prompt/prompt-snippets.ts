@@ -101,8 +101,8 @@ const SNIPPET_SOURCE: Readonly<Record<string, SnippetSource>> = {
     whenNotToUse: "Read/list/search.",
     argumentNotes: "cmd and relative workdir; keep session_id of a long-running process.",
     sideEffects: "process/state/network.",
-    safety: "Gate/approval for risk; stop long-running processes with stop_process.",
-    resultHandling: "Output + exit status.",
+    safety: "Gate/approval for risk; keep dev/preview servers and watchers running for the user.",
+    resultHandling: "Output + exit status; retain session_id and share the actual listening URL.",
   },
   write_stdin: {
     purpose: "Write or poll process.",
@@ -115,8 +115,9 @@ const SNIPPET_SOURCE: Readonly<Record<string, SnippetSource>> = {
   },
   stop_process: {
     purpose: "Stop managed process.",
-    whenToUse: "End a long-running process exec_command started.",
-    whenNotToUse: "Never taskkill/pkill/killall/Stop-Process/kill.",
+    whenToUse: "A user-requested stop, or replacing a failed/redundant service this Run started.",
+    whenNotToUse:
+      "Never stop a dev/preview server merely because verification or the task finished; never taskkill/pkill/killall/Stop-Process/kill.",
     argumentNotes: "Exact session_id from exec_command; no pid or name.",
     sideEffects: "Terminates that one session.",
     safety: "Runtime allows only a same-Run owned session.",

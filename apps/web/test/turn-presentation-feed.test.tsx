@@ -1,4 +1,6 @@
-import { renderToStaticMarkup } from "react-dom/server";
+import { PassThrough } from "node:stream";
+import type { ReactElement } from "react";
+import { renderToPipeableStream, renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   createInitialLiveActivityState,
@@ -27,6 +29,22 @@ import { modelWaitMessage } from "../src/components/model-wait-presentation.js";
 
 const runId = createRunId();
 const toolInvocationId = createToolInvocationId();
+
+function renderResolvedMarkup(element: ReactElement): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const output = new PassThrough();
+    let html = "";
+    output.on("data", (chunk: Buffer) => {
+      html += chunk.toString();
+    });
+    output.on("end", () => resolve(html));
+    output.on("error", reject);
+    const stream = renderToPipeableStream(element, {
+      onAllReady: () => stream.pipe(output),
+      onError: reject,
+    });
+  });
+}
 function presentation(): SessionTurnPresentationResponse {
   return {
     capabilityVersion: 1,
@@ -1121,7 +1139,7 @@ describe("TurnPresentationFeed", () => {
     expect(html).not.toContain("任务结束报告");
   });
 
-  it("renders durable final answers and live drafts as safe Markdown", () => {
+  it("renders durable final answers and live drafts as safe Markdown", async () => {
     const initial = createInitialLiveActivityState(runId);
     const markdown = [
       "## 结果",
@@ -1141,7 +1159,7 @@ describe("TurnPresentationFeed", () => {
       "const answer = true;",
       "```",
     ].join("\n");
-    const html = renderToStaticMarkup(
+    const html = await renderResolvedMarkup(
       <TurnPresentationFeed
         presentation={{
           ...presentation(),
@@ -1196,8 +1214,8 @@ describe("TurnPresentationFeed", () => {
     expect(process).not.toContain("<h2>");
   });
 
-  it("keeps raw HTML inert and does not create links for unsafe protocols", () => {
-    const html = renderToStaticMarkup(
+  it("keeps raw HTML inert and does not create links for unsafe protocols", async () => {
+    const html = await renderResolvedMarkup(
       <TurnPresentationFeed
         presentation={{
           capabilityVersion: 1,
@@ -1227,8 +1245,8 @@ describe("TurnPresentationFeed", () => {
     expect(reply).toContain("危险");
   });
 
-  it("opens protocol-relative Markdown links with safe external-link attributes", () => {
-    const html = renderToStaticMarkup(
+  it("opens protocol-relative Markdown links with safe external-link attributes", async () => {
+    const html = await renderResolvedMarkup(
       <TurnPresentationFeed
         presentation={{
           capabilityVersion: 1,

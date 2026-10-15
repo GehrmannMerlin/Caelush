@@ -3,9 +3,8 @@ import { BrowserWindow, shell } from "electron";
 import { BUILD_CONFIGURATION } from "../build-config.js";
 import type { DesktopRendererTrust } from "../ipc/handlers.js";
 import {
-  allowedExternalHttpsUrl,
+  allowedExternalUrl,
   createSecureWebPreferences,
-  createRendererTrust,
   isLocalRendererUrl,
 } from "./security-policy.js";
 
@@ -34,7 +33,7 @@ export function createMainWindow(options: CreateWindowOptions): BrowserWindow {
 
   window.once("ready-to-show", () => window.show());
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void openExternalHttps(url);
+    void openExternalUrl(url);
     return { action: "deny" };
   });
   window.webContents.on("will-navigate", (event, destination) => {
@@ -52,9 +51,9 @@ export function createMainWindow(options: CreateWindowOptions): BrowserWindow {
   return window;
 }
 
-async function openExternalHttps(value: string): Promise<void> {
+async function openExternalUrl(value: string): Promise<void> {
   try {
-    const allowedUrl = allowedExternalHttpsUrl(value, externalHttpsHosts);
+    const allowedUrl = allowedExternalUrl(value, externalHttpsHosts);
     if (allowedUrl !== null) await shell.openExternal(allowedUrl);
   } catch {
     // External URL parsing/open failures are intentionally not reflected to the renderer.

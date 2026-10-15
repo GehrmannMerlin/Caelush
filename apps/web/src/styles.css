@@ -1134,10 +1134,19 @@ textarea:disabled {
 }
 
 .assistant-markdown a {
-  color: var(--web-accent, #17664e);
+  color: var(--web-blue-600, #2563eb);
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 0.16em;
+}
+
+.assistant-markdown a:hover {
+  color: var(--web-blue-800, #1749a6);
+}
+
+.assistant-markdown a:focus-visible {
+  outline: 2px solid var(--web-blue-600, #2563eb);
+  outline-offset: 3px;
 }
 
 .assistant-markdown :not(pre) > code {

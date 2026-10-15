@@ -50,22 +50,24 @@ export function isLocalRendererUrl(destination: string, trust: DesktopRendererTr
   }
 }
 
-export function allowedExternalHttpsUrl(
+export function allowedExternalUrl(
   value: string,
   allowedHosts: ReadonlySet<string>,
 ): string | null {
   try {
     const url = new URL(value);
+    if (url.username !== "" || url.password !== "") return null;
     if (
-      url.protocol !== "https:" ||
-      url.username !== "" ||
-      url.password !== "" ||
-      url.port !== "" ||
-      !allowedHosts.has(url.hostname.toLowerCase())
-    ) {
-      return null;
-    }
-    return url.toString();
+      url.protocol === "http:" &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname.toLowerCase()) &&
+      url.port !== "0"
+    )
+      return url.toString();
+    return url.protocol === "https:" &&
+      url.port === "" &&
+      allowedHosts.has(url.hostname.toLowerCase())
+      ? url.toString()
+      : null;
   } catch {
     return null;
   }

@@ -1,11 +1,13 @@
-import { createElement, type ReactElement } from "react";
+import { createElement, Fragment, type ReactElement } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { rehypeLocalPreviewLinks } from "./local-preview-links.js";
 
 const components: Components = {
   a: ({ href, children, node, ...props }) => {
     void node;
     const external = isExternalHttpUrl(href);
+    if (!external && !href?.startsWith("#")) return createElement(Fragment, null, children);
     return createElement(
       "a",
       {
@@ -29,7 +31,11 @@ export function AssistantMarkdown({ children }: { readonly children: string }): 
   return createElement(
     "div",
     { className: "assistant-markdown" },
-    createElement(ReactMarkdown, { remarkPlugins: [remarkGfm], components }, children),
+    createElement(
+      ReactMarkdown,
+      { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeLocalPreviewLinks], components },
+      children,
+    ),
   );
 }
 
@@ -37,7 +43,12 @@ function isExternalHttpUrl(href: string | undefined): boolean {
   if (href === undefined) return false;
   try {
     const url = new URL(href.startsWith("//") ? `https:${href}` : href);
-    return url.protocol === "https:" || url.protocol === "http:";
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      url.username === "" &&
+      url.password === "" &&
+      url.port !== "0"
+    );
   } catch {
     return false;
   }

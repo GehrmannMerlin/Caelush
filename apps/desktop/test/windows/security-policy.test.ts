@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  allowedExternalHttpsUrl,
+  allowedExternalUrl,
   createRendererTrust,
   createSecureWebPreferences,
   isLocalRendererUrl,
@@ -56,7 +56,7 @@ describe("Electron window security policy", () => {
 
   it("opens external navigation only for allowlisted HTTPS hosts", () => {
     const allowed = new Set(["github.com", "www.caelush.com"]);
-    expect(allowedExternalHttpsUrl("https://github.com/GehrmannMerlin/Caelush", allowed)).toBe(
+    expect(allowedExternalUrl("https://github.com/GehrmannMerlin/Caelush", allowed)).toBe(
       "https://github.com/GehrmannMerlin/Caelush",
     );
     for (const url of [
@@ -66,7 +66,30 @@ describe("Electron window security policy", () => {
       "https://github.com:8443/",
       "javascript:alert(1)",
     ]) {
-      expect(allowedExternalHttpsUrl(url, allowed)).toBeNull();
+      expect(allowedExternalUrl(url, allowed)).toBeNull();
     }
+  });
+
+  it.each([
+    ["http://localhost:5173", "http://localhost:5173/"],
+    ["http://127.0.0.1:3000/login?next=%2F#form", "http://127.0.0.1:3000/login?next=%2F#form"],
+    ["http://[::1]:8080/", "http://[::1]:8080/"],
+  ])("opens a valid loopback preview in the system browser: %s", (input, expected) => {
+    expect(allowedExternalUrl(input, new Set())).toBe(expected);
+  });
+
+  it.each([
+    "http://localhost:5173%EF%BC%89%EF%BC%8C%E8%AF%B4%E6%98%8E",
+    "http://localhost:70000/",
+    "http://localhost:0/",
+    "http://localhost.attacker.example:5173/",
+    "http://127.0.0.1.attacker.example:5173/",
+    "http://user:password@localhost:5173/",
+    "http://localhost@attacker.example:5173/",
+    "http://192.168.1.1:5173/",
+    "http://0.0.0.0:5173/",
+    "file:///C:/Windows/",
+  ])("rejects malformed or non-loopback local-preview destinations: %s", (url) => {
+    expect(allowedExternalUrl(url, new Set())).toBeNull();
   });
 });
