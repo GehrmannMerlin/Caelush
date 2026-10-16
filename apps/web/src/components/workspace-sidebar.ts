@@ -16,7 +16,8 @@ import {
   Plus,
 } from "lucide-react";
 import { derivePromptTitle } from "../application/prompt.js";
-import caelushLogo from "../assets/logo/caelush-logo.png";
+import { CaelushBrand, type ResolvedTheme } from "@caelush/ui-theme";
+import { caelushBrandAssets } from "../brand-assets.js";
 import archiveIcon from "../assets/icons/archive.svg";
 import { RunStatusIcon, runStatusClass, runStatusLabel } from "./run-status.js";
 import {
@@ -38,6 +39,7 @@ export interface WorkspaceSidebarProps {
   readonly selectedSessionId?: SessionId | undefined;
   readonly isDraft: boolean;
   readonly canNavigate: boolean;
+  readonly theme?: ResolvedTheme | undefined;
   readonly isOpen?: boolean;
   readonly onToggleWorkspace: (workspaceId: WorkspaceId) => void;
   readonly onSelectWorkspace: (workspaceId: WorkspaceId) => void;
@@ -62,9 +64,12 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
     createElement(
       "div",
       { className: "workspace-sidebar-brand" },
-      createElement("img", {
+      createElement(CaelushBrand, {
+        kind: "logo",
+        theme: props.theme ?? "light",
+        lightSrc: caelushBrandAssets.logo.light,
+        darkSrc: caelushBrandAssets.logo.dark,
         className: "workspace-sidebar-logo",
-        src: caelushLogo,
         alt: "Caelush",
       }),
     ),

@@ -2909,6 +2909,45 @@ body {
   border-bottom: 1px solid var(--web-line);
 }
 
+.settings-tabs {
+  display: flex;
+  gap: 22px;
+  padding: 0 26px;
+  border-bottom: 1px solid var(--web-line);
+}
+
+.settings-tab {
+  min-height: 44px;
+  padding: 10px 2px 9px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--web-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.settings-tab:hover,
+.settings-tab:focus-visible {
+  color: var(--web-ink-strong);
+  outline: none;
+}
+
+.settings-tab[aria-selected="true"] {
+  border-bottom-color: var(--web-accent, #2563eb);
+  color: var(--web-ink-strong);
+}
+
+.settings-tab-panel[hidden] {
+  display: none;
+}
+
+.settings-tab-panel--appearance {
+  padding: 20px 26px 26px;
+}
+
 .settings-eyebrow {
   color: #6b87a6;
   font-size: 0.66rem;

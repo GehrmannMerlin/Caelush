@@ -4,6 +4,7 @@ import { type LiveActivityState, type TimelineState, type TranscriptEntry } from
 import type { ApprovalResolution, RunId } from "@caelush/protocol";
 import type { ApprovalView } from "@caelush/client";
 import type { SessionTurnPresentationResponse } from "@caelush/protocol";
+import type { ResolvedTheme } from "@caelush/ui-theme";
 import type { WebControlMode } from "../application/session-manager.js";
 import { runStatusClass, runStatusLabel } from "./run-status.js";
 import { Timeline } from "./timeline.js";
@@ -18,6 +19,7 @@ import { ConversationStartPanel } from "./conversation-start-panel.js";
 
 export interface SessionWorkspaceProps {
   readonly title: string;
+  readonly theme?: ResolvedTheme | undefined;
   readonly workspaceName?: string | undefined;
   readonly workspaces: readonly WorkspaceRecord[];
   readonly selectedWorkspaceId?: WorkspaceId | undefined;
@@ -145,6 +147,7 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
           : props.turnPresentation !== undefined
             ? createElement(TurnPresentationFeed, {
                 presentation: props.turnPresentation,
+                theme: props.theme,
                 activeRun: props.activeRun,
                 liveActivity: props.liveActivity,
                 timeline: props.timeline,
@@ -255,6 +258,7 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
         ),
     createElement(ConversationStartPanel, {
       composer: props.composer,
+      theme: props.theme,
       workspaces: props.workspaces,
       selectedWorkspaceId: props.selectedWorkspaceId,
       workspaceName: props.workspaceName,

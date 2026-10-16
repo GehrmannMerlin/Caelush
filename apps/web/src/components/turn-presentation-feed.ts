@@ -31,7 +31,8 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import { toolPresentationCategory } from "@caelush/protocol";
-import caelushLogo from "../assets/logo/caelush-logo.png";
+import { CaelushBrand, type ResolvedTheme } from "@caelush/ui-theme";
+import { caelushBrandAssets } from "../brand-assets.js";
 import {
   browserFrameScheduler,
   type FrameHandle,
@@ -48,6 +49,7 @@ const AssistantMarkdown = lazy(async () => {
 
 export interface TurnPresentationFeedProps {
   readonly presentation: SessionTurnPresentationResponse;
+  readonly theme?: ResolvedTheme | undefined;
   readonly activeRun?: { readonly id: string; readonly status: RunStatus } | undefined;
   readonly liveActivity?: LiveActivityState | undefined;
   readonly timeline?: TimelineState | undefined;
@@ -272,6 +274,7 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
   const openedAt = latestUser === undefined ? undefined : Number(latestUser.createdAt);
   return createElement(TurnPresentationContent, {
     items,
+    theme: props.theme ?? "light",
     ...(legacyRunId === undefined ? {} : { runId: legacyRunId }),
     ...(openedAt === undefined ? {} : { openedAt }),
     isActive:
@@ -299,6 +302,7 @@ interface TurnPresentationContentProps {
   readonly activeRun?: { readonly id: string; readonly status: RunStatus } | undefined;
   readonly liveActivity?: LiveActivityState | undefined;
   readonly timeline?: TimelineState | undefined;
+  readonly theme?: ResolvedTheme | undefined;
 }
 
 function TurnPresentationContent(props: TurnPresentationContentProps): ReactElement {
@@ -490,9 +494,12 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
             createElement(
               "span",
               { className: "turn-presentation-summary-copy" },
-              createElement("img", {
+              createElement(CaelushBrand, {
+                kind: "logo",
+                theme: props.theme ?? "light",
+                lightSrc: caelushBrandAssets.logo.light,
+                darkSrc: caelushBrandAssets.logo.dark,
                 className: "turn-presentation-logo",
-                src: caelushLogo,
                 alt: "Caelush",
               }),
               taskElapsed === undefined

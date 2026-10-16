@@ -4,6 +4,7 @@ import { WorkspaceIdSchema } from "@caelush/protocol";
 import { WebHostApp } from "./app.js";
 import { createWebCaelushClient } from "./host/client-factory.js";
 import { createWebAppearanceController } from "./appearance/web-appearance.js";
+import "@caelush/ui-theme/styles.css";
 import "./styles.css";
 
 const appearanceController = createWebAppearanceController();
@@ -19,6 +20,11 @@ createRoot(document.getElementById("root") as HTMLElement).render(
   createElement(
     StrictMode,
     null,
-    createElement(WebHostApp, { client, launchContext, initialWorkspaceId }),
+    createElement(WebHostApp, {
+      client,
+      appearanceController,
+      launchContext,
+      initialWorkspaceId,
+    }),
   ),
 );

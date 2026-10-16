@@ -1,5 +1,6 @@
 import { createElement, type ReactElement } from "react";
 import type { WorkspaceId, WorkspaceRecord } from "@caelush/protocol";
+import type { ResolvedTheme } from "@caelush/ui-theme";
 import { ConversationStartPanel } from "./conversation-start-panel.js";
 
 export function WorkspaceEmptyState(props: {
@@ -10,6 +11,7 @@ export function WorkspaceEmptyState(props: {
   readonly onAddWorkspace: () => void;
   readonly onSelectWorkspace?: ((workspaceId: WorkspaceId) => void) | undefined;
   readonly composer?: ReactElement | undefined;
+  readonly theme?: ResolvedTheme | undefined;
 }): ReactElement {
   return createElement(
     "section",
@@ -21,6 +23,7 @@ export function WorkspaceEmptyState(props: {
       composer:
         props.composer ?? createElement("div", { className: "conversation-composer-placeholder" }),
       workspaces: props.workspaces,
+      theme: props.theme,
       selectedWorkspaceId: props.selectedWorkspaceId,
       disabled: props.disabled,
       onAddWorkspace: props.onAddWorkspace,

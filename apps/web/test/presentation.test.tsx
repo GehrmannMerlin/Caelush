@@ -297,6 +297,8 @@ describe("Web presentation", () => {
         onClose={vi.fn()}
         onConnect={vi.fn(async () => ({ ok: true }))}
         onDisconnect={vi.fn(async () => true)}
+        appearanceSnapshot={{ preference: "light", resolvedTheme: "light", revision: 0 }}
+        onPreferenceChange={vi.fn(async () => undefined)}
       />,
     );
 

@@ -1,6 +1,7 @@
 import { createElement, type ReactElement } from "react";
 import type { WorkspaceId, WorkspaceRecord } from "@caelush/protocol";
-import caelushLogo from "../assets/logo/caelush-logo.png";
+import { CaelushBrand, type ResolvedTheme } from "@caelush/ui-theme";
+import { caelushBrandAssets } from "../brand-assets.js";
 import { WorkspacePicker } from "./workspace-picker.js";
 
 export interface ConversationStartPanelProps {
@@ -9,6 +10,7 @@ export interface ConversationStartPanelProps {
   readonly selectedWorkspaceId?: WorkspaceId | undefined;
   readonly workspaceName?: string | undefined;
   readonly isSettled?: boolean | undefined;
+  readonly theme?: ResolvedTheme | undefined;
   readonly disabled?: boolean | undefined;
   readonly onAddWorkspace: () => void;
   readonly onSelectWorkspace: (workspaceId: WorkspaceId) => void;
@@ -27,7 +29,13 @@ export function ConversationStartPanel(props: ConversationStartPanelProps): Reac
     createElement(
       "div",
       { className: "conversation-start-brand", "aria-hidden": isSettled },
-      createElement("img", { src: caelushLogo, alt: "Caelush" }),
+      createElement(CaelushBrand, {
+        kind: "logo",
+        theme: props.theme ?? "light",
+        lightSrc: caelushBrandAssets.logo.light,
+        darkSrc: caelushBrandAssets.logo.dark,
+        alt: "Caelush",
+      }),
     ),
     createElement(
       "div",

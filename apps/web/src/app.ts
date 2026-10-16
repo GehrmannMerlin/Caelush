@@ -12,6 +12,7 @@ import {
   type ReactElement,
 } from "react";
 import type { SessionId, WorkspaceId, WorkspaceRecord, WorkspaceRef } from "@caelush/protocol";
+import type { AppearanceController } from "@caelush/ui-theme";
 import {
   canCancelRunStatus,
   createInitialLiveActivityState,
@@ -107,6 +108,7 @@ const EMPTY_WORKSPACE_STATE: WorkspaceManagerState = {
 
 export function WebHostApp(props: {
   readonly client: WebSessionClient;
+  readonly appearanceController: AppearanceController;
   readonly launchContext?: unknown | undefined;
   readonly initialWorkspaceId?: WorkspaceId | undefined;
 }): ReactElement {
@@ -125,6 +127,20 @@ export function WebHostApp(props: {
     null,
   );
   const pendingDraftWorkspaceId = useRef<WorkspaceId | undefined>(undefined);
+
+  const appearanceSubscribe = useCallback(
+    (listener: () => void) => props.appearanceController.subscribe(() => listener()),
+    [props.appearanceController],
+  );
+  const appearanceGetSnapshot = useCallback(
+    () => props.appearanceController.getSnapshot(),
+    [props.appearanceController],
+  );
+  const appearanceSnapshot = useSyncExternalStore(
+    appearanceSubscribe,
+    appearanceGetSnapshot,
+    appearanceGetSnapshot,
+  );
 
   useEffect(() => {
     const readSidebarProfile =
@@ -489,6 +505,8 @@ export function WebHostApp(props: {
     desktopPanelApi,
     sessionManager,
     snapshot: sessionSnapshot,
+    appearanceController: props.appearanceController,
+    appearanceSnapshot,
     sidebarOpen,
     workspaceDialogOpen,
     workspacePath,
@@ -541,6 +559,8 @@ function renderWorkspaceApp(input: {
   readonly desktopPanelApi: DesktopPanelApi | null;
   readonly sessionManager?: WebSessionManager | undefined;
   readonly snapshot: WebSessionSnapshot;
+  readonly appearanceController: AppearanceController;
+  readonly appearanceSnapshot: ReturnType<AppearanceController["getSnapshot"]>;
   readonly sidebarOpen: boolean;
   readonly workspaceDialogOpen: boolean;
   readonly workspacePath: string;
@@ -680,6 +700,7 @@ function renderWorkspaceApp(input: {
             selectedSessionId: snapshot.selectedSessionId,
             isDraft: snapshot.isDraft,
             canNavigate: input.workspaceState.status === "READY",
+            theme: input.appearanceSnapshot.resolvedTheme,
             isOpen: input.sidebarOpen,
             onToggleWorkspace: input.onToggleWorkspace,
             onSelectWorkspace: input.onSelectWorkspace,
@@ -734,6 +755,7 @@ function renderWorkspaceApp(input: {
           : hasWorkspace
             ? createElement(SessionWorkspace, {
                 title,
+                theme: input.appearanceSnapshot.resolvedTheme,
                 workspaceName: selectedWorkspace.displayName,
                 workspaces: input.workspaceState.workspaces,
                 selectedWorkspaceId: input.workspaceState.selectedWorkspaceId,
@@ -767,6 +789,7 @@ function renderWorkspaceApp(input: {
                   (await input.sessionManager?.createContinuitySession()) ?? false,
               })
             : createElement(WorkspaceEmptyState, {
+                theme: input.appearanceSnapshot.resolvedTheme,
                 hasWorkspaces: input.workspaceState.workspaces.length > 0,
                 workspaces: input.workspaceState.workspaces,
                 selectedWorkspaceId: input.workspaceState.selectedWorkspaceId,
@@ -808,6 +831,9 @@ function renderWorkspaceApp(input: {
           createElement(SettingsSurface, {
             providers: snapshot.aiProviders ?? [],
             models: snapshot.modelDirectory ?? [],
+            appearanceSnapshot: input.appearanceSnapshot,
+            onPreferenceChange: (preference) =>
+              input.appearanceController.setPreference(preference),
             onClose: input.onCloseSettings,
             onConnect: (providerId, apiKey) =>
               input.sessionManager?.connectProvider(providerId, apiKey) ??

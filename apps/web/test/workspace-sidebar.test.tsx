@@ -76,7 +76,7 @@ describe("WorkspaceSidebar", () => {
 
     expect(html).toContain("项目");
     expect(html).toContain('class="workspace-sidebar-brand"');
-    expect(html).toContain('class="workspace-sidebar-logo"');
+    expect(html).toContain('class="caelush-brand workspace-sidebar-logo"');
     expect(html).toContain('alt="Caelush"');
     expect(html).not.toContain('class="brand-symbol"');
     expect(html).not.toContain('class="brand-name"');

@@ -783,10 +783,12 @@ describe("TurnPresentationFeed", () => {
 
   it("uses the Caelush logo as the process title without the redundant activity kicker", () => {
     const html = renderToStaticMarkup(
-      <TurnPresentationFeed presentation={presentation()} isActive={false} />,
+      <TurnPresentationFeed presentation={presentation()} isActive={false} theme="dark" />,
     );
 
-    expect(html).toContain('class="turn-presentation-logo"');
+    expect(html).toContain('class="caelush-brand turn-presentation-logo"');
+    expect(html).toContain('data-caelush-brand-theme="dark"');
+    expect(html).toContain("caelush-logo-white");
     expect(html).toContain('alt="Caelush"');
     expect(html).not.toContain("任务活动");
     expect(html).not.toContain('class="turn-presentation-kicker"');
