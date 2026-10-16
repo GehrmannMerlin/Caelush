@@ -80,6 +80,37 @@ import {
   type PermissionPresetSelection,
 } from "@caelush/protocol";
 import { ApprovalRequestIdSchema } from "@caelush/protocol";
+import {
+  ArchiveSessionListQuerySchema,
+  ArchiveSessionListResponseSchema,
+  ArchiveWorkspaceListQuerySchema,
+  ArchiveWorkspaceListResponseSchema,
+  ArchiveTargetSchema,
+  ArchiveStateSchema,
+  ArchiveMutationResponseSchema,
+  ArchiveDeletionSelectionSchema,
+  ArchiveDeletionPreviewResponseSchema,
+  RestoreArchiveRequestSchema,
+  PermanentDeletionRequestSchema,
+  PermanentDeletionResponseSchema,
+  LegacyArchiveImportRequestSchema,
+  LegacyArchiveImportResponseSchema,
+  SessionIdSchema,
+  type ArchiveSessionListQuery,
+  type ArchiveSessionListResponse,
+  type ArchiveWorkspaceListQuery,
+  type ArchiveWorkspaceListResponse,
+  type ArchiveTarget,
+  type ArchiveState,
+  type ArchiveMutationResponse,
+  type ArchiveDeletionSelection,
+  type ArchiveDeletionPreviewResponse,
+  type RestoreArchiveRequest,
+  type PermanentDeletionRequest,
+  type PermanentDeletionResponse,
+  type LegacyArchiveImportRequest,
+  type LegacyArchiveImportResponse,
+} from "@caelush/protocol";
 
 const MAX_SSE_FRAME_BYTES = 1024 * 1024;
 const MAX_HTTP_ERROR_BYTES = 64 * 1024;
@@ -129,10 +160,24 @@ export class CaelushClientProtocolError extends Error {
 }
 
 export class CaelushProtocolCompatibilityError extends CaelushClientProtocolError {
-  constructor() {
-    super("Daemon protocol version is unsupported.");
+  constructor(message = "Daemon protocol version is unsupported.") {
+    super(message);
     this.name = "CaelushProtocolCompatibilityError";
   }
+}
+
+export function requireArchiveManagement(info: DaemonInfo): void {
+  if (info.capabilities.archiveManagementV1 !== true)
+    throw new CaelushProtocolCompatibilityError(
+      "Daemon archiveManagementV1 capability is required.",
+    );
+}
+
+function archiveQuery(input: Record<string, string | number | boolean | undefined>): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(input))
+    if (value !== undefined) query.set(key, String(value));
+  return query.toString();
 }
 
 export class CaelushClient {
@@ -144,6 +189,145 @@ export class CaelushClient {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.headers = new Headers(options.headers);
+  }
+
+  async listArchivedSessions(
+    input: Partial<ArchiveSessionListQuery> = {},
+    options: CaelushClientRequestOptions = {},
+  ): Promise<ArchiveSessionListResponse> {
+    const query = ArchiveSessionListQuerySchema.parse(input);
+    return this.request(
+      `/api/v1/archives/sessions?${archiveQuery(query)}`,
+      { method: "GET" },
+      ArchiveSessionListResponseSchema,
+      [200],
+      options,
+    );
+  }
+  async listArchivedWorkspaces(
+    input: Partial<ArchiveWorkspaceListQuery> = {},
+    options: CaelushClientRequestOptions = {},
+  ): Promise<ArchiveWorkspaceListResponse> {
+    const query = ArchiveWorkspaceListQuerySchema.parse(input);
+    return this.request(
+      `/api/v1/archives/workspaces?${archiveQuery(query)}`,
+      { method: "GET" },
+      ArchiveWorkspaceListResponseSchema,
+      [200],
+      options,
+    );
+  }
+  async getArchiveState(
+    input: ArchiveTarget,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<ArchiveState> {
+    return this.request(
+      `/api/v1/archives/state?${archiveQuery(ArchiveTargetSchema.parse(input))}`,
+      { method: "GET" },
+      ArchiveStateSchema,
+      [200],
+      options,
+    );
+  }
+  async archiveSession(
+    sessionId: SessionId,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<ArchiveMutationResponse> {
+    return this.archiveMutation(
+      { type: "SESSION", sessionId: SessionIdSchema.parse(sessionId) },
+      "archive",
+      {},
+      options,
+    );
+  }
+  async archiveWorkspace(
+    workspaceId: WorkspaceId,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<ArchiveMutationResponse> {
+    return this.archiveMutation(
+      { type: "WORKSPACE", workspaceId: WorkspaceIdSchema.parse(workspaceId) },
+      "archive",
+      {},
+      options,
+    );
+  }
+  async restoreSession(
+    sessionId: SessionId,
+    input: RestoreArchiveRequest,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<ArchiveMutationResponse> {
+    return this.archiveMutation(
+      { type: "SESSION", sessionId: SessionIdSchema.parse(sessionId) },
+      "restore",
+      RestoreArchiveRequestSchema.parse(input),
+      options,
+    );
+  }
+  async restoreWorkspace(
+    workspaceId: WorkspaceId,
+    input: RestoreArchiveRequest,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<ArchiveMutationResponse> {
+    return this.archiveMutation(
+      { type: "WORKSPACE", workspaceId: WorkspaceIdSchema.parse(workspaceId) },
+      "restore",
+      RestoreArchiveRequestSchema.parse(input),
+      options,
+    );
+  }
+  async previewArchiveDeletion(
+    input: ArchiveDeletionSelection,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<ArchiveDeletionPreviewResponse> {
+    return this.request(
+      "/api/v1/archives/deletion-preview",
+      { method: "POST", body: JSON.stringify(ArchiveDeletionSelectionSchema.parse(input)) },
+      ArchiveDeletionPreviewResponseSchema,
+      [200],
+      options,
+    );
+  }
+  async permanentlyDeleteArchives(
+    input: PermanentDeletionRequest,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<PermanentDeletionResponse> {
+    return this.request(
+      "/api/v1/archives/permanent-deletions",
+      { method: "POST", body: JSON.stringify(PermanentDeletionRequestSchema.parse(input)) },
+      PermanentDeletionResponseSchema,
+      [200],
+      options,
+    );
+  }
+  async importLegacyArchives(
+    input: LegacyArchiveImportRequest,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<LegacyArchiveImportResponse> {
+    return this.request(
+      "/api/v1/archives/legacy-import",
+      { method: "POST", body: JSON.stringify(LegacyArchiveImportRequestSchema.parse(input)) },
+      LegacyArchiveImportResponseSchema,
+      [200],
+      options,
+    );
+  }
+  private archiveMutation(
+    target: ArchiveTarget,
+    action: "archive" | "restore",
+    body: Record<string, string>,
+    options: CaelushClientRequestOptions,
+  ): Promise<ArchiveMutationResponse> {
+    const path =
+      target.type === "SESSION"
+        ? `sessions/${encodeURIComponent(target.sessionId)}`
+        : `workspaces/${encodeURIComponent(target.workspaceId)}`;
+    return this.request(
+      `/api/v1/${path}/${action}`,
+      { method: "POST", body: JSON.stringify(body) },
+      ArchiveMutationResponseSchema,
+      [200],
+      options,
+    );
   }
 
   async getHealth(options: CaelushClientRequestOptions = {}): Promise<HealthResponse> {

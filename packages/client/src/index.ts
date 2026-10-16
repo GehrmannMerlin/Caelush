@@ -3,6 +3,7 @@ export {
   CaelushClientHttpError,
   CaelushClientProtocolError,
   CaelushProtocolCompatibilityError,
+  requireArchiveManagement,
   parseSseReader,
 } from "./client.js";
 export {
