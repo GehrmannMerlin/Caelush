@@ -80,6 +80,14 @@ export function readArchiveCatalog(database: CaelushDatabase): ArchiveCatalog {
   };
 }
 
+/** An individual forgotten-Workspace archive records that parent ownership was not proven. */
+export function isUnassociatedLegacySession(
+  catalog: ArchiveCatalog,
+  sessionId: SessionId,
+): boolean {
+  return catalog.sessionArchives.get(sessionId)?.reason === "LEGACY_FORGOTTEN_WORKSPACE";
+}
+
 export function archiveState(catalog: ArchiveCatalog, target: ArchiveTarget): ArchiveState {
   if (target.type === "WORKSPACE") {
     if (!catalog.workspaceById.has(target.workspaceId))
@@ -95,22 +103,22 @@ export function archiveState(catalog: ArchiveCatalog, target: ArchiveTarget): Ar
   const session = catalog.sessionById.get(target.sessionId);
   if (session === undefined) throw new StorageNotFoundError("AgentSession", target.sessionId);
   const ownArchive = catalog.sessionArchives.get(session.id);
-  const workspace =
-    session.workspaceId === undefined ? undefined : catalog.workspaceById.get(session.workspaceId);
+  const parentId = isUnassociatedLegacySession(catalog, session.id)
+    ? undefined
+    : session.workspaceId;
+  const workspace = parentId === undefined ? undefined : catalog.workspaceById.get(parentId);
   const parentArchive =
-    session.workspaceId === undefined
-      ? undefined
-      : catalog.workspaceArchives.get(session.workspaceId);
+    parentId === undefined ? undefined : catalog.workspaceArchives.get(parentId);
   const archived = ownArchive !== undefined || parentArchive !== undefined;
   return ArchiveStateSchema.parse({
     target,
     archived,
     ...(ownArchive === undefined ? {} : { ownArchive }),
-    ...(session.workspaceId === undefined
+    ...(parentId === undefined
       ? {}
       : {
           parentWorkspace: {
-            workspaceId: session.workspaceId,
+            workspaceId: parentId,
             ...(parentArchive === undefined ? {} : { archive: parentArchive }),
           },
         }),
@@ -146,13 +154,13 @@ export function archivedSessionItems(
     const state = archiveState(catalog, { type: "SESSION", sessionId: session.id });
     if (!state.archived) continue;
     const workspace =
-      session.workspaceId === undefined
+      session.workspaceId === undefined || isUnassociatedLegacySession(catalog, session.id)
         ? undefined
         : catalog.workspaceById.get(session.workspaceId);
     const title = session.title?.trim() || "未命名会话";
     if (
       !matches(title, filter.query) ||
-      (filter.workspaceId !== undefined && session.workspaceId !== filter.workspaceId) ||
+      (filter.workspaceId !== undefined && workspace?.id !== filter.workspaceId) ||
       (filter.unassociated === true && workspace !== undefined)
     )
       continue;
@@ -199,7 +207,7 @@ export function archivedWorkspaceItems(
 ): ArchiveWorkspaceItem[] {
   const counts = new Map<WorkspaceId, number>();
   for (const session of catalog.sessions)
-    if (session.workspaceId !== undefined)
+    if (session.workspaceId !== undefined && !isUnassociatedLegacySession(catalog, session.id))
       counts.set(session.workspaceId, (counts.get(session.workspaceId) ?? 0) + 1);
   return catalog.workspaces
     .filter(

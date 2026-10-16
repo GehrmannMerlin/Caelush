@@ -6,6 +6,7 @@ import {
   type ClientModelSelectionWithReasoning,
   type ModelRef,
   type SessionId,
+  type WorkspaceRecord,
 } from "@caelush/protocol";
 import type { ArchiveStore, SessionRepository } from "@caelush/storage";
 import { requireUnarchivedTarget } from "./archive-access.js";
@@ -43,9 +44,11 @@ export class SessionService {
     const timestamp = this.now();
     let workspaceId = input.workspaceId;
     let defaultWorkspace = input.defaultWorkspace;
+    let expectedWorkspace: WorkspaceRecord | undefined;
     if (this.options.workspaceService !== undefined) {
       if (workspaceId !== undefined) {
         const workspace = await this.options.workspaceService.requireWorkspace(workspaceId);
+        expectedWorkspace = workspace;
         const canonicalRef = this.options.workspaceService.toWorkspaceRef(workspace);
         if (defaultWorkspace !== undefined) {
           let requestedPath: string;
@@ -66,6 +69,7 @@ export class SessionService {
           path: defaultWorkspace.path,
         });
         workspaceId = registration.workspace.id;
+        expectedWorkspace = registration.workspace;
         defaultWorkspace = this.options.workspaceService.toWorkspaceRef(registration.workspace);
       } else {
         throw new WorkspaceOwnershipError();
@@ -103,7 +107,10 @@ export class SessionService {
       updatedAt: timestamp,
       metadata: input.metadata ?? {},
     });
-    await this.options.repository.insert(session);
+    await this.options.repository.insert(
+      session,
+      expectedWorkspace === undefined ? undefined : { expectedWorkspace },
+    );
     return session;
   }
 

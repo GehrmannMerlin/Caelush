@@ -3,6 +3,7 @@ import {
   type AgentSession,
   type SessionId,
   type WorkspaceId,
+  type WorkspaceRecord,
 } from "@caelush/protocol";
 import type { CaelushDatabase } from "../database.js";
 import {
@@ -15,6 +16,7 @@ import {
   StorageDecodeError,
   StorageError,
   StorageNotFoundError,
+  StorageArchiveConflictError,
 } from "../errors.js";
 
 interface SessionRow {
@@ -31,7 +33,11 @@ export interface SessionListOptions {
 }
 
 export interface SessionRepository {
-  insert(session: AgentSession): Promise<void>;
+  /** Production creation binds the parent observed before asynchronous preparation. */
+  insert(
+    session: AgentSession,
+    options?: { readonly expectedWorkspace: WorkspaceRecord },
+  ): Promise<void>;
   get(id: SessionId): Promise<AgentSession | null>;
   update(session: AgentSession): Promise<void>;
   list(options?: SessionListOptions): Promise<AgentSession[]>;
@@ -70,8 +76,29 @@ function mapRepositoryError(error: unknown, action: string, id: string): never {
 export class SqliteSessionRepository implements SessionRepository {
   constructor(private readonly database: CaelushDatabase) {}
 
-  async insert(session: AgentSession): Promise<void> {
+  async insert(
+    session: AgentSession,
+    options?: { readonly expectedWorkspace: WorkspaceRecord },
+  ): Promise<void> {
     withArchiveWriteTransaction(this.database, () => {
+      if (options !== undefined) {
+        const expected = options.expectedWorkspace;
+        const current = this.database.client
+          .prepare("SELECT canonical_path, created_at_ms FROM workspaces WHERE id = ?")
+          .get(expected.id);
+        if (current === undefined) throw new StorageNotFoundError("Workspace", expected.id);
+        if (
+          session.workspaceId !== expected.id ||
+          session.defaultWorkspace?.id !== expected.id ||
+          session.defaultWorkspace.path !== expected.canonicalPath ||
+          current.canonical_path !== expected.canonicalPath ||
+          current.created_at_ms !== expected.createdAt
+        )
+          throw new StorageArchiveConflictError(
+            "ARCHIVE_SELECTION_CHANGED",
+            "The Workspace registry changed during Session preparation.",
+          );
+      }
       const workspaceId = session.workspaceId ?? session.defaultWorkspace?.id;
       if (workspaceId !== undefined)
         assertArchiveWritableInTransaction(this.database, { type: "WORKSPACE", workspaceId });

@@ -49,6 +49,33 @@ async function fixture() {
 }
 
 describe("daemon archive admission", () => {
+  it("refuses a late production Session insert after its Workspace was permanently deleted", async () => {
+    const { storage, workspace } = await fixture();
+    const entered = gate();
+    const resume = gate();
+    const service = new SessionService({
+      repository: storage.sessions,
+      archives: storage.archives,
+      workspaceService: new WorkspaceService({
+        repository: storage.workspaces,
+        archives: storage.archives,
+      }),
+      defaultSelection: async () => {
+        entered.release();
+        await resume.promise;
+        return undefined;
+      },
+    });
+    const creation = service.createSession({ workspaceId: workspace.id, title: "late" });
+    await entered.promise;
+    const target = { type: "WORKSPACE" as const, workspaceId: workspace.id };
+    await storage.archives.archive(target, createTimestampMs(10));
+    await storage.archives.purge(target, (await storage.archives.snapshotDeletion(target)).digest);
+    resume.release();
+    await expect(creation).rejects.toMatchObject({ name: "StorageNotFoundError" });
+    expect(await storage.sessions.list()).toEqual([]);
+    expect(await storage.workspaces.getById(workspace.id)).toBeNull();
+  });
   it("blocks Run creation when archive commits during asynchronous preparation", async () => {
     const { storage, session } = await fixture();
     const entered = gate();

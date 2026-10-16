@@ -14,7 +14,7 @@ import {
 } from "@caelush/protocol";
 import type { CaelushDatabase } from "../database.js";
 import { StorageError } from "../errors.js";
-import { readArchiveCatalog, archiveState } from "./archive-query.js";
+import { readArchiveCatalog, archiveState, isUnassociatedLegacySession } from "./archive-query.js";
 import type { ArchivePolicy } from "./archive-store.js";
 
 export interface LegacyArchiveCandidate {
@@ -127,6 +127,34 @@ export function reconcileLegacyArchives(
     const workspace =
       entry.workspace === undefined ? undefined : WorkspaceRecordSchema.parse(entry.workspace);
     if (workspace !== undefined) {
+      // Audit every sibling in this transaction, including those outside the candidate page.
+      // The host supplies only a pure identity predicate; evidence is read under this write lock.
+      const matches =
+        policy?.legacyWorkspaceMatches ??
+        ((w: WorkspaceRecord, ref: WorkspaceRef) =>
+          w.id === ref.id && w.canonicalPath === ref.path);
+      const siblingsProven = catalog.sessions
+        .filter(
+          (s) =>
+            s.workspaceId === session.workspaceId && !isUnassociatedLegacySession(catalog, s.id),
+        )
+        .every((sibling) => {
+          const proof = candidate(database, sibling, policy);
+          const refs = [
+            ...(sibling.defaultWorkspace === undefined ? [] : [sibling.defaultWorkspace]),
+            ...proof.runWorkspaces,
+          ];
+          return (
+            !proof.ambiguous &&
+            !proof.hasNonTerminalRun &&
+            refs.length > 0 &&
+            refs.every((ref) => matches(workspace, ref))
+          );
+        });
+      if (!siblingsProven) {
+        deferredSessionIds.push(session.id);
+        continue;
+      }
       const siblingActive = database.client
         .prepare(
           "SELECT r.status FROM agent_runs r JOIN agent_sessions s ON s.id = r.session_id WHERE s.workspace_id = ?",
@@ -198,7 +226,10 @@ export function importLegacyArchiveMarkers(
       result.rejected.push({ sessionId: marker.sessionId, reason: "NOT_OWNED" });
       continue;
     }
-    if (archiveState(catalog, { type: "SESSION", sessionId: marker.sessionId }).archived) {
+    if (
+      archiveState(catalog, { type: "SESSION", sessionId: marker.sessionId }).ownArchive !==
+      undefined
+    ) {
       result.alreadyArchivedSessionIds.push(marker.sessionId);
       continue;
     }

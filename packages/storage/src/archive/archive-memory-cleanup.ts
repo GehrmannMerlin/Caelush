@@ -52,7 +52,6 @@ export function cleanupArchiveMemoriesInTransaction(
   const runs = new Set<string>(selection.runIds);
   const workspaces = new Set<string>(selection.workspaceIds);
   const deleted = new Set<string>();
-  const rewritten = new Set<string>();
   const rows = database.client
     .prepare(
       "SELECT id, scope, project_id, source_run_ids_json, evidence_refs_json FROM memory_records",
@@ -77,39 +76,18 @@ export function cleanupArchiveMemoriesInTransaction(
     )
       continue;
     if (sources.length > 0 && sources.every((source) => runs.has(source))) {
+      if (owners.some((owner) => owner === undefined || !runs.has(owner))) ownershipConflict();
       deleted.add(id);
       continue;
     }
-    if (sources.length === 0 || owners.some((owner) => owner === undefined)) ownershipConflict();
-    const remainingSources = sources.filter((source) => !runs.has(source));
-    const remainingEvidence = evidence.filter((_, i) => !runs.has(owners[i]!));
-    const remainingOwners = new Set(
-      owners.filter((owner) => owner !== undefined && !runs.has(owner)),
-    );
-    if (remainingSources.length === 0) {
-      deleted.add(id);
-      continue;
-    }
-    if (
-      remainingSources.some(
-        (source) =>
-          !database.client.prepare("SELECT 1 FROM agent_runs WHERE id = ?").get(source) ||
-          !remainingOwners.has(source),
-      ) ||
-      [...remainingOwners].some((owner) => !remainingSources.includes(owner!))
-    )
-      ownershipConflict();
-    database.client
-      .prepare(
-        "UPDATE memory_records SET source_run_ids_json = ?, evidence_refs_json = ?, supersedes = NULL, superseded_by = NULL WHERE id = ?",
-      )
-      .run(JSON.stringify(remainingSources), JSON.stringify(remainingEvidence), id);
-    rewritten.add(id);
+    // Current memory records have no per-fact support proof. An existing remaining Run ID
+    // cannot establish that the full fact is independent of the source being deleted.
+    ownershipConflict();
   }
   const remove = database.client.prepare("DELETE FROM memory_records WHERE id = ?");
   const clear = database.client.prepare(
     "UPDATE memory_records SET supersedes = CASE WHEN supersedes = ? THEN NULL ELSE supersedes END, superseded_by = CASE WHEN superseded_by = ? THEN NULL ELSE superseded_by END WHERE supersedes = ? OR superseded_by = ?",
   );
-  for (const id of new Set([...deleted, ...rewritten])) clear.run(id, id, id, id);
+  for (const id of deleted) clear.run(id, id, id, id);
   for (const id of deleted) remove.run(id);
 }

@@ -132,7 +132,7 @@ describe("permanent archive purge", () => {
       true,
     );
   });
-  it("retains proven shared memory and clears deleted sources and replacement links", async () => {
+  it("rejects mixed facts even when remaining Run IDs exist, without deleting any records", async () => {
     const { database, store } = await fixture();
     const target = await archiveGraph(database, "来源一");
     const other = await archiveGraph(database, "来源二");
@@ -140,7 +140,7 @@ describe("permanent archive purge", () => {
     const record = await memory.save({
       scope: "GLOBAL",
       topic: "fact",
-      fact: "Use strict mode.",
+      fact: "A-only private detail and B-only public detail.",
       confidence: 1,
       evidenceRefs: [`run:${target.run.id}`, `run:${other.run.id}`],
       sourceRunIds: [target.run.id, other.run.id],
@@ -157,13 +157,17 @@ describe("permanent archive purge", () => {
     });
     await memory.supersede(exclusive.id, record.id);
     await store.archive({ type: "SESSION", sessionId: target.session.id }, createTimestampMs(10));
-    await remove(store, { type: "SESSION", sessionId: target.session.id });
+    const before = dump(database);
+    await expect(
+      remove(store, { type: "SESSION", sessionId: target.session.id }),
+    ).rejects.toMatchObject({ code: "DATA_OWNERSHIP_CONFLICT" });
+    expect(dump(database)).toEqual(before);
     expect(await memory.get(record.id)).toMatchObject({
-      sourceRunIds: [other.run.id],
-      evidenceRefs: [`run:${other.run.id}`],
+      fact: "A-only private detail and B-only public detail.",
+      sourceRunIds: [target.run.id, other.run.id],
+      evidenceRefs: [`run:${target.run.id}`, `run:${other.run.id}`],
     });
-    expect((await memory.get(record.id))?.supersedes).toBeUndefined();
-    expect(await memory.get(exclusive.id)).toBeUndefined();
+    expect(await memory.get(exclusive.id)).toBeDefined();
   });
   it("aborts ambiguous mixed memory ownership without partial effects", async () => {
     const { database, store } = await fixture();

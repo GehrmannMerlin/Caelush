@@ -16,6 +16,7 @@ import {
   archivedWorkspaceItems,
   archiveState,
   readArchiveCatalog,
+  isUnassociatedLegacySession,
 } from "./archive-query.js";
 
 export interface ArchiveSelectionSet {
@@ -49,6 +50,18 @@ export function collectArchiveDeletionSnapshotInTransaction(
     sessionIds = archivedSessionItems(catalog, selection.filter).map((item) => item.sessionId);
   }
   const workspaces = new Set(workspaceIds);
+  if (
+    catalog.sessions.some(
+      (s) =>
+        s.workspaceId !== undefined &&
+        workspaces.has(s.workspaceId) &&
+        isUnassociatedLegacySession(catalog, s.id),
+    )
+  )
+    throw new StorageArchiveConflictError(
+      "DATA_OWNERSHIP_CONFLICT",
+      "An unassociated historical Session must be handled separately.",
+    );
   sessionIds = [
     ...new Set([
       ...sessionIds,
@@ -76,7 +89,12 @@ export function collectArchiveDeletionSnapshotInTransaction(
         return [];
       }
       const parent = catalog.sessionById.get(sessionId)?.workspaceId;
-      if (parent !== undefined && catalog.workspaceById.has(parent) && parent !== runWorkspaceId)
+      if (
+        parent !== undefined &&
+        catalog.workspaceById.has(parent) &&
+        parent !== runWorkspaceId &&
+        !isUnassociatedLegacySession(catalog, sessionId)
+      )
         throw new StorageArchiveConflictError(
           "DATA_OWNERSHIP_CONFLICT",
           "A Run has conflicting Session ownership.",

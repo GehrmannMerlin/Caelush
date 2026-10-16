@@ -6,6 +6,7 @@ import {
   WorkspaceRefSchema,
   type WorkspaceId,
   type WorkspaceRef,
+  type WorkspaceRecord,
 } from "@caelush/protocol";
 
 export class WorkspacePathError extends Error {
@@ -75,4 +76,10 @@ export function historicalWorkspaceRef(ref: WorkspaceRef): WorkspaceRef | undefi
 
 export function displayNameForWorkspacePath(canonicalPath: string): string {
   return basename(canonicalPath) || canonicalPath;
+}
+
+/** Pure identity policy used by Storage while holding its authoritative legacy-repair lock. */
+export function legacyWorkspaceMatches(workspace: WorkspaceRecord, ref: WorkspaceRef): boolean {
+  const normalized = historicalWorkspaceRef(ref);
+  return normalized?.id === workspace.id && normalized.path === workspace.canonicalPath;
 }

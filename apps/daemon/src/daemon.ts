@@ -58,6 +58,11 @@ import type { WebStaticHostOptions } from "./web/static-host.js";
 import type { SubscriberQueuePolicy } from "./events/subscriber-queue.js";
 import { DefaultPublicEventProjector } from "./events/public-event-projector.js";
 import { WorkspaceService } from "./workspaces/workspace-service.js";
+import {
+  createStableWorkspaceId,
+  historicalWorkspaceRef,
+  legacyWorkspaceMatches,
+} from "./workspaces/workspace-identity.js";
 import { LegacyArchiveReconciler } from "./workspaces/legacy-archive-reconciler.js";
 import type { WorkspacePreparationPort } from "./services/security-capability-service.js";
 import type { SecurityFeatureGates } from "./services/security-feature-gates.js";
@@ -367,7 +372,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
    */
   const storage = await openCaelushStorage({
     path: options.databasePath,
-    archivePolicy: { isTerminalRunStatus },
+    archivePolicy: {
+      isTerminalRunStatus,
+      legacyWorkspaceMatches,
+    },
     replayProtection: createReplayProtection(
       createHostReplayKeyProvider({
         keyFile: join(dirname(options.databasePath), "private-replay-keys", "master.v1.json"),
@@ -390,15 +398,36 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   let workspaceBackfill: WorkspaceBackfillSummary;
   const legacyArchiveReconciler = new LegacyArchiveReconciler(storage.archives);
   try {
+    // Preserve the evidence of a forgotten registry before a remembered launch hint can insert it.
+    await legacyArchiveReconciler.reconcile();
     const compatibilityPath = options.workspacePath?.trim() || options.web?.workspace?.path;
     if (compatibilityPath !== undefined && compatibilityPath.length > 0) {
-      try {
-        await workspaceService.registerWorkspace({ path: compatibilityPath });
-      } catch (error) {
-        // A remembered launch path is not an explicit restore request. Keep its archived
-        // registry entry untouched while allowing the daemon and archive page to start.
-        if (!(error instanceof StorageArchiveConflictError) || error.code !== "WORKSPACE_ARCHIVED")
-          throw error;
+      const remembered = historicalWorkspaceRef({
+        id: createStableWorkspaceId(compatibilityPath),
+        path: compatibilityPath,
+      });
+      const known =
+        remembered === undefined ? null : await storage.workspaces.getById(remembered.id);
+      const archived =
+        known !== null &&
+        (await storage.archives.getState({ type: "WORKSPACE", workspaceId: known.id })).archived;
+      const unresolved =
+        known === null &&
+        remembered !== undefined &&
+        (await storage.sessions.list()).some((s) => s.workspaceId === remembered.id);
+      // Persisted archived identity is sufficient to start archive management even if its
+      // project directory has disappeared. Unresolved history must not be implicitly rebound.
+      if (!archived && !unresolved) {
+        try {
+          await workspaceService.registerWorkspace({ path: compatibilityPath });
+        } catch (error) {
+          // A still-existing alias may resolve to an archived canonical directory.
+          if (
+            !(error instanceof StorageArchiveConflictError) ||
+            error.code !== "WORKSPACE_ARCHIVED"
+          )
+            throw error;
+        }
       }
     }
     workspaceBackfill = await backfillSessionWorkspaceOwnership({

@@ -21,6 +21,7 @@ import {
   type TimestampMs,
   type WorkspaceId,
   type WorkspaceRecord,
+  type WorkspaceRef,
 } from "@caelush/protocol";
 import type { CaelushDatabase } from "../database.js";
 import { StorageArchiveConflictError, StorageError } from "../errors.js";
@@ -46,6 +47,8 @@ import {
 
 export interface ArchivePolicy {
   readonly isTerminalRunStatus: (status: RunStatus) => boolean;
+  /** Pure synchronous host identity comparison; no filesystem access or mutation. */
+  readonly legacyWorkspaceMatches?: (workspace: WorkspaceRecord, ref: WorkspaceRef) => boolean;
 }
 export interface ArchiveStore {
   listLegacyArchiveCandidates(

@@ -6,6 +6,7 @@ import * as reconcilerModule from "../src/workspaces/legacy-archive-reconciler.j
 import {
   createStableWorkspaceId,
   normalizeWorkspaceIdentityPath,
+  legacyWorkspaceMatches,
 } from "../src/workspaces/workspace-identity.js";
 import { WorkspaceService } from "../src/workspaces/workspace-service.js";
 import { backfillSessionWorkspaceOwnership } from "../src/workspaces/workspace-backfill.js";
@@ -16,7 +17,7 @@ afterEach(async () => {
 async function fixture() {
   const storage = await openCaelushStorage({
     path: ":memory:",
-    archivePolicy: { isTerminalRunStatus },
+    archivePolicy: { isTerminalRunStatus, legacyWorkspaceMatches },
   });
   stores.push(storage);
   return storage;
