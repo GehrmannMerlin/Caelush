@@ -1,0 +1,26 @@
+{
+  "name": "@caelush/ui-theme",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./styles.css": "./src/styles/index.css",
+    "./styles/light.css": "./src/styles/light.css",
+    "./styles/dark.css": "./src/styles/dark.css",
+    "./assets/*": "./assets/*"
+  },
+  "scripts": {
+    "build": "tsc --build && node scripts/copy-static.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18"
+  }
+}

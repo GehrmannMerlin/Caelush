@@ -1092,7 +1092,7 @@ export async function runBoundaryCheck(options = {}) {
         "",
         findings.join("\n\n"),
         "",
-        "Allowed Caelush packages: @caelush/protocol, @caelush/client",
+        "Allowed Caelush packages: @caelush/protocol, @caelush/client, @caelush/ui-theme",
       ].join("\n"),
       summary: {
         desktopBoundaryPolicyVersion: desktopBoundary.policyVersion,

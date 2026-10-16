@@ -15,7 +15,9 @@ async function desktopFixture(
     readonly dependencies?: Record<string, string>;
   } = {},
 ): Promise<Awaited<ReturnType<typeof createFixtureWorkspace>>> {
-  const source = input.source ?? 'import "@caelush/protocol";\nimport "@caelush/client";\n';
+  const source =
+    input.source ??
+    'import "@caelush/protocol";\nimport "@caelush/client";\nimport "@caelush/ui-theme";\n';
   const fixture = await createFixtureWorkspace(
     v2WorkspaceSpec({
       "apps/desktop": {
@@ -35,17 +37,18 @@ describe("Desktop architecture boundary", () => {
 
     const scan = await scanner.scanDesktopBoundary(fixture.root);
 
-    expect(scan.policyVersion).toBe(1);
+    expect(scan.policyVersion).toBe(2);
     expect(scan.sourceFileCount).toBe(1);
-    expect(scan.sourceImportCount).toBe(2);
+    expect(scan.sourceImportCount).toBe(3);
     expect(scan.violations).toEqual([]);
   });
 
-  it("allows the public Protocol and client package entry points", async () => {
+  it("allows the public Protocol, client, and UI theme package entry points", async () => {
     const fixture = await desktopFixture({
       source: [
         'import "@caelush/protocol";',
         'import "@caelush/client";',
+        'import "@caelush/ui-theme";',
         'import { randomBytes } from "node:crypto";',
         'import { app } from "electron";',
       ].join("\n"),
@@ -54,7 +57,7 @@ describe("Desktop architecture boundary", () => {
     const scan = await scanner.scanDesktopBoundary(fixture.root);
 
     expect(scan.sourceFileCount).toBeGreaterThan(0);
-    expect(scan.sourceImportCount).toBe(4);
+    expect(scan.sourceImportCount).toBe(5);
     expect(scan.violations).toEqual([]);
   });
 
@@ -118,6 +121,7 @@ describe("Desktop architecture boundary", () => {
       dependencies: {
         "@caelush/protocol": "workspace:*",
         "@caelush/client": "workspace:*",
+        "@caelush/ui-theme": "workspace:*",
         "@caelush/agent": "workspace:*",
       },
     });

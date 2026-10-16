@@ -136,6 +136,9 @@ importers:
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@caelush/ui-theme':
+        specifier: workspace:*
+        version: link:../../packages/ui-theme
       '@types/react':
         specifier: 19.2.18
         version: 19.2.18
@@ -199,6 +202,9 @@ importers:
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@caelush/ui-theme':
+        specifier: workspace:*
+        version: link:../../packages/ui-theme
       '@xterm/addon-fit':
         specifier: 0.11.0
         version: 0.11.0
@@ -369,6 +375,16 @@ importers:
       drizzle-kit:
         specifier: 1.0.0-rc.4
         version: 1.0.0-rc.4
+
+  packages/ui-theme:
+    dependencies:
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
+    devDependencies:
+      '@types/react':
+        specifier: 19.2.18
+        version: 19.2.18
 
   packages/verification:
     dependencies:

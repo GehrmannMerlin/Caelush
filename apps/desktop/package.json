@@ -23,6 +23,7 @@
   "devDependencies": {
     "@caelush/client": "workspace:*",
     "@caelush/protocol": "workspace:*",
+    "@caelush/ui-theme": "workspace:*",
     "lucide-react": "1.48.0",
     "node-pty": "1.1.0",
     "react": "19.2.8",
