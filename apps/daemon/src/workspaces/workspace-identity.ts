@@ -66,6 +66,7 @@ export function normalizeWorkspaceIdentityPath(workspacePath: string): string {
 
 /** Historical identity checks never access or create a project directory. */
 export function historicalWorkspaceRef(ref: WorkspaceRef): WorkspaceRef | undefined {
+  // eslint-disable-next-line no-control-regex -- Historical host paths must reject literal controls.
   if ((!isAbsolute(ref.path) && !win32.isAbsolute(ref.path)) || /[\u0000-\u001f]/u.test(ref.path))
     return undefined;
   const path = normalizeWorkspaceIdentityPath(ref.path);

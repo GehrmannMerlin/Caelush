@@ -58,7 +58,7 @@ export class LegacyArchiveReconciler {
     const migratedSessionIds: LegacyArchiveReconcileResult["migratedSessionIds"][number][] = [],
       deferredSessionIds: LegacyArchiveReconcileResult["deferredSessionIds"][number][] = [];
     let cursor: string | undefined;
-    let catalogRevision = 0;
+    let catalogRevision: number;
     do {
       const page = await this.archives.listLegacyArchiveCandidates(cursor);
       const result = await this.archives.reconcileLegacyEntries(page.items.map(entry));

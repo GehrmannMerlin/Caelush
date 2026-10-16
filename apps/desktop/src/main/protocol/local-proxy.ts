@@ -187,6 +187,7 @@ export function isTrustedAgentRequest(request: Request): boolean {
 }
 
 function parseTrustedApiUrl(value: string): URL | null {
+  // eslint-disable-next-line no-control-regex -- A trusted local URL must reject literal controls.
   if (value.includes("\\") || /[\u0000-\u001f\u007f]/u.test(value)) return null;
   let url: URL;
   try {
