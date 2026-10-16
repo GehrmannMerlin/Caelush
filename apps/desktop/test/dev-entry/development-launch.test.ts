@@ -1,6 +1,7 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   assertDesktopBuildReady,
@@ -15,6 +16,18 @@ afterEach(async () => {
 });
 
 describe("Desktop development launch", () => {
+  it("builds the static account renderer before starting the dev app", async () => {
+    const packageJson = JSON.parse(
+      await readFile(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8"),
+    ) as { scripts: Record<string, string> };
+    const devScript = packageJson.scripts.dev;
+    const rendererBuildIndex = devScript.indexOf("vite build");
+    const devLaunchIndex = devScript.indexOf("node scripts/dev.mjs");
+
+    expect(rendererBuildIndex).toBeGreaterThanOrEqual(0);
+    expect(devLaunchIndex).toBeGreaterThan(rendererBuildIndex);
+  });
+
   it("discovers the existing sandbox runner without invoking a native build", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "caelush-start-sandbox-test-"));
     roots.push(root);

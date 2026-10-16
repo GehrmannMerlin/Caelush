@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node scripts/build-local-agent.mjs && pnpm run typecheck && node scripts/build-main.mjs && vite build",
     "build:main": "node scripts/build-main.mjs",
-    "dev": "node scripts/build-local-agent.mjs && pnpm run typecheck && node scripts/build-main.mjs && node scripts/dev.mjs",
+    "dev": "node scripts/build-local-agent.mjs && pnpm run typecheck && node scripts/build-main.mjs && vite build && node scripts/dev.mjs",
     "start": "node scripts/start.mjs",
     "clean:dev": "node scripts/clean-owned-output.mjs dev",
     "clean:release": "node scripts/clean-owned-output.mjs release",
