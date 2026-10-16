@@ -42,8 +42,11 @@ import { registerAIRoutes } from "./routes/ai.js";
 import { AIConfigurationService } from "./services/ai-configuration-service.js";
 import type { SecurityCapabilityService } from "./services/security-capability-service.js";
 import { registerSecurityRoutes } from "./routes/security.js";
+import { registerArchiveRoutes } from "./routes/archives.js";
+import type { ArchiveService } from "./services/archive-service.js";
 
 export interface DaemonDependencies {
+  readonly archiveService?: ArchiveService;
   readonly archives?: ArchiveStore;
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
@@ -78,6 +81,8 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
     assertLoopbackRequest(request, dependencies.desktopHost),
   );
   registerErrorHandling(app);
+  if (dependencies.archiveService !== undefined)
+    registerArchiveRoutes(app, dependencies.archiveService);
   registerHealthRoute(app);
   if (dependencies.info !== undefined) registerInfoRoute(app, dependencies.info);
   if (dependencies.securityCapabilityService !== undefined) {

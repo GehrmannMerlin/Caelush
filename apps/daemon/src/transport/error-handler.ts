@@ -27,6 +27,7 @@ import { EnvironmentCredentialReadOnlyError } from "../providers/credential-auth
 import { ModelDiscoveryError, ModelSelectionError } from "../providers/model-directory.js";
 import { SessionPresentationCursorError } from "../services/session-presentation-service.js";
 import { SecurityPolicyRequestError } from "../services/run-service.js";
+import { ArchiveConfirmationError } from "../services/archive-confirmation.js";
 
 export class InvalidEventCursorError extends Error {
   constructor() {
@@ -90,6 +91,12 @@ function isEventCursorValidationError(error: unknown): boolean {
 }
 
 function mapError(error: unknown): MappedError {
+  if (error instanceof ArchiveConfirmationError)
+    return {
+      statusCode: error.code === "INVALID_REQUEST" ? 400 : 409,
+      code: error.code,
+      message: error.message,
+    };
   if (error instanceof StorageArchiveConflictError) {
     return {
       statusCode: error.code === "INVALID_REQUEST" ? 400 : 409,
