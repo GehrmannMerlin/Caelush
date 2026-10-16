@@ -114,6 +114,7 @@ export function WebHostApp(props: {
 }): ReactElement {
   const clientHost = useMemo(() => resolveClientHostIntegration(), []);
   const desktopHostLoadingUI = clientHost.loadingUi;
+  const appearanceSupported = clientHost.kind !== "DESKTOP" || clientHost.appearance !== undefined;
   const [state, setState] = useState<WebHostState>(createInitialWebHostState);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
@@ -507,6 +508,8 @@ export function WebHostApp(props: {
     snapshot: sessionSnapshot,
     appearanceController: props.appearanceController,
     appearanceSnapshot,
+    appearanceSupported,
+    appearanceSaveError: clientHost.kind === "DESKTOP" ? "无法保存外观设置，请重试。" : undefined,
     sidebarOpen,
     workspaceDialogOpen,
     workspacePath,
@@ -561,6 +564,8 @@ function renderWorkspaceApp(input: {
   readonly snapshot: WebSessionSnapshot;
   readonly appearanceController: AppearanceController;
   readonly appearanceSnapshot: ReturnType<AppearanceController["getSnapshot"]>;
+  readonly appearanceSupported: boolean;
+  readonly appearanceSaveError?: string | undefined;
   readonly sidebarOpen: boolean;
   readonly workspaceDialogOpen: boolean;
   readonly workspacePath: string;
@@ -835,6 +840,8 @@ function renderWorkspaceApp(input: {
             appearanceSnapshot: input.appearanceSnapshot,
             onPreferenceChange: (preference) =>
               input.appearanceController.setPreference(preference),
+            appearanceSupported: input.appearanceSupported,
+            appearanceSaveError: input.appearanceSaveError,
             onClose: input.onCloseSettings,
             onConnect: (providerId, apiKey) =>
               input.sessionManager?.connectProvider(providerId, apiKey) ??

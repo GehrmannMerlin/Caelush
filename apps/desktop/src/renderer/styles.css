@@ -33,6 +33,35 @@
   --mono: "DM Mono", Consolas, monospace;
 }
 
+:root[data-caelush-theme="dark"] {
+  color-scheme: dark;
+  --ink: var(--caelush-text);
+  --canvas: var(--caelush-page);
+  --surface: var(--caelush-card);
+  --surface-raised: var(--caelush-input);
+  --surface-hover: var(--caelush-hover);
+  --line: var(--caelush-border);
+  --line-bright: var(--caelush-border-strong);
+  --text: var(--caelush-text);
+  --muted: var(--caelush-muted);
+  --dim: var(--caelush-subtle);
+  --mint: var(--caelush-accent);
+  --mint-dark: var(--caelush-accent-hover);
+  --gold: var(--caelush-warning);
+  --red: var(--caelush-danger);
+  --brand: var(--caelush-accent);
+  --brand-hover: var(--caelush-accent-hover);
+  --brand-soft: var(--caelush-accent-soft);
+  --brand-panel: var(--caelush-surface);
+  --brand-line: var(--caelush-border-strong);
+  --warning-soft: var(--caelush-warning-soft);
+  --warning-ink: var(--caelush-warning);
+  --warning-line: var(--caelush-border-strong);
+  --danger-soft: var(--caelush-danger-soft);
+  --danger: var(--caelush-danger);
+  --danger-line: var(--caelush-border-strong);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -1665,7 +1694,7 @@ button:disabled {
   padding-inline: 14px;
   border-color: rgb(73 116 178 / 19%);
   border-radius: 12px;
-  background: rgb(255 255 255 / 48%);
+  background: var(--caelush-input);
   backdrop-filter: blur(14px);
 }
 .auth-layout .input-wrap input {
@@ -1674,7 +1703,7 @@ button:disabled {
 }
 .auth-layout .input-wrap:focus-within {
   border-color: var(--brand);
-  background: rgb(255 255 255 / 70%);
+  background: var(--caelush-input);
   box-shadow: 0 0 0 3px rgb(37 99 235 / 10%);
 }
 .auth-layout .primary-button {
@@ -1699,11 +1728,11 @@ button:disabled {
   border-color: rgb(73 116 178 / 18%);
   border-radius: 11px;
   color: var(--text);
-  background: rgb(255 255 255 / 42%);
+  background: var(--surface);
 }
 .auth-layout .secondary-button:hover:not(:disabled) {
   color: var(--brand);
-  background: rgb(255 255 255 / 68%);
+  background: var(--surface-hover);
 }
 .auth-layout .text-button,
 .auth-layout .back-link {
@@ -2066,7 +2095,7 @@ button:disabled {
   height: 240px;
   overflow: hidden;
   border-radius: 50%;
-  background: #111a29;
+  background: var(--surface-raised);
   cursor: grab;
   touch-action: none;
   user-select: none;
@@ -3239,7 +3268,126 @@ button:disabled {
 .account-archive-host {
   --archive-text: var(--text);
   --archive-muted: var(--muted);
-  --archive-line: #e6ebf2;
+  --archive-line: var(--line);
   --archive-accent: var(--brand);
   --archive-danger: var(--danger);
+}
+
+:root[data-caelush-theme="dark"] .agent-startup-page {
+  background: var(--caelush-page);
+}
+:root[data-caelush-theme="dark"] .agent-startup-retry {
+  background: var(--caelush-card);
+}
+:root[data-caelush-theme="dark"] .auth-layout {
+  background:
+    radial-gradient(ellipse 42% 70% at 82% 10%, rgb(122 162 255 / 10%), transparent 100%),
+    radial-gradient(ellipse 38% 58% at 22% 48%, rgb(122 162 255 / 7%), transparent 100%),
+    linear-gradient(180deg, #181818 0%, #1a1a1a 58%, #181818 100%);
+}
+:root[data-caelush-theme="dark"] .brand-panel::after {
+  background: linear-gradient(145deg, transparent 10%, rgb(122 162 255 / 10%) 100%);
+}
+:root[data-caelush-theme="dark"] .auth-layout::before {
+  background-image:
+    linear-gradient(rgb(122 162 255 / 4%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(122 162 255 / 4%) 1px, transparent 1px);
+}
+:root[data-caelush-theme="dark"] .auth-layout .input-wrap {
+  border-color: var(--caelush-border);
+  background: var(--caelush-input);
+}
+:root[data-caelush-theme="dark"] .auth-layout .input-wrap:focus-within {
+  background: var(--caelush-input);
+  box-shadow: 0 0 0 3px rgb(122 162 255 / 16%);
+}
+:root[data-caelush-theme="dark"] .auth-layout .primary-button,
+:root[data-caelush-theme="dark"] .auth-layout .primary-button:disabled {
+  color: var(--caelush-accent-contrast);
+}
+:root[data-caelush-theme="dark"] .auth-layout .secondary-button {
+  border-color: var(--caelush-border);
+  background: var(--caelush-card);
+}
+:root[data-caelush-theme="dark"] .auth-layout .secondary-button:hover:not(:disabled) {
+  background: var(--caelush-hover);
+}
+:root[data-caelush-theme="dark"] .auth-layout .message-box,
+:root[data-caelush-theme="dark"] .auth-layout .message-box.info {
+  border-color: var(--caelush-border);
+  background: var(--caelush-card);
+}
+:root[data-caelush-theme="dark"] .auth-layout .message-box.error {
+  border-color: var(--caelush-danger);
+  background: var(--caelush-danger-soft);
+}
+:root[data-caelush-theme="dark"] .account-layout,
+:root[data-caelush-theme="dark"] .account-content {
+  background: var(--caelush-page);
+}
+:root[data-caelush-theme="dark"] .account-sidebar {
+  border-right-color: var(--caelush-border);
+  background: var(--caelush-sidebar);
+}
+:root[data-caelush-theme="dark"] .profile-avatar-overlay {
+  background: rgb(0 0 0 / 58%);
+}
+:root[data-caelush-theme="dark"] .profile-avatar-action {
+  border-color: var(--caelush-border-strong);
+  color: var(--caelush-text);
+  background: var(--caelush-card);
+}
+:root[data-caelush-theme="dark"] .profile-avatar-action:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--caelush-hover);
+}
+:root[data-caelush-theme="dark"] .revoke-button:hover:not(:disabled) {
+  background: var(--caelush-danger-soft);
+}
+:root[data-caelush-theme="dark"] .profile-crop-backdrop {
+  background: var(--caelush-overlay);
+}
+:root[data-caelush-theme="dark"] .profile-crop-dialog {
+  box-shadow: var(--caelush-shadow);
+}
+:root[data-caelush-theme="dark"] .skeleton-block {
+  background: var(--caelush-hover);
+}
+:root[data-caelush-theme="dark"] .skeleton-block::after {
+  background: linear-gradient(105deg, transparent 25%, rgb(255 255 255 / 9%) 48%, transparent 72%);
+}
+:root[data-caelush-theme="dark"] .archive-page {
+  background: var(--caelush-page);
+}
+:root[data-caelush-theme="dark"] .archive-bulk,
+:root[data-caelush-theme="dark"] .archive-error {
+  background: var(--caelush-danger-soft);
+}
+:root[data-caelush-theme="dark"] .archive-workspace-trigger,
+:root[data-caelush-theme="dark"] .archive-restore,
+:root[data-caelush-theme="dark"] .archive-secondary,
+:root[data-caelush-theme="dark"] .archive-load-more {
+  background: var(--caelush-input);
+}
+:root[data-caelush-theme="dark"] .archive-workspace-popover,
+:root[data-caelush-theme="dark"] .archive-delete-dialog {
+  background: var(--caelush-float);
+  box-shadow: var(--caelush-shadow);
+}
+:root[data-caelush-theme="dark"] .archive-modal-backdrop {
+  background: var(--caelush-overlay);
+}
+:root[data-caelush-theme="dark"] .archive-workspace-option:hover,
+:root[data-caelush-theme="dark"] .archive-workspace-option[aria-selected="true"] {
+  background: var(--caelush-hover);
+}
+:root[data-caelush-theme="dark"] .archive-delete-icon:hover,
+:root[data-caelush-theme="dark"] .archive-delete-icon:focus-visible {
+  background: var(--caelush-danger-soft);
+}
+:root[data-caelush-theme="dark"] .archive-skeleton {
+  background: var(--caelush-card);
+}
+:root[data-caelush-theme="dark"] .archive-danger {
+  color: var(--caelush-accent-contrast);
 }

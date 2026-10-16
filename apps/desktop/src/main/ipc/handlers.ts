@@ -1,6 +1,13 @@
 import { open } from "node:fs/promises";
 import { setImmediate } from "node:timers";
-import { BrowserWindow, dialog, ipcMain, type IpcMain, type IpcMainInvokeEvent } from "electron";
+import {
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  type IpcMain,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent,
+} from "electron";
 import { z } from "zod";
 import { WorkspaceIdSchema } from "@caelush/protocol";
 import { AccountController, AccountOperationError } from "../account/controller.js";
@@ -23,12 +30,20 @@ import { DesktopWorkspacePanelController } from "../workspace/panel-controller.j
 import type { DesktopArchiveController } from "../archive/controller.js";
 import { ARCHIVE_IPC_CHANNELS, registerArchiveHandlers } from "./archive-handlers.js";
 import type { DesktopUpdateCoordinator } from "../update/coordinator.js";
+import type { DesktopAppearanceController } from "../appearance/appearance-controller.js";
+import type { AppearanceSnapshot } from "@caelush/ui-theme";
 import {
   DesktopReleaseHistoryItemSchema,
   UpdateStateSchema,
 } from "../../shared/update-contract.js";
 
 export const IPC_CHANNELS = Object.freeze({
+  appearance: Object.freeze({
+    initialSnapshot: "caelush:appearance:initial-snapshot",
+    getSnapshot: "caelush:appearance:get-snapshot",
+    setPreference: "caelush:appearance:set-preference",
+    snapshot: "caelush:appearance:snapshot",
+  }),
   archive: ARCHIVE_IPC_CHANNELS,
   account: Object.freeze({
     state: "caelush:account:state",
@@ -108,6 +123,15 @@ export const IPC_CHANNELS = Object.freeze({
 });
 
 const NoInput = z.undefined();
+const ThemePreferenceSchema = z.enum(["light", "dark", "system"]);
+const AppearanceSnapshotSchema = z
+  .object({
+    preference: ThemePreferenceSchema,
+    resolvedTheme: z.enum(["light", "dark"]),
+    revision: z.number().int().nonnegative().safe(),
+  })
+  .strict();
+const SetAppearancePreferenceInput = z.object({ preference: ThemePreferenceSchema }).strict();
 const EmailInput = z.object({ email: z.email().max(320) }).strict();
 const CredentialsInput = z
   .object({ email: z.email().max(320), password: z.string().min(1).max(1024) })
@@ -387,6 +411,7 @@ export interface RegisterDesktopIpcOptions {
   readonly legacyImporter?: DesktopLegacyDataImporter;
   readonly desktopPanels?: DesktopWorkspacePanelController;
   readonly updates?: DesktopUpdateCoordinator;
+  readonly appearanceController?: DesktopAppearanceController | undefined;
 }
 
 type IpcCallerPolicy = "LOGIN" | "AGENT" | "LOGIN_OR_AGENT";
@@ -395,6 +420,8 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
   const main = options.ipcMain ?? ipcMain;
   const registered: string[] = [];
   const { account, window: windowChannels, feature } = IPC_CHANNELS;
+  let unsubscribeAppearance: (() => void) | null = null;
+  let appearanceStartupHandler: ((event: IpcMainEvent) => void) | null = null;
 
   const register = <TInput, TOutput>(
     channel: string,
@@ -477,6 +504,59 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
 
   if (options.archiveController !== undefined)
     registerArchiveHandlers(register, options.archiveController);
+
+  if (options.appearanceController !== undefined) {
+    const appearanceController = options.appearanceController;
+    register(
+      IPC_CHANNELS.appearance.getSnapshot,
+      NoInput,
+      AppearanceSnapshotSchema,
+      () => appearanceController.getSnapshot(),
+      undefined,
+      IPC_OPERATION_TIMEOUT_MS,
+      "LOGIN_OR_AGENT",
+    );
+    register(
+      IPC_CHANNELS.appearance.setPreference,
+      SetAppearancePreferenceInput,
+      AppearanceSnapshotSchema,
+      (input) => appearanceController.setPreference(input.preference),
+      undefined,
+      IPC_OPERATION_TIMEOUT_MS,
+      "LOGIN_OR_AGENT",
+    );
+    appearanceStartupHandler = (event) => {
+      event.returnValue = null;
+      try {
+        assertTrustedCaller(
+          event as unknown as IpcMainInvokeEvent,
+          options.window,
+          options.rendererTrust,
+          "LOGIN_OR_AGENT",
+        );
+        const snapshot = AppearanceSnapshotSchema.safeParse(appearanceController.getSnapshot());
+        if (snapshot.success) event.returnValue = Object.freeze({ ...snapshot.data });
+      } catch {
+        // Untrusted or malformed callers receive no appearance data.
+      }
+    };
+    main.on(IPC_CHANNELS.appearance.initialSnapshot, appearanceStartupHandler);
+    unsubscribeAppearance = appearanceController.subscribe((snapshot: AppearanceSnapshot) => {
+      if (options.window.isDestroyed() || options.window.webContents.isDestroyed()) return;
+      if (
+        !isTrustedCallerUrl(
+          options.window.webContents.mainFrame.url,
+          options.rendererTrust,
+          "LOGIN_OR_AGENT",
+        )
+      ) {
+        return;
+      }
+      const safeSnapshot = AppearanceSnapshotSchema.safeParse(snapshot);
+      if (safeSnapshot.success)
+        options.window.webContents.send(IPC_CHANNELS.appearance.snapshot, safeSnapshot.data);
+    });
+  }
 
   const getProjectedState = () => {
     const state = options.controller.getState();
@@ -1110,6 +1190,10 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
   });
 
   return () => {
+    if (appearanceStartupHandler !== null) {
+      main.removeListener(IPC_CHANNELS.appearance.initialSnapshot, appearanceStartupHandler);
+    }
+    unsubscribeAppearance?.();
     unsubscribeUpdates?.();
     unsubscribe();
     for (const channel of registered) main.removeHandler(channel);

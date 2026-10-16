@@ -41,6 +41,15 @@ import type {
   SessionTranscriptQuery,
   SessionTranscriptResponse,
 } from "@caelush/protocol";
+import type { AppearanceSnapshot, ThemePreference } from "@caelush/ui-theme";
+
+export interface DesktopAppearanceApi {
+  readonly capabilityVersion: 1;
+  readonly initialSnapshot: AppearanceSnapshot;
+  getSnapshot(): Promise<AppearanceSnapshot>;
+  setPreference(preference: ThemePreference): Promise<AppearanceSnapshot>;
+  subscribe(listener: (snapshot: AppearanceSnapshot) => void): () => void;
+}
 
 export interface DesktopArchiveApi {
   readonly capabilityVersion: 1;
@@ -62,6 +71,7 @@ export interface DesktopArchiveApi {
 
 export interface DesktopApi {
   readonly protocolVersion: 1;
+  readonly appearance?: DesktopAppearanceApi;
   readonly archive?: DesktopArchiveApi;
   readonly account: {
     getState(): Promise<AccountState>;

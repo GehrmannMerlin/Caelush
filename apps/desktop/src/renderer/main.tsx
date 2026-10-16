@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { DesktopApp } from "./App.js";
+import "@caelush/ui-theme/styles.css";
 import "./styles.css";
 
 const root = document.getElementById("root");

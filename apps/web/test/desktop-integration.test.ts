@@ -43,6 +43,39 @@ describe("client host integration", () => {
     expect(integration.panelApi).toBeNull();
   });
 
+  it("projects only a complete versioned Desktop appearance capability", () => {
+    const appearance = {
+      capabilityVersion: 1,
+      initialSnapshot: { preference: "dark", resolvedTheme: "dark", revision: 3 },
+      getSnapshot: vi.fn(async () => ({ preference: "dark", resolvedTheme: "dark", revision: 3 })),
+      setPreference: vi.fn(async () => ({
+        preference: "light",
+        resolvedTheme: "light",
+        revision: 4,
+      })),
+      subscribe: vi.fn(() => () => undefined),
+    };
+    const integration = resolveClientHostIntegration({
+      caelushDesktop: { protocolVersion: 1, appearance },
+    });
+
+    if (integration.kind !== "DESKTOP") throw new Error("expected Desktop integration");
+    expect(integration.appearance).toBe(appearance);
+    const invalidSnapshot = resolveClientHostIntegration({
+      caelushDesktop: {
+        protocolVersion: 1,
+        appearance: { ...appearance, initialSnapshot: { preference: "sepia" } },
+      },
+    });
+    if (invalidSnapshot.kind !== "DESKTOP") throw new Error("expected Desktop integration");
+    expect(invalidSnapshot.appearance).toBeUndefined();
+    const unsupported = resolveClientHostIntegration({
+      caelushDesktop: { protocolVersion: 1, appearance: { capabilityVersion: 2 } },
+    });
+    if (unsupported.kind !== "DESKTOP") throw new Error("expected Desktop integration");
+    expect(unsupported.appearance).toBeUndefined();
+  });
+
   it("disables an incomplete panel without disabling the other Desktop actions", () => {
     const integration = resolveClientHostIntegration({
       caelushDesktop: {

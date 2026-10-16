@@ -37,7 +37,7 @@ import {
 } from "./daemon/resources.js";
 import { DesktopDaemonSupervisor } from "./daemon/supervisor.js";
 import { DesktopWorkspacePanelController } from "./workspace/panel-controller.js";
-import { createMainWindow } from "./windows/create-window.js";
+import { createMainWindow, loadMainWindow } from "./windows/create-window.js";
 import { createRendererTrust } from "./windows/security-policy.js";
 
 logD6Startup("MAIN_MODULE", {
@@ -470,7 +470,9 @@ if (!singleInstance) {
       appPath,
       preloadPath: join(appPath, "dist", "preload", "index.cjs"),
       rendererTrust,
-      backgroundColor: windowBackgroundColor(desktopAppearance?.getSnapshot().resolvedTheme ?? "light"),
+      backgroundColor: windowBackgroundColor(
+        desktopAppearance?.getSnapshot().resolvedTheme ?? "light",
+      ),
     });
     logD6Startup("BROWSER_WINDOW_CREATED", { url: mainWindow.webContents.getURL() });
     mainWindow.webContents.on("dom-ready", () => logD6Startup("RENDERER_DOM_READY"));
@@ -550,6 +552,7 @@ if (!singleInstance) {
       legacyImporter,
       desktopPanels,
       updates,
+      appearanceController: desktopAppearance ?? undefined,
     });
     mainWindow.on("close", (event) => {
       if (safeQuitApproved) return;
@@ -579,6 +582,7 @@ if (!singleInstance) {
       disposeIpc = null;
       mainWindow = null;
     });
+    loadMainWindow(mainWindow, rendererTrust);
   }
 
   function isTrustedAgentWindow(): boolean {

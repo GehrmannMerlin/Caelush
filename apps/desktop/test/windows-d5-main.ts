@@ -48,7 +48,7 @@ import {
 } from "../src/main/profiles/profile-manager.js";
 import { DesktopWorkspacePanelController } from "../src/main/workspace/panel-controller.js";
 import { registerDesktopIpc } from "../src/main/ipc/handlers.js";
-import { createMainWindow } from "../src/main/windows/create-window.js";
+import { createMainWindow, loadMainWindow } from "../src/main/windows/create-window.js";
 import type { AccountState } from "../src/main/account/state.js";
 import { assertSuccessfulShutdown } from "../scripts/windows-d6-acceptance-helpers.mjs";
 
@@ -234,6 +234,7 @@ app.whenReady().then(async () => {
       appPath: desktopRoot,
       preloadPath: path.join(desktopRoot, "dist", "preload", "index.cjs"),
       rendererTrust: { developmentOrigin: null },
+      backgroundColor: "#ffffff",
     });
     mainWindow.webContents.on("console-message", (_event, details) => {
       if (details.level >= 2) {
@@ -296,6 +297,7 @@ app.whenReady().then(async () => {
       legacyImporter,
       desktopPanels: panels,
     });
+    loadMainWindow(mainWindow, { developmentOrigin: null });
     await waitFor(
       () => mainWindow!.webContents.getURL().startsWith("caelush-login://app/"),
       "Login Renderer",

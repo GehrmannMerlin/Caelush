@@ -2,7 +2,11 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { UpdatePage } from "./UpdatePage.js";
 import { AccountProfileScreen } from "./components/account-profile-screen.js";
 import { AccountArchiveEntry } from "./components/account-archive-screen.js";
-import type { DesktopArchiveApi } from "../preload/api-types.js";
+import { AccountAppearanceScreen } from "./components/account-appearance-screen.js";
+import type { DesktopArchiveApi, DesktopAppearanceApi } from "../preload/api-types.js";
+import { CaelushBrand, type AppearanceSnapshot, type ThemePreference } from "@caelush/ui-theme";
+import caelushLogoLight from "@caelush/ui-theme/assets/caelush-logo.png";
+import caelushLogoDark from "@caelush/ui-theme/assets/caelush-logo-white.png";
 import {
   ArrowLeft,
   Archive,
@@ -23,6 +27,7 @@ import {
   MonitorCog,
   RefreshCw,
   ShieldCheck,
+  Sun,
   Unplug,
 } from "lucide-react";
 import type { AccountState, DesktopAccountProfile, SafeDevice } from "../main/account/state.js";
@@ -33,8 +38,14 @@ import type {
 } from "../shared/legacy-data-contract.js";
 
 type AuthScreen = "login" | "register" | "verify" | "forgot" | "reset";
-type AccountScreen = "home" | "profile" | "archives" | "updates";
+type AccountScreen = "home" | "profile" | "appearance" | "archives" | "updates";
 type AppScreen = AuthScreen | AccountScreen | "agent-starting";
+
+const defaultAppearanceSnapshot: AppearanceSnapshot = Object.freeze({
+  preference: "light",
+  resolvedTheme: "light",
+  revision: 0,
+});
 
 const brandTitlePrefix = Array.from("让灵感 ");
 const brandTitleAccent = Array.from("自由生长。");
@@ -51,14 +62,24 @@ const initialState: AccountState = {
 };
 
 export function DesktopApp() {
+  const appearanceApi = window.caelushDesktop.appearance;
   const [accountState, setAccountState] = useState<AccountState>(initialState);
-  const [screen, setScreen] = useState<AppScreen>(() =>
-    window.location.protocol === "caelush-login:" &&
-    new URLSearchParams(window.location.search).get("view") === "account" &&
-    new URLSearchParams(window.location.search).get("section") === "archives"
-      ? "archives"
-      : "login",
-  );
+  const [screen, setScreen] = useState<AppScreen>(() => {
+    const query = new URLSearchParams(window.location.search);
+    if (
+      window.location.protocol === "caelush-login:" &&
+      query.get("view") === "account" &&
+      query.get("section") === "archives"
+    )
+      return "archives";
+    if (
+      window.location.protocol === "caelush-login:" &&
+      query.get("view") === "account" &&
+      query.get("section") === "appearance"
+    )
+      return "appearance";
+    return "login";
+  });
   const accountRouteRequested =
     window.location.protocol === "caelush-login:" &&
     new URLSearchParams(window.location.search).get("view") === "account";
@@ -91,6 +112,13 @@ export function DesktopApp() {
     readonly tone: "info" | "error";
     readonly message: string;
   } | null>(null);
+  const [appearanceSnapshot, setAppearanceSnapshot] = useState<AppearanceSnapshot>(
+    () => appearanceApi?.initialSnapshot ?? defaultAppearanceSnapshot,
+  );
+  const [appearanceError, setAppearanceError] = useState<string | null>(null);
+  const committedAppearanceSnapshot = useRef(appearanceSnapshot);
+  const latestAppearanceRequestId = useRef(0);
+  const pendingAppearanceRequestId = useRef(0);
 
   const authenticated =
     accountState.status === "AUTHENTICATED_ONLINE" || accountState.status === "AUTHORIZED_OFFLINE";
@@ -109,7 +137,9 @@ export function DesktopApp() {
     !reconnectingOffline &&
     (authScreenOpen || screen === "agent-starting");
   const activeView: AccountScreen =
-    screen === "profile" || screen === "archives" || screen === "updates" ? screen : "home";
+    screen === "profile" || screen === "appearance" || screen === "archives" || screen === "updates"
+      ? screen
+      : "home";
   const retryAgentStartup = useCallback(async () => {
     setAgentRetrying(true);
     setFeedback(null);
@@ -121,6 +151,93 @@ export function DesktopApp() {
       setAgentRetrying(false);
     }
   }, []);
+
+  const acceptCommittedAppearance = useCallback((next: AppearanceSnapshot) => {
+    if (next.revision < committedAppearanceSnapshot.current.revision) return;
+    committedAppearanceSnapshot.current = next;
+    if (pendingAppearanceRequestId.current === 0) setAppearanceSnapshot(next);
+  }, []);
+
+  useEffect(() => {
+    if (appearanceApi === undefined) {
+      committedAppearanceSnapshot.current = defaultAppearanceSnapshot;
+      setAppearanceSnapshot(defaultAppearanceSnapshot);
+      return undefined;
+    }
+    let active = true;
+    const receive = (next: AppearanceSnapshot) => {
+      if (active) acceptCommittedAppearance(next);
+    };
+    const unsubscribe = appearanceApi.subscribe(receive);
+    void appearanceApi
+      .getSnapshot()
+      .then(receive)
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [acceptCommittedAppearance, appearanceApi]);
+
+  useEffect(() => {
+    document.documentElement.dataset.caelushTheme = appearanceSnapshot.resolvedTheme;
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute(
+        "content",
+        appearanceSnapshot.resolvedTheme === "dark" ? "#181818" : "#ffffff",
+      );
+  }, [appearanceSnapshot.resolvedTheme]);
+
+  const changeAppearance = useCallback(
+    async (preference: ThemePreference) => {
+      if (appearanceApi === undefined) {
+        const error = new Error("This Desktop version does not support appearance settings.");
+        setAppearanceError("当前 Desktop 版本不支持外观设置，请更新应用后重试。");
+        throw error;
+      }
+      const requestId = ++latestAppearanceRequestId.current;
+      pendingAppearanceRequestId.current = requestId;
+      setAppearanceError(null);
+      setAppearanceSnapshot((current) => ({
+        preference,
+        resolvedTheme:
+          preference === "system" ? committedAppearanceSnapshot.current.resolvedTheme : preference,
+        revision: current.revision + 1,
+      }));
+
+      try {
+        const acknowledgement = await appearanceApi.setPreference(preference);
+        acceptCommittedAppearance(acknowledgement);
+      } catch (error) {
+        if (requestId === latestAppearanceRequestId.current) {
+          await appearanceApi
+            .getSnapshot()
+            .then(acceptCommittedAppearance)
+            .catch(() => undefined);
+          if (requestId === latestAppearanceRequestId.current) {
+            pendingAppearanceRequestId.current = 0;
+            setAppearanceSnapshot(committedAppearanceSnapshot.current);
+            setAppearanceError("无法保存外观设置，请重试。");
+          }
+        }
+        throw error;
+      }
+
+      if (requestId === latestAppearanceRequestId.current) {
+        await appearanceApi
+          .getSnapshot()
+          .then(acceptCommittedAppearance)
+          .catch(() => undefined);
+        if (requestId === latestAppearanceRequestId.current) {
+          pendingAppearanceRequestId.current = 0;
+          setAppearanceSnapshot(committedAppearanceSnapshot.current);
+        }
+      }
+      return committedAppearanceSnapshot.current;
+    },
+    [acceptCommittedAppearance, appearanceApi],
+  );
 
   useEffect(() => {
     let active = true;
@@ -182,7 +299,10 @@ export function DesktopApp() {
     if (!authenticated) {
       agentNavigationStarted.current = false;
       setScreen((current) =>
-        current === "profile" || current === "updates" || current === "agent-starting"
+        current === "profile" ||
+        current === "appearance" ||
+        current === "updates" ||
+        current === "agent-starting"
           ? "login"
           : current,
       );
@@ -420,6 +540,7 @@ export function DesktopApp() {
     ) : shouldStartAgent ? (
       <AgentStartupScreen
         state={accountState}
+        theme={appearanceSnapshot.resolvedTheme}
         retrying={agentRetrying}
         message={feedback}
         onRetry={() => void retryAgentStartup()}
@@ -433,6 +554,10 @@ export function DesktopApp() {
         }}
         accountState={accountState}
         activeView={activeView}
+        appearanceApi={appearanceApi}
+        appearanceSnapshot={appearanceSnapshot}
+        appearanceError={appearanceError}
+        onAppearancePreferenceChange={changeAppearance}
         devices={devices}
         devicesLoading={devicesLoading}
         busy={busy}
@@ -474,6 +599,7 @@ export function DesktopApp() {
     ) : (
       <AuthShell
         screen={screen === "agent-starting" ? "login" : (screen as AuthScreen)}
+        theme={appearanceSnapshot.resolvedTheme}
         status={accountState.status}
         email={email}
         password={password}
@@ -502,6 +628,7 @@ export function DesktopApp() {
 
 function AgentStartupScreen(props: {
   state: AccountState;
+  theme: AppearanceSnapshot["resolvedTheme"];
   retrying: boolean;
   message: string | null;
   onRetry(): void;
@@ -514,7 +641,14 @@ function AgentStartupScreen(props: {
   return (
     <main className="agent-startup-page" aria-busy={isStarting || props.retrying}>
       <section className="agent-startup-content" aria-live="polite" aria-atomic="true">
-        <img className="agent-startup-logo" src="/caelush-logo.png" alt="Caelush" />
+        <CaelushBrand
+          kind="logo"
+          theme={props.theme}
+          lightSrc={caelushLogoLight}
+          darkSrc={caelushLogoDark}
+          className="agent-startup-logo"
+          alt="Caelush"
+        />
         {isStarting && !props.message ? (
           <LoaderCircle className="agent-startup-indicator spin" aria-hidden="true" />
         ) : (
@@ -635,6 +769,7 @@ function BrandIntroduction() {
 
 function AuthShell(props: {
   screen: AuthScreen;
+  theme: AppearanceSnapshot["resolvedTheme"];
   status: AccountState["status"];
   email: string;
   password: string;
@@ -659,7 +794,13 @@ function AuthShell(props: {
   return (
     <main className="auth-layout">
       <div className="brand-emblem">
-        <img src="/caelush-logo.png" alt="Caelush" />
+        <CaelushBrand
+          kind="logo"
+          theme={props.theme}
+          lightSrc={caelushLogoLight}
+          darkSrc={caelushLogoDark}
+          alt="Caelush"
+        />
       </div>
       <div className="auth-content">
         <section className="brand-panel">
@@ -848,7 +989,7 @@ function AuthShell(props: {
 }
 
 function AccountLoadingScreen(props: { view: AccountScreen }) {
-  const navigation = ["home", "profile", "archives", "updates"] as const;
+  const navigation = ["home", "profile", "appearance", "archives", "updates"] as const;
   return (
     <main
       className="account-layout account-layout--loading"
@@ -947,6 +1088,16 @@ function AccountPageSkeleton(props: { view: AccountScreen }) {
     );
   }
 
+  if (props.view === "appearance") {
+    return (
+      <div className="account-appearance-skeleton" aria-hidden="true">
+        <span className="skeleton-block account-skeleton-section-title" />
+        <span className="skeleton-block account-skeleton-copy" />
+        <span className="skeleton-block account-skeleton-panel" />
+      </div>
+    );
+  }
+
   return (
     <div className="account-skeleton-overview" aria-hidden="true">
       <span className="skeleton-block account-skeleton-connection" />
@@ -1000,6 +1151,10 @@ function DeviceRowsSkeleton() {
 
 function AccountHome(props: {
   archiveApi?: DesktopArchiveApi | undefined;
+  appearanceApi?: DesktopAppearanceApi | undefined;
+  appearanceSnapshot: AppearanceSnapshot;
+  appearanceError: string | null;
+  onAppearancePreferenceChange(preference: ThemePreference): Promise<unknown>;
   onArchiveMutation(): void;
   accountState: AccountState;
   activeView: AccountScreen;
@@ -1052,6 +1207,12 @@ function AccountHome(props: {
           <BadgeCheck size={16} /> 个人信息
         </button>
         <button
+          className={`side-nav ${props.activeView === "appearance" ? "is-current" : ""}`}
+          onClick={() => props.onNavigate("appearance")}
+        >
+          <Sun size={16} /> 外观
+        </button>
+        <button
           className={`side-nav ${props.activeView === "archives" ? "is-current" : ""}`}
           onClick={() => props.onNavigate("archives")}
         >
@@ -1088,7 +1249,9 @@ function AccountHome(props: {
                   ? "总览"
                   : props.activeView === "profile"
                     ? "个人信息"
-                    : "检查更新"}
+                    : props.activeView === "appearance"
+                      ? "外观"
+                      : "检查更新"}
               </h2>
             </div>
           )}
@@ -1126,6 +1289,14 @@ function AccountHome(props: {
               setCurrentPassword={props.setCurrentPassword}
               setNewPassword={props.setNewPassword}
               onChangePassword={props.onChangePassword}
+            />
+          )}
+          {props.activeView === "appearance" && (
+            <AccountAppearanceScreen
+              api={props.appearanceApi}
+              snapshot={props.appearanceSnapshot}
+              error={props.appearanceError}
+              onPreferenceChange={props.onAppearancePreferenceChange}
             />
           )}
           {props.activeView === "updates" && <UpdatePage />}

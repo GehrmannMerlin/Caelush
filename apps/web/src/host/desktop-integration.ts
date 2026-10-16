@@ -1,4 +1,5 @@
 import type { DesktopPanelApi } from "./desktop-panel-api.js";
+import type { AppearanceSnapshot, ThemePreference } from "@caelush/ui-theme";
 
 export const CAELUSH_DESKTOP_PROTOCOL_VERSION = 1 as const;
 
@@ -33,9 +34,18 @@ export interface DesktopUpdateBridge {
   subscribeState(listener: (state: DesktopUpdateState) => void): () => void;
 }
 
+export interface DesktopAppearanceBridge {
+  readonly capabilityVersion: 1;
+  readonly initialSnapshot: AppearanceSnapshot;
+  getSnapshot(): Promise<AppearanceSnapshot>;
+  setPreference(preference: ThemePreference): Promise<AppearanceSnapshot>;
+  subscribe(listener: (snapshot: AppearanceSnapshot) => void): () => void;
+}
+
 export interface DesktopBridgeV1 {
   readonly protocolVersion: typeof CAELUSH_DESKTOP_PROTOCOL_VERSION;
   readonly account?: DesktopAccountBridge | undefined;
+  readonly appearance?: DesktopAppearanceBridge | undefined;
   readonly update?: DesktopUpdateBridge | undefined;
   readonly workspace?: DesktopPanelApi["workspace"] | undefined;
   readonly browser?: DesktopPanelApi["browser"] | undefined;
@@ -46,6 +56,7 @@ export type ClientHostIntegration =
   | {
       readonly kind: "DESKTOP";
       readonly loadingUi: true;
+      readonly appearance?: DesktopAppearanceBridge | undefined;
       readonly account?:
         | {
             readonly href: "caelush-login://app/?view=account";
@@ -91,6 +102,9 @@ export function resolveClientHostIntegration(
             : {}),
         }
       : undefined;
+  const appearance = isDesktopAppearanceBridge(bridge.appearance)
+    ? (bridge.appearance as unknown as DesktopAppearanceBridge)
+    : undefined;
   const updates =
     isRecord(bridge.update) && typeof bridge.update.check === "function"
       ? { check: bridge.update.check as DesktopUpdateBridge["check"] }
@@ -99,6 +113,7 @@ export function resolveClientHostIntegration(
   return {
     kind: "DESKTOP",
     loadingUi: true,
+    ...(appearance === undefined ? {} : { appearance }),
     ...(account === undefined ? {} : { account }),
     ...(updates === undefined ? {} : { updates }),
     ...(hasMethods(bridge.update, [
@@ -114,6 +129,29 @@ export function resolveClientHostIntegration(
       : {}),
     panelApi: isDesktopPanelApi(bridge) ? bridge : null,
   };
+}
+
+function isDesktopAppearanceBridge(value: unknown): value is DesktopAppearanceBridge {
+  if (!isRecord(value) || value.capabilityVersion !== 1) return false;
+  return (
+    isAppearanceSnapshot(value.initialSnapshot) &&
+    typeof value.getSnapshot === "function" &&
+    typeof value.setPreference === "function" &&
+    typeof value.subscribe === "function"
+  );
+}
+
+function isAppearanceSnapshot(value: unknown): value is AppearanceSnapshot {
+  return (
+    isRecord(value) &&
+    (value.preference === "light" ||
+      value.preference === "dark" ||
+      value.preference === "system") &&
+    (value.resolvedTheme === "light" || value.resolvedTheme === "dark") &&
+    typeof value.revision === "number" &&
+    Number.isSafeInteger(value.revision) &&
+    value.revision >= 0
+  );
 }
 
 function isDesktopPanelApi(value: unknown): value is DesktopPanelApi {

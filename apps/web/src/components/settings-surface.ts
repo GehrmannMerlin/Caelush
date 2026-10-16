@@ -43,6 +43,8 @@ export interface SettingsSurfaceProps {
   readonly onDisconnect: (providerId: string) => Promise<boolean>;
   readonly appearanceSnapshot: AppearanceSnapshot;
   readonly onPreferenceChange: (preference: ThemePreference) => Promise<unknown>;
+  readonly appearanceSupported?: boolean | undefined;
+  readonly appearanceSaveError?: string | undefined;
 }
 
 export function SettingsSurface(props: SettingsSurfaceProps): ReactElement {
@@ -55,7 +57,7 @@ export function SettingsSurface(props: SettingsSurfaceProps): ReactElement {
     try {
       await props.onPreferenceChange(preference);
     } catch {
-      setAppearanceError("已应用，当前浏览器未能保存");
+      setAppearanceError(props.appearanceSaveError ?? "已应用，当前浏览器未能保存");
     }
   };
   return createElement(
@@ -129,11 +131,17 @@ export function SettingsSurface(props: SettingsSurfaceProps): ReactElement {
             tabIndex: 0,
             hidden: activeTab !== "appearance",
           },
-          createElement(AppearanceModeSelector, {
-            snapshot: props.appearanceSnapshot,
-            error: appearanceError,
-            onPreferenceChange: saveAppearance,
-          }),
+          props.appearanceSupported === false
+            ? createElement(
+                "p",
+                { className: "settings-appearance-unavailable", role: "status" },
+                "当前 Desktop 版本不支持外观设置，请更新应用后重试。",
+              )
+            : createElement(AppearanceModeSelector, {
+                snapshot: props.appearanceSnapshot,
+                error: appearanceError,
+                onPreferenceChange: saveAppearance,
+              }),
         ),
         createElement(
           "div",

@@ -1,10 +1,17 @@
 import electron = require("electron");
 import type { AccountState } from "../main/account/state.js";
 import type { DesktopApi } from "./api-types.js";
+import type { AppearanceSnapshot, ThemePreference } from "@caelush/ui-theme";
 import type { LegacyImportProgress } from "../shared/legacy-data-contract.js";
 import type { DesktopReleaseHistoryItem, DesktopUpdateState } from "../shared/update-contract.js";
 
 const channels = {
+  appearance: {
+    initialSnapshot: "caelush:appearance:initial-snapshot",
+    getSnapshot: "caelush:appearance:get-snapshot",
+    setPreference: "caelush:appearance:set-preference",
+    snapshot: "caelush:appearance:snapshot",
+  },
   archive: {
     listSessions: "caelush:archive:list-sessions",
     listWorkspaces: "caelush:archive:list-workspaces",
@@ -396,7 +403,53 @@ function isBrowserState(
   );
 }
 
+function isAppearanceSnapshot(value: unknown): value is AppearanceSnapshot {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "preference" in value &&
+    (value.preference === "light" ||
+      value.preference === "dark" ||
+      value.preference === "system") &&
+    "resolvedTheme" in value &&
+    (value.resolvedTheme === "light" || value.resolvedTheme === "dark") &&
+    "revision" in value &&
+    typeof value.revision === "number" &&
+    Number.isSafeInteger(value.revision) &&
+    value.revision >= 0
+  );
+}
+
+const initialAppearanceSnapshot: AppearanceSnapshot = (() => {
+  try {
+    const snapshot: unknown = electron.ipcRenderer.sendSync(channels.appearance.initialSnapshot);
+    if (isAppearanceSnapshot(snapshot)) return Object.freeze({ ...snapshot });
+  } catch {
+    // Older or untrusted renderer configurations retain the light default.
+  }
+  return Object.freeze({ preference: "light", resolvedTheme: "light", revision: 0 });
+})();
+
 const api: DesktopApi = Object.freeze({
+  appearance: Object.freeze({
+    capabilityVersion: 1 as const,
+    initialSnapshot: initialAppearanceSnapshot,
+    getSnapshot: async () =>
+      unwrapIpcResult<AppearanceSnapshot>(
+        await electron.ipcRenderer.invoke(channels.appearance.getSnapshot),
+      ),
+    setPreference: async (preference: ThemePreference) =>
+      unwrapIpcResult<AppearanceSnapshot>(
+        await electron.ipcRenderer.invoke(channels.appearance.setPreference, { preference }),
+      ),
+    subscribe(listener: (snapshot: AppearanceSnapshot) => void) {
+      const handler = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        if (isAppearanceSnapshot(value)) listener(value);
+      };
+      electron.ipcRenderer.on(channels.appearance.snapshot, handler);
+      return () => electron.ipcRenderer.removeListener(channels.appearance.snapshot, handler);
+    },
+  }),
   archive: Object.freeze<NonNullable<DesktopApi["archive"]>>({
     capabilityVersion: 1,
     listSessions: async (input) =>

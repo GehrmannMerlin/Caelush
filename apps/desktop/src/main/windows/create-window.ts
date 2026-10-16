@@ -44,12 +44,15 @@ export function createMainWindow(options: CreateWindowOptions): BrowserWindow {
     if (!isLocalRendererUrl(destination, options.rendererTrust)) event.preventDefault();
   });
 
-  if (options.rendererTrust.developmentOrigin !== null) {
-    void window.loadURL(options.rendererTrust.developmentOrigin);
+  return window;
+}
+
+export function loadMainWindow(window: BrowserWindow, rendererTrust: DesktopRendererTrust): void {
+  if (rendererTrust.developmentOrigin !== null) {
+    void window.loadURL(rendererTrust.developmentOrigin);
   } else {
     void window.loadURL("caelush-login://app/");
   }
-  return window;
 }
 
 async function openExternalUrl(value: string): Promise<void> {
