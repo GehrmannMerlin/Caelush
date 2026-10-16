@@ -1,5 +1,5 @@
-import { useEffect, useState, type ReactElement } from "react";
-import { Archive, Folder, Search, Trash2, Undo2 } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ReactElement } from "react";
+import { Archive, Check, ChevronDown, Folder, Search, Trash2, Undo2 } from "lucide-react";
 import type { ArchiveSessionItem, ArchiveState, WorkspaceId } from "@caelush/protocol";
 import type { DesktopArchiveApi } from "../../preload/api-types.js";
 import type {
@@ -168,12 +168,37 @@ export function AccountArchiveView({
 }): ReactElement {
   const sessions = state.tab === "SESSIONS";
   const result = sessions ? state.sessions : state.workspaces;
-  const counts = result?.totalCounts ?? { sessions: 0, workspaces: 0 };
   const filter = sessions ? state.sessionFilter : state.workspaceFilter;
   const [searchText, setSearchText] = useState(filter.query ?? "");
+  const [workspaceFilterOpen, setWorkspaceFilterOpen] = useState(false);
+  const workspaceFilterRootRef = useRef<HTMLDivElement>(null);
+  const workspaceFilterTriggerRef = useRef<HTMLButtonElement>(null);
+  const workspaceFilterOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const workspaceFilterId = useId();
   useEffect(() => {
     setSearchText(filter.query ?? "");
   }, [state.tab, filter.query]);
+  useEffect(() => {
+    if (!workspaceFilterOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent): void => {
+      if (!workspaceFilterRootRef.current?.contains(event.target as Node))
+        setWorkspaceFilterOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      setWorkspaceFilterOpen(false);
+      workspaceFilterTriggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [workspaceFilterOpen]);
+  useEffect(() => {
+    setWorkspaceFilterOpen(false);
+  }, [state.tab]);
   const filtered =
     Boolean(filter.query) ||
     (sessions &&
@@ -184,6 +209,28 @@ export function AccountArchiveView({
     if (group) group.items.push(item);
     else groups.set(item.group.key, { item, items: [item] });
   }
+  const workspaceFilterValue = state.sessionFilter.unassociated
+    ? "UNASSOCIATED"
+    : (state.sessionFilter.workspaceId ?? "ALL");
+  const workspaceFilterOptions = [
+    { key: "ALL", displayName: "所有工作区", canonicalPath: "" },
+    ...(workspaceOptions ?? [...groups.values()].map(({ item }) => item.group)),
+  ];
+  const selectedWorkspaceFilter =
+    workspaceFilterOptions.find((option) => option.key === workspaceFilterValue) ??
+    workspaceFilterOptions[0];
+  const setWorkspaceFilter = (value: string): void => {
+    actions.setFilter({
+      ...(state.sessionFilter.query ? { query: state.sessionFilter.query } : {}),
+      ...(value === "ALL"
+        ? {}
+        : value === "UNASSOCIATED"
+          ? { unassociated: true as const }
+          : { workspaceId: value as WorkspaceId }),
+    });
+    setWorkspaceFilterOpen(false);
+    workspaceFilterTriggerRef.current?.focus();
+  };
   const batch = sessions
     ? { type: "SESSION_FILTER" as const, filter: state.sessionFilter }
     : { type: "WORKSPACE_FILTER" as const, filter: state.workspaceFilter };
@@ -198,11 +245,7 @@ export function AccountArchiveView({
           onClick={() => actions.previewDeletion(batch)}
         >
           <Trash2 size={14} />
-          {filtered
-            ? "删除筛选结果"
-            : sessions
-              ? "删除全部已归档会话"
-              : "删除全部已归档工作区"} · {result?.matchedCount ?? 0}
+          {filtered ? "删除筛选结果" : sessions ? "删除全部已归档会话" : "删除全部已归档工作区"}
         </button>
       </header>
       <div className="archive-tabs" role="tablist" aria-label="归档类型">
@@ -212,7 +255,7 @@ export function AccountArchiveView({
           aria-controls="archive-results"
           onClick={() => actions.setTab("SESSIONS")}
         >
-          会话 · {counts.sessions}
+          会话
         </button>
         <button
           role="tab"
@@ -220,7 +263,7 @@ export function AccountArchiveView({
           aria-controls="archive-results"
           onClick={() => actions.setTab("WORKSPACES")}
         >
-          工作区 · {counts.workspaces}
+          工作区
         </button>
       </div>
       <div className="archive-toolbar">
@@ -239,35 +282,95 @@ export function AccountArchiveView({
           />
         </label>
         {sessions && (
-          <select
-            aria-label="筛选所属工作区"
-            value={
-              state.sessionFilter.unassociated
-                ? "UNASSOCIATED"
-                : (state.sessionFilter.workspaceId ?? "ALL")
-            }
-            onChange={(event) => {
-              const value = event.target.value;
-              actions.setFilter({
-                ...(state.sessionFilter.query ? { query: state.sessionFilter.query } : {}),
-                ...(value === "ALL"
-                  ? {}
-                  : value === "UNASSOCIATED"
-                    ? { unassociated: true as const }
-                    : { workspaceId: value as WorkspaceId }),
-              });
+          <div
+            className="archive-workspace-filter"
+            ref={workspaceFilterRootRef}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+                setWorkspaceFilterOpen(false);
             }}
           >
-            <option value="ALL">所有工作区</option>
-            {(workspaceOptions ?? [...groups.values()].map(({ item }) => item.group)).map(
-              (group) => (
-                <option key={group.key} value={group.key}>
-                  {group.displayName}
-                  {group.canonicalPath ? ` · ${group.canonicalPath}` : ""}
-                </option>
-              ),
+            <button
+              ref={workspaceFilterTriggerRef}
+              type="button"
+              className="archive-workspace-trigger"
+              aria-label="筛选所属工作区"
+              aria-haspopup="listbox"
+              aria-expanded={workspaceFilterOpen}
+              aria-controls={workspaceFilterOpen ? workspaceFilterId : undefined}
+              onClick={() => setWorkspaceFilterOpen((open) => !open)}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                event.preventDefault();
+                setWorkspaceFilterOpen(true);
+                const selectedIndex = workspaceFilterOptions.findIndex(
+                  (option) => option.key === workspaceFilterValue,
+                );
+                requestAnimationFrame(() => {
+                  workspaceFilterOptionRefs.current[Math.max(selectedIndex, 0)]?.focus();
+                });
+              }}
+            >
+              <span className="archive-workspace-trigger-label">
+                {selectedWorkspaceFilter?.displayName ?? "所有工作区"}
+              </span>
+              <ChevronDown size={15} aria-hidden="true" />
+            </button>
+            {workspaceFilterOpen && (
+              <div
+                id={workspaceFilterId}
+                className="archive-workspace-popover"
+                role="listbox"
+                aria-label="筛选所属工作区"
+              >
+                {workspaceFilterOptions.map((option, index) => {
+                  const selected = option.key === workspaceFilterValue;
+                  return (
+                    <button
+                      key={option.key}
+                      ref={(element) => {
+                        workspaceFilterOptionRefs.current[index] = element;
+                      }}
+                      type="button"
+                      className="archive-workspace-option"
+                      role="option"
+                      aria-selected={selected}
+                      title={option.canonicalPath || option.displayName}
+                      onClick={() => setWorkspaceFilter(option.key)}
+                      onKeyDown={(event) => {
+                        const currentIndex = workspaceFilterOptionRefs.current.indexOf(
+                          event.currentTarget,
+                        );
+                        const nextIndex =
+                          event.key === "ArrowDown"
+                            ? Math.min(currentIndex + 1, workspaceFilterOptions.length - 1)
+                            : event.key === "ArrowUp"
+                              ? Math.max(currentIndex - 1, 0)
+                              : event.key === "Home"
+                                ? 0
+                                : event.key === "End"
+                                  ? workspaceFilterOptions.length - 1
+                                  : undefined;
+                        if (nextIndex === undefined) return;
+                        event.preventDefault();
+                        workspaceFilterOptionRefs.current[nextIndex]?.focus();
+                      }}
+                    >
+                      <span className="archive-workspace-option-copy">
+                        <span className="archive-workspace-option-name">{option.displayName}</span>
+                        {option.canonicalPath && (
+                          <small className="archive-workspace-option-path">
+                            {option.canonicalPath}
+                          </small>
+                        )}
+                      </span>
+                      {selected && <Check size={15} aria-hidden="true" />}
+                    </button>
+                  );
+                })}
+              </div>
             )}
-          </select>
+          </div>
         )}
       </div>
       {state.error && (
