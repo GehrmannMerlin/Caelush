@@ -20,6 +20,8 @@ import {
 } from "../cloud/schemas.js";
 import { safeErrorForIpc } from "./safe-error.js";
 import { DesktopWorkspacePanelController } from "../workspace/panel-controller.js";
+import type { DesktopArchiveController } from "../archive/controller.js";
+import { ARCHIVE_IPC_CHANNELS, registerArchiveHandlers } from "./archive-handlers.js";
 import type { DesktopUpdateCoordinator } from "../update/coordinator.js";
 import {
   DesktopReleaseHistoryItemSchema,
@@ -27,6 +29,7 @@ import {
 } from "../../shared/update-contract.js";
 
 export const IPC_CHANNELS = Object.freeze({
+  archive: ARCHIVE_IPC_CHANNELS,
   account: Object.freeze({
     state: "caelush:account:state",
     getState: "caelush:account:get-state",
@@ -370,6 +373,7 @@ export interface DesktopRendererTrust {
 }
 
 export interface RegisterDesktopIpcOptions {
+  readonly archiveController?: DesktopArchiveController;
   readonly ipcMain?: IpcMain;
   readonly window: BrowserWindow;
   readonly controller: AccountController;
@@ -470,6 +474,9 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
     });
     registered.push(channel);
   };
+
+  if (options.archiveController !== undefined)
+    registerArchiveHandlers(register, options.archiveController);
 
   const getProjectedState = () => {
     const state = options.controller.getState();

@@ -22,6 +22,7 @@ import { captureUpdateProfile, verifyUpdateProfile } from "./update/profile-veri
 import { registerDesktopIpc } from "./ipc/handlers.js";
 import { registerAppProtocol } from "./protocol/app-protocol.js";
 import { DesktopLocalProxy } from "./protocol/local-proxy.js";
+import { DesktopArchiveController } from "./archive/controller.js";
 import {
   ProfileManager,
   ProfileManagerError,
@@ -502,6 +503,15 @@ if (!singleInstance) {
       },
     });
     disposeIpc = registerDesktopIpc({
+      archiveController: new DesktopArchiveController({
+        supervisor,
+        getAuthorizedUserId: () => {
+          const state = account.getState();
+          return state.status === "AUTHENTICATED_ONLINE" || state.status === "AUTHORIZED_OFFLINE"
+            ? (state.account?.userId ?? null)
+            : null;
+        },
+      }),
       window: mainWindow,
       controller: account,
       rendererTrust,

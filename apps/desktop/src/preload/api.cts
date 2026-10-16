@@ -5,6 +5,16 @@ import type { LegacyImportProgress } from "../shared/legacy-data-contract.js";
 import type { DesktopReleaseHistoryItem, DesktopUpdateState } from "../shared/update-contract.js";
 
 const channels = {
+  archive: {
+    listSessions: "caelush:archive:list-sessions",
+    listWorkspaces: "caelush:archive:list-workspaces",
+    getState: "caelush:archive:get-state",
+    archive: "caelush:archive:archive",
+    restore: "caelush:archive:restore",
+    previewDeletion: "caelush:archive:preview-deletion",
+    permanentlyDelete: "caelush:archive:permanently-delete",
+    readTranscript: "caelush:archive:read-transcript",
+  },
   account: {
     state: "caelush:account:state",
     getState: "caelush:account:get-state",
@@ -387,6 +397,25 @@ function isBrowserState(
 }
 
 const api: DesktopApi = Object.freeze({
+  archive: Object.freeze<NonNullable<DesktopApi["archive"]>>({
+    capabilityVersion: 1,
+    listSessions: async (input) =>
+      unwrapIpcResult(await electron.ipcRenderer.invoke(channels.archive.listSessions, input)),
+    listWorkspaces: async (input) =>
+      unwrapIpcResult(await electron.ipcRenderer.invoke(channels.archive.listWorkspaces, input)),
+    getState: async (input) =>
+      unwrapIpcResult(await electron.ipcRenderer.invoke(channels.archive.getState, input)),
+    archive: async (input) =>
+      unwrapIpcResult(await electron.ipcRenderer.invoke(channels.archive.archive, input)),
+    restore: async (input) =>
+      unwrapIpcResult(await electron.ipcRenderer.invoke(channels.archive.restore, input)),
+    previewDeletion: async (input) =>
+      unwrapIpcResult(await electron.ipcRenderer.invoke(channels.archive.previewDeletion, input)),
+    permanentlyDelete: async (input) =>
+      unwrapIpcResult(await electron.ipcRenderer.invoke(channels.archive.permanentlyDelete, input)),
+    readTranscript: async (input) =>
+      unwrapIpcResult(await electron.ipcRenderer.invoke(channels.archive.readTranscript, input)),
+  }),
   protocolVersion: 1,
   account: Object.freeze(accountApi),
   window: Object.freeze({

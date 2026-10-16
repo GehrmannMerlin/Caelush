@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { AccountProfile } from "../profiles/profile-manager.js";
+import {
+  isOwnedLoopbackTarget,
+  isValidHostToken,
+  ownedDaemonHeaders,
+} from "./daemon-authorization.js";
 
 const APP_ORIGIN = "caelush-app://app";
 const MAX_REQUEST_BODY_BYTES = 1_048_576;
@@ -224,38 +229,14 @@ function parseTrustedApiUrl(value: string): URL | null {
   return url;
 }
 
-function isOwnedLoopbackTarget(value: string): boolean {
-  try {
-    const target = new URL(value);
-    return (
-      target.protocol === "http:" &&
-      target.hostname === "127.0.0.1" &&
-      target.port !== "" &&
-      target.username === "" &&
-      target.password === "" &&
-      target.pathname === "/" &&
-      target.search === "" &&
-      target.hash === ""
-    );
-  } catch {
-    return false;
-  }
-}
-
-function isValidHostToken(value: string): boolean {
-  if (!/^[A-Za-z0-9_-]{43}$/u.test(value)) return false;
-  const decoded = Buffer.from(value, "base64url");
-  return decoded.byteLength === 32 && decoded.toString("base64url") === value;
-}
-
 function createUpstreamHeaders(source: Headers, lease: DesktopDaemonProxyLease): Headers {
   const headers = new Headers();
   for (const name of FORWARDED_REQUEST_HEADERS) {
     const value = source.get(name);
     if (value !== null) headers.set(name, value);
   }
-  headers.set("origin", lease.baseUrl);
-  headers.set("x-caelush-host-token", lease.hostToken);
+  for (const [name, value] of Object.entries(ownedDaemonHeaders(lease) ?? {}))
+    headers.set(name, value);
   return headers;
 }
 

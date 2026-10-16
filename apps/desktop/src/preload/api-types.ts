@@ -25,9 +25,44 @@ import type {
 } from "../main/terminal/user-terminal-manager.js";
 import type { BrowserGuestBounds, BrowserGuestState } from "../main/browser/guest-manager.js";
 import type { DesktopEditorDescriptor, DesktopEditorId } from "../main/ide/editor-resolver.js";
+import type {
+  ArchiveSessionListQuery,
+  ArchiveSessionListResponse,
+  ArchiveWorkspaceListQuery,
+  ArchiveWorkspaceListResponse,
+  ArchiveTarget,
+  ArchiveState,
+  ArchiveMutationResponse,
+  ArchiveDeletionSelection,
+  ArchiveDeletionPreviewResponse,
+  PermanentDeletionRequest,
+  PermanentDeletionResponse,
+  SessionId,
+  SessionTranscriptQuery,
+  SessionTranscriptResponse,
+} from "@caelush/protocol";
+
+export interface DesktopArchiveApi {
+  readonly capabilityVersion: 1;
+  listSessions(input: Partial<ArchiveSessionListQuery>): Promise<ArchiveSessionListResponse>;
+  listWorkspaces(input: Partial<ArchiveWorkspaceListQuery>): Promise<ArchiveWorkspaceListResponse>;
+  getState(input: ArchiveTarget): Promise<ArchiveState>;
+  archive(input: ArchiveTarget): Promise<ArchiveMutationResponse>;
+  restore(input: {
+    readonly target: ArchiveTarget;
+    readonly archiveId: string;
+  }): Promise<ArchiveMutationResponse>;
+  previewDeletion(input: ArchiveDeletionSelection): Promise<ArchiveDeletionPreviewResponse>;
+  permanentlyDelete(input: PermanentDeletionRequest): Promise<PermanentDeletionResponse>;
+  readTranscript(input: {
+    readonly sessionId: SessionId;
+    readonly query?: Partial<SessionTranscriptQuery>;
+  }): Promise<SessionTranscriptResponse>;
+}
 
 export interface DesktopApi {
   readonly protocolVersion: 1;
+  readonly archive?: DesktopArchiveApi;
   readonly account: {
     getState(): Promise<AccountState>;
     retryAgentStartup(): Promise<AccountState>;
