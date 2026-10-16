@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { UpdatePage } from "./UpdatePage.js";
 import { AccountProfileScreen } from "./components/account-profile-screen.js";
+import { AccountArchiveEntry } from "./components/account-archive-screen.js";
+import type { DesktopArchiveApi } from "../preload/api-types.js";
 import {
   ArrowLeft,
+  Archive,
   ArrowRight,
   BadgeCheck,
   CircleAlert,
@@ -30,7 +33,7 @@ import type {
 } from "../shared/legacy-data-contract.js";
 
 type AuthScreen = "login" | "register" | "verify" | "forgot" | "reset";
-type AccountScreen = "home" | "profile" | "updates";
+type AccountScreen = "home" | "profile" | "archives" | "updates";
 type AppScreen = AuthScreen | AccountScreen | "agent-starting";
 
 const brandTitlePrefix = Array.from("让灵感 ");
@@ -49,7 +52,13 @@ const initialState: AccountState = {
 
 export function DesktopApp() {
   const [accountState, setAccountState] = useState<AccountState>(initialState);
-  const [screen, setScreen] = useState<AppScreen>("login");
+  const [screen, setScreen] = useState<AppScreen>(() =>
+    window.location.protocol === "caelush-login:" &&
+    new URLSearchParams(window.location.search).get("view") === "account" &&
+    new URLSearchParams(window.location.search).get("section") === "archives"
+      ? "archives"
+      : "login",
+  );
   const accountRouteRequested =
     window.location.protocol === "caelush-login:" &&
     new URLSearchParams(window.location.search).get("view") === "account";
@@ -99,7 +108,8 @@ export function DesktopApp() {
     !accountRouteRequested &&
     !reconnectingOffline &&
     (authScreenOpen || screen === "agent-starting");
-  const activeView: AccountScreen = screen === "profile" || screen === "updates" ? screen : "home";
+  const activeView: AccountScreen =
+    screen === "profile" || screen === "archives" || screen === "updates" ? screen : "home";
   const retryAgentStartup = useCallback(async () => {
     setAgentRetrying(true);
     setFeedback(null);
@@ -416,6 +426,11 @@ export function DesktopApp() {
       />
     ) : authenticated && !reconnectingOffline ? (
       <AccountHome
+        archiveApi={window.caelushDesktop.archive}
+        onArchiveMutation={() => {
+          setLegacySummary(null);
+          setLegacyDismissed(false);
+        }}
         accountState={accountState}
         activeView={activeView}
         devices={devices}
@@ -833,7 +848,7 @@ function AuthShell(props: {
 }
 
 function AccountLoadingScreen(props: { view: AccountScreen }) {
-  const navigation = ["home", "profile", "updates"] as const;
+  const navigation = ["home", "profile", "archives", "updates"] as const;
   return (
     <main
       className="account-layout account-layout--loading"
@@ -871,6 +886,12 @@ function AccountLoadingScreen(props: { view: AccountScreen }) {
 }
 
 function AccountPageSkeleton(props: { view: AccountScreen }) {
+  if (props.view === "archives")
+    return (
+      <div className="archive-skeleton" aria-hidden="true">
+        正在加载归档记录…
+      </div>
+    );
   if (props.view === "profile") {
     return (
       <div className="account-profile-stack" aria-hidden="true">
@@ -978,6 +999,8 @@ function DeviceRowsSkeleton() {
 }
 
 function AccountHome(props: {
+  archiveApi?: DesktopArchiveApi | undefined;
+  onArchiveMutation(): void;
   accountState: AccountState;
   activeView: AccountScreen;
   devices: readonly SafeDevice[];
@@ -1029,6 +1052,12 @@ function AccountHome(props: {
           <BadgeCheck size={16} /> 个人信息
         </button>
         <button
+          className={`side-nav ${props.activeView === "archives" ? "is-current" : ""}`}
+          onClick={() => props.onNavigate("archives")}
+        >
+          <Archive size={16} /> 已归档
+        </button>
+        <button
           className={`side-nav ${props.activeView === "updates" ? "is-current" : ""}`}
           onClick={() => props.onNavigate("updates")}
         >
@@ -1046,19 +1075,23 @@ function AccountHome(props: {
         </button>
       </aside>
 
-      <section className="account-content">
+      <section
+        className={`account-content${props.activeView === "archives" ? " account-content--archives" : ""}`}
+      >
         <div
-          className={`account-content-inner${props.activeView === "profile" ? " is-profile-view" : ""}`}
+          className={`account-content-inner${props.activeView === "profile" ? " is-profile-view" : props.activeView === "archives" ? " is-archives-view" : ""}`}
         >
-          <div className="account-page-head">
-            <h2>
-              {props.activeView === "home"
-                ? "总览"
-                : props.activeView === "profile"
-                  ? "个人信息"
-                  : "检查更新"}
-            </h2>
-          </div>
+          {props.activeView !== "archives" && (
+            <div className="account-page-head">
+              <h2>
+                {props.activeView === "home"
+                  ? "总览"
+                  : props.activeView === "profile"
+                    ? "个人信息"
+                    : "检查更新"}
+              </h2>
+            </div>
+          )}
           {props.feedback && <MessageBox message={props.feedback} tone="info" />}
           {props.activeView === "home" && (
             <Overview
@@ -1096,6 +1129,13 @@ function AccountHome(props: {
             />
           )}
           {props.activeView === "updates" && <UpdatePage />}
+          {props.activeView === "archives" && (
+            <AccountArchiveEntry
+              api={props.archiveApi}
+              identityKey={accountState.account?.userId ?? "unavailable"}
+              onMutation={props.onArchiveMutation}
+            />
+          )}
         </div>
       </section>
     </main>
