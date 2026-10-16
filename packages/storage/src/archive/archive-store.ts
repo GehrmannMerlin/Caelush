@@ -5,6 +5,8 @@ import {
   ArchiveWorkspaceListQuerySchema,
   type ArchiveDeletionSelection,
   type ArchiveDeletionSnapshot,
+  type LegacyArchiveImportRequest,
+  type LegacyArchiveImportResponse,
   RunStatusSchema,
   TimestampMsSchema,
   type AgentSession,
@@ -33,11 +35,26 @@ import {
 import { archiveTransaction } from "./archive-transaction.js";
 import { collectArchiveDeletionSnapshotInTransaction } from "./archive-selection.js";
 import { purgeArchiveGraphInTransaction, type ArchiveDeletionCommit } from "./archive-purge.js";
+import {
+  legacyArchiveCandidates,
+  reconcileLegacyArchives,
+  importLegacyArchiveMarkers,
+  type LegacyArchiveCandidate,
+  type LegacyArchiveEntry,
+  type LegacyArchiveReconcileResult,
+} from "./archive-legacy.js";
 
 export interface ArchivePolicy {
   readonly isTerminalRunStatus: (status: RunStatus) => boolean;
 }
 export interface ArchiveStore {
+  listLegacyArchiveCandidates(
+    cursor?: string,
+  ): Promise<{ items: LegacyArchiveCandidate[]; nextCursor?: string }>;
+  reconcileLegacyEntries(
+    entries: readonly LegacyArchiveEntry[],
+  ): Promise<LegacyArchiveReconcileResult>;
+  importLegacyMarkers(input: LegacyArchiveImportRequest): Promise<LegacyArchiveImportResponse>;
   snapshotDeletion(selection: ArchiveDeletionSelection): Promise<ArchiveDeletionSnapshot>;
   purge(
     selection: ArchiveDeletionSelection,
@@ -90,6 +107,28 @@ export class SqliteArchiveStore implements ArchiveStore {
     private readonly database: CaelushDatabase,
     private readonly policy?: ArchivePolicy,
   ) {}
+
+  async listLegacyArchiveCandidates(
+    cursor?: string,
+  ): Promise<{ items: LegacyArchiveCandidate[]; nextCursor?: string }> {
+    return archiveTransaction(this.database, false, () =>
+      legacyArchiveCandidates(this.database, this.policy, cursor),
+    );
+  }
+  async reconcileLegacyEntries(
+    entries: readonly LegacyArchiveEntry[],
+  ): Promise<LegacyArchiveReconcileResult> {
+    return archiveTransaction(this.database, true, () =>
+      reconcileLegacyArchives(this.database, this.policy, entries),
+    );
+  }
+  async importLegacyMarkers(
+    input: LegacyArchiveImportRequest,
+  ): Promise<LegacyArchiveImportResponse> {
+    return archiveTransaction(this.database, true, () =>
+      importLegacyArchiveMarkers(this.database, this.policy, input),
+    );
+  }
 
   async snapshotDeletion(selection: ArchiveDeletionSelection): Promise<ArchiveDeletionSnapshot> {
     return archiveTransaction(

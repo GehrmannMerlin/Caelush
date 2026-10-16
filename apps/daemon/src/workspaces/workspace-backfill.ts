@@ -1,5 +1,5 @@
 import type { AgentSession } from "@caelush/protocol";
-import type { RunRepository, SessionRepository } from "@caelush/storage";
+import type { ArchiveStore, RunRepository, SessionRepository } from "@caelush/storage";
 import { canonicalizeWorkspacePath } from "./workspace-identity.js";
 import type { WorkspaceService } from "./workspace-service.js";
 
@@ -10,6 +10,7 @@ export interface WorkspaceBackfillSummary {
 }
 
 export interface WorkspaceBackfillOptions {
+  readonly archives?: Pick<ArchiveStore, "getState">;
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
   readonly workspaceService: WorkspaceService;
@@ -23,6 +24,10 @@ export async function backfillSessionWorkspaceOwnership(
   let ambiguous = 0;
 
   for (const session of await options.sessions.list()) {
+    if ((await options.archives?.getState({ type: "SESSION", sessionId: session.id }))?.archived) {
+      unbound += 1;
+      continue;
+    }
     if (session.workspaceId !== undefined) {
       bound += 1;
       continue;

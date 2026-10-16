@@ -51,6 +51,7 @@ import type { WebStaticHostOptions } from "./web/static-host.js";
 import type { SubscriberQueuePolicy } from "./events/subscriber-queue.js";
 import { DefaultPublicEventProjector } from "./events/public-event-projector.js";
 import { WorkspaceService } from "./workspaces/workspace-service.js";
+import { LegacyArchiveReconciler } from "./workspaces/legacy-archive-reconciler.js";
 import type { WorkspacePreparationPort } from "./services/security-capability-service.js";
 import type { SecurityFeatureGates } from "./services/security-feature-gates.js";
 import { createWindowsSandboxHost } from "./services/windows-sandbox-host.js";
@@ -380,16 +381,19 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     runs: storage.runs,
   });
   let workspaceBackfill: WorkspaceBackfillSummary;
+  const legacyArchiveReconciler = new LegacyArchiveReconciler(storage.archives);
   try {
     const compatibilityPath = options.workspacePath?.trim() || options.web?.workspace?.path;
     if (compatibilityPath !== undefined && compatibilityPath.length > 0) {
       await workspaceService.registerWorkspace({ path: compatibilityPath });
     }
     workspaceBackfill = await backfillSessionWorkspaceOwnership({
+      archives: storage.archives,
       sessions: storage.sessions,
       runs: storage.runs,
       workspaceService,
     });
+    await legacyArchiveReconciler.reconcile();
   } catch (error) {
     await storage.close().catch(() => undefined);
     throw error;

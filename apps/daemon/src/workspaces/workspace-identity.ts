@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
-import { basename, isAbsolute, resolve } from "node:path";
+import { basename, isAbsolute, resolve, win32 } from "node:path";
 import {
   WorkspaceIdSchema,
   WorkspaceRefSchema,
@@ -52,12 +52,24 @@ export function createStableWorkspaceId(workspacePath: string): WorkspaceId {
 }
 
 export function normalizeWorkspaceIdentityPath(workspacePath: string): string {
+  if (win32.isAbsolute(workspacePath) && /^[A-Za-z]:|^\\\\/u.test(workspacePath)) {
+    const windowsPath = win32.resolve(workspacePath).replaceAll("\\", "/").toLowerCase();
+    return /^[a-z]:\/$/u.test(windowsPath) ? windowsPath : windowsPath.replace(/\/+$/u, "");
+  }
   const normalized = resolve(workspacePath).replaceAll("\\", "/");
   const withoutTrailingSlash =
     normalized.length > 1 && !/^[A-Za-z]:\/$/.test(normalized)
       ? normalized.replace(/\/+$/, "")
       : normalized;
   return process.platform === "win32" ? withoutTrailingSlash.toLowerCase() : withoutTrailingSlash;
+}
+
+/** Historical identity checks never access or create a project directory. */
+export function historicalWorkspaceRef(ref: WorkspaceRef): WorkspaceRef | undefined {
+  if ((!isAbsolute(ref.path) && !win32.isAbsolute(ref.path)) || /[\u0000-\u001f]/u.test(ref.path))
+    return undefined;
+  const path = normalizeWorkspaceIdentityPath(ref.path);
+  return createStableWorkspaceId(path) === ref.id ? { id: ref.id, path } : undefined;
 }
 
 export function displayNameForWorkspacePath(canonicalPath: string): string {

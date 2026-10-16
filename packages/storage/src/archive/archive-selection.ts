@@ -76,7 +76,7 @@ export function collectArchiveDeletionSnapshotInTransaction(
         return [];
       }
       const parent = catalog.sessionById.get(sessionId)?.workspaceId;
-      if (parent !== undefined && parent !== runWorkspaceId)
+      if (parent !== undefined && catalog.workspaceById.has(parent) && parent !== runWorkspaceId)
         throw new StorageArchiveConflictError(
           "DATA_OWNERSHIP_CONFLICT",
           "A Run has conflicting Session ownership.",
@@ -110,12 +110,10 @@ export function collectArchiveDeletionSnapshotInTransaction(
           const w = catalog.workspaceById.get(id)!;
           return { type: "WORKSPACE", label: w.displayName, canonicalPath: w.canonicalPath };
         })
-      : sessionIds
-          .slice(0, 3)
-          .map((id) => ({
-            type: "SESSION",
-            label: catalog.sessionById.get(id)?.title?.trim() || "未命名会话",
-          }));
+      : sessionIds.slice(0, 3).map((id) => ({
+          type: "SESSION",
+          label: catalog.sessionById.get(id)?.title?.trim() || "未命名会话",
+        }));
   return {
     workspaceIds,
     sessionIds,
