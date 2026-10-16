@@ -34,7 +34,7 @@ export interface SessionRepository {
   listByWorkspace(workspaceId: WorkspaceId, options?: SessionListOptions): Promise<AgentSession[]>;
 }
 
-function decodeSession(row: SessionRow): AgentSession {
+export function decodeSession(row: SessionRow): AgentSession {
   const session = decodeProtocol(AgentSessionSchema, row.data_json, {
     entityType: "AgentSession",
     entityId: row.id,

@@ -1,8 +1,4 @@
-import {
-  WorkspaceRecordSchema,
-  type WorkspaceId,
-  type WorkspaceRecord,
-} from "@caelush/protocol";
+import { WorkspaceRecordSchema, type WorkspaceId, type WorkspaceRecord } from "@caelush/protocol";
 import type { CaelushDatabase } from "../database.js";
 import {
   StorageConflictError,
@@ -29,7 +25,7 @@ export interface WorkspaceRepository {
   remove(id: WorkspaceId): Promise<void>;
 }
 
-function decodeWorkspace(row: WorkspaceRow): WorkspaceRecord {
+export function decodeWorkspace(row: WorkspaceRow): WorkspaceRecord {
   try {
     return WorkspaceRecordSchema.parse({
       id: row.id,
@@ -119,9 +115,7 @@ export class SqliteWorkspaceRepository implements WorkspaceRepository {
 
   async touch(id: WorkspaceId, timestamp: number): Promise<WorkspaceRecord> {
     const result = this.database.client
-      .prepare(
-        `UPDATE workspaces SET updated_at_ms = ?, last_opened_at_ms = ? WHERE id = ?`,
-      )
+      .prepare(`UPDATE workspaces SET updated_at_ms = ?, last_opened_at_ms = ? WHERE id = ?`)
       .run(timestamp, timestamp, id);
     if (result.changes === 0) throw new StorageNotFoundError("Workspace", id);
     const workspace = await this.getById(id);

@@ -1,3 +1,5 @@
+import type { ApiErrorCode } from "@caelush/protocol";
+
 export class StorageError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
@@ -16,6 +18,16 @@ export class StorageConflictError extends StorageError {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
     this.name = "StorageConflictError";
+  }
+}
+
+export class StorageArchiveConflictError extends StorageConflictError {
+  constructor(
+    readonly code: ApiErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "StorageArchiveConflictError";
   }
 }
 

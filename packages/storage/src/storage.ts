@@ -1,4 +1,9 @@
 import { migrateCaelushDatabase } from "./migrate.js";
+import {
+  SqliteArchiveStore,
+  type ArchivePolicy,
+  type ArchiveStore,
+} from "./archive/archive-store.js";
 import { SqlitePrivateReplayStore } from "./private-replay-store.js";
 import type { PrivateReplayStorePort, ReplayProtectionPort } from "@caelush/agent";
 import { openCaelushDatabase } from "./database.js";
@@ -89,6 +94,7 @@ import {
 } from "./repositories/ai-selection-repository.js";
 
 export interface CaelushStorage {
+  readonly archives: ArchiveStore;
   readonly privateReplay: PrivateReplayStorePort;
   readonly workspaces: WorkspaceRepository;
   readonly providerCredentials: ProviderCredentialRepository;
@@ -128,6 +134,7 @@ export interface CaelushStorage {
 
 export async function openCaelushStorage(options: {
   path: string;
+  archivePolicy?: ArchivePolicy;
   replayProtection?: ReplayProtectionPort;
   approvalClock?: ApprovalClock;
   budget?: SqliteRunBudgetPortOptions;
@@ -148,6 +155,7 @@ export async function openCaelushStorage(options: {
     const promptSurfaceStore = new SqlitePromptSurfaceStore(database);
     const privateReplay = new SqlitePrivateReplayStore(database, options.replayProtection);
     return {
+      archives: new SqliteArchiveStore(database, options.archivePolicy),
       privateReplay,
       workspaces: new SqliteWorkspaceRepository(database),
       providerCredentials: new SqliteProviderCredentialRepository(database),

@@ -57,6 +57,29 @@ export const agentSessions = sqliteTable("agent_sessions", {
   dataJson: text("data_json").notNull(),
 });
 
+export const sessionArchives = sqliteTable("session_archives", {
+  sessionId: text("session_id")
+    .primaryKey()
+    .references(() => agentSessions.id, { onDelete: "cascade" }),
+  archiveId: text("archive_id").notNull().unique(),
+  archivedAtMs: integer("archived_at_ms"),
+  reason: text("reason").notNull(),
+});
+
+export const workspaceArchives = sqliteTable("workspace_archives", {
+  workspaceId: text("workspace_id")
+    .primaryKey()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  archiveId: text("archive_id").notNull().unique(),
+  archivedAtMs: integer("archived_at_ms"),
+  reason: text("reason").notNull(),
+});
+
+export const archiveCatalogMeta = sqliteTable("archive_catalog_meta", {
+  singleton: integer("singleton").primaryKey(),
+  revision: integer("revision").notNull(),
+});
+
 export const agentRuns = sqliteTable(
   "agent_runs",
   {
