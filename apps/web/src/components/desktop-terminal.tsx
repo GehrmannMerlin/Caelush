@@ -2,12 +2,15 @@ import { createElement, useCallback, useEffect, useRef, useState, type ReactElem
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import type { ResolvedTheme } from "@caelush/ui-theme";
 import type { DesktopPanelApi, DesktopTerminalSession } from "../host/desktop-panel-api.js";
+import { resolveDesktopTerminalTheme } from "./desktop-terminal-theme.js";
 
 export function DesktopTerminal(props: {
   readonly api: DesktopPanelApi;
   readonly workspaceId: string | null;
   readonly visible: boolean;
+  readonly theme?: ResolvedTheme | undefined;
 }): ReactElement {
   const [session, setSession] = useState<DesktopTerminalSession | null>(null);
   const [busy, setBusy] = useState(false);
@@ -28,12 +31,7 @@ export function DesktopTerminal(props: {
       fontFamily: '"Cascadia Mono", Consolas, "Courier New", monospace',
       fontSize: 12,
       scrollback: 1500,
-      theme: {
-        background: "#101615",
-        foreground: "#dce7df",
-        cursor: "#b5e3a4",
-        selectionBackground: "#3e5a52",
-      },
+      theme: resolveDesktopTerminalTheme(props.theme ?? "light"),
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
@@ -91,6 +89,12 @@ export function DesktopTerminal(props: {
       terminal.dispose();
     };
   }, [props.api]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (terminal !== null)
+      terminal.options.theme = resolveDesktopTerminalTheme(props.theme ?? "light");
+  }, [props.theme]);
 
   useEffect(() => {
     if (props.workspaceId === null) {

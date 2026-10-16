@@ -152,14 +152,6 @@
   object-position: center;
 }
 
-.caelush-brand[data-caelush-brand-kind="logo"][data-caelush-brand-theme="dark"] {
-  transform: scale(0.96);
-}
-
-.caelush-brand[data-caelush-brand-kind="icon"][data-caelush-brand-theme="dark"] {
-  transform: scale(0.94);
-}
-
 @media (max-width: 520px) {
   .caelush-appearance__options {
     grid-template-columns: 1fr;

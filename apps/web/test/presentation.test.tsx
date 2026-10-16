@@ -307,16 +307,16 @@ describe("Web presentation", () => {
     expect(html).toContain("DeepSeek");
   });
 
-  it("keeps the sidebar Settings control readable with black text and icon", () => {
+  it("keeps the sidebar Settings control black in the existing light palette", () => {
     const styles = readFileSync(
       fileURLToPath(new URL("../src/styles.css", import.meta.url)),
       "utf8",
     );
-    const finalSettingsRule = styles.slice(
-      styles.lastIndexOf(".workspace-sidebar .workspace-settings-button"),
-    );
-
-    expect(finalSettingsRule).toMatch(/color:\s*#111827/);
+    const lightSettingsRuleStart = styles.indexOf(".workspace-sidebar .workspace-settings-button,");
+    expect(lightSettingsRuleStart).toBeGreaterThanOrEqual(0);
+    expect(
+      styles.slice(lightSettingsRuleStart, styles.indexOf("}", lightSettingsRuleStart)),
+    ).toMatch(/color:\s*#111827/);
   });
 
   it("renders user messages as right-aligned bubble content", () => {

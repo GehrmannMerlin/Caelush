@@ -807,6 +807,7 @@ function renderWorkspaceApp(input: {
             createElement(DesktopWorkspacePanel, {
               api: input.desktopPanelApi,
               workspaceId: input.workspaceState.selectedWorkspaceId ?? null,
+              theme: input.appearanceSnapshot.resolvedTheme,
             }),
           ),
     ),

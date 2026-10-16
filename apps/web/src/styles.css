@@ -1,6 +1,6 @@
 :root {
-  color: #e7f0ed;
-  background: #0c1515;
+  color: var(--caelush-text);
+  background: var(--caelush-page);
   font-family: "Segoe UI", system-ui, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -14,7 +14,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
-  background: radial-gradient(circle at 15% 10%, rgb(44 126 105 / 18%), transparent 34rem), #0c1515;
+  background: var(--caelush-page);
 }
 
 button,
@@ -1478,10 +1478,6 @@ textarea:disabled {
 /* Viewport-split application shell: the sidebar and the conversation own their scroll. */
 :root {
   --web-sidebar-width: clamp(248px, 24vw, 292px);
-  --web-sidebar-bg: #fbfbfb;
-  --web-sidebar-ink: #234b72;
-  --web-sidebar-muted: #6483a2;
-  --web-sidebar-line: #d1e2f5;
 }
 
 html,
@@ -3571,35 +3567,18 @@ body {
 
 /* Phase 13E production workspace refinements */
 :root {
-  --web-ink: #17231f;
-  --web-ink-strong: #0d1814;
-  --web-muted: #64756d;
-  --web-subtle: #8a9a93;
-  --web-line: #d8e1dc;
-  --web-line-strong: #c2d0c8;
-  --web-surface: #ffffff;
-  --web-surface-soft: #f5f8f6;
-  --web-sidebar: #eef3f0;
-  --web-accent: #17664e;
-  --web-accent-dark: #0d4d3a;
-  --web-accent-soft: #e3f1ea;
-  --web-warning: #966a22;
-  --web-warning-soft: #fff6e4;
-  --web-danger: #a24c47;
-  --web-danger-soft: #fff0ee;
-  --web-shadow: 0 18px 48px rgb(38 68 55 / 8%);
   --web-radius-sm: 8px;
   --web-radius-md: 12px;
   --web-control-height: 40px;
 }
 
 body {
-  background: #f0f4f1;
+  background: var(--caelush-page);
 }
 
 .web-app-shell {
   min-height: 100vh;
-  background: var(--web-surface-soft);
+  background: var(--caelush-page);
   color: var(--web-ink);
 }
 
@@ -3991,25 +3970,13 @@ body {
 }
 
 .workspace-dialog {
-  --web-ink-strong: #16243c;
-  --web-ink: #293752;
-  --web-muted: #64748b;
-  --web-subtle: #8a97aa;
-  --web-line: #e6ebf2;
-  --web-line-strong: #d4dce8;
-  --web-surface: #fff;
-  --web-surface-soft: #f7faff;
-  --web-accent: var(--web-blue-600, #2563eb);
-  --web-accent-dark: #1d4ed8;
-  --web-accent-soft: #eff6ff;
-
   display: grid;
   width: min(100%, 480px);
   gap: 10px;
   padding: 24px;
   border: 1px solid var(--web-line-strong);
   border-radius: 16px;
-  background: var(--web-surface);
+  background: var(--caelush-card);
   box-shadow: 0 24px 70px rgb(30 50 83 / 18%);
 }
 
@@ -4798,34 +4765,13 @@ textarea:focus-visible {
  * easy to audit while the older compatibility rules above remain intact.
  */
 :root {
-  --web-blue-900: #123b8f;
-  --web-blue-800: #1749a6;
-  --web-blue-700: #1f5ed6;
-  --web-blue-600: #2563eb;
-  --web-blue-100: #eaf1ff;
-  --web-blue-050: #f5f8ff;
-  --web-sidebar-ink: #eaf2ff;
-  --web-sidebar-muted: #b8cbed;
-  --web-ink-strong: #16243c;
-  --web-ink: #293752;
-  --web-muted: #64748b;
-  --web-subtle: #8a97aa;
-  --web-line: #e6ebf2;
-  --web-line-strong: #d4dce8;
-  --web-surface: #fff;
-  --web-surface-soft: #fff;
-  --web-danger: #cf3f52;
-  --web-danger-soft: #fff0f2;
-  --web-warning: #a66a05;
-  --web-warning-soft: #fff7e5;
   --web-radius-sm: 8px;
   --web-radius-md: 14px;
-  --web-shadow: 0 10px 30px rgb(36 57 92 / 7%);
   font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
 }
 
 body {
-  background: #fff;
+  background: var(--caelush-page);
   color: var(--web-ink);
 }
 
@@ -4835,7 +4781,7 @@ body {
 
 .web-app-shell {
   min-height: 100vh;
-  background: #fff;
+  background: var(--caelush-page);
   color: var(--web-ink);
 }
 
@@ -7842,12 +7788,6 @@ body {
 
 /* Compact task-process feed; all rules stay inside the task disclosure. */
 .turn-presentation-process {
-  --turn-process-ink: #34363d;
-  --turn-process-muted: #6b6d75;
-  --turn-process-subtle: #888b94;
-  --turn-process-line: #e1e3e7;
-  --turn-process-panel: #f5f6f7;
-  --turn-process-accent: var(--web-blue-600, #2563eb);
   font-family: "Segoe UI", system-ui, "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   color: var(--turn-process-ink);
 }
@@ -8712,4 +8652,455 @@ body {
     animation: none;
     transition: none;
   }
+}
+
+/* Shared surfaces use the active palette after the legacy layout layers above. */
+html,
+body,
+#root {
+  background: var(--caelush-page);
+  color: var(--caelush-text);
+}
+
+body,
+.host-shell,
+.web-app-shell,
+.workspace-frame,
+.workspace-column,
+.session-workspace,
+.session-scroll,
+.archive-page {
+  background: var(--caelush-page);
+  color: var(--caelush-text);
+}
+
+.host-card,
+.approval-card,
+.recovery-panel,
+.desktop-workspace-panel,
+.workspace-settings-menu,
+.model-picker-menu,
+.workspace-dialog,
+.settings-surface > *,
+.permission-selector-confirmation,
+.workspace-switcher-popover,
+.archive-workspace-popover,
+.archive-delete-dialog,
+.context-inspector {
+  border-color: var(--caelush-border);
+  background: var(--caelush-card);
+  color: var(--caelush-text);
+  box-shadow: var(--caelush-shadow);
+}
+
+.workspace-notices,
+.prompt-composer {
+  border-color: var(--caelush-border);
+  background: var(--caelush-page);
+  color: var(--caelush-text);
+}
+
+.workspace-sidebar {
+  border-color: var(--web-sidebar-line);
+  background: var(--caelush-sidebar);
+  color: var(--web-sidebar-ink);
+}
+
+:root[data-caelush-theme="dark"]
+  .workspace-sidebar
+  :is(h1, h2, h3, p, button, a, span, strong, small),
+:root[data-caelush-theme="dark"]
+  .desktop-panel-body
+  :is(h1, h2, h3, p, button, a, span, strong, small, dt, dd),
+:root[data-caelush-theme="dark"]
+  .settings-surface-panel
+  :is(h1, h2, h3, p, button, a, span, strong, small, label),
+:root[data-caelush-theme="dark"]
+  .workspace-dialog
+  :is(h1, h2, h3, p, button, a, span, strong, small, label),
+:root[data-caelush-theme="dark"]
+  .archive-page
+  :is(h1, h2, h3, p, button, a, span, strong, small, label, dt, dd, li),
+:root[data-caelush-theme="dark"]
+  .context-inspector
+  :is(h1, h2, h3, p, button, a, span, strong, small, label, dt, dd) {
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .workspace-card,
+:root[data-caelush-theme="dark"] .workspace-list-button,
+:root[data-caelush-theme="dark"] .workspace-new-session-button,
+:root[data-caelush-theme="dark"] .workspace-session-item,
+:root[data-caelush-theme="dark"] .workspace-settings-button {
+  border-color: var(--caelush-border);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .workspace-card:hover,
+:root[data-caelush-theme="dark"] .workspace-card:focus-within,
+:root[data-caelush-theme="dark"] .workspace-list-item--selected .workspace-card,
+:root[data-caelush-theme="dark"] .workspace-new-session-button:hover:not(:disabled),
+:root[data-caelush-theme="dark"] .workspace-new-session-button:focus-visible,
+:root[data-caelush-theme="dark"] .workspace-session-item:hover:not(:disabled),
+:root[data-caelush-theme="dark"] .workspace-session-item:focus-visible,
+:root[data-caelush-theme="dark"] .workspace-session-item--selected,
+:root[data-caelush-theme="dark"] .workspace-settings-button:hover,
+:root[data-caelush-theme="dark"] .workspace-settings-button:focus-visible {
+  border-color: var(--caelush-border-strong);
+  background: var(--caelush-hover);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .workspace-add-button,
+:root[data-caelush-theme="dark"] .workspace-picker-button,
+:root[data-caelush-theme="dark"] .settings-provider-card,
+:root[data-caelush-theme="dark"] .approval-action,
+:root[data-caelush-theme="dark"] .recovery-run button,
+:root[data-caelush-theme="dark"] .permission-selector-confirmation-actions button:not(:last-child) {
+  border-color: var(--caelush-border-strong);
+  background: var(--caelush-card);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .workspace-add-button:hover,
+:root[data-caelush-theme="dark"] .workspace-add-button:focus-visible,
+:root[data-caelush-theme="dark"] .workspace-picker-button:hover:not(:disabled),
+:root[data-caelush-theme="dark"] .workspace-picker-button:focus-visible,
+:root[data-caelush-theme="dark"] .settings-provider-card:hover,
+:root[data-caelush-theme="dark"] .settings-provider-card:focus-visible,
+:root[data-caelush-theme="dark"] .model-picker-row:hover,
+:root[data-caelush-theme="dark"] .model-picker-row:focus-visible,
+:root[data-caelush-theme="dark"] .model-picker-back:hover,
+:root[data-caelush-theme="dark"] .model-picker-back:focus-visible,
+:root[data-caelush-theme="dark"] .model-picker-item:hover,
+:root[data-caelush-theme="dark"] .model-picker-item:focus-visible,
+:root[data-caelush-theme="dark"] .model-picker-item--selected,
+:root[data-caelush-theme="dark"] .workspace-settings-menu-item:hover,
+:root[data-caelush-theme="dark"] .workspace-settings-menu-item:focus-visible,
+:root[data-caelush-theme="dark"] .archive-workspace-option:hover,
+:root[data-caelush-theme="dark"] .archive-workspace-option[aria-selected="true"] {
+  border-color: var(--caelush-border-strong);
+  background: var(--caelush-hover);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .workspace-dialog-backdrop,
+:root[data-caelush-theme="dark"] .settings-surface,
+:root[data-caelush-theme="dark"] .permission-selector-confirmation::backdrop,
+:root[data-caelush-theme="dark"] .archive-modal-backdrop,
+:root[data-caelush-theme="dark"] .approval-overlay {
+  background: var(--caelush-overlay);
+}
+
+.workspace-dialog,
+.settings-surface-panel,
+.permission-selector-confirmation,
+.archive-delete-dialog,
+.context-inspector {
+  background: var(--caelush-card);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .settings-surface-header,
+:root[data-caelush-theme="dark"] .settings-tabs,
+:root[data-caelush-theme="dark"] .archive-toolbar,
+:root[data-caelush-theme="dark"] .archive-row,
+:root[data-caelush-theme="dark"] .archive-workspace-option:first-child {
+  border-color: var(--caelush-border);
+}
+
+:root[data-caelush-theme="dark"] .settings-tab,
+:root[data-caelush-theme="dark"] .model-picker-trigger,
+:root[data-caelush-theme="dark"] .model-picker-back,
+:root[data-caelush-theme="dark"] .model-picker-empty,
+:root[data-caelush-theme="dark"] .archive-back,
+:root[data-caelush-theme="dark"] .archive-workspace-trigger {
+  color: var(--caelush-muted);
+}
+
+:root[data-caelush-theme="dark"] .settings-tab[aria-selected="true"],
+:root[data-caelush-theme="dark"] .settings-tab:hover,
+:root[data-caelush-theme="dark"] .settings-tab:focus-visible {
+  border-bottom-color: var(--caelush-accent);
+  color: var(--caelush-text);
+}
+
+.prompt-composer {
+  border-color: var(--caelush-border);
+  background: var(--caelush-input);
+}
+
+:root[data-caelush-theme="dark"] .prompt-input,
+:root[data-caelush-theme="dark"] .workspace-dialog input,
+:root[data-caelush-theme="dark"] .settings-surface input,
+:root[data-caelush-theme="dark"] .archive-page input,
+:root[data-caelush-theme="dark"] .archive-page select,
+:root[data-caelush-theme="dark"] .workspace-switcher-search input {
+  border-color: var(--caelush-border-strong);
+  background: var(--caelush-input);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .prompt-input::placeholder,
+:root[data-caelush-theme="dark"] .workspace-dialog input::placeholder,
+:root[data-caelush-theme="dark"] .settings-surface input::placeholder,
+:root[data-caelush-theme="dark"] .archive-page input::placeholder {
+  color: var(--caelush-placeholder);
+}
+
+:root[data-caelush-theme="dark"] .prompt-input:focus,
+:root[data-caelush-theme="dark"] .workspace-dialog input:focus,
+:root[data-caelush-theme="dark"] .settings-surface input:focus,
+:root[data-caelush-theme="dark"] .archive-page input:focus,
+:root[data-caelush-theme="dark"] .archive-page select:focus {
+  border-color: var(--caelush-focus);
+  outline-color: var(--caelush-focus);
+}
+
+:root[data-caelush-theme="dark"] .assistant-markdown,
+:root[data-caelush-theme="dark"] .turn-presentation-item,
+:root[data-caelush-theme="dark"] .turn-presentation-final,
+:root[data-caelush-theme="dark"] .archive-message {
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .assistant-markdown a,
+:root[data-caelush-theme="dark"] .assistant-markdown a:hover,
+:root[data-caelush-theme="dark"] .assistant-markdown a:focus-visible,
+:root[data-caelush-theme="dark"] .model-picker-settings-link,
+:root[data-caelush-theme="dark"] .archive-link {
+  color: var(--caelush-link);
+}
+
+:root[data-caelush-theme="dark"] .assistant-markdown blockquote,
+:root[data-caelush-theme="dark"] .assistant-markdown :not(pre) > code,
+:root[data-caelush-theme="dark"] .assistant-markdown pre,
+:root[data-caelush-theme="dark"] .assistant-markdown th,
+:root[data-caelush-theme="dark"] .turn-presentation-tool-details-content,
+:root[data-caelush-theme="dark"] .turn-presentation-preview,
+:root[data-caelush-theme="dark"] .turn-presentation-facts,
+:root[data-caelush-theme="dark"] .workspace-picker-selection,
+:root[data-caelush-theme="dark"] .workspace-switcher-search,
+:root[data-caelush-theme="dark"] .workspace-switcher-empty,
+:root[data-caelush-theme="dark"] .archive-workspace-filter {
+  border-color: var(--caelush-border);
+  background: var(--caelush-code);
+  color: var(--caelush-code-text);
+}
+
+:root[data-caelush-theme="dark"] .assistant-markdown pre code,
+:root[data-caelush-theme="dark"] .turn-presentation-preview code {
+  color: var(--caelush-code-text);
+}
+
+:root[data-caelush-theme="dark"] .turn-presentation-process {
+  color: var(--turn-process-ink);
+}
+
+:root[data-caelush-theme="dark"] .turn-presentation-process .turn-presentation-body,
+:root[data-caelush-theme="dark"] .turn-presentation-process .turn-presentation-tool-details-content,
+:root[data-caelush-theme="dark"] .turn-presentation-process .turn-presentation-preview,
+:root[data-caelush-theme="dark"] .turn-presentation-process .turn-presentation-facts {
+  border-color: var(--turn-process-line);
+  background: var(--turn-process-panel);
+  color: var(--turn-process-ink);
+}
+
+.archive-page {
+  color: var(--archive-text);
+  background: var(--caelush-page);
+}
+
+:root[data-caelush-theme="dark"]
+  .archive-page
+  :is(.archive-row, .archive-card, .archive-search, .archive-filter) {
+  border-color: var(--archive-line);
+  background: var(--caelush-card);
+  color: var(--archive-text);
+}
+
+:root[data-caelush-theme="dark"] .archive-page .archive-workspace-popover,
+:root[data-caelush-theme="dark"] .archive-page .archive-delete-dialog {
+  border-color: var(--archive-line);
+  background: var(--caelush-card);
+  color: var(--archive-text);
+}
+
+.prompt-submit-button,
+.permission-selector-confirmation-actions button:last-child {
+  border-color: var(--caelush-accent);
+  background: var(--caelush-accent);
+  color: var(--caelush-accent-contrast);
+}
+
+input,
+textarea,
+select {
+  accent-color: var(--caelush-accent);
+  color-scheme: inherit;
+}
+
+:root[data-caelush-theme="dark"] ::selection {
+  background: var(--caelush-terminal-selection);
+}
+
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-settings-button,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-settings-button:hover,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-settings-button:focus-visible,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-settings-button svg,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-card,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-list-button,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-list-copy strong,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-session-item,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-add-button {
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] input:not([type="checkbox"]):not([type="radio"]),
+:root[data-caelush-theme="dark"] textarea,
+:root[data-caelush-theme="dark"] select {
+  border-color: var(--caelush-border-strong);
+  background: var(--caelush-input);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"]
+  :is(button, a, input, textarea, select, details, summary):focus-visible {
+  outline-color: var(--caelush-focus);
+}
+
+.desktop-workspace-panel {
+  border-color: var(--caelush-border);
+  background: var(--caelush-surface);
+  color: var(--caelush-text);
+}
+
+.desktop-panel-heading,
+.desktop-panel-tabs,
+.desktop-panel-content,
+.desktop-panel-tab-content {
+  border-color: var(--caelush-border);
+  background: var(--caelush-surface);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .desktop-workspace-panel,
+:root[data-caelush-theme="dark"] .desktop-panel-heading,
+:root[data-caelush-theme="dark"] .desktop-panel-tabs,
+:root[data-caelush-theme="dark"] .desktop-panel-content,
+:root[data-caelush-theme="dark"] .desktop-panel-tab-content {
+  background: var(--caelush-sidebar);
+}
+
+.desktop-terminal {
+  background: var(--caelush-terminal);
+  color: var(--caelush-terminal-text);
+}
+
+.desktop-terminal-toolbar,
+.desktop-browser,
+.desktop-browser-toolbar {
+  border-color: var(--caelush-border);
+  background: var(--caelush-card);
+  color: var(--caelush-text);
+}
+
+.desktop-terminal-warning {
+  background: var(--caelush-warning-soft);
+  color: var(--caelush-warning);
+}
+
+:root[data-caelush-theme="dark"] .web-topbar,
+:root[data-caelush-theme="dark"] .conversation-entry--assistant,
+:root[data-caelush-theme="dark"] .timeline,
+:root[data-caelush-theme="dark"] .desktop-browser,
+:root[data-caelush-theme="dark"] .desktop-browser-viewport,
+:root[data-caelush-theme="dark"] .archive-workspace-popover,
+:root[data-caelush-theme="dark"] .archive-delete-dialog {
+  border-color: var(--caelush-border);
+  background: var(--caelush-card);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .new-session-button,
+:root[data-caelush-theme="dark"] .session-list-button--selected,
+:root[data-caelush-theme="dark"] .workspace-add-button,
+:root[data-caelush-theme="dark"] .workspace-session-item--selected,
+:root[data-caelush-theme="dark"] .desktop-small-button,
+:root[data-caelush-theme="dark"] .desktop-load-more,
+:root[data-caelush-theme="dark"] .continuity-warning-action,
+:root[data-caelush-theme="dark"] .archive-secondary,
+:root[data-caelush-theme="dark"] .archive-load-more,
+:root[data-caelush-theme="dark"] .archive-restore,
+:root[data-caelush-theme="dark"] .archive-workspace-trigger {
+  border-color: var(--caelush-border-strong);
+  background: var(--caelush-card);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .sidebar-toggle-button,
+:root[data-caelush-theme="dark"] .model-picker-trigger:focus-visible,
+:root[data-caelush-theme="dark"] .permission-selector-select:focus-visible,
+:root[data-caelush-theme="dark"] .desktop-browser-address {
+  border-color: var(--caelush-border-strong);
+  background: var(--caelush-input);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .workspace-bootstrap-loading,
+:root[data-caelush-theme="dark"] .workspace-column--loading {
+  background: var(--caelush-page);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .workbench-loading-composer {
+  border-color: var(--caelush-border);
+  background: var(--caelush-input);
+}
+
+:root[data-caelush-theme="dark"] .turn-presentation-process .turn-presentation-tool-output,
+:root[data-caelush-theme="dark"] .turn-presentation-process .turn-presentation-preview {
+  border-color: var(--turn-process-line);
+  background: var(--turn-process-panel);
+  color: var(--turn-process-ink);
+}
+
+:root[data-caelush-theme="dark"] .archive-error {
+  border-color: var(--caelush-danger);
+  background: var(--caelush-danger-soft);
+  color: var(--caelush-danger);
+}
+
+:root[data-caelush-theme="dark"] .archive-skeleton,
+:root[data-caelush-theme="dark"] .archive-search,
+:root[data-caelush-theme="dark"] .archive-workspace-trigger {
+  border-color: var(--archive-line);
+  background: var(--caelush-code);
+  color: var(--archive-text);
+}
+
+:root[data-caelush-theme="dark"] .archive-delete-icon:hover,
+:root[data-caelush-theme="dark"] .archive-delete-icon:focus-visible {
+  border-color: var(--caelush-danger-soft);
+  background: var(--caelush-danger-soft);
+  color: var(--caelush-danger);
+}
+
+:root[data-caelush-theme="dark"] .archive-bulk {
+  border-color: var(--caelush-danger-soft);
+  background: var(--caelush-danger-soft);
+  color: var(--caelush-danger);
+}
+
+:root[data-caelush-theme="dark"] .workspace-notices,
+:root[data-caelush-theme="dark"] .conversation-entry--user,
+:root[data-caelush-theme="dark"] .conversation-entry--assistant {
+  border-color: var(--caelush-border);
+  background: var(--caelush-card);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-session-empty,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-list-copy small {
+  color: var(--caelush-muted);
 }

@@ -9,6 +9,7 @@ import {
   type ReactElement,
 } from "react";
 import { Files, PanelRightClose, PanelRightOpen, TerminalSquare, Globe2 } from "lucide-react";
+import type { ResolvedTheme } from "@caelush/ui-theme";
 import type { DesktopPanelApi } from "../host/desktop-panel-api.js";
 import { DesktopFileExplorer } from "./desktop-file-explorer.js";
 import { DesktopBrowserControls } from "./desktop-browser-controls.js";
@@ -23,6 +24,7 @@ const DesktopTerminal = lazy(async () => {
 export function DesktopWorkspacePanel(props: {
   readonly api: DesktopPanelApi;
   readonly workspaceId: string | null;
+  readonly theme?: ResolvedTheme | undefined;
 }): ReactElement {
   const [expanded, setExpanded] = useState(false);
   const [tab, setTab] = useState<DesktopPanelTab>("FILES");
@@ -183,6 +185,7 @@ export function DesktopWorkspacePanel(props: {
                       api: props.api,
                       workspaceId: activeWorkspaceId,
                       visible: terminalVisible,
+                      theme: props.theme,
                     }),
                   ),
                 )
