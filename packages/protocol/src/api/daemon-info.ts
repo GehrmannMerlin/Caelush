@@ -30,6 +30,7 @@ const DaemonCapabilitiesSchema = z
     approvals: z.literal(true),
     sseReplay: z.literal(true),
     sessionTranscript: z.literal(true).optional(),
+    archiveManagementV1: z.literal(true).optional(),
     sessionContinuityPreflight: z.literal(true).optional(),
     sessionTurnPresentation: z.literal(true).optional(),
     desktopHostAuthV1: z.literal(true).optional(),
