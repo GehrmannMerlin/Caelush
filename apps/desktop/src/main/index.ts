@@ -1,5 +1,7 @@
 import { basename, isAbsolute, join, resolve } from "node:path";
-import { app, BrowserWindow, dialog, protocol, safeStorage, session } from "electron";
+import { app, BrowserWindow, dialog, nativeTheme, protocol, safeStorage, session } from "electron";
+import { DesktopAppearanceController } from "./appearance/appearance-controller.js";
+import { DesktopAppearanceStore } from "./appearance/appearance-store.js";
 import { AccountController } from "./account/controller.js";
 import { DesktopAccountAvatarCache } from "./account/avatar-cache.js";
 import type { AccountState } from "./account/state.js";
@@ -88,6 +90,8 @@ if (!singleInstance) {
 } else {
   let mainWindow: BrowserWindow | null = null;
   let disposeIpc: (() => void) | null = null;
+  let desktopAppearance: DesktopAppearanceController | null = null;
+  let unsubscribeAppearance: (() => void) | null = null;
   let desktopPanels: DesktopWorkspacePanelController | null = null;
   let unsubscribeAccount: (() => void) | null = null;
   let safeQuitApproved = false;
@@ -366,6 +370,16 @@ if (!singleInstance) {
         return;
       }
     }
+    desktopAppearance = new DesktopAppearanceController({
+      store: new DesktopAppearanceStore(join(app.getPath("userData"), "appearance.json")),
+      nativeTheme,
+    });
+    await desktopAppearance.initialize();
+    unsubscribeAppearance = desktopAppearance.subscribe((snapshot) => {
+      if (mainWindow !== null && !mainWindow.isDestroyed()) {
+        mainWindow.setBackgroundColor(windowBackgroundColor(snapshot.resolvedTheme));
+      }
+    });
     const appPath = app.getAppPath();
     registerAppProtocol({
       rendererRoot: join(appPath, "dist", "renderer"),
@@ -441,6 +455,10 @@ if (!singleInstance) {
     }
     unsubscribeAccount?.();
     unsubscribeAccount = null;
+    unsubscribeAppearance?.();
+    unsubscribeAppearance = null;
+    desktopAppearance?.dispose();
+    desktopAppearance = null;
     disposeIpc?.();
     disposeIpc = null;
   });
@@ -452,6 +470,7 @@ if (!singleInstance) {
       appPath,
       preloadPath: join(appPath, "dist", "preload", "index.cjs"),
       rendererTrust,
+      backgroundColor: windowBackgroundColor(desktopAppearance?.getSnapshot().resolvedTheme ?? "light"),
     });
     logD6Startup("BROWSER_WINDOW_CREATED", { url: mainWindow.webContents.getURL() });
     mainWindow.webContents.on("dom-ready", () => logD6Startup("RENDERER_DOM_READY"));
@@ -612,6 +631,10 @@ function logD6Startup(stage: string, details: Readonly<Record<string, unknown>> 
     ]),
   );
   process.stderr.write(`D6_MAIN_STAGE=${JSON.stringify({ stage, ...safeDetails })}\n`);
+}
+
+function windowBackgroundColor(theme: "light" | "dark"): string {
+  return theme === "dark" ? "#181818" : "#ffffff";
 }
 
 function safeResourceVerificationFailure(error: unknown): string {

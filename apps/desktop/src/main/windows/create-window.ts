@@ -14,6 +14,7 @@ export interface CreateWindowOptions {
   readonly appPath: string;
   readonly preloadPath: string;
   readonly rendererTrust: DesktopRendererTrust;
+  readonly backgroundColor: string;
 }
 
 export function createMainWindow(options: CreateWindowOptions): BrowserWindow {
@@ -26,7 +27,7 @@ export function createMainWindow(options: CreateWindowOptions): BrowserWindow {
     center: true,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: "#ffffff",
+    backgroundColor: options.backgroundColor,
     icon: join(options.appPath, "resources", "caelush-app-icon.png"),
     webPreferences: createSecureWebPreferences(options.preloadPath, BUILD_CONFIGURATION.production),
   });
