@@ -13,7 +13,11 @@ import {
   type ClientModelSelection,
   type ContextBudgetPolicySnapshot,
 } from "@caelush/protocol";
-import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
+import {
+  openCaelushStorage,
+  StorageArchiveConflictError,
+  toHostToolEffectsPort,
+} from "@caelush/storage";
 import { createReplayProtection, type ReplayKeyProvider } from "@caelush/security";
 import { LocalRuntime, type ProcessSandboxProvider } from "@caelush/runtime";
 import {
@@ -388,7 +392,14 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   try {
     const compatibilityPath = options.workspacePath?.trim() || options.web?.workspace?.path;
     if (compatibilityPath !== undefined && compatibilityPath.length > 0) {
-      await workspaceService.registerWorkspace({ path: compatibilityPath });
+      try {
+        await workspaceService.registerWorkspace({ path: compatibilityPath });
+      } catch (error) {
+        // A remembered launch path is not an explicit restore request. Keep its archived
+        // registry entry untouched while allowing the daemon and archive page to start.
+        if (!(error instanceof StorageArchiveConflictError) || error.code !== "WORKSPACE_ARCHIVED")
+          throw error;
+      }
     }
     workspaceBackfill = await backfillSessionWorkspaceOwnership({
       archives: storage.archives,
