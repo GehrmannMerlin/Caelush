@@ -1,6 +1,7 @@
 export { openCaelushStorage } from "./storage.js";
 export type { CaelushStorage } from "./storage.js";
 export type { ArchivePolicy, ArchiveStore } from "./archive/archive-store.js";
+export type { ArchiveDeletionCommit } from "./archive/archive-purge.js";
 export { StorageArchiveConflictError } from "./errors.js";
 export {
   SqliteProviderCredentialRepository,

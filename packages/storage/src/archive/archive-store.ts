@@ -3,6 +3,8 @@ import {
   ArchiveTargetSchema,
   ArchiveSessionListQuerySchema,
   ArchiveWorkspaceListQuerySchema,
+  type ArchiveDeletionSelection,
+  type ArchiveDeletionSnapshot,
   RunStatusSchema,
   TimestampMsSchema,
   type AgentSession,
@@ -29,11 +31,18 @@ import {
   type ArchiveCatalog,
 } from "./archive-query.js";
 import { archiveTransaction } from "./archive-transaction.js";
+import { collectArchiveDeletionSnapshotInTransaction } from "./archive-selection.js";
+import { purgeArchiveGraphInTransaction, type ArchiveDeletionCommit } from "./archive-purge.js";
 
 export interface ArchivePolicy {
   readonly isTerminalRunStatus: (status: RunStatus) => boolean;
 }
 export interface ArchiveStore {
+  snapshotDeletion(selection: ArchiveDeletionSelection): Promise<ArchiveDeletionSnapshot>;
+  purge(
+    selection: ArchiveDeletionSelection,
+    expectedDigest: string,
+  ): Promise<ArchiveDeletionCommit>;
   listSessions(query: ArchiveSessionListQuery): Promise<ArchiveSessionListResponse>;
   listWorkspaces(query: ArchiveWorkspaceListQuery): Promise<ArchiveWorkspaceListResponse>;
   getState(target: ArchiveTarget): Promise<ArchiveState>;
@@ -81,6 +90,33 @@ export class SqliteArchiveStore implements ArchiveStore {
     private readonly database: CaelushDatabase,
     private readonly policy?: ArchivePolicy,
   ) {}
+
+  async snapshotDeletion(selection: ArchiveDeletionSelection): Promise<ArchiveDeletionSnapshot> {
+    return archiveTransaction(
+      this.database,
+      false,
+      () => collectArchiveDeletionSnapshotInTransaction(this.database, selection).snapshot,
+    );
+  }
+
+  async purge(
+    selection: ArchiveDeletionSelection,
+    expectedDigest: string,
+  ): Promise<ArchiveDeletionCommit> {
+    return archiveTransaction(this.database, true, () => {
+      const set = collectArchiveDeletionSnapshotInTransaction(this.database, selection);
+      if (set.snapshot.digest !== expectedDigest)
+        throw new StorageArchiveConflictError(
+          "ARCHIVE_SELECTION_CHANGED",
+          "The deletion scope changed; review it again.",
+        );
+      for (const sessionId of set.sessionIds)
+        assertArchiveRunsTerminal(this.database, { type: "SESSION", sessionId }, this.policy);
+      if (this.policy === undefined)
+        throw new StorageError("Archive management requires a host Run status policy.");
+      return purgeArchiveGraphInTransaction(this.database, set);
+    });
+  }
 
   async getState(target: ArchiveTarget): Promise<ArchiveState> {
     const parsed = ArchiveTargetSchema.parse(target);
