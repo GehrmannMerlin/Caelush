@@ -202,6 +202,13 @@ export class RunEventHub implements RunEventNotifierPort {
     this.enqueue(event);
   }
 
+  invalidateRuns(runIds: readonly RunId[]): void {
+    const deleted = new Set(runIds);
+    for (const subscription of [...this.subscriptions.values()]) {
+      if (deleted.has(subscription.filter.runId)) subscription.close("RUN_DELETED");
+    }
+  }
+
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
@@ -232,7 +239,7 @@ export class RunEventHub implements RunEventNotifierPort {
         if (state.closed) return;
         state.closed = true;
         state.controller.abort();
-        state.queue.close(reason);
+        state.queue.discardAndClose(reason);
         this.subscriptions.delete(state.id);
         try {
           this.onSubscriptionClosed?.(state.id, reason);
@@ -266,7 +273,7 @@ export class RunEventHub implements RunEventNotifierPort {
   private async runObserverWorker(state: SubscriptionState): Promise<void> {
     while (!state.closed) {
       const event = await state.queue.next();
-      if (event === undefined) return;
+      if (state.closed || event === undefined) return;
       try {
         await state.observer?.(event, {
           subscriptionId: state.id,
@@ -319,6 +326,7 @@ export class RunEventHub implements RunEventNotifierPort {
         return;
       }
       const highWatermark = await abortable(this.reader.latestSequence(runId), options.signal);
+      if (state.closed) return;
       if (!Number.isSafeInteger(highWatermark) || highWatermark < 0) {
         throw new RunEventReplayError("Durable reader returned an invalid high watermark.");
       }
@@ -336,9 +344,11 @@ export class RunEventHub implements RunEventNotifierPort {
           }),
           options.signal,
         );
+        if (state.closed) return;
         validateReplayPage(page, runId, cursor, highWatermark);
         if (page.length === 0) break;
         for (const event of page) {
+          if (state.closed) return;
           cursor = event.durability.sequence;
           yield event;
         }
@@ -347,6 +357,7 @@ export class RunEventHub implements RunEventNotifierPort {
 
       if (state.closed) return;
       for (const event of state.queue.drain()) {
+        if (state.closed) return;
         if (!isDurable(event)) continue;
         if (event.durability.sequence <= highWatermark) continue;
         if (event.durability.sequence <= cursor) {
@@ -358,7 +369,7 @@ export class RunEventHub implements RunEventNotifierPort {
 
       while (!state.closed) {
         const event = await state.queue.next();
-        if (event === undefined) return;
+        if (state.closed || event === undefined) return;
         yield event;
       }
     } finally {

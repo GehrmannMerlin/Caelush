@@ -17,7 +17,7 @@ export const DEFAULT_SUBSCRIBER_QUEUE_POLICY: SubscriberQueuePolicy = Object.fre
 });
 
 export type SubscriberQueueCloseReason =
-  "UNSUBSCRIBED" | "ABORTED" | "SLOW_CONSUMER" | "HUB_DISPOSED";
+  "UNSUBSCRIBED" | "ABORTED" | "SLOW_CONSUMER" | "HUB_DISPOSED" | "RUN_DELETED";
 
 function isCoalescible(event: RunEvent): boolean {
   return (
@@ -121,6 +121,10 @@ export class BoundedSubscriberQueue {
   }
 
   close(reason: SubscriberQueueCloseReason): void {
+    this.discardAndClose(reason);
+  }
+
+  discardAndClose(reason: SubscriberQueueCloseReason): void {
     if (this.closedValue) return;
     this.closedValue = true;
     this.closeReasonValue = reason;

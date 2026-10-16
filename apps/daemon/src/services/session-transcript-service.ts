@@ -66,6 +66,8 @@ export class SessionTranscriptService {
     }
 
     const records = await this.options.messageRecords.listBySession(sessionId);
+    if ((await this.options.sessions.get(sessionId)) === null)
+      throw new StorageNotFoundError("AgentSession", sessionId);
     for (const record of records) {
       if (record.messageType !== "ASSISTANT" || !record.audience.model) continue;
       try {
@@ -99,6 +101,8 @@ export class SessionTranscriptService {
     const start = parseCursor(query.cursor, items.length);
     const page = items.slice(start, start + query.limit);
     const end = start + page.length;
+    if ((await this.options.sessions.get(sessionId)) === null)
+      throw new StorageNotFoundError("AgentSession", sessionId);
     return {
       items: page,
       ...(end < items.length ? { nextCursor: String(end) } : {}),

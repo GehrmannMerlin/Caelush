@@ -14,8 +14,10 @@ export interface ActiveStreamRegistry {
 async function* mapEvents(
   events: AsyncIterable<RunEvent>,
   publicEventProjector: PublicEventProjector,
+  exists: () => Promise<boolean>,
 ) {
   for await (const event of events) {
+    if (!(await exists())) return;
     const publicEvent = publicEventProjector.project(event);
     if (publicEvent !== null) yield mapPublicRunEventToSse(publicEvent);
   }
@@ -82,6 +84,7 @@ export function registerEventStreamRoute(
               signal: controller.signal,
             }),
             dependencies.publicEventProjector,
+            async () => (await dependencies.runs.get(runId as never)) !== null,
           ),
         );
       } finally {

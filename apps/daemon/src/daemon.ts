@@ -1,4 +1,5 @@
 import { dirname, join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { isTerminalRunStatus } from "@caelush/core";
 import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
 import type { ContextContributionRegistration } from "@caelush/agent";
@@ -44,6 +45,8 @@ import {
 } from "./execution/run-startup-reconciliation.js";
 import { SessionTranscriptService } from "./services/session-transcript-service.js";
 import { SessionPresentationService } from "./services/session-presentation-service.js";
+import { ArchiveService } from "./services/archive-service.js";
+import { ArchiveInvalidator } from "./services/archive-invalidation.js";
 import { AIConfigurationService } from "./services/ai-configuration-service.js";
 import type { DaemonModelProviderConfig } from "./providers/model-canonicalizer.js";
 import type { RuntimeProviderCredentialAuthority } from "./providers/credential-authority.js";
@@ -533,7 +536,24 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     if (composition.eventHub === undefined) {
       throw new Error("Production daemon composition did not create a RunEventHub.");
     }
+    const invalidator = new ArchiveInvalidator({ eventHub: composition.eventHub });
+    const scopeId =
+      options.desktopHost === undefined
+        ? createHash("sha256").update(`${options.databasePath}:${randomUUID()}`).digest("hex")
+        : `${options.desktopHost.profileId}:${options.desktopHost.generationId}`;
+    const archiveService = new ArchiveService({
+      archives: storage.archives,
+      reconciler: legacyArchiveReconciler,
+      scopeId,
+      onDeleted: (commit) => invalidator.invalidate(commit),
+      onInvalidationError: () =>
+        app.log.warn(
+          { code: "ARCHIVE_INVALIDATION_FAILED" },
+          "Committed archive deletion invalidation failed.",
+        ),
+    });
     app = buildDaemonApp({
+      archiveService,
       archives: storage.archives,
       sessions: storage.sessions,
       runs: storage.runs,
@@ -546,16 +566,16 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       activeStreams,
       config,
       execution: composition,
-      info:
-        options.desktopHost === undefined
-          ? composition.info
-          : DaemonInfoSchema.parse({
-              ...composition.info,
-              capabilities: {
-                ...composition.info.capabilities,
-                ...Object.fromEntries(DESKTOP_HOST_CAPABILITY_NAMES.map((name) => [name, true])),
-              },
-            }),
+      info: DaemonInfoSchema.parse({
+        ...composition.info,
+        capabilities: {
+          ...composition.info.capabilities,
+          archiveManagementV1: true,
+          ...(options.desktopHost === undefined
+            ? {}
+            : Object.fromEntries(DESKTOP_HOST_CAPABILITY_NAMES.map((name) => [name, true]))),
+        },
+      }),
       ...(options.desktopHost === undefined
         ? {}
         : { desktopHost: { hostToken: options.desktopHost.hostToken } }),

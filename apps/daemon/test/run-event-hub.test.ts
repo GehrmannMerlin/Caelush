@@ -29,6 +29,55 @@ function deferred<T = void>(): {
   return { promise, resolve };
 }
 
+describe("deleted Run subscriptions", () => {
+  it("discards replay pages read before deletion without disturbing another Run", async () => {
+    const reader = new MemoryReader();
+    const target = createRunId();
+    const other = createRunId();
+    reader.events.push(makeDurable(target, 1));
+    reader.latestValue = 1;
+    reader.replayGate = deferred<void>();
+    const hub = new RunEventHub(reader);
+    const iterator = hub.watch(target)[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    await reader.replayCalled.promise;
+    const seen: string[] = [];
+    hub.subscribe({ runId: other }, (event) => {
+      seen.push(event.runId);
+    });
+    hub.invalidateRuns([target]);
+    reader.replayGate.resolve();
+    expect(await pending).toMatchObject({ done: true });
+    hub.notifyCommitted([makeDurable(target, 2), makeDurable(other, 1)]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(seen).toEqual([other]);
+    await hub.dispose();
+  });
+  it("does not yield a retained replay array or a resolved transient waiter after deletion", async () => {
+    const reader = new MemoryReader();
+    const runId = createRunId();
+    reader.events.push(makeDurable(runId, 1), makeDurable(runId, 2));
+    reader.latestValue = 2;
+    const hub = new RunEventHub(reader);
+    const iterator = hub.watch(runId)[Symbol.asyncIterator]();
+    expect((await iterator.next()).done).toBe(false);
+    hub.invalidateRuns([runId]);
+    expect(await iterator.next()).toMatchObject({ done: true });
+    const liveReader = new MemoryReader();
+    const liveHub = new RunEventHub(liveReader);
+    const live = liveHub.watch(runId)[Symbol.asyncIterator]();
+    const pending = live.next();
+    await liveReader.latestCalled.promise;
+    await Promise.resolve();
+    liveHub.emitTransient(makeTransient(runId, "stream", 1));
+    liveHub.invalidateRuns([runId]);
+    expect(await pending).toMatchObject({ done: true });
+    await hub.dispose();
+    await liveHub.dispose();
+  });
+});
+
 function makeDurable(runId: RunId, sequence: number): DurableRunEvent {
   return {
     eventId: createEventId(),

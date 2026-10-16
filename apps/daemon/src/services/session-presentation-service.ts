@@ -130,6 +130,13 @@ export class SessionPresentationService {
       pageRuns.map((run) => this.projectRun(run, recordsByRun.get(run.id) ?? [])),
     );
     const end = start + turns.length;
+    if ((await this.options.sessions.get(sessionId)) === null)
+      throw new StorageNotFoundError("AgentSession", sessionId);
+    if (
+      query.runId !== undefined &&
+      !(await this.options.runs.listBySession(sessionId)).some((run) => run.id === query.runId)
+    )
+      throw new StorageNotFoundError("AgentRun", query.runId);
     return SessionTurnPresentationResponseV3Schema.parse({
       capabilityVersion: 3,
       turns,
