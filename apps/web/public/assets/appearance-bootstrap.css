@@ -1,0 +1,17 @@
+:root[data-caelush-theme="light"] {
+  color-scheme: light;
+  color: #17243a;
+  background-color: #ffffff;
+}
+
+:root[data-caelush-theme="dark"] {
+  color-scheme: dark;
+  color: #f3f3f3;
+  background-color: #181818;
+}
+
+html,
+body {
+  background-color: inherit;
+  color: inherit;
+}
