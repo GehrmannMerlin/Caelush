@@ -45,6 +45,51 @@ const otherWorkspace: WorkspaceRef = {
 };
 
 describe("WebSessionManager", () => {
+  it("archives only after server acceptance and clears the selected history and draft input identity", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const client = makeClient({ sessions: [session] });
+    let reject = true;
+    client.archiveSession = async () => {
+      if (reject) throw new Error("conflict");
+      return {} as never;
+    };
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    await manager.loadSessions();
+    await manager.selectSession(session.id);
+    await expect(manager.archiveSession(session.id)).resolves.toBe(false);
+    expect(manager.getSnapshot().selectedSessionId).toBe(session.id);
+    reject = false;
+    await expect(manager.archiveSession(session.id)).resolves.toBe(true);
+    expect(manager.getSnapshot()).toMatchObject({
+      selectedSessionId: undefined,
+      history: [],
+      isDraft: true,
+    });
+    manager.dispose();
+  });
+  it("makes a remotely archived Session read-only and refuses submission", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const client = makeClient({ sessions: [session] });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    await manager.loadSessions();
+    await manager.selectSession(session.id);
+    client.getArchiveState = async () => ({
+      target: { type: "SESSION", sessionId: session.id },
+      archived: true,
+      ownArchive: {
+        archiveId: "00000000-0000-4000-8000-000000000000",
+        archivedAt: null,
+        reason: "USER",
+      },
+      restoreDisposition: "AVAILABLE",
+    });
+    await manager.refreshArchiveState();
+    expect(manager.getSnapshot().archiveReadOnly).toBe(true);
+    expect(manager.getSnapshot().composerEnabled).toBe(false);
+    expect(await manager.submitPrompt("should stay read-only")).toBe(false);
+    expect(client.createRun).not.toHaveBeenCalled();
+    manager.dispose();
+  });
   it.each([
     ["DESKTOP_ACCOUNT_UNAUTHORIZED", 401, "桌面账户"],
     ["LOCAL_AGENT_UNAVAILABLE", 503, "本地 Agent"],

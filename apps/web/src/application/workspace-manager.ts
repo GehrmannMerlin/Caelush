@@ -1,4 +1,6 @@
 import { CaelushClientHttpError } from "@caelush/client";
+import type { CaelushClient } from "@caelush/client";
+import { archiveErrorMessage } from "./archive-errors.js";
 import {
   WorkspaceIdSchema,
   type CreateWorkspaceRequest,
@@ -57,7 +59,7 @@ export class WorkspaceSelectionStore {
 export interface WorkspaceManagerClient {
   listWorkspaces(): Promise<{ readonly items: readonly WorkspaceRecord[] }>;
   createWorkspace(input: CreateWorkspaceRequest): Promise<WorkspaceRecord>;
-  deleteWorkspace(workspaceId: WorkspaceId): Promise<void>;
+  archiveWorkspace: CaelushClient["archiveWorkspace"];
   pickWorkspaceDirectory?(): Promise<WorkspaceDirectoryPickerResponse>;
   listWorkspaceSessions(workspaceId: WorkspaceId): Promise<{
     readonly items: readonly WorkspaceSessionSummary[];
@@ -70,7 +72,7 @@ export interface WorkspaceManagerError {
   readonly code:
     | "WORKSPACE_LOAD_FAILED"
     | "WORKSPACE_REGISTER_FAILED"
-    | "WORKSPACE_FORGET_FAILED"
+    | "WORKSPACE_ARCHIVE_FAILED"
     | "ACTIVE_RUN_CONFLICT";
   readonly message: string;
 }
@@ -90,6 +92,8 @@ export class WebWorkspaceManager {
   private readonly listeners = new Set<WorkspaceManagerListener>();
   private snapshot: WorkspaceManagerState = initialState();
   private disposed = false;
+  private loadGeneration = 0;
+  private readonly summaryGenerations = new Map<WorkspaceId, number>();
 
   constructor(
     private readonly options: {
@@ -110,9 +114,11 @@ export class WebWorkspaceManager {
 
   async loadWorkspaces(): Promise<void> {
     if (this.disposed) return;
+    const generation = ++this.loadGeneration;
     this.publish({ status: "LOADING", error: undefined });
     try {
       const response = await this.options.client.listWorkspaces();
+      if (this.disposed || generation !== this.loadGeneration) return;
       const workspaces = [...response.items];
       const selectedWorkspaceId = this.chooseWorkspace(workspaces);
       const availableWorkspaceIds = new Set(workspaces.map((workspace) => workspace.id));
@@ -137,6 +143,7 @@ export class WebWorkspaceManager {
         await this.loadWorkspaceSessions(selectedWorkspaceId);
       }
     } catch (error) {
+      if (this.disposed || generation !== this.loadGeneration) return;
       this.publish({
         status: "ERROR",
         error: workspaceError("WORKSPACE_LOAD_FAILED", error),
@@ -163,8 +170,16 @@ export class WebWorkspaceManager {
 
   async loadWorkspaceSessions(workspaceId: WorkspaceId): Promise<void> {
     if (this.disposed) return;
+    const generation = (this.summaryGenerations.get(workspaceId) ?? 0) + 1;
+    this.summaryGenerations.set(workspaceId, generation);
     try {
       const response = await this.options.client.listWorkspaceSessions(workspaceId);
+      if (
+        this.disposed ||
+        generation !== this.summaryGenerations.get(workspaceId) ||
+        !this.snapshot.workspaces.some((w) => w.id === workspaceId)
+      )
+        return;
       this.publish({
         sessionSummaries: {
           ...this.snapshot.sessionSummaries,
@@ -173,6 +188,7 @@ export class WebWorkspaceManager {
         error: undefined,
       });
     } catch (error) {
+      if (this.disposed || generation !== this.summaryGenerations.get(workspaceId)) return;
       this.publish({
         error: workspaceError("WORKSPACE_LOAD_FAILED", error),
       });
@@ -206,17 +222,25 @@ export class WebWorkspaceManager {
     return this.options.client.pickWorkspaceDirectory();
   }
 
-  async forgetWorkspace(workspaceId: WorkspaceId): Promise<void> {
+  async archiveWorkspace(workspaceId: WorkspaceId): Promise<void> {
     if (this.disposed) return;
     try {
-      await this.options.client.deleteWorkspace(workspaceId);
+      await this.options.client.archiveWorkspace(workspaceId);
+      ++this.loadGeneration;
+      this.summaryGenerations.set(workspaceId, (this.summaryGenerations.get(workspaceId) ?? 0) + 1);
       if (this.options.selectionStore?.read() === workspaceId) this.options.selectionStore.clear();
       const sessionSummaries = { ...this.snapshot.sessionSummaries };
       delete sessionSummaries[workspaceId];
       this.publish({ sessionSummaries, error: undefined });
       await this.loadWorkspaces();
     } catch (error) {
-      const mapped = workspaceError("WORKSPACE_FORGET_FAILED", error);
+      const mapped: WorkspaceManagerError = {
+        code:
+          error instanceof CaelushClientHttpError && error.code === "ACTIVE_RUN_CONFLICT"
+            ? "ACTIVE_RUN_CONFLICT"
+            : "WORKSPACE_ARCHIVE_FAILED",
+        message: archiveErrorMessage(error),
+      };
       this.publish({
         status: mapped.code === "ACTIVE_RUN_CONFLICT" ? "READY" : "ERROR",
         error: mapped,

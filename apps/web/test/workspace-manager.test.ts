@@ -18,6 +18,49 @@ function workspace(name: string) {
 }
 
 describe("WebWorkspaceManager", () => {
+  it("archives through the authoritative API and preserves a rejected Workspace", async () => {
+    const target = workspace("archive");
+    let reject = true;
+    let items = [target];
+    const client = {
+      listWorkspaces: async () => ({ items }),
+      listWorkspaceSessions: async () => ({ items: [] }),
+      createWorkspace: vi.fn(),
+      archiveWorkspace: async () => {
+        if (reject) throw new Error("rejected");
+        items = [];
+        return {} as never;
+      },
+    };
+    const manager = new WebWorkspaceManager({ client });
+    await manager.loadWorkspaces();
+    await expect(manager.archiveWorkspace(target.id)).rejects.toThrow();
+    expect(manager.getSnapshot().workspaces).toEqual([target]);
+    reject = false;
+    await manager.archiveWorkspace(target.id);
+    expect(manager.getSnapshot().workspaces).toEqual([]);
+  });
+  it("discards a superseded Workspace response", async () => {
+    const target = workspace("stale");
+    let release!: (response: { items: (typeof target)[] }) => void;
+    let calls = 0;
+    const delayed = new Promise<{ items: (typeof target)[] }>((resolve) => {
+      release = resolve;
+    });
+    const manager = new WebWorkspaceManager({
+      client: {
+        listWorkspaces: async () => (++calls === 1 ? delayed : { items: [] }),
+        listWorkspaceSessions: async () => ({ items: [] }),
+        createWorkspace: vi.fn(),
+        archiveWorkspace: vi.fn(),
+      },
+    });
+    const old = manager.loadWorkspaces();
+    await manager.loadWorkspaces();
+    release({ items: [target] });
+    await old;
+    expect(manager.getSnapshot().workspaces).toEqual([]);
+  });
   it("loads, persists, expands, and selects Workspace-scoped Session summaries", async () => {
     const first = workspace("first");
     const second = workspace("second");
@@ -25,7 +68,7 @@ describe("WebWorkspaceManager", () => {
       listWorkspaces: vi.fn(async () => ({ items: [first, second] })),
       listWorkspaceSessions: vi.fn(async () => ({ items: [] })),
       createWorkspace: vi.fn(),
-      deleteWorkspace: vi.fn(),
+      archiveWorkspace: vi.fn(),
     };
     const storage = new Map<string, string>();
     const manager = new WebWorkspaceManager({
@@ -56,7 +99,7 @@ describe("WebWorkspaceManager", () => {
       listWorkspaces: vi.fn(async () => ({ items: [first, created] })),
       listWorkspaceSessions: vi.fn(async () => ({ items: [] })),
       createWorkspace: vi.fn(async () => created),
-      deleteWorkspace: vi.fn(),
+      archiveWorkspace: vi.fn(),
     };
     const manager = new WebWorkspaceManager({ client });
 
@@ -64,7 +107,7 @@ describe("WebWorkspaceManager", () => {
     await expect(manager.registerWorkspace("D:/workspace/created")).resolves.toEqual(created);
     expect(manager.getSnapshot()).toMatchObject({
       selectedWorkspaceId: created.id,
-      expandedWorkspaceIds: [created.id],
+      expandedWorkspaceIds: expect.arrayContaining([created.id]),
     });
     expect(client.createWorkspace).toHaveBeenCalledWith({ path: "D:/workspace/created" });
   });
@@ -74,7 +117,7 @@ describe("WebWorkspaceManager", () => {
       listWorkspaces: vi.fn(async () => ({ items: [] })),
       listWorkspaceSessions: vi.fn(async () => ({ items: [] })),
       createWorkspace: vi.fn(),
-      deleteWorkspace: vi.fn(),
+      archiveWorkspace: vi.fn(),
       pickWorkspaceDirectory: vi.fn(async () => ({
         status: "SELECTED" as const,
         path: "D:/workspace/selected",

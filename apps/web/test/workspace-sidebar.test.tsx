@@ -1,9 +1,49 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { createWorkspaceId } from "@caelush/protocol";
+import { createWorkspaceId, createSessionId } from "@caelush/protocol";
 import { WorkspaceSettingsMenu, WorkspaceSidebar } from "../src/components/workspace-sidebar.js";
 
 describe("WorkspaceSidebar", () => {
+  it("disables archive affordances for known active tasks without exposing permanent deletion", () => {
+    const workspaceId = createWorkspaceId();
+    const sessionId = createSessionId();
+    const html = renderToStaticMarkup(
+      <WorkspaceSidebar
+        workspaces={[
+          {
+            id: workspaceId,
+            canonicalPath: "D:/active",
+            displayName: "active",
+            createdAt: 1,
+            updatedAt: 1,
+            lastOpenedAt: 1,
+          },
+        ]}
+        expandedWorkspaceIds={[workspaceId]}
+        sessionSummaries={{
+          [workspaceId]: [
+            {
+              session: { id: sessionId } as never,
+              lastActivityAt: 1 as never,
+              latestRun: { status: "RUNNING", goal: "任务" } as never,
+            },
+          ],
+        }}
+        isDraft={false}
+        canNavigate
+        onToggleWorkspace={vi.fn()}
+        onSelectWorkspace={vi.fn()}
+        onNewSession={vi.fn()}
+        onSelectSession={vi.fn()}
+        onAddWorkspace={vi.fn()}
+        onArchiveWorkspace={vi.fn()}
+        onArchiveSession={vi.fn()}
+      />,
+    );
+    expect(html).toContain("请先结束任务，再归档");
+    expect(html).not.toContain("彻底删除");
+    expect(html.match(/disabled=""/g)).toHaveLength(2);
+  });
   it("renders expandable Workspaces with scoped Sessions and forget wording", () => {
     const workspaceId = createWorkspaceId();
     const html = renderToStaticMarkup(
@@ -29,7 +69,8 @@ describe("WorkspaceSidebar", () => {
         onNewSession={vi.fn()}
         onSelectSession={vi.fn()}
         onAddWorkspace={vi.fn()}
-        onForgetWorkspace={vi.fn()}
+        onArchiveWorkspace={vi.fn()}
+        onArchiveSession={vi.fn()}
       />,
     );
 
@@ -40,7 +81,7 @@ describe("WorkspaceSidebar", () => {
     expect(html).not.toContain('class="brand-symbol"');
     expect(html).not.toContain('class="brand-name"');
     expect(html).toContain("新建会话");
-    expect(html).toContain("从 Caelush 中移除");
+    expect(html).toContain("归档工作区：Caelush");
     expect(html).toContain("添加工作区");
   });
 
@@ -57,7 +98,8 @@ describe("WorkspaceSidebar", () => {
         onNewSession={vi.fn()}
         onSelectSession={vi.fn()}
         onAddWorkspace={vi.fn()}
-        onForgetWorkspace={vi.fn()}
+        onArchiveWorkspace={vi.fn()}
+        onArchiveSession={vi.fn()}
         onOpenSettings={vi.fn()}
       />,
     );
@@ -89,7 +131,8 @@ describe("WorkspaceSidebar", () => {
         onNewSession={vi.fn()}
         onSelectSession={vi.fn()}
         onAddWorkspace={vi.fn()}
-        onForgetWorkspace={vi.fn()}
+        onArchiveWorkspace={vi.fn()}
+        onArchiveSession={vi.fn()}
         desktopActions={{
           accountHref: "caelush-login://app/?view=account",
           accountProfile: { displayName: "霜华", avatarBytes: new Uint8Array([88]) },
@@ -131,13 +174,14 @@ describe("WorkspaceSidebar", () => {
         onNewSession={vi.fn()}
         onSelectSession={vi.fn()}
         onAddWorkspace={vi.fn()}
-        onForgetWorkspace={vi.fn()}
+        onArchiveWorkspace={vi.fn()}
+        onArchiveSession={vi.fn()}
       />,
     );
 
     expect(html).toContain('class="workspace-card"');
     expect(html).toContain('data-folder-path="D:/Develop/Caelush"');
-    expect(html).toContain('aria-label="从 Caelush 中移除"');
+    expect(html).toContain('aria-label="归档工作区：Caelush"');
     expect(html).not.toContain(">D:/Develop/Caelush</small>");
   });
 });

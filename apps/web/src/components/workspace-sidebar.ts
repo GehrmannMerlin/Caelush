@@ -1,4 +1,5 @@
-import { createElement, useState, type ReactElement } from "react";
+import { createElement, type ReactElement } from "react";
+import { nonTerminalRuns } from "@caelush/client";
 import type {
   WorkspaceId,
   WorkspaceRecord,
@@ -15,7 +16,6 @@ import {
   Plus,
 } from "lucide-react";
 import { derivePromptTitle } from "../application/prompt.js";
-import { sessionArchiveStore } from "../application/session-archive-store.js";
 import caelushLogo from "../assets/logo/caelush-logo.png";
 import archiveIcon from "../assets/icons/archive.svg";
 import { RunStatusIcon, runStatusClass, runStatusLabel } from "./run-status.js";
@@ -44,19 +44,13 @@ export interface WorkspaceSidebarProps {
   readonly onNewSession: (workspaceId: WorkspaceId) => void;
   readonly onSelectSession: (workspaceId: WorkspaceId, sessionId: SessionId) => void;
   readonly onAddWorkspace: () => void;
-  readonly onForgetWorkspace: (workspaceId: WorkspaceId) => void;
+  readonly onArchiveWorkspace: (workspaceId: WorkspaceId) => void;
+  readonly onArchiveSession: (sessionId: SessionId) => void;
   readonly onOpenSettings?: () => void;
   readonly desktopActions?: WorkspaceSidebarDesktopActions | undefined;
 }
 
 export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
-  const [archivedSessions, setArchivedSessions] = useState(() => sessionArchiveStore.list());
-  const archivedSessionIds = new Set(archivedSessions.map((record) => record.sessionId));
-
-  const archiveSession = (sessionId: SessionId): void => {
-    setArchivedSessions(sessionArchiveStore.archive(sessionId));
-  };
-
   return createElement(
     "aside",
     {
@@ -96,9 +90,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
     createElement(
       "ol",
       { className: "workspace-list" },
-      props.workspaces.map((workspace) =>
-        renderWorkspace(props, workspace, archivedSessionIds, archiveSession),
-      ),
+      props.workspaces.map((workspace) => renderWorkspace(props, workspace)),
     ),
     createElement(WorkspaceSidebarFooter, {
       onOpenSettings: props.onOpenSettings,
@@ -107,17 +99,13 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
   );
 }
 
-function renderWorkspace(
-  props: WorkspaceSidebarProps,
-  workspace: WorkspaceRecord,
-  archivedSessionIds: ReadonlySet<SessionId>,
-  onArchiveSession: (sessionId: SessionId) => void,
-): ReactElement {
+function renderWorkspace(props: WorkspaceSidebarProps, workspace: WorkspaceRecord): ReactElement {
   const selected = workspace.id === props.selectedWorkspaceId;
   const expanded = props.expandedWorkspaceIds.includes(workspace.id);
   const summaries = props.sessionSummaries[workspace.id] ?? [];
-  const visibleSummaries = summaries.filter(
-    (summary) => !archivedSessionIds.has(summary.session.id),
+  const visibleSummaries = summaries;
+  const hasActiveRun = summaries.some(
+    (summary) => summary.latestRun !== undefined && nonTerminalRuns([summary.latestRun]).length > 0,
   );
   return createElement(
     "li",
@@ -167,9 +155,10 @@ function renderWorkspace(
         {
           type: "button",
           className: "workspace-forget-button",
-          onClick: () => props.onForgetWorkspace(workspace.id),
-          title: `从 ${workspace.displayName} 中移除`,
-          "aria-label": `从 ${workspace.displayName} 中移除`,
+          onClick: () => props.onArchiveWorkspace(workspace.id),
+          disabled: hasActiveRun || !props.canNavigate,
+          title: hasActiveRun ? "请先结束任务，再归档" : `归档工作区：${workspace.displayName}`,
+          "aria-label": `归档工作区：${workspace.displayName}`,
         },
         createElement("img", { src: archiveIcon, alt: "", "aria-hidden": true }),
       ),
@@ -201,9 +190,7 @@ function renderWorkspace(
                 createElement("span", null, "新会话"),
               )
             : null,
-          visibleSummaries.map((summary) =>
-            renderSession(props, workspace, summary, onArchiveSession),
-          ),
+          visibleSummaries.map((summary) => renderSession(props, workspace, summary)),
           visibleSummaries.length === 0 && !(props.isDraft && selected)
             ? createElement("p", { className: "workspace-session-empty" }, "还没有会话。")
             : null,
@@ -216,7 +203,6 @@ function renderSession(
   props: WorkspaceSidebarProps,
   workspace: WorkspaceRecord,
   summary: WorkspaceSessionSummary,
-  onArchiveSession: (sessionId: SessionId) => void,
 ): ReactElement {
   const latestRun = summary.latestRun;
   const status = latestRun?.status ?? "PENDING";
@@ -255,8 +241,14 @@ function renderSession(
       {
         type: "button",
         className: "workspace-session-archive-button",
-        onClick: () => onArchiveSession(summary.session.id),
-        title: `归档会话：${title}（保留记录）`,
+        onClick: () => props.onArchiveSession(summary.session.id),
+        disabled:
+          !props.canNavigate ||
+          (latestRun !== undefined && nonTerminalRuns([latestRun]).length > 0),
+        title:
+          latestRun !== undefined && nonTerminalRuns([latestRun]).length > 0
+            ? "请先结束任务，再归档"
+            : `归档会话：${title}（保留记录）`,
         "aria-label": `归档会话：${title}，保留会话记录`,
       },
       createElement("img", { src: archiveIcon, alt: "", "aria-hidden": true }),

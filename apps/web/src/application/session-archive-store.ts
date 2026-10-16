@@ -12,7 +12,7 @@ interface ArchiveStorage {
   setItem(key: string, value: string): void;
 }
 
-/** Stores sidebar archive markers only; session and run data remain daemon-owned and untouched. */
+/** Legacy markers are read only until the current daemon acknowledges their migration. */
 export class SessionArchiveStore {
   constructor(private readonly storage: ArchiveStorage = browserStorage()) {}
 
@@ -53,19 +53,28 @@ export class SessionArchiveStore {
     );
   }
 
-  archive(sessionId: SessionId, archivedAt = Date.now()): readonly ArchivedSessionRecord[] {
-    const parsedSessionId = SessionIdSchema.parse(sessionId);
-    const records = new Map(this.list().map((record) => [record.sessionId, record]));
-    records.set(parsedSessionId, { sessionId: parsedSessionId, archivedAt });
-    const next = [...records.values()].sort((left, right) => right.archivedAt - left.archivedAt);
-    this.storage.setItem(ARCHIVED_SESSIONS_KEY, JSON.stringify(next));
-    return next;
-  }
-
-  restore(sessionId: SessionId): readonly ArchivedSessionRecord[] {
-    const next = this.list().filter((record) => record.sessionId !== sessionId);
-    this.storage.setItem(ARCHIVED_SESSIONS_KEY, JSON.stringify(next));
-    return next;
+  acknowledge(sessionIds: readonly SessionId[]): void {
+    const confirmed = new Set(sessionIds);
+    try {
+      const raw: unknown = JSON.parse(this.storage.getItem(ARCHIVED_SESSIONS_KEY) ?? "[]");
+      if (!Array.isArray(raw)) return;
+      this.storage.setItem(
+        ARCHIVED_SESSIONS_KEY,
+        JSON.stringify(
+          raw.filter(
+            (value: unknown) =>
+              !(
+                typeof value === "object" &&
+                value !== null &&
+                "sessionId" in value &&
+                confirmed.has(value.sessionId as SessionId)
+              ),
+          ),
+        ),
+      );
+    } catch {
+      /* Unavailable or damaged legacy storage remains eligible for a later retry. */
+    }
   }
 }
 

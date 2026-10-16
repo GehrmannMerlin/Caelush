@@ -35,6 +35,9 @@ import {
   type WorkspaceManagerState,
 } from "./application/workspace-manager.js";
 import { derivePromptTitle } from "./application/prompt.js";
+import { importLegacySessionArchives } from "./application/legacy-archive-import.js";
+import { sessionArchiveStore } from "./application/session-archive-store.js";
+import { archiveErrorMessage } from "./application/archive-errors.js";
 import { PromptComposer } from "./components/prompt-composer.js";
 import { SessionWorkspace } from "./components/session-workspace.js";
 import {
@@ -199,7 +202,7 @@ export function WebHostApp(props: {
       selectedWorkspace === undefined
         ? undefined
         : { id: selectedWorkspace.id, path: selectedWorkspace.canonicalPath },
-    [selectedWorkspace],
+    [selectedWorkspace?.id, selectedWorkspace?.canonicalPath],
   );
 
   const sessionManager = useMemo(() => {
@@ -224,6 +227,25 @@ export function WebHostApp(props: {
     void sessionManager.loadSessions();
     return () => sessionManager.dispose();
   }, [sessionManager]);
+
+  useEffect(() => {
+    const refresh = () => {
+      void workspaceManager?.loadWorkspaces();
+      void sessionManager?.refreshArchiveState();
+      if (
+        state.info?.capabilities.archiveManagementV1 === true &&
+        props.client.importLegacyArchives !== undefined
+      )
+        void importLegacySessionArchives({
+          client: props.client as Required<Pick<WebSessionClient, "importLegacyArchives">>,
+          store: sessionArchiveStore,
+        })
+          .then(() => workspaceManager?.loadWorkspaces())
+          .catch(() => undefined);
+    };
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [props.client, sessionManager, workspaceManager, state.info]);
 
   const sessionSubscribe = useCallback(
     (listener: () => void) => sessionManager?.subscribe(() => listener()) ?? (() => undefined),
@@ -310,20 +332,58 @@ export function WebHostApp(props: {
     }
     closeSidebar();
   };
-  const onForgetWorkspace = (workspaceId: WorkspaceId) => {
+  const onArchiveWorkspace = (workspaceId: WorkspaceId) => {
+    if (state.info?.capabilities.archiveManagementV1 !== true) {
+      setWorkspaceActionError("当前本地服务不支持归档管理，请更新后重试。");
+      return;
+    }
     const target = workspaceState.workspaces.find((workspace) => workspace.id === workspaceId);
     if (
       typeof window !== "undefined" &&
       target !== undefined &&
-      !window.confirm(`从 ${target.displayName} 中移除？这不会删除磁盘文件。`)
+      !window.confirm(`归档工作区“${target.displayName}”？归档后可在归档页恢复。`)
     ) {
       return;
     }
     setWorkspaceActionError(undefined);
-    void workspaceManager.forgetWorkspace(workspaceId).catch(() => {
+    void workspaceManager.archiveWorkspace(workspaceId).catch(() => {
       const error = workspaceManager.getSnapshot().error;
-      setWorkspaceActionError(error?.message ?? "工作区移除失败。");
+      setWorkspaceActionError(error?.message ?? "工作区归档失败。");
     });
+  };
+  const onArchiveSession = (sessionId: SessionId) => {
+    if (state.info?.capabilities.archiveManagementV1 !== true) {
+      setWorkspaceActionError("当前本地服务不支持归档管理，请更新后重试。");
+      return;
+    }
+    setWorkspaceActionError(undefined);
+    const selected = sessionSnapshot.candidates.find(
+      (candidate) => candidate.session.id === sessionId,
+    );
+    const workspaceId =
+      selected?.session.workspaceId ??
+      workspaceState.workspaces.find((workspace) =>
+        workspaceState.sessionSummaries[workspace.id]?.some(
+          (summary) => summary.session.id === sessionId,
+        ),
+      )?.id;
+    if (workspaceId === selectedWorkspaceId && sessionManager !== undefined) {
+      void sessionManager.archiveSession(sessionId).then((accepted) => {
+        if (accepted && workspaceId !== undefined)
+          void workspaceManager.loadWorkspaceSessions(workspaceId);
+        if (!accepted)
+          setWorkspaceActionError(sessionManager.getSnapshot().error?.message ?? "会话归档失败。");
+      });
+    } else if (props.client.archiveSession !== undefined) {
+      void props.client
+        .archiveSession(sessionId)
+        .then(() =>
+          workspaceId === undefined
+            ? undefined
+            : workspaceManager.loadWorkspaceSessions(workspaceId),
+        )
+        .catch((error: unknown) => setWorkspaceActionError(archiveErrorMessage(error)));
+    }
   };
   const onAddWorkspace = () => {
     setWorkspaceActionError(undefined);
@@ -404,7 +464,8 @@ export function WebHostApp(props: {
     onNewSession,
     onSelectSession,
     onAddWorkspace,
-    onForgetWorkspace,
+    onArchiveWorkspace,
+    onArchiveSession,
     onCloseWorkspaceDialog: () => setWorkspaceDialogOpen(false),
     onPickWorkspaceDirectory,
     onRegisterWorkspace,
@@ -451,7 +512,8 @@ function renderWorkspaceApp(input: {
   readonly onNewSession: (workspaceId: WorkspaceId) => void;
   readonly onSelectSession: (workspaceId: WorkspaceId, sessionId: SessionId) => void;
   readonly onAddWorkspace: () => void;
-  readonly onForgetWorkspace: (workspaceId: WorkspaceId) => void;
+  readonly onArchiveWorkspace: (workspaceId: WorkspaceId) => void;
+  readonly onArchiveSession: (sessionId: SessionId) => void;
   readonly onCloseWorkspaceDialog: () => void;
   readonly onPickWorkspaceDirectory: () => void;
   readonly onRegisterWorkspace: (event: FormEvent<HTMLFormElement>) => void;
@@ -496,6 +558,7 @@ function renderWorkspaceApp(input: {
         (model) => model.provider === modelSelection.provider && model.id === modelSelection.model,
       ));
   const promptComposer = createElement(PromptComposer, {
+    key: `${selectedWorkspace?.id ?? "none"}:${snapshot.selectedSessionId ?? "draft"}`,
     disabled: !hasWorkspace || composerInteractionDisabled,
     modelReady: hasWorkspace ? modelReady : false,
     placeholder: hasWorkspace ? undefined : "先添加工作区，再开始对话",
@@ -581,7 +644,8 @@ function renderWorkspaceApp(input: {
             onNewSession: input.onNewSession,
             onSelectSession: input.onSelectSession,
             onAddWorkspace: input.onAddWorkspace,
-            onForgetWorkspace: input.onForgetWorkspace,
+            onArchiveWorkspace: input.onArchiveWorkspace,
+            onArchiveSession: input.onArchiveSession,
             onOpenSettings: input.onOpenSettings,
             desktopActions: input.desktopActions,
           }),
@@ -717,9 +781,10 @@ export function shouldDisableComposerInteraction(
   snapshot: Pick<
     WebSessionSnapshot,
     "status" | "submission" | "activeRun" | "controlMode" | "preparingPreset"
-  >,
+  > & { readonly archiveReadOnly?: boolean },
 ): boolean {
   return (
+    snapshot.archiveReadOnly === true ||
     snapshot.status !== "READY" ||
     snapshot.submission !== "IDLE" ||
     snapshot.preparingPreset !== undefined ||

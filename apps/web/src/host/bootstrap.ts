@@ -10,6 +10,8 @@ import {
   type WorkspaceRef,
 } from "@caelush/protocol";
 import { z } from "zod";
+import { importLegacySessionArchives } from "../application/legacy-archive-import.js";
+import { sessionArchiveStore } from "../application/session-archive-store.js";
 
 const WebLaunchContextSchema = z
   .object({
@@ -50,6 +52,7 @@ export interface WebHostState {
 }
 
 export interface WebHostClient {
+  importLegacyArchives?: CaelushClient["importLegacyArchives"];
   getHealth(): Promise<HealthResponse>;
   getInfo(): Promise<DaemonInfo>;
 }
@@ -116,6 +119,15 @@ export async function bootstrapWebHost(input: {
     });
     const info = await input.client.getInfo();
     if (!isCompatibleInfo(info)) return publish(input, incompatibleState(launchContext, health));
+    if (
+      info.capabilities.archiveManagementV1 === true &&
+      input.client.importLegacyArchives !== undefined
+    ) {
+      await importLegacySessionArchives({
+        client: input.client as Pick<CaelushClient, "importLegacyArchives">,
+        store: sessionArchiveStore,
+      }).catch(() => undefined);
+    }
     return publish(input, {
       bootstrap: "READY",
       connection: "CONNECTED",

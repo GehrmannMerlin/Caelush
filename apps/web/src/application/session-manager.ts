@@ -16,6 +16,7 @@ import {
   reduceLiveActivityEvent,
   reduceTimelineEvent,
   ReconnectScheduler,
+  type CaelushClient,
   resolveSessionWorkspace,
   sortSessionCandidates,
   type SessionCandidate,
@@ -63,6 +64,7 @@ import type {
   WorkspaceSecurityCapabilitiesResponse,
 } from "@caelush/protocol";
 import { derivePromptTitle, validatePrompt, type PromptError } from "./prompt.js";
+import { archiveErrorMessage } from "./archive-errors.js";
 import type { WebHostClient } from "../host/bootstrap.js";
 import { mergeActiveTurnPresentation } from "./session-presentation-merge.js";
 import {
@@ -81,6 +83,8 @@ import {
 } from "./permission-presets.js";
 
 export interface WebSessionClient extends SessionCandidateClient, WebHostClient {
+  archiveSession?: CaelushClient["archiveSession"];
+  getArchiveState?: CaelushClient["getArchiveState"];
   listWorkspaceSessions?(workspaceId: WorkspaceRef["id"]): Promise<{
     readonly items: readonly WorkspaceSessionSummary[];
   }>;
@@ -180,6 +184,7 @@ export interface WebSessionError {
 }
 
 export interface WebSessionSnapshot {
+  readonly archiveReadOnly?: boolean;
   readonly status: WebSessionLoadState;
   readonly candidates: readonly SessionCandidate[];
   readonly selectedSession?: ClientAgentSession;
@@ -292,6 +297,10 @@ export class WebSessionManager {
   private contextUsageRefreshRunId: RunId | undefined;
   private continuityPreflightGeneration = 0;
   private disposed = false;
+  private loadGeneration = 0;
+  private selectionGeneration = 0;
+  private archiveGeneration = 0;
+  private archiveReadOnly = false;
 
   constructor(
     private readonly options: {
@@ -318,6 +327,7 @@ export class WebSessionManager {
 
   async loadSessions(): Promise<void> {
     if (this.disposed) return;
+    const generation = ++this.loadGeneration;
     this.publish({ status: "LOADING", error: undefined });
     try {
       await this.loadAIControl();
@@ -326,6 +336,7 @@ export class WebSessionManager {
         this.options.client.listWorkspaceSessions === undefined
           ? await listMatchingSessionCandidates(this.options.client, this.options.workspace.path)
           : await this.listWorkspaceSessionCandidates();
+      if (this.disposed || generation !== this.loadGeneration) return;
       const selectionStore = this.options.selectionStore;
       selectionStore?.setCandidates(
         this.options.workspace.id,
@@ -336,8 +347,13 @@ export class WebSessionManager {
       this.publish({ status: "READY", candidates, error: undefined });
       if (selectedId !== undefined && candidates.some((item) => item.session.id === selectedId)) {
         await this.selectSession(selectedId);
+      } else if (selectedId !== undefined) {
+        this.options.selectionStore?.clear(this.options.workspace.id);
+        this.beginDraft();
+        await this.refreshArchiveState();
       }
     } catch {
+      if (this.disposed || generation !== this.loadGeneration) return;
       this.publish({
         status: "ERROR",
         composerEnabled: false,
@@ -353,6 +369,9 @@ export class WebSessionManager {
       this.snapshot.preparingPreset !== undefined
     )
       return;
+    ++this.selectionGeneration;
+    ++this.archiveGeneration;
+    this.archiveReadOnly = false;
     this.cancelActiveLifecycle();
     this.clearApprovals();
     const defaultSelection = this.snapshot.defaultSelection ?? this.options.info.defaultModel;
@@ -391,6 +410,7 @@ export class WebSessionManager {
       return false;
     const candidate = this.snapshot.candidates.find((item) => item.session.id === sessionId);
     if (candidate === undefined) return false;
+    const generation = ++this.selectionGeneration;
 
     // Navigation only aborts the browser observer for the previous Run. The
     // daemon-owned Run continues independently of the selected Web Session.
@@ -399,6 +419,9 @@ export class WebSessionManager {
     this.publish({ status: "LOADING", error: undefined });
     try {
       const runs = (await this.options.client.listRuns(sessionId, { limit: 100 })).items;
+      const state = await this.options.client.getArchiveState?.({ type: "SESSION", sessionId });
+      if (this.disposed || generation !== this.selectionGeneration) return false;
+      this.archiveReadOnly = state?.archived === true;
       if (this.options.client.listWorkspaceSessions === undefined) {
         const workspaceResult = resolveSessionWorkspace(
           candidate.session,
@@ -425,8 +448,9 @@ export class WebSessionManager {
         }
       }
       this.options.selectionStore?.write(this.options.workspace.id, sessionId);
-      return await this.applySelectedSession(candidate.session, runs);
+      return await this.applySelectedSession(candidate.session, runs, generation);
     } catch {
+      if (this.disposed || generation !== this.selectionGeneration) return false;
       this.publish({
         status: "ERROR",
         selectedSession: candidate.session,
@@ -449,6 +473,7 @@ export class WebSessionManager {
 
   async submitPrompt(prompt: string): Promise<boolean> {
     if (
+      this.archiveReadOnly ||
       this.disposed ||
       this.hasActiveRun() ||
       this.snapshot.submission !== "IDLE" ||
@@ -601,6 +626,74 @@ export class WebSessionManager {
         error: submissionError(code, error),
       });
       return false;
+    }
+  }
+
+  async archiveSession(sessionId: SessionId): Promise<boolean> {
+    if (this.disposed || this.options.client.archiveSession === undefined) return false;
+    try {
+      await this.options.client.archiveSession(sessionId);
+      if (this.disposed) return false;
+      ++this.loadGeneration;
+      ++this.selectionGeneration;
+      this.publish({
+        candidates: this.snapshot.candidates.filter((item) => item.session.id !== sessionId),
+      });
+      if (this.snapshot.selectedSessionId === sessionId) {
+        this.options.selectionStore?.clear(this.options.workspace.id);
+        this.beginDraft();
+      }
+      return true;
+    } catch (error) {
+      this.publish({
+        error: { code: "SESSION_SELECTION_FAILED", message: archiveErrorMessage(error) },
+      });
+      return false;
+    }
+  }
+
+  async refreshArchiveState(): Promise<void> {
+    if (this.disposed || this.options.client.getArchiveState === undefined) return;
+    const sessionId = this.snapshot.selectedSessionId;
+    const generation = ++this.archiveGeneration;
+    try {
+      const state = await this.options.client.getArchiveState(
+        sessionId === undefined
+          ? { type: "WORKSPACE", workspaceId: this.options.workspace.id }
+          : { type: "SESSION", sessionId },
+      );
+      if (
+        this.disposed ||
+        generation !== this.archiveGeneration ||
+        sessionId !== this.snapshot.selectedSessionId
+      )
+        return;
+      this.archiveReadOnly = state.archived;
+      this.publish({ composerEnabled: !state.archived && !this.hasActiveRun() });
+    } catch (error) {
+      if (
+        this.disposed ||
+        generation !== this.archiveGeneration ||
+        sessionId !== this.snapshot.selectedSessionId
+      )
+        return;
+      if (error instanceof CaelushClientHttpError && error.code === "NOT_FOUND") {
+        this.options.selectionStore?.clear(this.options.workspace.id);
+        this.beginDraft();
+        this.archiveReadOnly = true;
+        this.publish({
+          isDraft: false,
+          composerEnabled: false,
+          history: [],
+          turnPresentation: undefined,
+        });
+      } else {
+        this.archiveReadOnly = true;
+        this.publish({
+          composerEnabled: false,
+          error: { code: "SESSION_SELECTION_FAILED", message: archiveErrorMessage(error) },
+        });
+      }
     }
   }
 
@@ -1321,7 +1414,13 @@ export class WebSessionManager {
   private async applySelectedSession(
     session: ClientAgentSession,
     runs: readonly ClientAgentRun[],
+    generation: number,
   ): Promise<boolean> {
+    const [history, turnPresentation] = await Promise.all([
+      this.loadSessionTranscript(session.id),
+      this.loadSessionTurnPresentation(session.id),
+    ]);
+    if (this.disposed || generation !== this.selectionGeneration) return false;
     const activeRuns = nonTerminalRuns(runs);
     const contextUsageRun = selectContextUsageRun(runs, activeRuns);
     this.clearApprovals();
@@ -1330,8 +1429,8 @@ export class WebSessionManager {
       selectedSession: session,
       selectedSessionId: session.id,
       runs,
-      history: await this.loadSessionTranscript(session.id),
-      turnPresentation: await this.loadSessionTurnPresentation(session.id),
+      history,
+      turnPresentation,
       activeRuns,
       activeRun: activeRuns.length === 1 ? activeRuns[0] : undefined,
       selectedPreset:
@@ -2125,6 +2224,11 @@ export class WebSessionManager {
   private publish(patch: WebSessionSnapshotPatch, mode: "IMMEDIATE" | "FRAME" = "IMMEDIATE"): void {
     if (this.disposed) return;
     this.snapshot = { ...this.snapshot, ...patch } as WebSessionSnapshot;
+    this.snapshot = {
+      ...this.snapshot,
+      archiveReadOnly: this.archiveReadOnly,
+      ...(this.archiveReadOnly ? { composerEnabled: false } : {}),
+    };
     if (mode === "FRAME") {
       this.scheduleFramePublication();
       return;
@@ -2427,6 +2531,14 @@ function submissionError(
       ENVIRONMENT_CREDENTIAL_READ_ONLY: "模型凭据由运行环境提供，不能在应用内修改。",
       NO_MODEL_SELECTED: "尚未选择可用模型，请先选择模型后重试。",
       ACTIVE_RUN_CONFLICT: "当前工作区仍有运行中的任务，请等待任务结束后重试。",
+      OBJECT_ARCHIVED: archiveErrorMessage({ code: "OBJECT_ARCHIVED" }),
+      WORKSPACE_ARCHIVED: archiveErrorMessage({ code: "WORKSPACE_ARCHIVED" }),
+      PARENT_WORKSPACE_ARCHIVED: archiveErrorMessage({ code: "PARENT_WORKSPACE_ARCHIVED" }),
+      WORKSPACE_UNAVAILABLE: archiveErrorMessage({ code: "WORKSPACE_UNAVAILABLE" }),
+      ARCHIVE_LIST_CHANGED: archiveErrorMessage({ code: "ARCHIVE_LIST_CHANGED" }),
+      ARCHIVE_SELECTION_CHANGED: archiveErrorMessage({ code: "ARCHIVE_SELECTION_CHANGED" }),
+      ARCHIVE_CONFIRMATION_EXPIRED: archiveErrorMessage({ code: "ARCHIVE_CONFIRMATION_EXPIRED" }),
+      DATA_OWNERSHIP_CONFLICT: archiveErrorMessage({ code: "DATA_OWNERSHIP_CONFLICT" }),
       STORAGE_ERROR: "本地存储发生错误，操作未完成。",
       INTERNAL_ERROR: "Agent 服务内部错误，操作未完成。",
     };
