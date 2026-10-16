@@ -90,33 +90,37 @@ export function ArchivePage(props: {
     },
   };
   return (
-    <main className="archive-page">
-      {state.history ? (
-        <>
-          <ArchiveHistory
-            title={state.history.title}
-            entries={state.history.items}
-            loading={state.history.loading}
-            hasMore={state.history.nextCursor !== undefined}
-            onLoadMore={() => {
-              void manager?.loadMoreHistory();
-            }}
-            onBack={() => manager?.closeHistory()}
-          />
-          {state.history.error && (
-            <p role="alert" className="archive-error">
-              {state.history.error.message}
-            </p>
+    <>
+      <main className="archive-page">
+        <div className="archive-page-content">
+          {state.history ? (
+            <>
+              <ArchiveHistory
+                title={state.history.title}
+                entries={state.history.items}
+                loading={state.history.loading}
+                hasMore={state.history.nextCursor !== undefined}
+                onLoadMore={() => {
+                  void manager?.loadMoreHistory();
+                }}
+                onBack={() => manager?.closeHistory()}
+              />
+              {state.history.error && (
+                <p role="alert" className="archive-error">
+                  {state.history.error.message}
+                </p>
+              )}
+            </>
+          ) : (
+            <ArchivePageView
+              state={state}
+              actions={actions}
+              onClose={props.onClose}
+              workspaceOptions={manager?.getWorkspaceOptions()}
+            />
           )}
-        </>
-      ) : (
-        <ArchivePageView
-          state={state}
-          actions={actions}
-          onClose={props.onClose}
-          workspaceOptions={manager?.getWorkspaceOptions()}
-        />
-      )}
+        </div>
+      </main>
       {state.deletion && (
         <ArchiveDeleteDialog
           selection={state.deletion.selection}
@@ -132,7 +136,7 @@ export function ArchivePage(props: {
           }}
         />
       )}
-    </main>
+    </>
   );
 }
 type ArchivePageActions = {

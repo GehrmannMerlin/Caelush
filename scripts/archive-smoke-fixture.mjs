@@ -258,6 +258,52 @@ export async function exerciseArchivePage(page, artifacts, native = false, nativ
   await expect(page.getByRole("heading", { name: "已归档", exact: true })).toBeVisible();
   const search = page.getByRole("searchbox", { name: "搜索已归档会话" });
   await expect(search).toBeVisible();
+  const archivePage = page.locator(".archive-page");
+  const scrollLayout = await archivePage.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const contentBounds = element.querySelector(".archive-page-content").getBoundingClientRect();
+    const before = element.scrollTop;
+    element.scrollTop = element.scrollHeight;
+    return {
+      left: bounds.left,
+      right: bounds.right,
+      viewportWidth: globalThis.innerWidth,
+      contentLeft: contentBounds.left,
+      contentRight: contentBounds.right,
+      contentCenter: (contentBounds.left + contentBounds.right) / 2,
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      scrollTop: element.scrollTop,
+      windowScrollY: globalThis.scrollY,
+      overflowY: globalThis.getComputedStyle(element).overflowY,
+      before,
+    };
+  });
+  assert.ok(
+    scrollLayout.left <= 1 && scrollLayout.right >= scrollLayout.viewportWidth - 1,
+    "Archive page scroll region must span the viewport so its scrollbar stays at the far right",
+  );
+  assert.ok(
+    scrollLayout.contentRight - scrollLayout.contentLeft <= 945 &&
+      scrollLayout.contentLeft >= 0 &&
+      scrollLayout.contentRight <= scrollLayout.viewportWidth &&
+      Math.abs(scrollLayout.contentCenter - scrollLayout.viewportWidth / 2) <= 16,
+    "Archive content must remain centered within its 944px maximum width",
+  );
+  assert.equal(scrollLayout.overflowY, "auto", "Archive page owns vertical scrolling");
+  assert.ok(
+    scrollLayout.scrollHeight > scrollLayout.clientHeight && scrollLayout.scrollTop > 0,
+    "Archive page must scroll through the full session list",
+  );
+  assert.equal(
+    scrollLayout.windowScrollY,
+    0,
+    "The document itself must not become a scroll region",
+  );
+  await expect(page.getByRole("button", { name: "加载更多", exact: true })).toBeInViewport();
+  await archivePage.evaluate((element) => {
+    element.scrollTop = 0;
+  });
   await search.fill("独立归档 · 公开历史");
   await expect(page.locator(".archive-row")).toHaveCount(1);
   const row = page.locator(".archive-row");
@@ -280,12 +326,12 @@ export async function exerciseArchivePage(page, artifacts, native = false, nativ
   await expect(dialog).toHaveCount(0);
   await expect(page.getByText("没有找到匹配结果", { exact: true })).toBeVisible();
   await search.fill("%_");
-  await expect(page.getByRole("button", { name: "删除筛选结果 · 105", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "删除筛选结果", exact: true })).toBeEnabled();
   await expect(page.locator(".archive-row")).toHaveCount(50);
   await page.getByRole("button", { name: "加载更多", exact: true }).click();
   await expect(page.locator(".archive-row")).toHaveCount(100);
   await screenshot("filtered-pagination.png");
-  await page.getByRole("button", { name: "删除筛选结果 · 105", exact: true }).click();
+  await page.getByRole("button", { name: "删除筛选结果", exact: true }).click();
   await expect(dialog.getByText(/105 个会话/)).toBeVisible();
   await dialog.getByRole("button", { name: "彻底删除", exact: true }).click();
   await expect(dialog).toHaveCount(0);
@@ -297,7 +343,7 @@ export async function exerciseArchivePage(page, artifacts, native = false, nativ
     .filter({ hasText: "随工作区归档 · 先恢复父级" })
     .getByRole("button", { name: "先恢复工作区" })
     .click();
-  await expect(page.getByRole("tab", { name: /工作区 ·/ })).toHaveAttribute(
+  await expect(page.getByRole("tab", { name: "工作区", exact: true })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -313,7 +359,7 @@ export async function exerciseArchivePage(page, artifacts, native = false, nativ
   await dialog.getByRole("button", { name: "彻底删除", exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.locator(".archive-workspace-row")).toHaveCount(0);
-  await page.getByRole("tab", { name: /会话 ·/ }).click();
+  await page.getByRole("tab", { name: "会话", exact: true }).click();
   await expect(page.locator(".archive-row")).toHaveCount(1);
   await expect(
     page.getByRole("button", { name: "子会话独立归档 · 恢复父级后仍保留", exact: true }),

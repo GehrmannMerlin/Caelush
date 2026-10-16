@@ -322,9 +322,13 @@ export function WebHostApp(props: {
       return createElement(
         "main",
         { className: "archive-page" },
-        createElement("h1", null, "已归档"),
-        createElement("p", { role: "alert" }, "当前本地服务不支持归档管理，请更新后重试。"),
-        createElement("button", { onClick: () => setArchivesOpen(false) }, "返回工作台"),
+        createElement(
+          "div",
+          { className: "archive-page-content" },
+          createElement("h1", null, "已归档"),
+          createElement("p", { role: "alert" }, "当前本地服务不支持归档管理，请更新后重试。"),
+          createElement("button", { onClick: () => setArchivesOpen(false) }, "返回工作台"),
+        ),
       );
     return createElement(
       Suspense,

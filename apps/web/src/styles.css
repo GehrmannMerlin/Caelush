@@ -8141,14 +8141,23 @@ body {
   --archive-line: var(--web-line, #e6ebf2);
   --archive-accent: var(--web-blue-600, #2563eb);
   --archive-danger: var(--web-danger, #c43e4c);
-  width: min(100%, 944px);
-  min-height: 100%;
-  margin: 0 auto;
-  padding: 40px 32px 64px;
+  width: 100%;
+  height: 100dvh;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
   color: var(--archive-text);
   background: #fff;
   font-size: 14px;
   line-height: 1.5;
+}
+.archive-page-content {
+  width: min(100%, 944px);
+  min-height: 100%;
+  margin-inline: auto;
+  padding: 40px 32px 64px;
 }
 .archive-page button,
 .archive-page input,
@@ -8621,7 +8630,7 @@ body {
   font-size: 13px;
 }
 @media (max-width: 600px) {
-  .archive-page {
+  .archive-page-content {
     padding: 28px 20px 48px;
   }
   .archive-heading {
