@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
+import { isTerminalRunStatus } from "@caelush/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
 import { SecurityCapabilityService } from "../src/services/security-capability-service.js";
@@ -19,14 +20,26 @@ afterEach(async () => {
 
 async function createApp() {
   root = await mkdtemp(join(tmpdir(), "caelush-workspace-session-"));
-  storage = await openCaelushStorage({ path: join(root, "caelush.db") });
+  storage = await openCaelushStorage({
+    path: join(root, "caelush.db"),
+    archivePolicy: { isTerminalRunStatus },
+  });
   const workspaceService = new WorkspaceService({
+    archives: storage.archives,
     repository: storage.workspaces,
     sessions: storage.sessions,
     runs: storage.runs,
     now: () => 100,
   });
   const app = buildDaemonApp({
+    archives: storage.archives,
+    contextBudgetPolicyResolver: {
+      resolve: async () => ({
+        version: "ADAPTIVE_V1",
+        outputReserveTokens: 16384,
+        safetyReserveTokens: 4096,
+      }),
+    },
     sessions: storage.sessions,
     runs: storage.runs,
     workspaces: storage.workspaces,

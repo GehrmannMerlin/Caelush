@@ -1,3 +1,4 @@
+import { assertArchiveWritableInTransaction } from "./archive/archive-write-guard.js";
 import {
   RunExecutionConflictError,
   RunExecutionInvariantError,
@@ -305,6 +306,11 @@ function assertNormalCompletionCommit(command: RunExecutionCommitView) {
 }
 
 function writeRun(client: CaelushDatabase["client"], run: RunExecutionCommitView["run"]): void {
+  assertArchiveWritableInTransaction({ client }, { type: "SESSION", sessionId: run.sessionId });
+  assertArchiveWritableInTransaction(
+    { client },
+    { type: "WORKSPACE", workspaceId: run.workspace.id },
+  );
   const stored = client.prepare("SELECT data_json FROM agent_runs WHERE id = ?").get(run.id) as
     { data_json: string } | undefined;
   if (stored === undefined) throw new StorageError(`AgentRun ${run.id} was not found`);
@@ -419,6 +425,10 @@ export class SqliteRunExecutionStore
     const client = this.database.client;
     client.exec("BEGIN IMMEDIATE");
     try {
+      assertArchiveWritableInTransaction(this.database, {
+        type: "SESSION",
+        sessionId: command.sessionId,
+      });
       const runRow = client
         .prepare("SELECT id, session_id, status FROM agent_runs WHERE id = ?")
         .get(command.runId) as

@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
+import { isTerminalRunStatus } from "@caelush/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
 import { WorkspaceService } from "../src/workspaces/workspace-service.js";
@@ -18,12 +19,20 @@ afterEach(async () => {
 
 async function createApp(picker?: { pick: () => Promise<unknown> }) {
   root = await mkdtemp(join(tmpdir(), "caelush-workspace-api-"));
-  storage = await openCaelushStorage({ path: join(root, "caelush.db") });
+  storage = await openCaelushStorage({
+    path: join(root, "caelush.db"),
+    archivePolicy: { isTerminalRunStatus },
+  });
   return buildDaemonApp({
     sessions: storage.sessions,
     runs: storage.runs,
     workspaces: storage.workspaces,
-    workspaceService: new WorkspaceService({ repository: storage.workspaces, now: () => 100 }),
+    archives: storage.archives,
+    workspaceService: new WorkspaceService({
+      repository: storage.workspaces,
+      archives: storage.archives,
+      now: () => 100,
+    }),
     eventHub: { watch: async function* () {} } as never,
     config: { host: "127.0.0.1", port: 43120, sseHeartbeatIntervalMs: 15_000 },
     ...(picker === undefined ? {} : { workspacePicker: picker as never }),
@@ -70,8 +79,13 @@ describe("Workspace API", () => {
     expect(
       await app.inject({ method: "GET", url: `/api/v1/workspaces/${id}`, headers }),
     ).toMatchObject({
-      statusCode: 404,
+      statusCode: 200,
     });
+    expect(
+      (await storage!.archives.listWorkspaces({ limit: 50 })).items.map(
+        (item) => item.workspace.id,
+      ),
+    ).toEqual([id]);
 
     await app.close();
   });

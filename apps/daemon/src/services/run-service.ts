@@ -23,7 +23,13 @@ import {
   type RunEventNotifierPort,
 } from "@caelush/agent";
 import { expandPermissionPreset } from "@caelush/security";
-import { StorageNotFoundError, type RunRepository, type SessionRepository } from "@caelush/storage";
+import {
+  StorageNotFoundError,
+  type ArchiveStore,
+  type RunRepository,
+  type SessionRepository,
+} from "@caelush/storage";
+import { requireUnarchivedTarget } from "./archive-access.js";
 import type {
   PermissionPresetSelection,
   WorkspaceSecurityCapabilitiesResponse,
@@ -56,6 +62,7 @@ export interface RunContextBudgetPolicyResolver {
 }
 
 export interface RunServiceOptions {
+  readonly archives?: ArchiveStore;
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
   readonly now?: () => number;
@@ -97,6 +104,7 @@ export class RunService {
   }
 
   async createRun(sessionId: SessionId, input: CreateRunRequest): Promise<AgentRun> {
+    await requireUnarchivedTarget(this.options.archives, { type: "SESSION", sessionId });
     const session = await this.requireSession(sessionId);
     const resourcePolicy = normalizeCreateRunResourcePolicy(input);
     const modelSelection: ClientModelSelection | undefined =

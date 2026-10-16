@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   StorageConflictError,
+  StorageArchiveConflictError,
   StorageDecodeError,
   StorageError,
   StorageNotFoundError,
@@ -89,6 +90,13 @@ function isEventCursorValidationError(error: unknown): boolean {
 }
 
 function mapError(error: unknown): MappedError {
+  if (error instanceof StorageArchiveConflictError) {
+    return {
+      statusCode: error.code === "INVALID_REQUEST" ? 400 : 409,
+      code: error.code,
+      message: error.message,
+    };
+  }
   if (error instanceof WorkspacePathError) {
     return {
       statusCode: 400,

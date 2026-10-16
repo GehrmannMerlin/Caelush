@@ -6,7 +6,12 @@ import {
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
 import type { DaemonInfo } from "@caelush/protocol";
-import type { SessionRepository, RunRepository, WorkspaceRepository } from "@caelush/storage";
+import type {
+  ArchiveStore,
+  SessionRepository,
+  RunRepository,
+  WorkspaceRepository,
+} from "@caelush/storage";
 import type { DaemonConfig } from "./config.js";
 import type { DaemonModelCanonicalizer } from "./providers/model-canonicalizer.js";
 import { registerErrorHandling } from "./transport/error-handler.js";
@@ -39,6 +44,7 @@ import type { SecurityCapabilityService } from "./services/security-capability-s
 import { registerSecurityRoutes } from "./routes/security.js";
 
 export interface DaemonDependencies {
+  readonly archives?: ArchiveStore;
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
   readonly workspaces?: WorkspaceRepository;
@@ -83,6 +89,7 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   }
   if (dependencies.workspaceService !== undefined) {
     registerWorkspaceRoutes(app, dependencies.workspaceService, {
+      ...(dependencies.archives === undefined ? {} : { archives: dependencies.archives }),
       sessions: dependencies.sessions,
       runs: dependencies.runs,
       ...(dependencies.workspacePicker === undefined
@@ -91,6 +98,7 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
     });
   }
   const sessionService = new SessionService({
+    ...(dependencies.archives === undefined ? {} : { archives: dependencies.archives }),
     repository: dependencies.sessions,
     ...(dependencies.modelCanonicalizer === undefined
       ? {}
@@ -114,6 +122,7 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   registerRunRoutes(
     app,
     new RunService({
+      ...(dependencies.archives === undefined ? {} : { archives: dependencies.archives }),
       sessions: dependencies.sessions,
       runs: dependencies.runs,
       ...(dependencies.modelCanonicalizer === undefined

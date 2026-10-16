@@ -25,10 +25,10 @@ import {
   archivedSessionItems,
   archivedWorkspaceItems,
   archiveState,
-  archiveTransaction,
   readArchiveCatalog,
   type ArchiveCatalog,
 } from "./archive-query.js";
+import { archiveTransaction } from "./archive-transaction.js";
 
 export interface ArchivePolicy {
   readonly isTerminalRunStatus: (status: RunStatus) => boolean;

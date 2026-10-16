@@ -11,7 +11,7 @@ import {
   type WorkspaceListQuery,
 } from "@caelush/protocol";
 import type { FastifyInstance } from "fastify";
-import type { RunRepository, SessionRepository } from "@caelush/storage";
+import type { ArchiveStore, RunRepository, SessionRepository } from "@caelush/storage";
 import { WorkspaceService } from "../workspaces/workspace-service.js";
 import type { WorkspaceDirectoryPicker } from "../workspaces/workspace-picker.js";
 import { WorkspaceSessionService } from "../services/workspace-session-service.js";
@@ -20,6 +20,7 @@ export function registerWorkspaceRoutes(
   app: FastifyInstance,
   service: WorkspaceService,
   dependencies: {
+    readonly archives?: ArchiveStore;
     readonly sessions?: SessionRepository;
     readonly runs?: RunRepository;
     readonly workspacePicker?: WorkspaceDirectoryPicker;
@@ -87,6 +88,7 @@ export function registerWorkspaceRoutes(
 
   if (dependencies.sessions !== undefined && dependencies.runs !== undefined) {
     const sessionService = new WorkspaceSessionService({
+      ...(dependencies.archives === undefined ? {} : { archives: dependencies.archives }),
       sessions: dependencies.sessions,
       runs: dependencies.runs,
       workspaceService: service,

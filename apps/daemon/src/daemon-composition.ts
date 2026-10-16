@@ -1188,6 +1188,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     // would leave completed Runs with permanently pending work.
   });
   const supervisor = new RunExecutionSupervisor({
+    archives: options.storage.archives,
     runs: options.storage.runs,
     controller,
     approvals: options.storage.approvals,

@@ -7,7 +7,8 @@ import {
   type ModelRef,
   type SessionId,
 } from "@caelush/protocol";
-import type { SessionRepository } from "@caelush/storage";
+import type { ArchiveStore, SessionRepository } from "@caelush/storage";
+import { requireUnarchivedTarget } from "./archive-access.js";
 import { StorageNotFoundError } from "@caelush/storage";
 import type { DaemonModelCanonicalizer } from "../providers/model-canonicalizer.js";
 import { canonicalizeWorkspacePath } from "../workspaces/workspace-identity.js";
@@ -16,6 +17,7 @@ import type { WorkspaceService } from "../workspaces/workspace-service.js";
 import { ModelSelectionError } from "../providers/model-directory.js";
 
 export interface SessionServiceOptions {
+  readonly archives?: ArchiveStore;
   readonly repository: SessionRepository;
   readonly now?: () => number;
   readonly createId?: typeof createSessionId;
@@ -69,6 +71,8 @@ export class SessionService {
         throw new WorkspaceOwnershipError();
       }
     }
+    if (workspaceId !== undefined)
+      await requireUnarchivedTarget(this.options.archives, { type: "WORKSPACE", workspaceId });
     let defaultModel = input.defaultModel;
     let defaultReasoningLevel = input.defaultReasoningLevel;
     if (defaultModel === undefined && defaultReasoningLevel !== undefined) {
@@ -110,6 +114,8 @@ export class SessionService {
   }
 
   async listSessions(limit: number): Promise<AgentSession[]> {
-    return this.options.repository.list({ limit });
+    return this.options.archives === undefined
+      ? this.options.repository.list({ limit })
+      : this.options.archives.listActiveSessions({ limit });
   }
 }

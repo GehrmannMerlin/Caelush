@@ -7,6 +7,10 @@ import {
   type SessionId,
 } from "@caelush/protocol";
 import type { CaelushDatabase } from "../database.js";
+import {
+  assertArchiveWritableInTransaction,
+  withArchiveWriteTransaction,
+} from "../archive/archive-write-guard.js";
 import { decodeProtocol, encodeProtocol } from "../codec.js";
 import {
   StorageConflictError,
@@ -136,6 +140,20 @@ export class SqliteRunRepository implements RunRepository {
   constructor(private readonly database: CaelushDatabase) {}
 
   async insert(run: AgentRun): Promise<void> {
+    withArchiveWriteTransaction(this.database, () => {
+      assertArchiveWritableInTransaction(this.database, {
+        type: "SESSION",
+        sessionId: run.sessionId,
+      });
+      assertArchiveWritableInTransaction(this.database, {
+        type: "WORKSPACE",
+        workspaceId: run.workspace.id,
+      });
+      this.insertInTransaction(run);
+    });
+  }
+
+  private insertInTransaction(run: AgentRun): void {
     const currentRun = CurrentAgentRunSchema.parse(run);
     const dataJson = encodeProtocol(CurrentAgentRunSchema, currentRun, {
       entityType: "AgentRun",
@@ -182,6 +200,14 @@ export class SqliteRunRepository implements RunRepository {
     const client = this.database.client;
     client.exec("BEGIN IMMEDIATE");
     try {
+      assertArchiveWritableInTransaction(this.database, {
+        type: "SESSION",
+        sessionId: run.sessionId,
+      });
+      assertArchiveWritableInTransaction(this.database, {
+        type: "WORKSPACE",
+        workspaceId: run.workspace.id,
+      });
       client
         .prepare(
           `INSERT INTO agent_runs
@@ -231,6 +257,10 @@ export class SqliteRunRepository implements RunRepository {
   }
 
   async update(run: AgentRun): Promise<void> {
+    withArchiveWriteTransaction(this.database, () => this.updateInTransaction(run));
+  }
+
+  private updateInTransaction(run: AgentRun): void {
     const stored = this.database.client
       .prepare("SELECT data_json FROM agent_runs WHERE id = ?")
       .get(run.id) as { data_json: string } | undefined;
@@ -239,6 +269,18 @@ export class SqliteRunRepository implements RunRepository {
       entityType: "AgentRun",
       entityId: run.id,
       table: "agent_runs",
+    });
+    assertArchiveWritableInTransaction(this.database, {
+      type: "SESSION",
+      sessionId: previous.sessionId,
+    });
+    assertArchiveWritableInTransaction(this.database, {
+      type: "SESSION",
+      sessionId: run.sessionId,
+    });
+    assertArchiveWritableInTransaction(this.database, {
+      type: "WORKSPACE",
+      workspaceId: run.workspace.id,
     });
     const schema =
       previous.contextBudgetPolicy === undefined ? AgentRunSchema : CurrentAgentRunSchema;

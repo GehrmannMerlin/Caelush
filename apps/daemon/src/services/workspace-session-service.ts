@@ -5,11 +5,12 @@ import type {
   WorkspaceSessionSummary,
 } from "@caelush/protocol";
 import { TimestampMsSchema } from "@caelush/protocol";
-import type { RunRepository, SessionRepository } from "@caelush/storage";
+import type { ArchiveStore, RunRepository, SessionRepository } from "@caelush/storage";
 import { toClientAgentRun, toClientAgentSession } from "./public-projection.js";
 import type { WorkspaceService } from "../workspaces/workspace-service.js";
 
 export interface WorkspaceSessionServiceOptions {
+  readonly archives?: ArchiveStore;
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
   readonly workspaceService: WorkspaceService;
@@ -20,7 +21,10 @@ export class WorkspaceSessionService {
 
   async listSessions(workspaceId: WorkspaceId, limit: number): Promise<WorkspaceSessionSummary[]> {
     await this.options.workspaceService.requireWorkspace(workspaceId);
-    const sessions = await this.options.sessions.listByWorkspace(workspaceId);
+    const sessions =
+      this.options.archives === undefined
+        ? await this.options.sessions.listByWorkspace(workspaceId)
+        : await this.options.archives.listActiveSessions({ workspaceId });
     const summaries = await Promise.all(sessions.map((session) => this.toSummary(session)));
     summaries.sort((left, right) => {
       if (right.lastActivityAt !== left.lastActivityAt) {
@@ -34,7 +38,10 @@ export class WorkspaceSessionService {
   private async toSummary(session: AgentSession): Promise<WorkspaceSessionSummary> {
     const runs = await this.options.runs.listBySession(session.id);
     const latestRun = latestByActivity(runs);
-    const lastActivityAt = Math.max(session.updatedAt, latestRun === undefined ? 0 : runActivityAt(latestRun));
+    const lastActivityAt = Math.max(
+      session.updatedAt,
+      latestRun === undefined ? 0 : runActivityAt(latestRun),
+    );
     return {
       session: toClientAgentSession(session),
       lastActivityAt: TimestampMsSchema.parse(lastActivityAt),

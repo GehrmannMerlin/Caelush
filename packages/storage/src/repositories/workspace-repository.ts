@@ -1,6 +1,10 @@
 import { WorkspaceRecordSchema, type WorkspaceId, type WorkspaceRecord } from "@caelush/protocol";
 import type { CaelushDatabase } from "../database.js";
 import {
+  assertArchiveWritableInTransaction,
+  withArchiveWriteTransaction,
+} from "../archive/archive-write-guard.js";
+import {
   StorageConflictError,
   StorageDecodeError,
   StorageError,
@@ -114,10 +118,13 @@ export class SqliteWorkspaceRepository implements WorkspaceRepository {
   }
 
   async touch(id: WorkspaceId, timestamp: number): Promise<WorkspaceRecord> {
-    const result = this.database.client
-      .prepare(`UPDATE workspaces SET updated_at_ms = ?, last_opened_at_ms = ? WHERE id = ?`)
-      .run(timestamp, timestamp, id);
-    if (result.changes === 0) throw new StorageNotFoundError("Workspace", id);
+    withArchiveWriteTransaction(this.database, () => {
+      assertArchiveWritableInTransaction(this.database, { type: "WORKSPACE", workspaceId: id });
+      const result = this.database.client
+        .prepare(`UPDATE workspaces SET updated_at_ms = ?, last_opened_at_ms = ? WHERE id = ?`)
+        .run(timestamp, timestamp, id);
+      if (result.changes === 0) throw new StorageNotFoundError("Workspace", id);
+    });
     const workspace = await this.getById(id);
     if (workspace === null) throw new StorageNotFoundError("Workspace", id);
     return workspace;

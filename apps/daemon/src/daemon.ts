@@ -1,4 +1,5 @@
 import { dirname, join } from "node:path";
+import { isTerminalRunStatus } from "@caelush/core";
 import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
 import type { ContextContributionRegistration } from "@caelush/agent";
 import type {
@@ -358,6 +359,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
    */
   const storage = await openCaelushStorage({
     path: options.databasePath,
+    archivePolicy: { isTerminalRunStatus },
     replayProtection: createReplayProtection(
       createHostReplayKeyProvider({
         keyFile: join(dirname(options.databasePath), "private-replay-keys", "master.v1.json"),
@@ -372,6 +374,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     }),
   });
   const workspaceService = new WorkspaceService({
+    archives: storage.archives,
     repository: storage.workspaces,
     sessions: storage.sessions,
     runs: storage.runs,
@@ -503,6 +506,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   }
   const activeStreams = new Set<AbortController>();
   const aiConfiguration = new AIConfigurationService({
+    archives: storage.archives,
     presets: composition.providerPresets,
     compatibilityProviderIds: new Set(options.providerBindings?.map((binding) => binding.id)),
     credentials: composition.credentialAuthority,
@@ -526,6 +530,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       throw new Error("Production daemon composition did not create a RunEventHub.");
     }
     app = buildDaemonApp({
+      archives: storage.archives,
       sessions: storage.sessions,
       runs: storage.runs,
       workspaces: storage.workspaces,

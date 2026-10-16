@@ -1,6 +1,7 @@
 import {
   WorkspaceIdSchema,
   WorkspaceRecordSchema,
+  createTimestampMs,
   type CreateWorkspaceRequest,
   type WorkspaceId,
   type WorkspaceRecord,
@@ -8,6 +9,8 @@ import {
 } from "@caelush/protocol";
 import {
   StorageNotFoundError,
+  StorageError,
+  type ArchiveStore,
   type RunRepository,
   type SessionRepository,
   type WorkspaceRepository,
@@ -17,11 +20,12 @@ import {
   createStableWorkspaceId,
   displayNameForWorkspacePath,
 } from "./workspace-identity.js";
-import { ActiveRunConflictError } from "./workspace-errors.js";
+import { requireUnarchivedTarget } from "../services/archive-access.js";
 
 export { WorkspacePathError } from "./workspace-identity.js";
 
 export interface WorkspaceServiceOptions {
+  readonly archives?: ArchiveStore;
   readonly repository: WorkspaceRepository;
   readonly sessions?: SessionRepository;
   readonly runs?: RunRepository;
@@ -44,6 +48,10 @@ export class WorkspaceService {
     const canonicalPath = canonicalizeWorkspacePath(input.path);
     const existing = await this.options.repository.getByCanonicalPath(canonicalPath);
     if (existing !== null) {
+      await requireUnarchivedTarget(this.options.archives, {
+        type: "WORKSPACE",
+        workspaceId: existing.id,
+      });
       return {
         workspace: await this.options.repository.touch(existing.id, this.now()),
         created: false,
@@ -91,36 +99,23 @@ export class WorkspaceService {
   }
 
   async listWorkspaces(limit?: number): Promise<WorkspaceRecord[]> {
-    return this.options.repository.list(limit);
+    return this.options.archives === undefined
+      ? this.options.repository.list(limit)
+      : this.options.archives.listActiveWorkspaces(limit);
   }
 
   async removeWorkspace(id: WorkspaceId): Promise<void> {
     const workspaceId = WorkspaceIdSchema.parse(id);
-    if (this.options.sessions !== undefined && this.options.runs !== undefined) {
-      const sessions = await this.options.sessions.listByWorkspace(workspaceId);
-      for (const session of sessions) {
-        const runs = await this.options.runs.listBySession(session.id);
-        if (runs.some((run) => !isTerminalRunStatus(run.status))) {
-          throw new ActiveRunConflictError();
-        }
-      }
-    }
-    await this.options.repository.remove(workspaceId);
+    if (this.options.archives === undefined)
+      throw new StorageError("Durable archive management is unavailable.");
+    await this.options.archives.archive(
+      { type: "WORKSPACE", workspaceId },
+      createTimestampMs(this.now()),
+    );
   }
 
   toWorkspaceRef(workspace: WorkspaceRecord): WorkspaceRef {
     const parsed = WorkspaceRecordSchema.parse(workspace);
     return { id: parsed.id, path: parsed.canonicalPath };
   }
-}
-
-function isTerminalRunStatus(status: string): boolean {
-  return [
-    "COMPLETED",
-    "FAILED",
-    "CANCELLED",
-    "TIMEOUT",
-    "MAX_STEPS_REACHED",
-    "BUDGET_EXCEEDED",
-  ].includes(status);
 }

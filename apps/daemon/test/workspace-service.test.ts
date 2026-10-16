@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
+import { isTerminalRunStatus } from "@caelush/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { WorkspacePathError, WorkspaceService } from "../src/workspaces/workspace-service.js";
 
@@ -17,8 +18,15 @@ afterEach(async () => {
 
 async function createService(): Promise<WorkspaceService> {
   root = await mkdtemp(join(tmpdir(), "caelush-workspace-service-"));
-  storage = await openCaelushStorage({ path: join(root, "caelush.db") });
-  return new WorkspaceService({ repository: storage.workspaces, now: () => 100 });
+  storage = await openCaelushStorage({
+    path: join(root, "caelush.db"),
+    archivePolicy: { isTerminalRunStatus },
+  });
+  return new WorkspaceService({
+    repository: storage.workspaces,
+    archives: storage.archives,
+    now: () => 100,
+  });
 }
 
 describe("WorkspaceService", () => {
@@ -34,7 +42,7 @@ describe("WorkspaceService", () => {
     expect((await service.listWorkspaces()).map((item) => item.id)).toEqual([first.workspace.id]);
   });
 
-  it.each(["missing", "file"]) (
+  it.each(["missing", "file"])(
     "rejects a %s path before creating a Registry record",
     async (kind) => {
       const service = await createService();
@@ -56,7 +64,7 @@ describe("WorkspaceService", () => {
     );
   });
 
-  it("forgets a Workspace without deleting its directory", async () => {
+  it("archives a Workspace without deleting its directory or registry", async () => {
     const service = await createService();
     const project = await mkdtemp(join(root!, "project-"));
     await mkdir(join(project, "src"));
@@ -64,7 +72,14 @@ describe("WorkspaceService", () => {
 
     await service.removeWorkspace(workspace.workspace.id);
 
-    expect(await service.getWorkspace(workspace.workspace.id)).toBeNull();
-    await expect(import("node:fs/promises").then(({ access }) => access(join(project, "src")))).resolves.toBeUndefined();
+    expect(await service.getWorkspace(workspace.workspace.id)).toEqual(workspace.workspace);
+    expect(await service.listWorkspaces()).toEqual([]);
+    expect(
+      (await storage!.archives.getState({ type: "WORKSPACE", workspaceId: workspace.workspace.id }))
+        .archived,
+    ).toBe(true);
+    await expect(
+      import("node:fs/promises").then(({ access }) => access(join(project, "src"))),
+    ).resolves.toBeUndefined();
   });
 });

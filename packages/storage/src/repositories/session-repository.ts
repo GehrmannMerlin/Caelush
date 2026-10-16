@@ -5,6 +5,10 @@ import {
   type WorkspaceId,
 } from "@caelush/protocol";
 import type { CaelushDatabase } from "../database.js";
+import {
+  assertArchiveWritableInTransaction,
+  withArchiveWriteTransaction,
+} from "../archive/archive-write-guard.js";
 import { decodeProtocol, encodeProtocol } from "../codec.js";
 import {
   StorageConflictError,
@@ -67,6 +71,15 @@ export class SqliteSessionRepository implements SessionRepository {
   constructor(private readonly database: CaelushDatabase) {}
 
   async insert(session: AgentSession): Promise<void> {
+    withArchiveWriteTransaction(this.database, () => {
+      const workspaceId = session.workspaceId ?? session.defaultWorkspace?.id;
+      if (workspaceId !== undefined)
+        assertArchiveWritableInTransaction(this.database, { type: "WORKSPACE", workspaceId });
+      this.insertInTransaction(session);
+    });
+  }
+
+  private insertInTransaction(session: AgentSession): void {
     const dataJson = encodeProtocol(AgentSessionSchema, session, {
       entityType: "AgentSession",
       entityId: session.id,
@@ -105,6 +118,16 @@ export class SqliteSessionRepository implements SessionRepository {
   }
 
   async update(session: AgentSession): Promise<void> {
+    withArchiveWriteTransaction(this.database, () => {
+      assertArchiveWritableInTransaction(this.database, { type: "SESSION", sessionId: session.id });
+      const workspaceId = session.workspaceId ?? session.defaultWorkspace?.id;
+      if (workspaceId !== undefined)
+        assertArchiveWritableInTransaction(this.database, { type: "WORKSPACE", workspaceId });
+      this.updateInTransaction(session);
+    });
+  }
+
+  private updateInTransaction(session: AgentSession): void {
     const dataJson = encodeProtocol(AgentSessionSchema, session, {
       entityType: "AgentSession",
       entityId: session.id,

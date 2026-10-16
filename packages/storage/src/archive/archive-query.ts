@@ -29,22 +29,6 @@ export interface ArchiveCatalog {
   readonly revision: number;
 }
 
-export function archiveTransaction<T>(
-  database: CaelushDatabase,
-  write: boolean,
-  operation: () => T,
-): T {
-  database.client.exec(write ? "BEGIN IMMEDIATE" : "BEGIN");
-  try {
-    const result = operation();
-    database.client.exec("COMMIT");
-    return result;
-  } catch (error) {
-    database.client.exec("ROLLBACK");
-    throw error;
-  }
-}
-
 export function readArchiveCatalog(database: CaelushDatabase): ArchiveCatalog {
   const sessions = (
     database.client

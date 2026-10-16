@@ -16,6 +16,7 @@ import {
   StorageNotFoundError,
   type AISelectionRepository,
   type SessionRepository,
+  type ArchiveStore,
 } from "@caelush/storage";
 import type { DaemonModelCanonicalizer } from "../providers/model-canonicalizer.js";
 import {
@@ -28,8 +29,10 @@ import {
   RuntimeModelDirectoryService,
 } from "../providers/model-directory.js";
 import type { ProviderPresetRegistry } from "../providers/provider-presets.js";
+import { requireUnarchivedTarget } from "./archive-access.js";
 
 export interface AIConfigurationServiceOptions {
+  readonly archives?: ArchiveStore;
   readonly presets: ProviderPresetRegistry;
   /** Existing native host bindings remain outside the Runtime Preset control plane. */
   readonly compatibilityProviderIds?: ReadonlySet<string>;
@@ -177,6 +180,7 @@ export class AIConfigurationService {
     sessionId: AgentSession["id"],
     input: UpdateSessionModelSelectionRequest,
   ): Promise<AgentSession> {
+    await requireUnarchivedTarget(this.options.archives, { type: "SESSION", sessionId });
     await this.validateSelection({
       provider: input.defaultModel.provider,
       model: input.defaultModel.model,

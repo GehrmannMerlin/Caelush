@@ -7,7 +7,8 @@ import {
 } from "@caelush/protocol";
 import { isTerminalRunStatus } from "@caelush/core";
 import type { RunShutdownCheckpointResult } from "@caelush/core";
-import { StorageNotFoundError, type RunRepository } from "@caelush/storage";
+import { StorageNotFoundError, type ArchiveStore, type RunRepository } from "@caelush/storage";
+import { requireUnarchivedTarget } from "../services/archive-access.js";
 
 export interface RunExecutionController {
   start(runId: RunId): Promise<unknown>;
@@ -32,6 +33,7 @@ export interface RunExecutionSupervisorLogger {
 }
 
 export interface RunExecutionSupervisorOptions {
+  readonly archives?: ArchiveStore;
   readonly runs: Pick<RunRepository, "get">;
   readonly controller: RunExecutionController;
   readonly approvals?: RunApprovalReader;
@@ -85,6 +87,10 @@ export class RunExecutionSupervisor {
 
   async start(runId: RunId): Promise<RunExecutionSupervisorResult> {
     const run = await this.requireRun(runId);
+    await requireUnarchivedTarget(this.options.archives, {
+      type: "SESSION",
+      sessionId: run.sessionId,
+    });
     if (isTerminalRunStatus(run.status)) return this.noop(run, "START");
     if (this.active.has(runId)) return this.activeResult(run, "START");
     if (run.status !== "PENDING") {
@@ -96,6 +102,10 @@ export class RunExecutionSupervisor {
 
   async recover(runId: RunId): Promise<RunExecutionSupervisorResult> {
     const run = await this.requireRun(runId);
+    await requireUnarchivedTarget(this.options.archives, {
+      type: "SESSION",
+      sessionId: run.sessionId,
+    });
     if (isTerminalRunStatus(run.status)) return this.noop(run, "RECOVER");
     if (this.active.has(runId)) return this.activeResult(run, "RECOVER");
     if (run.status === "PENDING") {
@@ -113,6 +123,10 @@ export class RunExecutionSupervisor {
     resolution: ApprovalResolution,
   ): Promise<RunExecutionSupervisorResult> {
     const run = await this.requireRun(runId);
+    await requireUnarchivedTarget(this.options.archives, {
+      type: "SESSION",
+      sessionId: run.sessionId,
+    });
     if (isTerminalRunStatus(run.status)) return this.noop(run, "RESOLVE_APPROVAL");
     if (this.active.has(runId)) throw new RunExecutionSupervisorBusyError(runId);
     if (run.status !== "WAITING_APPROVAL") {
@@ -143,6 +157,10 @@ export class RunExecutionSupervisor {
 
   async continueResourceGuard(runId: RunId): Promise<RunExecutionSupervisorResult> {
     const run = await this.requireRun(runId);
+    await requireUnarchivedTarget(this.options.archives, {
+      type: "SESSION",
+      sessionId: run.sessionId,
+    });
     if (isTerminalRunStatus(run.status)) return this.noop(run, "CONTINUE_RESOURCE");
     if (this.active.has(runId)) return this.activeResult(run, "CONTINUE_RESOURCE");
     if (run.status !== "WAITING_RESOURCE") {
