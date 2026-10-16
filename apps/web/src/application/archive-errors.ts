@@ -11,6 +11,9 @@ export function archiveErrorMessage(error: unknown): string {
     ARCHIVE_SELECTION_CHANGED: "删除范围已变化，请重新确认。",
     ARCHIVE_CONFIRMATION_EXPIRED: "删除确认已过期，请重新预览。",
     DATA_OWNERSHIP_CONFLICT: "关联数据的归属存在冲突，未删除任何记录。",
+    ARCHIVE_MANAGEMENT_UNAVAILABLE: "当前本地服务版本不支持归档管理，请更新客户端后重试。",
+    ARCHIVE_SCOPE_CHANGED: "当前账号或本地服务已切换，请刷新归档页并检查最新状态。",
+    DESKTOP_ACCOUNT_UNAUTHORIZED: "当前桌面账号尚未完成授权，请先登录并授权后再管理归档。",
     NOT_FOUND: "记录已不存在，请刷新列表。",
   };
   return messages[code] ?? "归档操作未完成，请稍后重试。";
