@@ -854,7 +854,9 @@ function AccountLoadingScreen(props: { view: AccountScreen }) {
         </div>
       </aside>
       <section className="account-content">
-        <div className="account-content-inner">
+        <div
+          className={`account-content-inner${props.view === "profile" ? " is-profile-view" : ""}`}
+        >
           <div className="account-page-head">
             <span className="skeleton-block account-skeleton-title" />
           </div>
@@ -872,28 +874,21 @@ function AccountPageSkeleton(props: { view: AccountScreen }) {
   if (props.view === "profile") {
     return (
       <div className="account-profile-stack" aria-hidden="true">
-        <section className="table-panel account-skeleton-panel">
-          <div className="account-skeleton-panel-heading">
+        <section className="profile-card">
+          <div className="profile-edit-form">
+            <div className="profile-avatar-row">
+              <span className="skeleton-block account-skeleton-profile-avatar" />
+            </div>
+            <span className="skeleton-block account-skeleton-profile-name" />
+            <span className="skeleton-block account-skeleton-profile-email" />
+          </div>
+        </section>
+        <section className="password-panel">
+          <div className="table-heading">
             <div>
               <span className="skeleton-block account-skeleton-section-title" />
               <span className="skeleton-block account-skeleton-copy" />
             </div>
-            <span className="skeleton-block account-skeleton-icon-large" />
-          </div>
-          <div className="account-skeleton-form">
-            {[0, 1].map((item) => (
-              <div className="account-skeleton-field" key={item}>
-                <span className="skeleton-block account-skeleton-label" />
-                <span className="skeleton-block account-skeleton-input" />
-              </div>
-            ))}
-            <span className="skeleton-block account-skeleton-submit" />
-          </div>
-        </section>
-        <section className="table-panel account-skeleton-panel">
-          <div className="account-skeleton-panel-heading">
-            <span className="skeleton-block account-skeleton-section-title" />
-            <span className="skeleton-block account-skeleton-icon-large" />
           </div>
           <div className="account-skeleton-form">
             {[0, 1].map((item) => (
@@ -1052,7 +1047,9 @@ function AccountHome(props: {
       </aside>
 
       <section className="account-content">
-        <div className="account-content-inner">
+        <div
+          className={`account-content-inner${props.activeView === "profile" ? " is-profile-view" : ""}`}
+        >
           <div className="account-page-head">
             <h2>
               {props.activeView === "home"

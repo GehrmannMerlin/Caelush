@@ -1142,9 +1142,6 @@ button:disabled {
   display: grid;
   gap: 13px;
 }
-.password-panel > .table-heading > svg {
-  color: var(--text);
-}
 .password-change-form {
   display: grid;
   max-width: 460px;
@@ -1777,117 +1774,239 @@ button:disabled {
   max-width: 1080px;
   margin-inline: auto;
 }
+.account-content-inner.is-profile-view {
+  max-width: 920px;
+}
+.is-profile-view .account-page-head {
+  justify-content: center;
+  text-align: center;
+}
 .account-profile-stack {
   display: grid;
-  gap: 16px;
+  max-width: 820px;
+  gap: 52px;
+  margin-inline: auto;
+}
+.profile-card {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 .profile-edit-form {
   display: grid;
-  max-width: 620px;
-  gap: 9px;
+  justify-items: center;
+  max-width: none;
 }
 .profile-avatar-row {
   display: flex;
-  align-items: center;
-  gap: 18px;
-  margin-bottom: 10px;
+  justify-content: center;
+  margin-bottom: 20px;
 }
 .profile-avatar-frame {
-  width: 88px;
-  height: 88px;
+  position: relative;
+  width: 120px;
+  height: 120px;
   flex: 0 0 auto;
   display: grid;
   overflow: hidden;
   place-items: center;
-  border: 1px solid var(--brand-line);
   border-radius: 50%;
   color: var(--brand);
   background: var(--brand-soft);
   font-size: 1.8rem;
   font-weight: 650;
+  box-shadow: 0 0 0 1px rgb(26 49 84 / 10%);
 }
 .profile-avatar-frame img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
-.profile-avatar-actions {
-  display: grid;
-  gap: 6px;
-}
-.profile-avatar-actions > strong {
-  color: var(--text);
-  font-size: 0.77rem;
-}
-.profile-avatar-actions > span,
-.profile-field-hint {
-  color: var(--muted);
-  font-size: 0.68rem;
-}
-.profile-action-row,
-.profile-form-actions {
+.profile-avatar-overlay {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
+  border-radius: inherit;
+  background: rgb(11 22 40 / 44%);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 150ms ease,
+    background-color 150ms ease;
 }
-.profile-action-button {
-  min-height: 34px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding-inline: 11px;
-  font-size: 0.7rem;
+.profile-avatar-frame:hover .profile-avatar-overlay,
+.profile-avatar-frame:focus-within .profile-avatar-overlay {
+  opacity: 1;
+  pointer-events: auto;
 }
-.profile-remove-avatar {
+.profile-avatar-action {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / 58%);
+  border-radius: 50%;
+  color: #fff;
+  background: rgb(255 255 255 / 16%);
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    transform 120ms ease;
+}
+.profile-avatar-action:hover:not(:disabled) {
+  color: var(--text);
+  background: #fff;
+  transform: translateY(-1px);
+}
+.profile-avatar-action.is-danger:hover:not(:disabled) {
   color: var(--danger);
-  font-size: 0.7rem;
 }
-.profile-name-input {
-  max-width: 460px;
+.profile-avatar-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
-.profile-name-input input[readonly] {
-  cursor: default;
-  color: var(--muted);
+.profile-avatar-action:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -4px;
 }
-.profile-verified {
-  flex: 0 0 auto;
-  color: var(--muted);
-  font-size: 0.66rem;
+.profile-name-button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 3px;
 }
-.profile-verified.is-verified {
+.profile-name-button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 2px 5px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  background: transparent;
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.045em;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+.profile-name-button:hover:not(:disabled) {
   color: var(--brand);
 }
-.profile-field-hint {
-  margin: -3px 0 4px;
+.profile-name-button svg {
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 120ms ease;
 }
-.profile-form-actions {
-  justify-content: flex-start;
-  margin-top: 9px;
+.profile-name-button:hover svg,
+.profile-name-button:focus-visible svg {
+  opacity: 1;
 }
-.profile-form-actions .compact-primary {
-  margin-top: 0;
+.profile-name-button:disabled {
+  cursor: default;
+}
+.profile-name-input {
+  width: min(100%, 360px);
+  min-height: 40px;
+  margin: 0;
+  padding: 4px 8px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  text-align: center;
+  transition: border-color 120ms ease;
+}
+.profile-name-input:focus {
+  border-bottom-color: var(--brand);
+  outline: 0;
+}
+.profile-email {
+  max-width: 100%;
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+.password-panel {
+  width: min(100%, 560px);
+  margin-inline: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.password-panel .table-heading {
+  margin-bottom: 18px;
+}
+.password-panel .table-heading p {
+  margin-top: 5px;
+}
+.password-change-form {
+  max-width: none;
+  gap: 8px;
+}
+.password-change-form .input-wrap {
+  height: 43px;
+  padding: 0 2px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+.password-change-form .input-wrap:focus-within {
+  border-bottom-color: var(--brand);
+  background: transparent;
+}
+.password-change-form .input-wrap input:focus-visible {
+  border: 0;
+  border-radius: 0;
+  color: var(--text);
+}
+.password-change-form .field-label:not(:first-child) {
+  margin-top: 10px;
 }
 .account-profile-banner {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 9px;
-  margin-bottom: 14px;
-  padding: 10px 12px;
-  border: 1px solid var(--brand-line);
-  border-radius: 9px;
+  margin-bottom: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
   color: var(--muted);
-  background: var(--brand-soft);
-  font-size: 0.7rem;
+  background: transparent;
+  font-size: 0.74rem;
   line-height: 1.5;
+  text-align: center;
 }
 .account-profile-banner svg {
   flex: 0 0 auto;
   color: var(--brand);
 }
 .account-profile-feedback {
-  margin: 8px 0;
-  color: var(--brand);
-  font-size: 0.7rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.74rem;
   line-height: 1.5;
 }
 .account-profile-feedback.is-error {
@@ -2302,6 +2421,21 @@ button:disabled {
   height: 27px;
   border-radius: 7px;
 }
+.account-skeleton-profile-avatar {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+}
+.account-skeleton-profile-name {
+  width: 140px;
+  height: 26px;
+  margin-inline: auto;
+}
+.account-skeleton-profile-email {
+  width: 190px;
+  height: 12px;
+  margin: 9px auto 0;
+}
 .account-layout--loading .side-nav {
   gap: 11px;
 }
@@ -2464,16 +2598,43 @@ button:disabled {
 }
 
 @media (max-width: 640px) {
-  .profile-avatar-row {
-    align-items: flex-start;
-    gap: 13px;
+  .account-profile-stack {
+    gap: 40px;
   }
   .profile-avatar-frame {
-    width: 72px;
-    height: 72px;
+    width: 104px;
+    height: 104px;
+  }
+  .account-skeleton-profile-avatar {
+    width: 104px;
+    height: 104px;
+  }
+  .profile-name-button {
+    font-size: 1.35rem;
+  }
+  .profile-email {
+    font-size: 0.82rem;
   }
   .profile-crop-dialog {
     padding: 18px;
+  }
+}
+@media (hover: none) {
+  .profile-avatar-overlay {
+    align-items: flex-end;
+    justify-content: flex-end;
+    padding: 8px;
+    background: transparent;
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .profile-avatar-action {
+    width: 34px;
+    height: 34px;
+    border-color: rgb(255 255 255 / 84%);
+    color: var(--text);
+    background: rgb(255 255 255 / 94%);
+    box-shadow: 0 2px 8px rgb(11 22 40 / 18%);
   }
 }
 .account-skeleton-update-toolbar {

@@ -9,23 +9,25 @@ import { AccountProfileUpdateInputSchema } from "../../src/main/cloud/schemas.js
 const desktopRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 const entry = `
-import { StrictMode } from "react";
+import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AccountProfileScreen } from "./src/renderer/components/account-profile-screen.tsx";
 
-const profile = {
+const initialProfile = {
   displayName: "Crop test",
   email: "crop@example.test",
   emailVerified: true,
-  avatarRevision: null,
+  avatarRevision: "avatar-v1",
   avatarBytes: null,
   updatedAt: "2026-10-15T00:00:00Z",
   canEdit: true,
 };
 
-window.avatarTest = { saved: null };
-createRoot(document.getElementById("root")).render(
-  <StrictMode>
+window.avatarTest = { saved: null, calls: [] };
+
+function TestHarness() {
+  const [profile, setProfile] = useState(initialProfile);
+  return (
     <AccountProfileScreen
       profile={profile}
       loading={false}
@@ -57,17 +59,34 @@ createRoot(document.getElementById("root")).render(
             crop: input.avatar.crop,
           },
         };
-        return profile;
+        window.avatarTest.calls.push(window.avatarTest.saved);
+        const updated = {
+          ...profile,
+          displayName: input.displayName,
+          avatarRevision: input.removeAvatar
+            ? null
+            : input.avatar
+              ? "avatar-v2"
+              : profile.avatarRevision,
+        };
+        setProfile(updated);
+        return updated;
       }}
       onChangePassword={(event) => event.preventDefault()}
     />
+  );
+}
+
+createRoot(document.getElementById("root")).render(
+  <StrictMode>
+    <TestHarness />
   </StrictMode>,
 );
 `;
 
 // The main CI check job installs Chromium; other environments can run the
 // non-browser suite without downloading a browser as a test side effect.
-describe.skipIf(!existsSync(chromium.executablePath()))("account avatar cropping", () => {
+describe.skipIf(!existsSync(chromium.executablePath()))("account profile editing", () => {
   let browser: Browser;
   let page: Page;
   let bundle: string;
@@ -90,6 +109,7 @@ describe.skipIf(!existsSync(chromium.executablePath()))("account avatar cropping
 
   beforeEach(async () => {
     page = await browser.newPage();
+    page.setDefaultTimeout(1_500);
   });
 
   afterEach(async () => {
@@ -100,9 +120,14 @@ describe.skipIf(!existsSync(chromium.executablePath()))("account avatar cropping
     await browser?.close();
   });
 
-  async function selectImage(width: number, height: number, cached: boolean) {
+  async function mountProfile() {
     await page.setContent('<div id="root"></div>');
     await page.addStyleTag({ content: styles });
+    await page.addScriptTag({ content: bundle });
+  }
+
+  async function selectImage(width: number, height: number, cached: boolean) {
+    await mountProfile();
     await page.evaluate(
       async ({ width, height, cached }) => {
         const canvas = document.createElement("canvas");
@@ -120,8 +145,8 @@ describe.skipIf(!existsSync(chromium.executablePath()))("account avatar cropping
       },
       { width, height, cached },
     );
-    await page.addScriptTag({ content: bundle });
-    await page.getByRole("button", { name: "选择图片", exact: true }).click();
+    await page.locator(".profile-avatar-frame").hover();
+    await page.getByRole("button", { name: "上传头像", exact: true }).click();
     await page.locator(".profile-crop-viewport img").waitFor({ state: "visible" });
     await page.waitForFunction(() => {
       const image = document.querySelector<HTMLImageElement>(".profile-crop-viewport img");
@@ -133,13 +158,65 @@ describe.skipIf(!existsSync(chromium.executablePath()))("account avatar cropping
     const confirm = page.getByRole("button", { name: "使用此头像", exact: true });
     await expect.poll(() => confirm.isEnabled(), { timeout: 2_000 }).toBe(true);
     await confirm.click();
-    await page.getByRole("img", { name: "头像预览", exact: true }).waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "保存更改", exact: true }).click();
+    await expect.poll(() => page.evaluate("window.avatarTest.calls.length")).toBeGreaterThan(0);
     await expect
       .poll(() => page.evaluate("window.avatarTest.saved"))
       .toMatchObject({ displayName: "Crop test", removeAvatar: false });
     return page.evaluate("window.avatarTest.saved");
   }
+
+  it("saves a display name when the inline editor loses focus", async () => {
+    await mountProfile();
+
+    await page.getByRole("button", { name: "编辑展示名：Crop test", exact: true }).click();
+    await page.getByRole("textbox", { name: "展示名", exact: true }).fill("霜华");
+    await page.locator("body").click({ position: { x: 1, y: 1 } });
+
+    await expect
+      .poll(() => page.evaluate("window.avatarTest.saved"))
+      .toMatchObject({
+        displayName: "霜华",
+        removeAvatar: false,
+      });
+    expect(await page.evaluate("window.avatarTest.calls.length")).toBe(1);
+  });
+
+  it("renders the email address as read-only text", async () => {
+    await mountProfile();
+
+    expect(await page.getByText("crop@example.test", { exact: true }).isVisible()).toBe(true);
+    expect(await page.locator("#profile-email").count()).toBe(0);
+  });
+
+  it("shows avatar actions only while hovering the avatar", async () => {
+    await mountProfile();
+    const avatar = page.locator(".profile-avatar-frame");
+    const overlay = page.locator(".profile-avatar-overlay");
+
+    await expect.poll(() => overlay.evaluate((node) => getComputedStyle(node).opacity)).toBe("0");
+    await avatar.hover();
+    await expect.poll(() => overlay.evaluate((node) => getComputedStyle(node).opacity)).toBe("1");
+    expect(await page.getByRole("button", { name: "上传头像", exact: true }).isVisible()).toBe(
+      true,
+    );
+    expect(await page.getByRole("button", { name: "删除头像", exact: true }).isVisible()).toBe(
+      true,
+    );
+    await page.mouse.move(1, 1);
+    await expect.poll(() => overlay.evaluate((node) => getComputedStyle(node).opacity)).toBe("0");
+  });
+
+  it("removes the avatar immediately after clicking the delete control", async () => {
+    await mountProfile();
+    await page.locator(".profile-avatar-frame").hover();
+    await page.getByRole("button", { name: "删除头像", exact: true }).click();
+
+    await expect.poll(() => page.evaluate("window.avatarTest.calls.length")).toBe(1);
+    expect(await page.evaluate("window.avatarTest.saved")).toMatchObject({
+      displayName: "Crop test",
+      removeAvatar: true,
+    });
+  });
 
   it("confirms a cached image returned asynchronously by the file picker", async () => {
     await selectImage(400, 400, true);
@@ -174,11 +251,9 @@ describe.skipIf(!existsSync(chromium.executablePath()))("account avatar cropping
     },
   ])("submits an in-bounds crop for a $width x $height image", async ({ width, height, crop }) => {
     await selectImage(width, height, true);
-    await page.getByRole("textbox", { name: "展示名", exact: true }).fill("霜华");
     const confirm = page.getByRole("button", { name: "使用此头像", exact: true });
     await expect.poll(() => confirm.isEnabled(), { timeout: 2_000 }).toBe(true);
     await confirm.click();
-    await page.getByRole("button", { name: "保存更改", exact: true }).click();
     await expect.poll(() => page.evaluate("window.avatarTest.saved")).not.toBeNull();
     const saved = await page.evaluate("window.avatarTest.saved");
 
@@ -188,7 +263,6 @@ describe.skipIf(!existsSync(chromium.executablePath()))("account avatar cropping
         avatar: { ...saved.avatar, bytes: new Uint8Array(saved.avatar.bytes) },
       }).success,
     ).toBe(true);
-    expect(saved.displayName).toBe("霜华");
     for (const coordinate of ["x", "y", "width", "height"] as const) {
       expect(saved.avatar.crop[coordinate]).toBeCloseTo(crop[coordinate], 12);
     }

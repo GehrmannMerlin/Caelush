@@ -8,13 +8,13 @@ import {
   type PointerEvent,
 } from "react";
 import {
-  BadgeCheck,
-  Camera,
   KeyRound,
   LoaderCircle,
   LockKeyhole,
-  Mail,
+  Pencil,
   ShieldCheck,
+  Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import type { DesktopAccountProfile } from "../../main/account/state.js";
@@ -53,6 +53,7 @@ interface Props {
 
 export function AccountProfileScreen(props: Props) {
   const [displayName, setDisplayName] = useState("");
+  const [editingName, setEditingName] = useState(false);
   const [selection, setSelection] = useState<AvatarSelection | null>(null);
   const [removeAvatar, setRemoveAvatar] = useState(false);
   const [cropSource, setCropSource] = useState<{
@@ -63,8 +64,8 @@ export function AccountProfileScreen(props: Props) {
   const [saving, setSaving] = useState(false);
   const [choosing, setChoosing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [messageTone, setMessageTone] = useState<"info" | "error">("info");
   const [dirty, setDirty] = useState(false);
+  const skipNameBlur = useRef(false);
   const imageUrl = useMemo(() => {
     if (props.profile?.avatarBytes === null || props.profile === null) return null;
     return bytesToDataUrl(props.profile.avatarBytes, "image/webp");
@@ -73,8 +74,6 @@ export function AccountProfileScreen(props: Props) {
   useEffect(() => {
     if (props.profile === null || dirty) return;
     setDisplayName(props.profile.displayName);
-    setSelection(null);
-    setRemoveAvatar(false);
   }, [props.profile, dirty]);
 
   useEffect(() => {
@@ -94,15 +93,25 @@ export function AccountProfileScreen(props: Props) {
   }, [selection]);
 
   const visibleAvatarUrl = selection !== null ? previewUrl : removeAvatar ? null : imageUrl;
-  const canSave =
-    props.online &&
-    props.profile?.canEdit === true &&
-    dirty &&
-    !saving &&
-    !props.busy &&
-    Array.from(displayName.normalize("NFC").trim()).length >= 1 &&
-    Array.from(displayName.normalize("NFC").trim()).length <= 32 &&
-    !/[\p{Cc}\p{Cs}\u2028\u2029]/u.test(displayName);
+  const canEdit = props.online && props.profile?.canEdit === true && !saving && !props.busy;
+
+  const save = async (input: AccountProfileUpdateInput): Promise<boolean> => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const updated = await props.onSave(input);
+      setDisplayName(updated.displayName);
+      setSelection(null);
+      setRemoveAvatar(false);
+      setDirty(false);
+      return true;
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "无法保存个人信息。");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const chooseAvatar = async () => {
     setChoosing(true);
@@ -112,71 +121,74 @@ export function AccountProfileScreen(props: Props) {
       if (selected !== null) setCropSource(selected);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "无法读取所选图片。");
-      setMessageTone("error");
     } finally {
       setChoosing(false);
     }
   };
 
-  const save = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!canSave) return;
-    setSaving(true);
-    setMessage(null);
-    try {
-      const input: AccountProfileUpdateInput = {
-        displayName: displayName.normalize("NFC").trim(),
-        removeAvatar,
-        ...(selection === null
-          ? {}
-          : {
-              avatar: {
-                bytes: new Uint8Array(selection.bytes) as Uint8Array<ArrayBuffer>,
-                contentType: selection.mimeType,
-                crop: selection.crop,
-              },
-            }),
-      };
-      await props.onSave(input);
-      setSelection(null);
-      setRemoveAvatar(false);
-      setDirty(false);
-      setMessage("个人信息已保存。");
-      setMessageTone("info");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "无法保存个人信息。");
-      setMessageTone("error");
-    } finally {
-      setSaving(false);
+  const saveDisplayName = async () => {
+    if (skipNameBlur.current) {
+      skipNameBlur.current = false;
+      return;
     }
+    setEditingName(false);
+    if (!canEdit) {
+      setDisplayName(props.profile?.displayName ?? "");
+      setDirty(false);
+      return;
+    }
+    const normalizedName = displayName.normalize("NFC").trim();
+    const nameLength = Array.from(normalizedName).length;
+    if (nameLength < 1 || nameLength > 32 || /[\p{Cc}\p{Cs}\u2028\u2029]/u.test(normalizedName)) {
+      setDisplayName(props.profile?.displayName ?? "");
+      setDirty(false);
+      setMessage("展示名需为 1–32 个字符，且不能包含控制字符。");
+      return;
+    }
+    if (normalizedName === props.profile?.displayName) {
+      setDisplayName(normalizedName);
+      setDirty(false);
+      return;
+    }
+    await save({ displayName: normalizedName, removeAvatar: false });
   };
 
-  const cancelChanges = () => {
-    setDisplayName(props.profile?.displayName ?? "");
+  const clearAvatar = async () => {
+    if (props.profile === null) return;
+    setRemoveAvatar(true);
     setSelection(null);
-    setRemoveAvatar(false);
-    setDirty(false);
-    setMessage(null);
+    setDirty(true);
+    const saved = await save({
+      displayName: props.profile.displayName,
+      removeAvatar: true,
+    });
+    if (!saved) {
+      setRemoveAvatar(false);
+      setDirty(false);
+    }
   };
 
   const acceptCrop = (crop: CropRect) => {
     if (cropSource === null) return;
-    setSelection({ ...cropSource, crop });
+    const nextSelection = { ...cropSource, crop };
+    setSelection(nextSelection);
     setCropSource(null);
     setRemoveAvatar(false);
     setDirty(true);
+    void save({
+      displayName: displayName.normalize("NFC").trim(),
+      removeAvatar: false,
+      avatar: {
+        bytes: new Uint8Array(nextSelection.bytes) as Uint8Array<ArrayBuffer>,
+        contentType: nextSelection.mimeType,
+        crop: nextSelection.crop,
+      },
+    });
   };
 
   return (
     <div className="account-profile-stack">
-      <section className="table-panel profile-card">
-        <div className="table-heading">
-          <div>
-            <h3>个人信息</h3>
-            <p>更新你的展示名和头像。邮箱与验证状态只读。</p>
-          </div>
-          <BadgeCheck size={18} aria-hidden="true" />
-        </div>
+      <section className="profile-card" aria-label="个人信息">
         {(!props.online || props.profile?.canEdit === false) && (
           <div className="account-profile-banner" role="status">
             <ShieldCheck size={17} aria-hidden="true" />
@@ -194,111 +206,113 @@ export function AccountProfileScreen(props: Props) {
           </p>
         )}
         {props.profile !== null && (
-          <form className="profile-edit-form" onSubmit={(event) => void save(event)}>
+          <div className="profile-edit-form">
             <div className="profile-avatar-row">
               <div className="profile-avatar-frame">
                 {visibleAvatarUrl !== null ? (
-                  <img src={visibleAvatarUrl} alt="头像预览" />
+                  <img src={visibleAvatarUrl} alt={`${props.profile.displayName}的头像`} />
                 ) : (
                   <span>{avatarFallback(displayName || props.profile.displayName)}</span>
                 )}
-              </div>
-              <div className="profile-avatar-actions">
-                <strong>头像</strong>
-                <span>PNG、JPEG 或 WebP，最大 5 MB</span>
-                <div className="profile-action-row">
+                <div className="profile-avatar-overlay" role="group" aria-label="头像操作">
                   <button
-                    className="secondary-button profile-action-button"
+                    className="profile-avatar-action"
                     type="button"
-                    disabled={
-                      !props.online || !props.profile.canEdit || choosing || props.busy || saving
-                    }
+                    aria-label="上传头像"
+                    title="上传头像"
+                    disabled={!canEdit || choosing}
                     onClick={() => void chooseAvatar()}
                   >
-                    {choosing ? <LoaderCircle size={14} className="spin" /> : <Camera size={14} />}
-                    选择图片
+                    {choosing || (saving && selection !== null) ? (
+                      <LoaderCircle size={17} className="spin" aria-hidden="true" />
+                    ) : (
+                      <Upload size={17} aria-hidden="true" />
+                    )}
                   </button>
-                  {(selection !== null || props.profile.avatarRevision !== null) && (
+                  {(props.profile.avatarRevision !== null || selection !== null) && (
                     <button
-                      className="text-button profile-remove-avatar"
+                      className="profile-avatar-action is-danger"
                       type="button"
-                      disabled={!props.online || !props.profile.canEdit || saving || props.busy}
-                      onClick={() => {
-                        setSelection(null);
-                        setRemoveAvatar(true);
-                        setDirty(true);
-                      }}
+                      aria-label="删除头像"
+                      title="删除头像"
+                      disabled={!canEdit}
+                      onClick={() => void clearAvatar()}
                     >
-                      移除头像
+                      <Trash2 size={17} aria-hidden="true" />
                     </button>
                   )}
                 </div>
               </div>
             </div>
-            <label className="field-label" htmlFor="profile-display-name">
-              展示名
-            </label>
-            <div className="input-wrap profile-name-input">
+            {editingName ? (
               <input
                 id="profile-display-name"
+                className="profile-name-input"
+                aria-label="展示名"
                 autoComplete="nickname"
                 maxLength={64}
                 value={displayName}
-                disabled={!props.online || !props.profile.canEdit || saving || props.busy}
+                disabled={!canEdit}
+                autoFocus
                 onChange={(event) => {
                   setDisplayName(event.target.value);
                   setDirty(true);
                   setMessage(null);
                 }}
+                onBlur={() => void saveDisplayName()}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    event.currentTarget.blur();
+                  } else if (event.key === "Escape") {
+                    skipNameBlur.current = true;
+                    setDisplayName(props.profile?.displayName ?? "");
+                    setDirty(false);
+                    setEditingName(false);
+                    setMessage(null);
+                    window.setTimeout(() => {
+                      skipNameBlur.current = false;
+                    }, 0);
+                  }
+                }}
               />
-            </div>
-            <p className="profile-field-hint">1–32 个 Unicode 字符，保存时会去除首尾空格。</p>
-            <label className="field-label" htmlFor="profile-email">
-              邮箱地址
-            </label>
-            <div className="input-wrap profile-name-input">
-              <Mail size={16} aria-hidden="true" />
-              <input id="profile-email" value={props.profile.email} readOnly />
-              <span
-                className={`profile-verified${props.profile.emailVerified ? " is-verified" : ""}`}
+            ) : (
+              <button
+                className="profile-name-button"
+                type="button"
+                disabled={!canEdit}
+                aria-label={`编辑展示名：${displayName}`}
+                title={canEdit ? "点击编辑展示名" : undefined}
+                onClick={() => {
+                  setMessage(null);
+                  setEditingName(true);
+                }}
               >
-                {props.profile.emailVerified ? "已验证" : "未验证"}
-              </span>
-            </div>
+                <span>{displayName}</span>
+                {canEdit && <Pencil size={15} aria-hidden="true" />}
+              </button>
+            )}
+            <p className="profile-email">{props.profile.email}</p>
+            {saving && (
+              <p className="account-profile-feedback" role="status">
+                <LoaderCircle size={13} className="spin" aria-hidden="true" /> 正在保存…
+              </p>
+            )}
             {message !== null && !props.loading && (
-              <p
-                className={`account-profile-feedback${messageTone === "error" ? " is-error" : ""}`}
-                role={messageTone === "error" ? "alert" : "status"}
-              >
+              <p className="account-profile-feedback is-error" role="alert">
                 {message}
               </p>
             )}
-            <div className="profile-form-actions">
-              {dirty && (
-                <button
-                  className="secondary-button"
-                  type="button"
-                  disabled={saving || props.busy}
-                  onClick={cancelChanges}
-                >
-                  取消
-                </button>
-              )}
-              <button className="primary-button compact-primary" type="submit" disabled={!canSave}>
-                {saving ? <LoaderCircle size={15} className="spin" /> : null} 保存更改
-              </button>
-            </div>
-          </form>
+          </div>
         )}
       </section>
 
-      <section className="table-panel password-panel">
+      <section className="password-panel">
         <div className="table-heading">
           <div>
             <h3>修改密码</h3>
             <p>修改密码后，其他已登录的账户会话将会失效。</p>
           </div>
-          <KeyRound size={18} aria-hidden="true" />
         </div>
         {!props.online && (
           <div className="account-profile-banner">请先连接云端，再修改账户密码。</div>
