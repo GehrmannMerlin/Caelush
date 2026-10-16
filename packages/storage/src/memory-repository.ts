@@ -3,9 +3,11 @@ import {
   type MemoryCandidate,
   type MemoryRecord,
   type MemoryStore,
+  type MemoryExtractionCommitPort,
 } from "@caelush/memory";
 import type { CaelushDatabase } from "./database.js";
 import { StorageError } from "./errors.js";
+import { archiveTransaction } from "./archive/archive-transaction.js";
 
 interface MemoryRow {
   id: string;
@@ -47,38 +49,94 @@ function decode(row: MemoryRow): MemoryRecord {
   });
 }
 
+function persistMemoryRecord(database: CaelushDatabase, record: MemoryRecord): void {
+  database.client
+    .prepare(
+      `INSERT INTO memory_records
+           (id, scope, project_id, topic, fact, status, confidence, evidence_refs_json,
+            source_run_ids_json, created_at_ms, updated_at_ms, last_confirmed_at_ms,
+            supersedes, superseded_by, sensitivity, schema_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      record.id,
+      record.scope,
+      record.projectId ?? null,
+      record.topic,
+      record.fact,
+      record.status,
+      Math.round(record.confidence * 1_000_000),
+      JSON.stringify(record.evidenceRefs),
+      JSON.stringify(record.sourceRunIds ?? []),
+      record.createdAt,
+      record.updatedAt,
+      record.lastConfirmedAt,
+      record.supersedes ?? null,
+      record.supersededBy ?? null,
+      record.sensitivity,
+      record.schemaVersion,
+    );
+}
+
+export class SqliteMemoryExtractionCommitStore implements MemoryExtractionCommitPort {
+  constructor(private readonly database: CaelushDatabase) {}
+
+  async commit(
+    input: Parameters<MemoryExtractionCommitPort["commit"]>[0],
+  ): Promise<"COMMITTED" | "STALE"> {
+    return archiveTransaction(this.database, true, () => {
+      const job = this.database.client
+        .prepare(
+          `SELECT j.source_run_id, j.project_id, json_extract(r.data_json, '$.workspace.id') AS workspace_id, s.workspace_id AS session_workspace_id
+         FROM memory_extraction_jobs j JOIN agent_runs r ON r.id = j.source_run_id
+         JOIN agent_sessions s ON s.id = r.session_id
+         WHERE j.id = ? AND j.status = 'RUNNING' AND j.attempt = ?`,
+        )
+        .get(input.jobId, input.attempt) as
+        | {
+            source_run_id: string;
+            project_id: string;
+            workspace_id: string;
+            session_workspace_id: string | null;
+          }
+        | undefined;
+      if (
+        job === undefined ||
+        job.project_id !== job.workspace_id ||
+        (job.session_workspace_id !== null && job.session_workspace_id !== job.workspace_id)
+      )
+        return "STALE";
+      for (const candidate of input.candidates) {
+        persistMemoryRecord(
+          this.database,
+          createMemoryRecord(
+            {
+              ...candidate,
+              scope: "PROJECT",
+              projectId: job.project_id,
+              sourceRunIds: [job.source_run_id],
+            },
+            input.now,
+          ),
+        );
+      }
+      this.database.client
+        .prepare(
+          "UPDATE memory_extraction_jobs SET status = 'COMPLETED', updated_at_ms = ?, last_error = NULL WHERE id = ? AND status = 'RUNNING' AND attempt = ?",
+        )
+        .run(input.now, input.jobId, input.attempt);
+      return "COMMITTED";
+    });
+  }
+}
+
 export class SqliteMemoryRepository implements MemoryStore {
   constructor(private readonly database: CaelushDatabase) {}
 
   async save(candidate: MemoryCandidate): Promise<MemoryRecord> {
     const record = createMemoryRecord(candidate, Date.now());
     try {
-      this.database.client
-        .prepare(
-          `INSERT INTO memory_records
-           (id, scope, project_id, topic, fact, status, confidence, evidence_refs_json,
-            source_run_ids_json, created_at_ms, updated_at_ms, last_confirmed_at_ms,
-            supersedes, superseded_by, sensitivity, schema_version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          record.id,
-          record.scope,
-          record.projectId ?? null,
-          record.topic,
-          record.fact,
-          record.status,
-          Math.round(record.confidence * 1_000_000),
-          JSON.stringify(record.evidenceRefs),
-          JSON.stringify(record.sourceRunIds ?? []),
-          record.createdAt,
-          record.updatedAt,
-          record.lastConfirmedAt,
-          record.supersedes ?? null,
-          record.supersededBy ?? null,
-          record.sensitivity,
-          record.schemaVersion,
-        );
+      persistMemoryRecord(this.database, record);
     } catch (error) {
       throw new StorageError("Unable to persist memory record.", { cause: error });
     }

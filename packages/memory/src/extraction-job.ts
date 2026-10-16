@@ -1,3 +1,5 @@
+import type { MemoryCandidate } from "./index.js";
+
 export type MemoryExtractionJobStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
 
 export interface MemoryExtractionJob {
@@ -25,7 +27,12 @@ export interface MemoryExtractionJobStore {
   listPending(): Promise<readonly MemoryExtractionJob[]>;
   claim(id: string, now: number): Promise<MemoryExtractionJob | undefined>;
   complete(id: string, now: number): Promise<MemoryExtractionJob | undefined>;
-  fail(id: string, now: number, message: string): Promise<MemoryExtractionJob | undefined>;
+  fail(
+    id: string,
+    now: number,
+    message: string,
+    expectedAttempt?: number,
+  ): Promise<MemoryExtractionJob | undefined>;
 }
 
 export function createMemoryExtractionJob(
@@ -49,4 +56,12 @@ export function createMemoryExtractionJob(
     createdAt: input.createdAt,
     updatedAt: input.createdAt,
   });
+}
+export interface MemoryExtractionCommitPort {
+  commit(input: {
+    readonly jobId: string;
+    readonly attempt: number;
+    readonly candidates: readonly MemoryCandidate[];
+    readonly now: number;
+  }): Promise<"COMMITTED" | "STALE">;
 }

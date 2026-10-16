@@ -118,7 +118,7 @@ export {
   StorageMigrationError,
   StorageNotFoundError,
 } from "./errors.js";
-export { SqliteMemoryRepository } from "./memory-repository.js";
+export { SqliteMemoryRepository, SqliteMemoryExtractionCommitStore } from "./memory-repository.js";
 export {
   SqliteContextCheckpointRepository,
   type ContextCheckpointCreateInput,

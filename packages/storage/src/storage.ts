@@ -55,8 +55,8 @@ import {
 } from "./repositories/verification-repository.js";
 import { SqliteVerificationExecutionStore } from "./verification-execution-store.js";
 import type { VerificationExecutionRecoveryStorePort } from "@caelush/verification";
-import { SqliteMemoryRepository } from "./memory-repository.js";
-import type { MemoryStore } from "@caelush/memory";
+import { SqliteMemoryRepository, SqliteMemoryExtractionCommitStore } from "./memory-repository.js";
+import type { MemoryStore, MemoryExtractionCommitPort } from "@caelush/memory";
 import {
   SqliteContextArtifactRepository,
   type ContextArtifactRepository,
@@ -120,6 +120,7 @@ export interface CaelushStorage {
   readonly verification: VerificationRepository;
   readonly verificationExecution: VerificationExecutionRecoveryStorePort;
   readonly memory: MemoryStore;
+  readonly memoryExtractionCommit: MemoryExtractionCommitPort;
   readonly memoryExtractionJobs: MemoryExtractionJobStore;
   readonly contextCheckpoints: ContextCheckpointRepository;
   readonly contextCheckpointsV2: ContextCheckpointRepositoryPort;
@@ -188,6 +189,7 @@ export async function openCaelushStorage(options: {
       verification: new SqliteVerificationRepository(database),
       verificationExecution: new SqliteVerificationExecutionStore(database),
       memory: new SqliteMemoryRepository(database),
+      memoryExtractionCommit: new SqliteMemoryExtractionCommitStore(database),
       memoryExtractionJobs: new SqliteMemoryExtractionJobRepository(database),
       contextCheckpoints: new SqliteContextCheckpointRepository(database),
       contextCheckpointsV2: new SqliteContextCheckpointRepositoryV2(database),

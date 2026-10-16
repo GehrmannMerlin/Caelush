@@ -2,12 +2,12 @@ import {
   type MemoryCandidate,
   type MemoryExtractionJob,
   type MemoryExtractionJobStore,
-  type MemoryStore,
+  type MemoryExtractionCommitPort,
 } from "@caelush/memory";
 
 export interface MemoryExtractionWorkerOptions {
   readonly jobs: MemoryExtractionJobStore;
-  readonly memory: MemoryStore;
+  readonly commit: MemoryExtractionCommitPort;
   extract(input: { readonly job: MemoryExtractionJob }): Promise<readonly MemoryCandidate[]>;
   readonly now?: () => number;
 }
@@ -30,22 +30,15 @@ export class MemoryExtractionWorker {
       const job = await this.options.jobs.claim(candidate.id, this.now());
       if (job === undefined) return false;
       try {
-        for (const memoryCandidate of await this.options.extract({ job })) {
-          await this.options.memory.save({
-            ...memoryCandidate,
-            scope: "PROJECT",
-            projectId: job.projectId,
-            sourceRunIds: [job.sourceRunId],
-            evidenceRefs: memoryCandidate.evidenceRefs,
-          });
-        }
-        await this.options.jobs.complete(job.id, this.now());
-      } catch (error) {
-        await this.options.jobs.fail(
-          job.id,
-          this.now(),
-          error instanceof Error ? error.message : "memory extraction failed",
-        );
+        const candidates = await this.options.extract({ job });
+        await this.options.commit.commit({
+          jobId: job.id,
+          attempt: job.attempt,
+          candidates,
+          now: this.now(),
+        });
+      } catch {
+        await this.options.jobs.fail(job.id, this.now(), "Memory extraction failed.", job.attempt);
       }
       return true;
     } finally {

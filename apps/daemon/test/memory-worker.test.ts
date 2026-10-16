@@ -12,7 +12,12 @@ describe("MemoryExtractionWorker", () => {
     const memory = new InMemoryMemoryStore({ now: () => 2 });
     const worker = new MemoryExtractionWorker({
       jobs,
-      memory,
+      commit: {
+        commit: async ({ candidates }) => {
+          for (const candidate of candidates) await memory.save(candidate);
+          return "COMMITTED";
+        },
+      },
       now: () => 2,
       extract: async () => [
         {
@@ -30,9 +35,45 @@ describe("MemoryExtractionWorker", () => {
     await expect(memory.list()).resolves.toHaveLength(0);
     expect(jobs.job.status).toBe("FAILED");
   });
+
+  it("sends late extraction to the fenced commit port without completing a deleted job", async () => {
+    const jobs = new TestJobs();
+    let release!: (value: readonly never[]) => void;
+    let entered!: () => void;
+    const extracted = new Promise<readonly never[]>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const received: unknown[] = [];
+    const worker = new MemoryExtractionWorker({
+      jobs,
+      now: () => 2,
+      extract: async () => {
+        entered();
+        return extracted;
+      },
+      commit: {
+        commit: async (input) => {
+          received.push(input);
+          return "STALE";
+        },
+      },
+    });
+    const running = worker.runOnce();
+    await started;
+    jobs.deleted = true;
+    release([]);
+    await expect(running).resolves.toBe(true);
+    expect(received).toEqual([{ jobId: "memory-job:1", attempt: 1, candidates: [], now: 2 }]);
+    expect(await jobs.get()).toBeUndefined();
+    expect(jobs.job.status).toBe("RUNNING");
+  });
 });
 
 class TestJobs implements MemoryExtractionJobStore {
+  deleted = false;
   job = createMemoryExtractionJob({
     id: "memory-job:1",
     sourceRunId: "run-1",
@@ -44,7 +85,7 @@ class TestJobs implements MemoryExtractionJobStore {
     return this.job;
   }
   async get() {
-    return this.job;
+    return this.deleted ? undefined : this.job;
   }
   async listPending() {
     return this.job.status === "PENDING" ? [this.job] : [];

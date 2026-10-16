@@ -180,4 +180,5 @@ export {
   type MemoryExtractionJobCreateInput,
   type MemoryExtractionJobStatus,
   type MemoryExtractionJobStore,
+  type MemoryExtractionCommitPort,
 } from "./extraction-job.js";

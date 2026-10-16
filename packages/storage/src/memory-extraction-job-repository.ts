@@ -87,12 +87,17 @@ export class SqliteMemoryExtractionJobRepository implements MemoryExtractionJobS
     return this.transition(id, "RUNNING", "COMPLETED", now);
   }
 
-  async fail(id: string, now: number, message: string): Promise<MemoryExtractionJob | undefined> {
+  async fail(
+    id: string,
+    now: number,
+    message: string,
+    expectedAttempt?: number,
+  ): Promise<MemoryExtractionJob | undefined> {
     const result = this.database.client
       .prepare(
-        "UPDATE memory_extraction_jobs SET status = 'FAILED', updated_at_ms = ?, last_error = ?, attempt = attempt + 1 WHERE id = ? AND status = 'RUNNING'",
+        "UPDATE memory_extraction_jobs SET status = 'FAILED', updated_at_ms = ?, last_error = ?, attempt = attempt + 1 WHERE id = ? AND status = 'RUNNING' AND (? IS NULL OR attempt = ?)",
       )
-      .run(now, message.slice(0, 512), id);
+      .run(now, message.slice(0, 512), id, expectedAttempt ?? null, expectedAttempt ?? null);
     return result.changes === 0 ? undefined : this.get(id);
   }
 
