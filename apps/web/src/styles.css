@@ -2567,8 +2567,8 @@ body {
   min-height: 36px;
   justify-content: flex-start;
   overflow: hidden;
-  gap: 8px;
-  padding: 0 9px;
+  gap: 10px;
+  padding: 0 6px;
   border-radius: 8px;
   text-align: left;
 }
@@ -2608,7 +2608,7 @@ body {
   flex: 0 0 36px;
 }
 
-.workspace-sidebar-footer--desktop .workspace-settings-button {
+.workspace-sidebar-footer--desktop .workspace-settings-control > .workspace-settings-button {
   width: 36px;
   min-width: 36px;
   min-height: 36px;
