@@ -67,6 +67,9 @@ const SettingsSurface = lazy(async () => {
   const module = await import("./components/settings-surface.js");
   return { default: module.SettingsSurface };
 });
+const ArchivePage = lazy(async () => ({
+  default: (await import("./components/archive-page.js")).ArchivePage,
+}));
 
 const DesktopWorkspacePanel = lazy(async () => {
   const module = await import("./components/desktop-workspace-panel.js");
@@ -116,6 +119,7 @@ export function WebHostApp(props: {
   const [workspacePickerBusy, setWorkspacePickerBusy] = useState(false);
   const [workspaceActionError, setWorkspaceActionError] = useState<string | undefined>();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [archivesOpen, setArchivesOpen] = useState(false);
   const [desktopPanelApi, setDesktopPanelApi] = useState<DesktopPanelApi | null>(null);
   const [sidebarAccountProfile, setSidebarAccountProfile] = useState<DesktopSidebarProfile | null>(
     null,
@@ -303,11 +307,39 @@ export function WebHostApp(props: {
     sessionManager.beginDraft();
   }, [selectedWorkspace?.id, sessionManager, sessionSnapshot.status]);
 
+  const refreshAfterArchiveMutation = useCallback(() => {
+    void workspaceManager?.loadWorkspaces();
+    void sessionManager?.refreshArchiveState();
+  }, [workspaceManager, sessionManager]);
+
   if (state.bootstrap !== "READY" || workspaceManager === undefined) {
     return renderHostBootstrap(state, desktopHostLoadingUI);
   }
 
   const closeSidebar = () => setSidebarOpen(false);
+  if (archivesOpen) {
+    if (state.info?.capabilities.archiveManagementV1 !== true)
+      return createElement(
+        "main",
+        { className: "archive-page" },
+        createElement("h1", null, "已归档"),
+        createElement("p", { role: "alert" }, "当前本地服务不支持归档管理，请更新后重试。"),
+        createElement("button", { onClick: () => setArchivesOpen(false) }, "返回工作台"),
+      );
+    return createElement(
+      Suspense,
+      { fallback: createElement("p", { role: "status" }, "正在加载归档页…") },
+      createElement(ArchivePage, {
+        client:
+          props.client as unknown as import("./application/archive-manager.js").ArchivePageClient,
+        onClose: () => {
+          setArchivesOpen(false);
+          refreshAfterArchiveMutation();
+        },
+        onMutation: refreshAfterArchiveMutation,
+      }),
+    );
+  }
   const selectedWorkspaceId = selectedWorkspace?.id;
   const onSelectWorkspace = (workspaceId: WorkspaceId) => {
     setWorkspaceActionError(undefined);
@@ -431,6 +463,7 @@ export function WebHostApp(props: {
     clientHost.kind === "DESKTOP"
       ? {
           accountHref: clientHost.account?.href,
+          archiveHref: clientHost.account?.archiveHref,
           accountProfile: sidebarAccountProfile ?? undefined,
           onCheckUpdates:
             clientHost.updates === undefined
@@ -466,6 +499,10 @@ export function WebHostApp(props: {
     onAddWorkspace,
     onArchiveWorkspace,
     onArchiveSession,
+    onOpenArchives: () => {
+      setArchivesOpen(true);
+      closeSidebar();
+    },
     onCloseWorkspaceDialog: () => setWorkspaceDialogOpen(false),
     onPickWorkspaceDirectory,
     onRegisterWorkspace,
@@ -514,6 +551,7 @@ function renderWorkspaceApp(input: {
   readonly onAddWorkspace: () => void;
   readonly onArchiveWorkspace: (workspaceId: WorkspaceId) => void;
   readonly onArchiveSession: (sessionId: SessionId) => void;
+  readonly onOpenArchives: () => void;
   readonly onCloseWorkspaceDialog: () => void;
   readonly onPickWorkspaceDirectory: () => void;
   readonly onRegisterWorkspace: (event: FormEvent<HTMLFormElement>) => void;
@@ -646,6 +684,7 @@ function renderWorkspaceApp(input: {
             onAddWorkspace: input.onAddWorkspace,
             onArchiveWorkspace: input.onArchiveWorkspace,
             onArchiveSession: input.onArchiveSession,
+            onOpenArchives: input.onOpenArchives,
             onOpenSettings: input.onOpenSettings,
             desktopActions: input.desktopActions,
           }),

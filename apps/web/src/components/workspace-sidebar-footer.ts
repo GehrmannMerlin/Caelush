@@ -1,8 +1,9 @@
 import { createElement, useEffect, useRef, useState, type ReactElement } from "react";
-import { LogOut, RefreshCw, Settings, SlidersHorizontal } from "lucide-react";
+import { Archive, LogOut, RefreshCw, Settings, SlidersHorizontal } from "lucide-react";
 
 export interface WorkspaceSidebarDesktopActions {
   readonly accountHref?: string | undefined;
+  readonly archiveHref?: string | undefined;
   readonly accountProfile?:
     { readonly displayName: string; readonly avatarBytes: Uint8Array | null } | undefined;
   readonly onCheckUpdates?: (() => void) | undefined;
@@ -10,6 +11,8 @@ export interface WorkspaceSidebarDesktopActions {
 }
 
 export interface WorkspaceSettingsMenuProps {
+  readonly onOpenArchives?: (() => void) | undefined;
+  readonly archiveHref?: string | undefined;
   readonly onSelect: () => void;
   readonly onCheckUpdates?: (() => void) | undefined;
   readonly onLogout?: (() => void) | undefined;
@@ -35,6 +38,26 @@ export function WorkspaceSettingsMenu(props: WorkspaceSettingsMenuProps): ReactE
       createElement(SlidersHorizontal, { size: 16, strokeWidth: 2, "aria-hidden": true }),
       createElement("span", null, "模型与配置"),
     ),
+    props.archiveHref !== undefined
+      ? createElement(
+          "a",
+          { className: "workspace-settings-menu-item", role: "menuitem", href: props.archiveHref },
+          createElement(Archive, { size: 16, "aria-hidden": true }),
+          createElement("span", null, "已归档"),
+        )
+      : props.onOpenArchives === undefined
+        ? null
+        : createElement(
+            "button",
+            {
+              type: "button",
+              className: "workspace-settings-menu-item",
+              role: "menuitem",
+              onClick: props.onOpenArchives,
+            },
+            createElement(Archive, { size: 16, "aria-hidden": true }),
+            createElement("span", null, "已归档"),
+          ),
     props.onCheckUpdates === undefined
       ? null
       : createElement(
@@ -65,6 +88,7 @@ export function WorkspaceSettingsMenu(props: WorkspaceSettingsMenuProps): ReactE
 }
 
 export function WorkspaceSidebarFooter(props: {
+  readonly onOpenArchives?: (() => void) | undefined;
   readonly onOpenSettings?: (() => void) | undefined;
   readonly desktopActions?: WorkspaceSidebarDesktopActions | undefined;
 }): ReactElement {
@@ -151,6 +175,8 @@ export function WorkspaceSidebarFooter(props: {
       ),
       settingsMenuOpen
         ? createElement(WorkspaceSettingsMenu, {
+            onOpenArchives: select(props.onOpenArchives),
+            archiveHref: desktopActions?.archiveHref,
             onSelect: () => {
               setSettingsMenuOpen(false);
               props.onOpenSettings?.();

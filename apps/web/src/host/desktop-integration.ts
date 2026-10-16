@@ -49,6 +49,7 @@ export type ClientHostIntegration =
       readonly account?:
         | {
             readonly href: "caelush-login://app/?view=account";
+            readonly archiveHref: "caelush-login://app/?view=account&section=archives";
             readonly logout: DesktopAccountBridge["logout"];
             readonly getSidebarProfile?: DesktopAccountBridge["getSidebarProfile"];
           }
@@ -80,6 +81,7 @@ export function resolveClientHostIntegration(
     isRecord(bridge.account) && typeof bridge.account.logout === "function"
       ? {
           href: "caelush-login://app/?view=account" as const,
+          archiveHref: "caelush-login://app/?view=account&section=archives" as const,
           logout: bridge.account.logout as DesktopAccountBridge["logout"],
           ...(typeof bridge.account.getSidebarProfile === "function"
             ? {
