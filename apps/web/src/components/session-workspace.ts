@@ -132,6 +132,7 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
         props.turnPresentation?.capabilityVersion === 3
           ? createElement(SessionConversation, {
               presentation: props.turnPresentation,
+              theme: props.theme,
               activeRun:
                 props.activeRun === undefined || !isActiveRun(props.activeRun.status)
                   ? undefined

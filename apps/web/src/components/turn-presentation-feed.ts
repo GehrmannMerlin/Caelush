@@ -58,6 +58,7 @@ export interface TurnPresentationFeedProps {
 
 export interface TurnPresentationProps {
   readonly turn: SessionTurnPresentationTurnV3;
+  readonly theme?: ResolvedTheme | undefined;
   readonly optimisticUser?: Extract<TranscriptEntry, { kind: "USER" }> | undefined;
   readonly activeRun?: { readonly id: string; readonly status: RunStatus } | undefined;
   readonly liveActivity?: LiveActivityState | undefined;
@@ -66,6 +67,7 @@ export interface TurnPresentationProps {
 
 export interface SessionConversationProps {
   readonly presentation: Extract<SessionTurnPresentationResponse, { capabilityVersion: 3 }>;
+  readonly theme?: ResolvedTheme | undefined;
   readonly optimisticUsers?: readonly Extract<TranscriptEntry, { kind: "USER" }>[] | undefined;
   readonly activeRun?: { readonly id: string; readonly status: RunStatus } | undefined;
   readonly liveActivity?: LiveActivityState | undefined;
@@ -173,6 +175,7 @@ export function SessionConversation(props: SessionConversationProps): ReactEleme
       return createElement(TurnPresentation, {
         key: turn.runId,
         turn,
+        theme: props.theme,
         ...(optimisticUser === undefined ? {} : { optimisticUser }),
         ...(props.activeRun === undefined ? {} : { activeRun: props.activeRun }),
         ...(props.liveActivity === undefined ? {} : { liveActivity: props.liveActivity }),
@@ -244,6 +247,7 @@ export function TurnPresentation(props: TurnPresentationProps): ReactElement {
     createElement(TurnPresentationContent, {
       items: props.turn.items,
       turn: props.turn,
+      theme: props.theme ?? "light",
       ...(props.optimisticUser === undefined ? {} : { optimisticUser: props.optimisticUser }),
       runId: props.turn.runId,
       conversationTurnId: props.turn.conversationTurnId,
@@ -263,6 +267,7 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
   if (props.presentation.capabilityVersion === 3) {
     return createElement(SessionConversation, {
       presentation: props.presentation,
+      theme: props.theme ?? "light",
       ...(props.activeRun === undefined ? {} : { activeRun: props.activeRun }),
       ...(props.liveActivity === undefined ? {} : { liveActivity: props.liveActivity }),
       ...(props.timeline === undefined ? {} : { timeline: props.timeline }),

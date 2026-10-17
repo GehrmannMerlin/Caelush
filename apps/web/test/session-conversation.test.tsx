@@ -286,6 +286,22 @@ describe("SessionConversation V3 rendering", () => {
     expect(html.lastIndexOf("prompt-composer")).toBeGreaterThan(finalTwo);
   });
 
+  it("passes the selected dark appearance into the canonical SessionWorkspace conversation", () => {
+    const html = renderToStaticMarkup(
+      <SessionWorkspace
+        title="深色会话"
+        history={[]}
+        turnPresentation={turnPresentation()}
+        theme="dark"
+        composer={<footer className="prompt-composer">输入</footer>}
+      />,
+    );
+
+    expect(html).toMatch(
+      /class="caelush-brand turn-presentation-logo" src="[^"]*caelush-logo-white\.png"[^>]*data-caelush-brand-theme="dark"/u,
+    );
+  });
+
   it("keeps Final answers outside collapsed Process and safely renders an empty active Turn", () => {
     const presentation: SessionTurnPresentationResponseV3 = {
       capabilityVersion: 3,

@@ -795,6 +795,61 @@ describe("TurnPresentationFeed", () => {
     expect(html).not.toContain(">执行过程<");
   });
 
+  it("keeps the dark appearance on the canonical V3 process title", () => {
+    const v3 = {
+      capabilityVersion: 3 as const,
+      turns: [
+        {
+          runId,
+          conversationTurnId: "turn-dark-theme",
+          runStatus: "COMPLETED" as const,
+          openedAt: 1,
+          closedAt: 3,
+          highWatermark: 3,
+          items: [
+            {
+              id: "user:dark-theme",
+              runId,
+              conversationTurnId: "turn-dark-theme",
+              ordinal: 0,
+              status: "COMPLETED" as const,
+              createdAt: 1,
+              kind: "USER" as const,
+              text: "检查主题",
+            },
+            {
+              id: "assistant:dark-commentary",
+              runId,
+              conversationTurnId: "turn-dark-theme",
+              ordinal: 1,
+              status: "COMPLETED" as const,
+              createdAt: 2,
+              kind: "ASSISTANT" as const,
+              phase: "COMMENTARY" as const,
+              text: "正在执行。",
+            },
+            {
+              id: "assistant:dark-final",
+              runId,
+              conversationTurnId: "turn-dark-theme",
+              ordinal: 2,
+              status: "COMPLETED" as const,
+              createdAt: 3,
+              kind: "ASSISTANT" as const,
+              phase: "FINAL_ANSWER" as const,
+              text: "已完成。",
+            },
+          ],
+        },
+      ],
+    } satisfies Extract<SessionTurnPresentationResponse, { capabilityVersion: 3 }>;
+
+    const html = renderToStaticMarkup(<TurnPresentationFeed presentation={v3} theme="dark" />);
+
+    expect(html).toContain('data-caelush-brand-theme="dark"');
+    expect(html).toContain("caelush-logo-white");
+  });
+
   it("places task elapsed time beside the logo and freezes it at the matching Run summary", () => {
     const startedAt = new Date(2026, 9, 4, 12, 0, 0).getTime();
     const completedAt = startedAt + 125_000;

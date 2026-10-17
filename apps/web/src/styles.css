@@ -8845,9 +8845,38 @@ body,
   color: var(--caelush-muted);
 }
 
-.prompt-composer {
+:root[data-caelush-theme="dark"] .prompt-composer {
   border-color: var(--caelush-border);
   background: var(--caelush-input);
+}
+
+:root[data-caelush-theme="dark"]
+  .conversation-start-brand
+  img[data-caelush-brand-kind="logo"][data-caelush-brand-theme="dark"] {
+  width: clamp(178.6px, 19vw, 205.2px);
+  max-height: none;
+}
+
+@media (max-width: 720px) {
+  :root[data-caelush-theme="dark"]
+    .conversation-start-brand
+    img[data-caelush-brand-kind="logo"][data-caelush-brand-theme="dark"] {
+    width: clamp(165.3px, 49.4vw, 205.2px);
+  }
+}
+
+:root[data-caelush-theme="dark"] .turn-presentation-logo[data-caelush-brand-theme="dark"] {
+  width: 5rem;
+  height: 1.75rem;
+  object-fit: cover;
+  object-position: center;
+}
+
+@media (max-width: 640px) {
+  :root[data-caelush-theme="dark"] .turn-presentation-logo[data-caelush-brand-theme="dark"] {
+    width: 4.25rem;
+    height: 1.5rem;
+  }
 }
 
 :root[data-caelush-theme="dark"] .prompt-input,

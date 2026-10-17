@@ -5,6 +5,14 @@ import { chromium, type Browser } from "@playwright/test";
 
 const readStyle = (relativePath: string) =>
   readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), "utf8");
+const readAssetDataUrl = (relativePath: string) =>
+  "data:image/png;base64," +
+  readFileSync(fileURLToPath(new URL(relativePath, import.meta.url))).toString("base64");
+
+const lightLogoDataUrl = readAssetDataUrl("../../../packages/ui-theme/assets/caelush-logo.png");
+const darkLogoDataUrl = readAssetDataUrl(
+  "../../../packages/ui-theme/assets/caelush-logo-white.png",
+);
 
 const appearanceStyles = [
   readStyle("../../../packages/ui-theme/src/styles/light.css"),
@@ -39,7 +47,7 @@ describe("appearance surface colors", () => {
         </aside>
         <section class="workspace-column">
           <div class="workspace-notices">notice</div>
-          <form class="prompt-composer">composer</form>
+          <form class="prompt-composer"><textarea class="prompt-input"></textarea></form>
           <article class="conversation-entry--assistant">assistant message</article>
           <article class="assistant-markdown"><a href="#">blue link</a></article>
         </section>
@@ -109,6 +117,7 @@ describe("appearance surface colors", () => {
           loadingComposer: color(".workbench-loading-composer", "backgroundColor"),
           archiveError: color(".archive-error", "backgroundColor"),
           archiveSkeleton: color(".archive-skeleton", "backgroundColor"),
+          composerInput: color(".prompt-input", "backgroundColor"),
           link: color(".assistant-markdown a", "color"),
         };
       });
@@ -122,6 +131,7 @@ describe("appearance surface colors", () => {
     expect(light.sidebarCopy).toBe("rgb(17, 24, 39)");
     expect(light.sidebarSettings).toBe("rgb(17, 24, 39)");
     expect(light.bodyText).toBe("rgb(41, 55, 82)");
+    expect(light.composer).toBe("rgb(255, 255, 255)");
 
     await page.evaluate(() => {
       document.documentElement.dataset.caelushTheme = "dark";
@@ -134,6 +144,7 @@ describe("appearance surface colors", () => {
     expect(dark.sidebar).toBe("rgb(27, 27, 27)");
     expect(dark.sidebarSettings).toBe("rgb(243, 243, 243)");
     expect(dark.composer).toBe("rgb(54, 54, 54)");
+    expect(dark.composerInput).toBe(dark.composer);
     expect(dark.notice).toBe("rgb(42, 42, 42)");
     expect(dark.assistantMessage).toBe("rgb(42, 42, 42)");
     expect(dark.workspaceDialog).toBe("rgb(42, 42, 42)");
@@ -163,6 +174,7 @@ describe("appearance surface colors", () => {
     const returnedToLight = await readColors();
     expect(returnedToLight.sidebar).toBe(light.sidebar);
     expect(returnedToLight.composer).toBe(light.composer);
+    expect(returnedToLight.composerInput).toBe(light.composerInput);
     expect(returnedToLight.workspaceDialog).toBe(light.workspaceDialog);
     expect(returnedToLight.settingsDialog).toBe(light.settingsDialog);
     expect(returnedToLight.modelMenu).toBe(light.modelMenu);
@@ -180,5 +192,141 @@ describe("appearance surface colors", () => {
     expect(returnedToLight.loadingComposer).toBe(light.loadingComposer);
     expect(returnedToLight.archiveError).toBe(light.archiveError);
     expect(returnedToLight.archiveSkeleton).toBe(light.archiveSkeleton);
+  });
+
+  it("keeps dark welcome and process logos optically the same size as their light variants", async () => {
+    for (const viewport of [
+      { width: 2560, height: 1392 },
+      { width: 390, height: 844 },
+    ]) {
+      const page = await browser.newPage({ viewport });
+      await page.setContent(
+        [
+          '<!doctype html><html data-caelush-theme="light"><head></head><body>',
+          '<div class="conversation-start-brand"><img id="welcome-logo" class="caelush-brand" data-caelush-brand-kind="logo" data-caelush-brand-theme="light" src="',
+          lightLogoDataUrl,
+          '"></div>',
+          '<details class="turn-presentation-process"><summary><span class="turn-presentation-summary-copy">',
+          '<img id="process-logo" class="caelush-brand turn-presentation-logo" data-caelush-brand-kind="logo" data-caelush-brand-theme="light" src="',
+          lightLogoDataUrl,
+          '"><span class="turn-presentation-task-elapsed">用时</span></span></summary></details>',
+          '<form class="prompt-composer"><textarea class="prompt-input"></textarea></form>',
+          "</body></html>",
+        ].join(""),
+      );
+      await page.addStyleTag({ content: appearanceStyles });
+      await page.addStyleTag({
+        content:
+          "*, *::before, *::after { animation: none !important; transition: none !important; }",
+      });
+
+      const measureVisibleLogo = (selector: string) =>
+        page.evaluate(async (imageSelector) => {
+          const image = document.querySelector<HTMLImageElement>(imageSelector);
+          if (image === null) throw new Error("Missing logo image: " + imageSelector);
+          await image.decode();
+          const canvas = document.createElement("canvas");
+          canvas.width = image.naturalWidth;
+          canvas.height = image.naturalHeight;
+          const context = canvas.getContext("2d", { willReadFrequently: true });
+          if (context === null) throw new Error("Canvas is unavailable");
+          context.drawImage(image, 0, 0);
+          const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+          let minX = canvas.width;
+          let minY = canvas.height;
+          let maxX = -1;
+          let maxY = -1;
+          for (let y = 0; y < canvas.height; y += 1) {
+            for (let x = 0; x < canvas.width; x += 1) {
+              if (pixels[(y * canvas.width + x) * 4 + 3]! <= 8) continue;
+              minX = Math.min(minX, x);
+              minY = Math.min(minY, y);
+              maxX = Math.max(maxX, x);
+              maxY = Math.max(maxY, y);
+            }
+          }
+          if (maxX < minX || maxY < minY) throw new Error("Logo image has no visible pixels");
+          const rect = image.getBoundingClientRect();
+          const style = getComputedStyle(image);
+          const scale =
+            style.objectFit === "cover"
+              ? Math.max(rect.width / canvas.width, rect.height / canvas.height)
+              : Math.min(rect.width / canvas.width, rect.height / canvas.height);
+          const contentWidth = canvas.width * scale;
+          const contentHeight = canvas.height * scale;
+          let left = rect.left + (rect.width - contentWidth) / 2 + minX * scale;
+          let right = rect.left + (rect.width - contentWidth) / 2 + (maxX + 1) * scale;
+          let top = rect.top + (rect.height - contentHeight) / 2 + minY * scale;
+          let bottom = rect.top + (rect.height - contentHeight) / 2 + (maxY + 1) * scale;
+          left = Math.max(left, rect.left);
+          right = Math.min(right, rect.right);
+          top = Math.max(top, rect.top);
+          bottom = Math.min(bottom, rect.bottom);
+          for (
+            let ancestor = image.parentElement;
+            ancestor !== null;
+            ancestor = ancestor.parentElement
+          ) {
+            const ancestorStyle = getComputedStyle(ancestor);
+            const ancestorRect = ancestor.getBoundingClientRect();
+            if (["hidden", "clip", "auto", "scroll"].includes(ancestorStyle.overflowX)) {
+              left = Math.max(left, ancestorRect.left);
+              right = Math.min(right, ancestorRect.right);
+            }
+            if (["hidden", "clip", "auto", "scroll"].includes(ancestorStyle.overflowY)) {
+              top = Math.max(top, ancestorRect.top);
+              bottom = Math.min(bottom, ancestorRect.bottom);
+            }
+          }
+          return {
+            width: Math.max(0, right - left),
+            height: Math.max(0, bottom - top),
+          };
+        }, selector);
+
+      const lightWelcome = await measureVisibleLogo("#welcome-logo");
+      const lightProcess = await measureVisibleLogo("#process-logo");
+      if (viewport.width === 2560) {
+        expect(lightWelcome.width).toBeCloseTo(189, 0);
+        expect(lightWelcome.height).toBeCloseTo(51, 0);
+        expect(lightProcess.width).toBeCloseTo(73, 0);
+        expect(lightProcess.height).toBeCloseTo(20, 0);
+      }
+      await page.evaluate(async (darkSrc) => {
+        document.documentElement.dataset.caelushTheme = "dark";
+        for (const image of document.querySelectorAll<HTMLImageElement>(
+          "#welcome-logo, #process-logo",
+        )) {
+          image.dataset.caelushBrandTheme = "dark";
+          image.src = darkSrc;
+          await image.decode();
+        }
+      }, darkLogoDataUrl);
+      const darkWelcome = await measureVisibleLogo("#welcome-logo");
+      const darkProcess = await measureVisibleLogo("#process-logo");
+
+      expect(darkWelcome.width).toBeCloseTo(lightWelcome.width, 0);
+      expect(darkWelcome.height).toBeCloseTo(lightWelcome.height, 0);
+      expect(darkProcess.width).toBeCloseTo(lightProcess.width, 0);
+      expect(darkProcess.height).toBeCloseTo(lightProcess.height, 0);
+
+      await page.evaluate(async (lightSrc) => {
+        document.documentElement.dataset.caelushTheme = "light";
+        for (const image of document.querySelectorAll<HTMLImageElement>(
+          "#welcome-logo, #process-logo",
+        )) {
+          image.dataset.caelushBrandTheme = "light";
+          image.src = lightSrc;
+          await image.decode();
+        }
+      }, lightLogoDataUrl);
+      const returnedWelcome = await measureVisibleLogo("#welcome-logo");
+      const returnedProcess = await measureVisibleLogo("#process-logo");
+      expect(returnedWelcome.width).toBeCloseTo(lightWelcome.width, 0);
+      expect(returnedWelcome.height).toBeCloseTo(lightWelcome.height, 0);
+      expect(returnedProcess.width).toBeCloseTo(lightProcess.width, 0);
+      expect(returnedProcess.height).toBeCloseTo(lightProcess.height, 0);
+      await page.close();
+    }
   });
 });
