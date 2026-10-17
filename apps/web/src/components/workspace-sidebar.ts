@@ -211,19 +211,22 @@ function renderSession(
   const selected =
     summary.session.id === props.selectedSessionId && workspace.id === props.selectedWorkspaceId;
   const title = derivePromptTitle(latestRun?.goal ?? summary.session.title ?? "新会话");
-  const statusIcon =
-    status === "RUNNING" || status === "VERIFYING" || status === "FAILED"
-      ? createElement(
-          "span",
-          {
-            className: `session-status-icon ${runStatusClass(status)}`,
-            role: "img",
-            "aria-label": runStatusLabel(status),
-            title: runStatusLabel(status),
-          },
-          createElement(RunStatusIcon, { status }),
-        )
-      : null;
+  const showStatusIcon = status === "RUNNING" || status === "VERIFYING" || status === "FAILED";
+  const statusIcon = showStatusIcon
+    ? createElement(
+        "span",
+        {
+          className: `session-status-icon ${runStatusClass(status)}`,
+          role: "img",
+          "aria-label": runStatusLabel(status),
+          title: runStatusLabel(status),
+        },
+        createElement(RunStatusIcon, { status }),
+      )
+    : null;
+  const sessionItemClasses = ["workspace-session-item"];
+  if (selected) sessionItemClasses.push("workspace-session-item--selected");
+  if (!showStatusIcon) sessionItemClasses.push("workspace-session-item--statusless");
   return createElement(
     "div",
     {
@@ -234,7 +237,7 @@ function renderSession(
       "button",
       {
         type: "button",
-        className: `workspace-session-item${selected ? " workspace-session-item--selected" : ""}`,
+        className: sessionItemClasses.join(" "),
         onClick: () => props.onSelectSession(workspace.id, summary.session.id),
         disabled: !props.canNavigate,
         "aria-current": selected ? "page" : undefined,

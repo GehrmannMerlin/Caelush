@@ -9029,13 +9029,23 @@ select {
   }
 }
 
-/* Bring session titles closer to their workspace, matching the compact tree layout. */
+/* Align session titles with workspace names, reserving an icon-width status slot. */
 .workspace-sidebar .workspace-session-group {
-  margin-left: 8px;
+  margin-left: 4px;
   padding-left: 0;
 }
 
 .workspace-sidebar .workspace-session-row .workspace-session-item {
   gap: 6px;
   padding-left: 4px;
+}
+
+.workspace-sidebar .workspace-session-row .workspace-session-item--statusless {
+  padding-left: 28px;
+}
+
+.workspace-sidebar .workspace-list-copy strong,
+.workspace-sidebar .workspace-session-title {
+  font-size: 0.74rem;
+  font-weight: 400;
 }
