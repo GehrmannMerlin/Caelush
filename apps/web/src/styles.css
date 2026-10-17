@@ -9052,8 +9052,9 @@ select {
 
 /* Keep dark sidebar controls flat and place the selected fill on the active row. */
 :root[data-caelush-theme="dark"] .workspace-sidebar .workspace-card {
-  border-color: transparent;
+  border: 0;
   background: var(--caelush-sidebar);
+  box-shadow: none;
   color: var(--caelush-text);
 }
 
@@ -9061,28 +9062,25 @@ select {
   .workspace-sidebar
   .workspace-list-item--selected:not(.workspace-list-item--has-sessions)
   .workspace-card {
+  border: 0;
   background: var(--caelush-hover);
+  box-shadow: none;
 }
 
 :root[data-caelush-theme="dark"]
   .workspace-sidebar
   .workspace-list-item--selected.workspace-list-item--has-sessions
   .workspace-card {
+  border: 0;
   background: var(--caelush-sidebar);
+  box-shadow: none;
 }
 
 :root[data-caelush-theme="dark"] .workspace-sidebar .workspace-card:hover,
-:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-card:focus-within,
-:root[data-caelush-theme="dark"]
-  .workspace-sidebar
-  .workspace-list-item--selected.workspace-list-item--has-sessions
-  .workspace-card:hover,
-:root[data-caelush-theme="dark"]
-  .workspace-sidebar
-  .workspace-list-item--selected.workspace-list-item--has-sessions
-  .workspace-card:focus-within {
-  border-color: transparent;
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-card:focus-within {
+  border: 0;
   background: var(--caelush-hover);
+  box-shadow: none;
 }
 
 :root[data-caelush-theme="dark"] .workspace-sidebar .workspace-list-button,
