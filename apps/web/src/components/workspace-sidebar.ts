@@ -6,15 +6,7 @@ import type {
   WorkspaceSessionSummary,
   SessionId,
 } from "@caelush/protocol";
-import {
-  ChevronDown,
-  ChevronRight,
-  CircleDot,
-  Folder,
-  FolderKanban,
-  FolderOpen,
-  Plus,
-} from "lucide-react";
+import { Archive, CircleDot, Folder, FolderKanban, FolderOpen, Plus } from "lucide-react";
 import { derivePromptTitle } from "../application/prompt.js";
 import { CaelushBrand } from "@caelush/ui-theme/brand";
 import type { ResolvedTheme } from "@caelush/ui-theme/appearance";
@@ -143,11 +135,6 @@ function renderWorkspace(props: WorkspaceSidebarProps, workspace: WorkspaceRecor
           "aria-current": selected ? "page" : undefined,
           disabled: !props.canNavigate,
         },
-        createElement(
-          "span",
-          { className: "workspace-expander", "aria-hidden": "true" },
-          createElement(expanded ? ChevronDown : ChevronRight, { size: 15, strokeWidth: 2.3 }),
-        ),
         createElement(expanded ? FolderOpen : Folder, {
           className: "workspace-folder-icon",
           size: 17,
@@ -161,33 +148,38 @@ function renderWorkspace(props: WorkspaceSidebarProps, workspace: WorkspaceRecor
         ),
       ),
       createElement(
-        "button",
-        {
-          type: "button",
-          className: "workspace-forget-button",
-          onClick: () => props.onArchiveWorkspace(workspace.id),
-          disabled: hasActiveRun || !props.canNavigate,
-          title: hasActiveRun ? "请先结束任务，再归档" : `归档工作区：${workspace.displayName}`,
-          "aria-label": `归档工作区：${workspace.displayName}`,
-        },
-        createElement("img", { src: archiveIcon, alt: "", "aria-hidden": true }),
+        "div",
+        { className: "workspace-card-actions" },
+        createElement(
+          "button",
+          {
+            type: "button",
+            className: "workspace-card-action-button workspace-new-session-icon-button",
+            onClick: () => props.onNewSession(workspace.id),
+            disabled: !props.canNavigate,
+            title: `在工作区“${workspace.displayName}”中新建会话`,
+            "aria-label": `在工作区“${workspace.displayName}”中新建会话`,
+          },
+          createElement(Plus, { size: 16, strokeWidth: 2.2, "aria-hidden": true }),
+        ),
+        createElement(
+          "button",
+          {
+            type: "button",
+            className: "workspace-card-action-button workspace-forget-button",
+            onClick: () => props.onArchiveWorkspace(workspace.id),
+            disabled: hasActiveRun || !props.canNavigate,
+            title: hasActiveRun ? "请先结束任务，再归档" : `归档工作区：${workspace.displayName}`,
+            "aria-label": `归档工作区：${workspace.displayName}`,
+          },
+          createElement(Archive, { size: 16, strokeWidth: 2, "aria-hidden": true }),
+        ),
       ),
     ),
     expanded
       ? createElement(
           "div",
           { className: "workspace-session-group" },
-          createElement(
-            "button",
-            {
-              type: "button",
-              className: "workspace-new-session-button",
-              onClick: () => props.onNewSession(workspace.id),
-              disabled: !props.canNavigate,
-            },
-            createElement(Plus, { size: 14, strokeWidth: 2.4, "aria-hidden": true }),
-            createElement("span", null, "新建会话"),
-          ),
           props.isDraft && selected
             ? createElement(
                 "div",

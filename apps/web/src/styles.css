@@ -8897,3 +8897,134 @@ select {
 :root[data-caelush-theme="dark"] .workspace-sidebar .workspace-list-copy small {
   color: var(--caelush-muted);
 }
+
+/* Keep workspace row actions isolated in each appearance theme. */
+:root[data-caelush-theme="light"] .workspace-sidebar {
+  --workspace-card-active-bg: #ffffff;
+  --workspace-card-active-border: var(--caelush-border);
+  --workspace-card-action-ink: #64748b;
+  --workspace-card-action-hover-bg: #f5f8ff;
+  --workspace-card-action-hover-ink: #1d4ed8;
+  --workspace-card-new-hover-bg: #eaf2ff;
+  --workspace-card-new-hover-ink: #2563eb;
+  --workspace-card-archive-hover-bg: #fff0f2;
+  --workspace-card-archive-hover-ink: #cf3f52;
+  --workspace-card-focus: #2563eb;
+}
+
+:root[data-caelush-theme="dark"] .workspace-sidebar {
+  --workspace-card-active-bg: #303030;
+  --workspace-card-active-border: #484848;
+  --workspace-card-action-ink: #a3a3a3;
+  --workspace-card-action-hover-bg: #303030;
+  --workspace-card-action-hover-ink: #f3f3f3;
+  --workspace-card-new-hover-bg: #25334d;
+  --workspace-card-new-hover-ink: #9bb8ff;
+  --workspace-card-archive-hover-bg: #3d2729;
+  --workspace-card-archive-hover-ink: #ff8a8a;
+  --workspace-card-focus: #7aa2ff;
+}
+
+:root[data-caelush-theme="light"] .workspace-sidebar .workspace-card:hover,
+:root[data-caelush-theme="light"] .workspace-sidebar .workspace-list-item--selected .workspace-card,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-card:hover,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-list-item--selected .workspace-card {
+  border-color: var(--workspace-card-active-border);
+  background: var(--workspace-card-active-bg);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="light"] .workspace-sidebar .workspace-session-group,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-session-group {
+  border-left: 0;
+}
+
+.workspace-card-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0;
+  margin-right: 4px;
+}
+
+:root[data-caelush-theme] .workspace-sidebar .workspace-card-action-button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--workspace-card-action-ink);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    opacity 140ms ease;
+}
+
+:root[data-caelush-theme] .workspace-sidebar .workspace-card:hover .workspace-card-action-button,
+:root[data-caelush-theme]
+  .workspace-sidebar
+  .workspace-card:focus-within
+  .workspace-card-action-button,
+:root[data-caelush-theme] .workspace-sidebar .workspace-card-action-button:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+:root[data-caelush-theme] .workspace-sidebar .workspace-card-action-button:focus-visible {
+  outline: 2px solid var(--workspace-card-focus);
+  outline-offset: 1px;
+}
+
+:root[data-caelush-theme="light"]
+  .workspace-sidebar
+  .workspace-new-session-icon-button:hover:not(:disabled),
+:root[data-caelush-theme="light"]
+  .workspace-sidebar
+  .workspace-new-session-icon-button:focus-visible,
+:root[data-caelush-theme="dark"]
+  .workspace-sidebar
+  .workspace-new-session-icon-button:hover:not(:disabled),
+:root[data-caelush-theme="dark"]
+  .workspace-sidebar
+  .workspace-new-session-icon-button:focus-visible {
+  background: var(--workspace-card-new-hover-bg);
+  color: var(--workspace-card-new-hover-ink);
+}
+
+:root[data-caelush-theme="light"] .workspace-sidebar .workspace-forget-button:hover:not(:disabled),
+:root[data-caelush-theme="light"] .workspace-sidebar .workspace-forget-button:focus-visible,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-forget-button:hover:not(:disabled),
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-forget-button:focus-visible {
+  background: var(--workspace-card-archive-hover-bg);
+  color: var(--workspace-card-archive-hover-ink);
+}
+
+:root[data-caelush-theme="light"] .workspace-sidebar .workspace-forget-button:hover:disabled,
+:root[data-caelush-theme="light"] .workspace-sidebar .workspace-forget-button:disabled:hover,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-forget-button:hover:disabled,
+:root[data-caelush-theme="dark"] .workspace-sidebar .workspace-forget-button:disabled:hover {
+  background: transparent;
+  color: var(--workspace-card-action-ink);
+  cursor: not-allowed;
+}
+
+@media (hover: none) {
+  :root[data-caelush-theme] .workspace-sidebar .workspace-card-action-button {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-caelush-theme] .workspace-sidebar .workspace-card-action-button {
+    transition: none;
+  }
+}
