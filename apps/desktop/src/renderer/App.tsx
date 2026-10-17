@@ -90,7 +90,6 @@ export function DesktopApp() {
   const [password, setPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [token, setToken] = useState("");
-  const [currentPassword, setCurrentPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [agentRetrying, setAgentRetrying] = useState(false);
@@ -464,16 +463,6 @@ export function DesktopApp() {
     });
   }
 
-  async function changePassword(event: FormEvent<HTMLFormElement>) {
-    await submit(event, async () => {
-      await window.caelushDesktop.account.changePassword({ currentPassword, newPassword });
-      setCurrentPassword("");
-      setNewPassword("");
-      setFeedback("密码已修改，请使用新密码重新登录。");
-      setScreen("login");
-    });
-  }
-
   async function revokeDevice(device: SafeDevice) {
     const label = device.current ? "此设备" : formatDeviceLabel(device.label);
     if (!window.confirm(`确定撤销“${label}”的访问权限吗？该设备需要重新登录。`)) return;
@@ -572,7 +561,6 @@ export function DesktopApp() {
           setFeedback(null);
           setScreen("login");
         }}
-        onChangePassword={(event) => void changePassword(event)}
         legacySummary={legacySummary}
         legacyLoading={legacyLoading}
         legacyDismissed={legacyDismissed}
@@ -582,10 +570,6 @@ export function DesktopApp() {
         onDismissLegacy={() => setLegacyDismissed(true)}
         onImportLegacy={(candidateId) => void importLegacyData(candidateId)}
         onResumeLegacy={() => void resumeLegacyImport()}
-        currentPassword={currentPassword}
-        newPassword={newPassword}
-        setCurrentPassword={setCurrentPassword}
-        setNewPassword={setNewPassword}
         profile={profile}
         profileLoading={profileLoading}
         profileLoadError={profileLoadError}
@@ -1045,23 +1029,6 @@ function AccountPageSkeleton(props: { view: AccountScreen }) {
             <span className="skeleton-block account-skeleton-profile-email" />
           </div>
         </section>
-        <section className="password-panel">
-          <div className="table-heading">
-            <div>
-              <span className="skeleton-block account-skeleton-section-title" />
-              <span className="skeleton-block account-skeleton-copy" />
-            </div>
-          </div>
-          <div className="account-skeleton-form">
-            {[0, 1].map((item) => (
-              <div className="account-skeleton-field" key={item}>
-                <span className="skeleton-block account-skeleton-label" />
-                <span className="skeleton-block account-skeleton-input" />
-              </div>
-            ))}
-            <span className="skeleton-block account-skeleton-submit" />
-          </div>
-        </section>
       </div>
     );
   }
@@ -1165,7 +1132,6 @@ function AccountHome(props: {
   onNavigate(screen: AccountScreen): void;
   onReconnect(): void;
   onRevoke(device: SafeDevice): void;
-  onChangePassword(event: FormEvent<HTMLFormElement>): void;
   legacySummary: LegacyDataImportSummary | null;
   legacyLoading: boolean;
   legacyDismissed: boolean;
@@ -1175,10 +1141,6 @@ function AccountHome(props: {
   onDismissLegacy(): void;
   onImportLegacy(candidateId: string): void;
   onResumeLegacy(): void;
-  currentPassword: string;
-  newPassword: string;
-  setCurrentPassword(value: string): void;
-  setNewPassword(value: string): void;
   profile: DesktopAccountProfile | null;
   profileLoading: boolean;
   profileLoadError: string | null;
@@ -1284,11 +1246,6 @@ function AccountHome(props: {
               busy={props.busy}
               onSelectAvatar={props.onSelectAvatar}
               onSave={props.onSaveProfile}
-              currentPassword={props.currentPassword}
-              newPassword={props.newPassword}
-              setCurrentPassword={props.setCurrentPassword}
-              setNewPassword={props.setNewPassword}
-              onChangePassword={props.onChangePassword}
             />
           )}
           {props.activeView === "appearance" && (

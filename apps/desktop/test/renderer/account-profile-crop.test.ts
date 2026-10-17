@@ -34,10 +34,6 @@ function TestHarness() {
       online={true}
       busy={false}
       loadError={null}
-      currentPassword=""
-      newPassword=""
-      setCurrentPassword={() => {}}
-      setNewPassword={() => {}}
       onSelectAvatar={() => {
         const { base64, delay } = window.avatarFixture;
         const selected = {
@@ -72,7 +68,6 @@ function TestHarness() {
         setProfile(updated);
         return updated;
       }}
-      onChangePassword={(event) => event.preventDefault()}
     />
   );
 }
@@ -164,6 +159,14 @@ describe.skipIf(!existsSync(chromium.executablePath()))("account profile editing
       .toMatchObject({ displayName: "Crop test", removeAvatar: false });
     return page.evaluate("window.avatarTest.saved");
   }
+
+  it("keeps the profile identity but does not show password-change controls", async () => {
+    await mountProfile();
+
+    expect(await page.locator(".profile-card").isVisible()).toBe(true);
+    expect(await page.getByText("crop@example.test", { exact: true }).isVisible()).toBe(true);
+    expect(await page.locator(".password-panel").count()).toBe(0);
+  });
 
   it("saves a display name when the inline editor loses focus", async () => {
     await mountProfile();

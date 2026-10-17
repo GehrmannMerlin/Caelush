@@ -1171,14 +1171,6 @@ button:disabled {
   display: grid;
   gap: 13px;
 }
-.password-change-form {
-  display: grid;
-  max-width: 460px;
-  gap: 9px;
-}
-.password-change-form .field-label:not(:first-child) {
-  margin-top: 8px;
-}
 .compact-primary {
   min-height: 38px;
   justify-self: start;
@@ -1971,44 +1963,6 @@ button:disabled {
   overflow-wrap: anywhere;
   text-align: center;
 }
-.password-panel {
-  width: min(100%, 560px);
-  margin-inline: auto;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-}
-.password-panel .table-heading {
-  margin-bottom: 18px;
-}
-.password-panel .table-heading p {
-  margin-top: 5px;
-}
-.password-change-form {
-  max-width: none;
-  gap: 8px;
-}
-.password-change-form .input-wrap {
-  height: 43px;
-  padding: 0 2px;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  border-radius: 0;
-  background: transparent;
-}
-.password-change-form .input-wrap:focus-within {
-  border-bottom-color: var(--brand);
-  background: transparent;
-}
-.password-change-form .input-wrap input:focus-visible {
-  border: 0;
-  border-radius: 0;
-  color: var(--text);
-}
-.password-change-form .field-label:not(:first-child) {
-  margin-top: 10px;
-}
 .account-profile-banner {
   display: flex;
   align-items: center;
@@ -2221,9 +2175,6 @@ button:disabled {
 .revoke-button:hover:not(:disabled) {
   color: var(--danger);
   background: #ffe4e7;
-}
-.password-change-form {
-  gap: 11px;
 }
 .text-button:hover,
 .back-link:hover {

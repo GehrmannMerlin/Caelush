@@ -1,22 +1,5 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type FormEvent,
-  type PointerEvent,
-} from "react";
-import {
-  KeyRound,
-  LoaderCircle,
-  LockKeyhole,
-  Pencil,
-  ShieldCheck,
-  Trash2,
-  Upload,
-  X,
-} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { LoaderCircle, Pencil, ShieldCheck, Trash2, Upload, X } from "lucide-react";
 import type { DesktopAccountProfile } from "../../main/account/state.js";
 import type { AccountProfileUpdateInput } from "../../main/cloud/schemas.js";
 
@@ -39,16 +22,11 @@ interface Props {
   readonly online: boolean;
   readonly busy: boolean;
   readonly loadError: string | null;
-  readonly currentPassword: string;
-  readonly newPassword: string;
-  setCurrentPassword(value: string): void;
-  setNewPassword(value: string): void;
   onSelectAvatar(): Promise<{
     readonly mimeType: AvatarMimeType;
     readonly bytes: Uint8Array;
   } | null>;
   onSave(input: AccountProfileUpdateInput): Promise<DesktopAccountProfile>;
-  onChangePassword(event: FormEvent<HTMLFormElement>): void;
 }
 
 export function AccountProfileScreen(props: Props) {
@@ -305,61 +283,6 @@ export function AccountProfileScreen(props: Props) {
             )}
           </div>
         )}
-      </section>
-
-      <section className="password-panel">
-        <div className="table-heading">
-          <div>
-            <h3>修改密码</h3>
-            <p>修改密码后，其他已登录的账户会话将会失效。</p>
-          </div>
-        </div>
-        {!props.online && (
-          <div className="account-profile-banner">请先连接云端，再修改账户密码。</div>
-        )}
-        <form className="password-change-form" onSubmit={props.onChangePassword}>
-          <label className="field-label" htmlFor="current-password">
-            当前密码
-          </label>
-          <div className="input-wrap">
-            <LockKeyhole size={16} aria-hidden="true" />
-            <input
-              id="current-password"
-              type="password"
-              autoComplete="current-password"
-              minLength={1}
-              maxLength={1024}
-              required
-              disabled={!props.online || props.busy}
-              value={props.currentPassword}
-              onChange={(event) => props.setCurrentPassword(event.target.value)}
-            />
-          </div>
-          <label className="field-label" htmlFor="new-password">
-            新密码
-          </label>
-          <div className="input-wrap">
-            <KeyRound size={16} aria-hidden="true" />
-            <input
-              id="new-password"
-              type="password"
-              autoComplete="new-password"
-              minLength={1}
-              maxLength={1024}
-              required
-              disabled={!props.online || props.busy}
-              value={props.newPassword}
-              onChange={(event) => props.setNewPassword(event.target.value)}
-            />
-          </div>
-          <button
-            className="primary-button compact-primary"
-            type="submit"
-            disabled={!props.online || props.busy}
-          >
-            {props.busy ? <LoaderCircle size={15} className="spin" /> : null} 修改密码
-          </button>
-        </form>
       </section>
 
       {cropSource !== null && (
