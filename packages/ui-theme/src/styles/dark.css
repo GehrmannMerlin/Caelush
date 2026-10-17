@@ -94,6 +94,6 @@
   --turn-process-muted: var(--caelush-muted);
   --turn-process-subtle: var(--caelush-subtle);
   --turn-process-line: var(--caelush-border);
-  --turn-process-panel: var(--caelush-card);
+  --turn-process-panel: var(--caelush-page);
   --turn-process-accent: var(--caelush-link);
 }

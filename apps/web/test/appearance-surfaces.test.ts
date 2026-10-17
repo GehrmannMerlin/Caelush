@@ -194,6 +194,90 @@ describe("appearance surface colors", () => {
     expect(returnedToLight.archiveSkeleton).toBe(light.archiveSkeleton);
   });
 
+  it("keeps execution surfaces dark, confirms full-access text contrast, and sizes the permission control to its label", async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <!doctype html>
+      <html data-caelush-theme="dark">
+      <body>
+        <details class="turn-presentation-process" open>
+          <div class="turn-presentation-body">
+            <pre class="turn-presentation-tool-output">tool output</pre>
+          </div>
+        </details>
+        <select class="permission-selector-select" id="permission">
+          <option value="read">只读</option>
+          <option value="workspace">工作区内修改</option>
+          <option value="full">完全访问</option>
+        </select>
+        <div class="permission-selector-confirmation">
+          <h2>确认完全权限</h2>
+          <p>完全权限会让 Agent 使用主机用户范围执行文件、进程和网络操作。</p>
+          <div class="permission-selector-confirmation-actions">
+            <button type="button">取消</button>
+            <button type="button">确认使用完全权限</button>
+          </div>
+        </div>
+      </body>
+      </html>
+    `);
+    await page.addStyleTag({ content: appearanceStyles });
+    await page.addStyleTag({
+      content:
+        "*, *::before, *::after { animation: none !important; transition: none !important; }",
+    });
+
+    const readStyle = (selector: string) =>
+      page.locator(selector).evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          backgroundColor: style.backgroundColor,
+          color: style.color,
+          borderWidth: style.borderWidth,
+          borderRadius: style.borderRadius,
+          width: element.getBoundingClientRect().width,
+        };
+      });
+
+    expect((await readStyle(".turn-presentation-body")).backgroundColor).toBe("rgb(24, 24, 24)");
+    expect((await readStyle(".turn-presentation-tool-output")).backgroundColor).toBe(
+      "rgb(24, 24, 24)",
+    );
+    expect((await readStyle(".permission-selector-confirmation h2")).color).toBe(
+      "rgb(243, 243, 243)",
+    );
+    expect((await readStyle(".permission-selector-confirmation p")).color).toBe(
+      "rgb(243, 243, 243)",
+    );
+    expect(
+      (await readStyle(".permission-selector-confirmation-actions button:first-child")).color,
+    ).toBe("rgb(243, 243, 243)");
+    expect(
+      (await readStyle(".permission-selector-confirmation-actions button:last-child")).color,
+    ).toBe("rgb(243, 243, 243)");
+
+    const permission = page.locator("#permission");
+    expect((await readStyle("#permission")).borderWidth).toBe("0px");
+    await permission.hover();
+    expect((await readStyle("#permission")).backgroundColor).toBe("rgb(48, 48, 48)");
+    const shortPermissionWidth = (await readStyle("#permission")).width;
+    await permission.selectOption("workspace");
+    const longPermissionWidth = (await readStyle("#permission")).width;
+    expect(longPermissionWidth).toBeGreaterThan(shortPermissionWidth);
+
+    await page.evaluate(() => {
+      document.documentElement.dataset.caelushTheme = "light";
+    });
+    expect((await readStyle(".turn-presentation-tool-output")).backgroundColor).toBe(
+      "rgb(255, 255, 255)",
+    );
+    expect((await readStyle(".permission-selector-confirmation h2")).color).toBe("rgb(22, 36, 60)");
+    expect((await readStyle(".permission-selector-confirmation p")).color).toBe("rgb(75, 93, 120)");
+    expect((await readStyle("#permission")).borderWidth).toBe("0px");
+    await permission.hover();
+    expect((await readStyle("#permission")).backgroundColor).toBe("rgb(238, 240, 243)");
+  });
+
   it("keeps dark welcome and process logos optically the same size as their light variants", async () => {
     for (const viewport of [
       { width: 2560, height: 1392 },

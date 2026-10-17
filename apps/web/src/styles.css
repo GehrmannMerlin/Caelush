@@ -2346,9 +2346,11 @@ body {
 
 .permission-selector-select {
   min-height: 34px;
-  min-width: 128px;
+  width: auto;
+  min-width: 0;
+  field-sizing: content;
   padding: 6px 28px 6px 9px;
-  border: 1px solid transparent;
+  border: 0;
   border-radius: 9px;
   background: transparent;
   color: var(--web-muted);
@@ -2357,8 +2359,7 @@ body {
   font-weight: 650;
   transition:
     color 150ms ease,
-    background-color 150ms ease,
-    border-color 150ms ease;
+    background-color 150ms ease;
 }
 
 .permission-selector-select[data-empty="true"] {
@@ -2366,12 +2367,16 @@ body {
   font-weight: 600;
 }
 
-.permission-selector-select:hover:not(:disabled),
-.permission-selector-select:focus-visible {
-  border-color: var(--web-line-strong);
-  background: #fff;
+.permission-selector-select:hover:not(:disabled) {
+  background: #eef0f3;
   color: var(--web-ink-strong);
-  outline: none;
+}
+
+.permission-selector-select:focus-visible {
+  background: #eef0f3;
+  color: var(--web-ink-strong);
+  outline: 2px solid var(--caelush-focus);
+  outline-offset: 2px;
 }
 
 .permission-selector-select:disabled {
@@ -2499,7 +2504,8 @@ body {
   }
 
   .permission-selector-select {
-    width: 100%;
+    width: auto;
+    max-width: 100%;
   }
 
   .permission-selector-confirmation {
@@ -9112,6 +9118,24 @@ select {
   border-color: var(--turn-process-line);
   background: var(--turn-process-panel);
   color: var(--turn-process-ink);
+}
+
+:root[data-caelush-theme="dark"] .permission-selector-select:hover:not(:disabled),
+:root[data-caelush-theme="dark"] .permission-selector-select:focus-visible {
+  background: var(--caelush-hover);
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"] .permission-selector-confirmation h2,
+:root[data-caelush-theme="dark"] .permission-selector-confirmation p {
+  color: var(--caelush-text);
+}
+
+:root[data-caelush-theme="dark"]
+  .permission-selector-confirmation
+  .permission-selector-confirmation-actions
+  button:not(:disabled) {
+  color: var(--caelush-text);
 }
 
 :root[data-caelush-theme="dark"] .archive-error {
