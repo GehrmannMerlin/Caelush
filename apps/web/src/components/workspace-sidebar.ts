@@ -106,13 +106,16 @@ function renderWorkspace(props: WorkspaceSidebarProps, workspace: WorkspaceRecor
   const expanded = props.expandedWorkspaceIds.includes(workspace.id);
   const summaries = props.sessionSummaries[workspace.id] ?? [];
   const visibleSummaries = summaries;
+  const listItemClasses = ["workspace-list-item"];
+  if (selected) listItemClasses.push("workspace-list-item--selected");
+  if (summaries.length > 0) listItemClasses.push("workspace-list-item--has-sessions");
   const hasActiveRun = summaries.some(
     (summary) => summary.latestRun !== undefined && nonTerminalRuns([summary.latestRun]).length > 0,
   );
   return createElement(
     "li",
     {
-      className: `workspace-list-item${selected ? " workspace-list-item--selected" : ""}`,
+      className: listItemClasses.join(" "),
       key: workspace.id,
     },
     createElement(
