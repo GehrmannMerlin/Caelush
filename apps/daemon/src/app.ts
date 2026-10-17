@@ -165,7 +165,11 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   if (dependencies.providerUsage !== undefined) {
     registerUsageSummaryRoute(app, dependencies.providerUsage);
     const getActivity = dependencies.providerUsage.getActivity;
-    if (getActivity !== undefined) registerUsageActivityRoute(app, { getActivity });
+    if (getActivity !== undefined) {
+      registerUsageActivityRoute(app, {
+        getActivity: getActivity.bind(dependencies.providerUsage),
+      });
+    }
   }
   if (dependencies.execution !== undefined) registerExecutionRoutes(app, dependencies.execution);
   if (dependencies.web !== undefined) registerWebStaticHost(app, dependencies.web);
