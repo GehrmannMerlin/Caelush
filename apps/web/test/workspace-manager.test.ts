@@ -61,7 +61,7 @@ describe("WebWorkspaceManager", () => {
     await old;
     expect(manager.getSnapshot().workspaces).toEqual([]);
   });
-  it("loads, persists, expands, and selects Workspace-scoped Session summaries", async () => {
+  it("keeps selected Workspaces without Session history collapsed unless explicitly expanded", async () => {
     const first = workspace("first");
     const second = workspace("second");
     const client = {
@@ -81,15 +81,68 @@ describe("WebWorkspaceManager", () => {
     expect(manager.getSnapshot()).toMatchObject({
       status: "READY",
       selectedWorkspaceId: second.id,
-      expandedWorkspaceIds: [second.id],
+      expandedWorkspaceIds: [],
     });
     expect(client.listWorkspaceSessions).toHaveBeenCalledWith(second.id);
 
-    manager.toggleWorkspaceExpanded(first.id);
+    manager.expandWorkspace(first.id);
     expect(manager.getSnapshot().expandedWorkspaceIds).toContain(first.id);
+    manager.toggleWorkspaceExpanded(first.id);
     await manager.selectWorkspace(first.id);
     expect(manager.getSnapshot().selectedWorkspaceId).toBe(first.id);
+    expect(manager.getSnapshot().expandedWorkspaceIds).not.toContain(first.id);
+
+    await manager.loadWorkspaces();
+    expect(manager.getSnapshot().selectedWorkspaceId).toBe(first.id);
+    expect(manager.getSnapshot().expandedWorkspaceIds).not.toContain(first.id);
+
+    manager.expandWorkspace(first.id);
+    expect(manager.getSnapshot().expandedWorkspaceIds).toContain(first.id);
+    await manager.loadWorkspaces();
+    expect(manager.getSnapshot().expandedWorkspaceIds).toContain(first.id);
     expect(storage.get("caelush:selected-workspace")).toContain(first.id);
+  });
+
+  it("still auto-expands the selected Workspace when Session history exists", async () => {
+    const first = workspace("first");
+    const second = workspace("second");
+    const history = { session: { id: "session-1" }, lastActivityAt: 1 } as never;
+    const manager = new WebWorkspaceManager({
+      client: {
+        listWorkspaces: async () => ({ items: [first, second] }),
+        listWorkspaceSessions: async (workspaceId) => ({
+          items: workspaceId === second.id ? [history] : [],
+        }),
+        createWorkspace: vi.fn(),
+        archiveWorkspace: vi.fn(),
+      },
+    });
+
+    await manager.loadWorkspaces();
+    expect(manager.getSnapshot().expandedWorkspaceIds).not.toContain(first.id);
+
+    await manager.selectWorkspace(second.id);
+    expect(manager.getSnapshot().expandedWorkspaceIds).toContain(second.id);
+  });
+
+  it("expands an empty Workspace when selection is part of starting a Session", async () => {
+    const selected = workspace("selected");
+    const target = workspace("new-session");
+    const manager = new WebWorkspaceManager({
+      client: {
+        listWorkspaces: async () => ({ items: [selected, target] }),
+        listWorkspaceSessions: async () => ({ items: [] }),
+        createWorkspace: vi.fn(),
+        archiveWorkspace: vi.fn(),
+      },
+    });
+
+    await manager.loadWorkspaces();
+    expect(manager.getSnapshot().expandedWorkspaceIds).not.toContain(target.id);
+
+    await manager.selectWorkspace(target.id, { expand: true });
+    expect(manager.getSnapshot().selectedWorkspaceId).toBe(target.id);
+    expect(manager.getSnapshot().expandedWorkspaceIds).toContain(target.id);
   });
 
   it("registers a Workspace, selects it, and reloads its summaries", async () => {
@@ -107,8 +160,8 @@ describe("WebWorkspaceManager", () => {
     await expect(manager.registerWorkspace("D:/workspace/created")).resolves.toEqual(created);
     expect(manager.getSnapshot()).toMatchObject({
       selectedWorkspaceId: created.id,
-      expandedWorkspaceIds: expect.arrayContaining([created.id]),
     });
+    expect(manager.getSnapshot().expandedWorkspaceIds).not.toContain(created.id);
     expect(client.createWorkspace).toHaveBeenCalledWith({ path: "D:/workspace/created" });
   });
 

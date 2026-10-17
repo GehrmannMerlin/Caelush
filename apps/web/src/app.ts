@@ -408,8 +408,9 @@ export function WebHostApp(props: {
   const onNewSession = (workspaceId: WorkspaceId) => {
     if (workspaceId !== selectedWorkspaceId) {
       pendingDraftWorkspaceId.current = workspaceId;
-      void workspaceManager.selectWorkspace(workspaceId);
+      void workspaceManager.selectWorkspace(workspaceId, { expand: true });
     } else {
+      workspaceManager.expandWorkspace(workspaceId);
       sessionManager?.beginDraft();
     }
     closeSidebar();
