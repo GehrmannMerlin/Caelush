@@ -1,5 +1,5 @@
 import { createElement, useEffect, useRef, useState, type ReactElement } from "react";
-import { Archive, LogOut, RefreshCw, Settings, SlidersHorizontal } from "lucide-react";
+import { Archive, LogOut, RefreshCw, Settings, SlidersHorizontal, Sun } from "lucide-react";
 
 export interface WorkspaceSidebarDesktopActions {
   readonly accountHref?: string | undefined;
@@ -12,6 +12,7 @@ export interface WorkspaceSidebarDesktopActions {
 
 export interface WorkspaceSettingsMenuProps {
   readonly onOpenArchives?: (() => void) | undefined;
+  readonly onOpenAppearance?: (() => void) | undefined;
   readonly archiveHref?: string | undefined;
   readonly onSelect: () => void;
   readonly onCheckUpdates?: (() => void) | undefined;
@@ -38,6 +39,19 @@ export function WorkspaceSettingsMenu(props: WorkspaceSettingsMenuProps): ReactE
       createElement(SlidersHorizontal, { size: 16, strokeWidth: 2, "aria-hidden": true }),
       createElement("span", null, "模型与配置"),
     ),
+    props.onOpenAppearance === undefined
+      ? null
+      : createElement(
+          "button",
+          {
+            type: "button",
+            className: "workspace-settings-menu-item",
+            role: "menuitem",
+            onClick: props.onOpenAppearance,
+          },
+          createElement(Sun, { size: 16, strokeWidth: 2, "aria-hidden": true }),
+          createElement("span", null, "外观"),
+        ),
     props.archiveHref !== undefined
       ? createElement(
           "a",
@@ -90,6 +104,7 @@ export function WorkspaceSettingsMenu(props: WorkspaceSettingsMenuProps): ReactE
 export function WorkspaceSidebarFooter(props: {
   readonly onOpenArchives?: (() => void) | undefined;
   readonly onOpenSettings?: (() => void) | undefined;
+  readonly onOpenAppearance?: (() => void) | undefined;
   readonly desktopActions?: WorkspaceSidebarDesktopActions | undefined;
 }): ReactElement {
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
@@ -176,6 +191,7 @@ export function WorkspaceSidebarFooter(props: {
       settingsMenuOpen
         ? createElement(WorkspaceSettingsMenu, {
             onOpenArchives: select(props.onOpenArchives),
+            onOpenAppearance: select(props.onOpenAppearance),
             archiveHref: desktopActions?.archiveHref,
             onSelect: () => {
               setSettingsMenuOpen(false);

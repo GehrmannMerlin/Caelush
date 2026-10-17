@@ -49,6 +49,7 @@ export interface WorkspaceSidebarProps {
   readonly onArchiveWorkspace: (workspaceId: WorkspaceId) => void;
   readonly onArchiveSession: (sessionId: SessionId) => void;
   readonly onOpenSettings?: () => void;
+  readonly onOpenAppearance?: (() => void) | undefined;
   readonly onOpenArchives?: () => void;
   readonly desktopActions?: WorkspaceSidebarDesktopActions | undefined;
 }
@@ -101,6 +102,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
     createElement(WorkspaceSidebarFooter, {
       onOpenArchives: props.onOpenArchives,
       onOpenSettings: props.onOpenSettings,
+      onOpenAppearance: props.onOpenAppearance,
       desktopActions: props.desktopActions,
     }),
   );

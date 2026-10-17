@@ -168,4 +168,29 @@ describe("Desktop appearance IPC", () => {
     }
     expect(test.eventHandlers.size).toBe(0);
   });
+
+  it("sends the validated startup snapshot in its first synchronous reply", () => {
+    const test = fixture();
+    try {
+      const initialize = test.eventHandlers.get(IPC_CHANNELS.appearance.initialSnapshot)!;
+      const event = { ...test.event, returnValue: undefined as unknown };
+      let assignments = 0;
+      let firstReply: unknown;
+      Object.defineProperty(event, "returnValue", {
+        configurable: true,
+        get: () => firstReply,
+        set: (value: unknown) => {
+          assignments += 1;
+          if (assignments === 1) firstReply = value;
+        },
+      });
+
+      initialize(event);
+
+      expect(assignments).toBe(1);
+      expect(firstReply).toEqual({ preference: "light", resolvedTheme: "light", revision: 0 });
+    } finally {
+      test.dispose();
+    }
+  });
 });

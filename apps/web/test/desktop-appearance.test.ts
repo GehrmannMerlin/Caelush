@@ -21,6 +21,27 @@ function snapshot(
 }
 
 describe("Desktop appearance adapter", () => {
+  it("reconciles the main-process theme during workbench startup", async () => {
+    const light = snapshot("light", "light", 0);
+    const dark = snapshot("dark", "dark", 7);
+    const bridge = {
+      capabilityVersion: 1 as const,
+      initialSnapshot: light,
+      getSnapshot: vi.fn(async () => dark),
+      setPreference: vi.fn(async () => dark),
+      subscribe: vi.fn(() => () => undefined),
+    };
+    const applyTheme = vi.fn();
+
+    const controller = createDesktopAppearanceController(bridge, applyTheme);
+
+    await vi.waitFor(() => expect(controller.getSnapshot()).toEqual(dark));
+    expect(bridge.getSnapshot).toHaveBeenCalledOnce();
+    expect(applyTheme).toHaveBeenNthCalledWith(1, "light");
+    expect(applyTheme).toHaveBeenNthCalledWith(2, "dark");
+    controller.dispose();
+  });
+
   it("previews immediately and reconciles from the latest main-process snapshot", async () => {
     let publish: ((value: AppearanceSnapshot) => void) | undefined;
     let mainSnapshot = snapshot("light", "light", 0);
@@ -60,7 +81,7 @@ describe("Desktop appearance adapter", () => {
     lightWrite.resolve(mainSnapshot);
     await lightRequest;
 
-    expect(bridge.getSnapshot).toHaveBeenCalledOnce();
+    expect(bridge.getSnapshot).toHaveBeenCalledTimes(2);
     expect(controller.getSnapshot()).toMatchObject({ preference: "light", resolvedTheme: "light" });
     expect(changes[0]).toMatchObject({ preference: "dark", resolvedTheme: "dark" });
     expect(applyTheme).toHaveBeenCalledWith("dark");
@@ -81,7 +102,7 @@ describe("Desktop appearance adapter", () => {
     const controller = createDesktopAppearanceController(bridge, vi.fn());
 
     await expect(controller.setPreference("dark")).rejects.toThrow("private storage detail");
-    expect(bridge.getSnapshot).toHaveBeenCalledOnce();
+    expect(bridge.getSnapshot).toHaveBeenCalledTimes(2);
     expect(controller.getSnapshot()).toMatchObject({ preference: "light", resolvedTheme: "light" });
     controller.dispose();
   });

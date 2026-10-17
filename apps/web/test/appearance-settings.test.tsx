@@ -4,7 +4,7 @@ import { SettingsSurface } from "../src/components/settings-surface.js";
 import { WorkspaceSidebar } from "../src/components/workspace-sidebar.js";
 
 describe("appearance settings", () => {
-  it("offers accessible light, dark, and system appearance options beside model settings", () => {
+  it("keeps the model configuration dialog focused on models and API", () => {
     const html = renderToStaticMarkup(
       <SettingsSurface
         providers={[]}
@@ -12,22 +12,15 @@ describe("appearance settings", () => {
         onClose={vi.fn()}
         onConnect={vi.fn()}
         onDisconnect={vi.fn()}
-        appearanceSnapshot={{ preference: "system", resolvedTheme: "dark", revision: 2 }}
-        onPreferenceChange={vi.fn()}
       />,
     );
 
-    expect(html).toContain('role="tablist"');
-    expect(html).toContain('role="tab"');
+    expect(html).not.toContain('role="tablist"');
+    expect(html).not.toContain('role="tab"');
     expect(html).toContain("模型与 API");
-    expect(html).toContain("外观");
-    expect(html).toContain('data-selected="true"');
-    expect(html).toContain('checked="" value="system"');
-    expect(html.match(/checked=""/g)).toHaveLength(1);
-    expect(html).toContain("浅色");
-    expect(html).toContain("深色");
-    expect(html).toContain("跟随系统");
-    expect(html).toContain("当前使用深色");
+    expect(html).not.toContain("外观");
+    expect(html).not.toContain("颜色模式");
+    expect(html).not.toContain('type="radio"');
   });
 
   it("uses the white Caelush logo in the dark workbench without changing its brand slot", () => {

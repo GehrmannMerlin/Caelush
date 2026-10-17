@@ -118,6 +118,19 @@ describe("WorkspaceSidebar", () => {
     expect(html.match(/role="menuitem"/g)).toHaveLength(1);
   });
 
+  it("offers a separate appearance action only when the Web host supplies it", () => {
+    const onOpenAppearance = vi.fn();
+    const web = renderToStaticMarkup(
+      <WorkspaceSettingsMenu onSelect={vi.fn()} onOpenAppearance={onOpenAppearance} />,
+    );
+    const desktop = renderToStaticMarkup(<WorkspaceSettingsMenu onSelect={vi.fn()} />);
+
+    expect(web).toContain("模型与配置");
+    expect(web).toContain("外观");
+    expect(web.match(/role="menuitem"/g)).toHaveLength(2);
+    expect(desktop).not.toContain("外观");
+  });
+
   it("renders Desktop account and native actions only when the host injects them", () => {
     const html = renderToStaticMarkup(
       <WorkspaceSidebar

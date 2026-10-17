@@ -41,6 +41,7 @@ import { sessionArchiveStore } from "./application/session-archive-store.js";
 import { archiveErrorMessage } from "./application/archive-errors.js";
 import { PromptComposer } from "./components/prompt-composer.js";
 import { SessionWorkspace } from "./components/session-workspace.js";
+import { WorkbenchAppearanceRoute } from "./components/appearance-page.js";
 import {
   PermissionPresetSelectionStore,
   SessionSelectionStore,
@@ -114,7 +115,6 @@ export function WebHostApp(props: {
 }): ReactElement {
   const clientHost = useMemo(() => resolveClientHostIntegration(), []);
   const desktopHostLoadingUI = clientHost.loadingUi;
-  const appearanceSupported = clientHost.kind !== "DESKTOP" || clientHost.appearance !== undefined;
   const [state, setState] = useState<WebHostState>(createInitialWebHostState);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
@@ -122,6 +122,7 @@ export function WebHostApp(props: {
   const [workspacePickerBusy, setWorkspacePickerBusy] = useState(false);
   const [workspaceActionError, setWorkspaceActionError] = useState<string | undefined>();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [archivesOpen, setArchivesOpen] = useState(false);
   const [desktopPanelApi, setDesktopPanelApi] = useState<DesktopPanelApi | null>(null);
   const [sidebarAccountProfile, setSidebarAccountProfile] = useState<DesktopSidebarProfile | null>(
@@ -508,8 +509,7 @@ export function WebHostApp(props: {
     snapshot: sessionSnapshot,
     appearanceController: props.appearanceController,
     appearanceSnapshot,
-    appearanceSupported,
-    appearanceSaveError: clientHost.kind === "DESKTOP" ? "无法保存外观设置，请重试。" : undefined,
+    appearanceOpen,
     sidebarOpen,
     workspaceDialogOpen,
     workspacePath,
@@ -533,11 +533,21 @@ export function WebHostApp(props: {
     onRegisterWorkspace,
     settingsOpen,
     onOpenSettings: () => {
+      setAppearanceOpen(false);
       setSettingsOpen(true);
       setSidebarOpen(false);
     },
+    onOpenAppearance:
+      clientHost.kind === "WEB"
+        ? () => {
+            setSettingsOpen(false);
+            setAppearanceOpen(true);
+            setSidebarOpen(false);
+          }
+        : undefined,
     desktopActions,
     onCloseSettings: () => setSettingsOpen(false),
+    onCloseAppearance: () => setAppearanceOpen(false),
   });
 }
 
@@ -564,8 +574,7 @@ function renderWorkspaceApp(input: {
   readonly snapshot: WebSessionSnapshot;
   readonly appearanceController: AppearanceController;
   readonly appearanceSnapshot: ReturnType<AppearanceController["getSnapshot"]>;
-  readonly appearanceSupported: boolean;
-  readonly appearanceSaveError?: string | undefined;
+  readonly appearanceOpen: boolean;
   readonly sidebarOpen: boolean;
   readonly workspaceDialogOpen: boolean;
   readonly workspacePath: string;
@@ -586,8 +595,10 @@ function renderWorkspaceApp(input: {
   readonly onRegisterWorkspace: (event: FormEvent<HTMLFormElement>) => void;
   readonly settingsOpen: boolean;
   readonly onOpenSettings: () => void;
+  readonly onOpenAppearance?: (() => void) | undefined;
   readonly desktopActions?: WorkspaceSidebarDesktopActions | undefined;
   readonly onCloseSettings: () => void;
+  readonly onCloseAppearance: () => void;
 }): ReactElement {
   const { snapshot, selectedWorkspace } = input;
   const selectedCandidate = snapshot.candidates.find(
@@ -664,7 +675,7 @@ function renderWorkspaceApp(input: {
     onSubmit: async (prompt) => (await input.sessionManager?.submitPrompt(prompt)) ?? false,
   });
 
-  return createElement(
+  const workbench = createElement(
     "main",
     { className: "web-app-shell" },
     createElement(
@@ -716,6 +727,7 @@ function renderWorkspaceApp(input: {
             onArchiveSession: input.onArchiveSession,
             onOpenArchives: input.onOpenArchives,
             onOpenSettings: input.onOpenSettings,
+            onOpenAppearance: input.onOpenAppearance,
             desktopActions: input.desktopActions,
           }),
       createElement(
@@ -837,11 +849,6 @@ function renderWorkspaceApp(input: {
           createElement(SettingsSurface, {
             providers: snapshot.aiProviders ?? [],
             models: snapshot.modelDirectory ?? [],
-            appearanceSnapshot: input.appearanceSnapshot,
-            onPreferenceChange: (preference) =>
-              input.appearanceController.setPreference(preference),
-            appearanceSupported: input.appearanceSupported,
-            appearanceSaveError: input.appearanceSaveError,
             onClose: input.onCloseSettings,
             onConnect: (providerId, apiKey) =>
               input.sessionManager?.connectProvider(providerId, apiKey) ??
@@ -852,6 +859,13 @@ function renderWorkspaceApp(input: {
         )
       : null,
   );
+  return createElement(WorkbenchAppearanceRoute, {
+    isOpen: input.appearanceOpen,
+    snapshot: input.appearanceSnapshot,
+    onBack: input.onCloseAppearance,
+    onPreferenceChange: (preference) => input.appearanceController.setPreference(preference),
+    workbench,
+  });
 }
 
 export function shouldDisableComposerInteraction(

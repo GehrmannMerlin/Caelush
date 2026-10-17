@@ -526,7 +526,7 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
       "LOGIN_OR_AGENT",
     );
     appearanceStartupHandler = (event) => {
-      event.returnValue = null;
+      let reply: AppearanceSnapshot | null = null;
       try {
         assertTrustedCaller(
           event as unknown as IpcMainInvokeEvent,
@@ -535,10 +535,12 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
           "LOGIN_OR_AGENT",
         );
         const snapshot = AppearanceSnapshotSchema.safeParse(appearanceController.getSnapshot());
-        if (snapshot.success) event.returnValue = Object.freeze({ ...snapshot.data });
+        if (snapshot.success) reply = Object.freeze({ ...snapshot.data });
       } catch {
         // Untrusted or malformed callers receive no appearance data.
       }
+      // Electron captures the synchronous response from this assignment.
+      event.returnValue = reply;
     };
     main.on(IPC_CHANNELS.appearance.initialSnapshot, appearanceStartupHandler);
     unsubscribeAppearance = appearanceController.subscribe((snapshot: AppearanceSnapshot) => {

@@ -27,26 +27,55 @@ export function createDesktopAppearanceController(
 
   applyTheme(snapshot.resolvedTheme);
 
-  const publish = (preference: ThemePreference, resolvedTheme: ResolvedTheme) => {
-    if (snapshot.preference === preference && snapshot.resolvedTheme === resolvedTheme) {
+  const publish = (
+    preference: ThemePreference,
+    resolvedTheme: ResolvedTheme,
+    committedRevision?: number,
+  ) => {
+    if (
+      committedRevision === undefined &&
+      snapshot.preference === preference &&
+      snapshot.resolvedTheme === resolvedTheme
+    ) {
       return snapshot;
     }
-    localRevision = Math.max(localRevision + 1, committedSnapshot.revision);
-    snapshot = Object.freeze({ preference, resolvedTheme, revision: localRevision });
+    const revision = committedRevision ?? Math.max(localRevision + 1, committedSnapshot.revision);
+    if (
+      snapshot.preference === preference &&
+      snapshot.resolvedTheme === resolvedTheme &&
+      snapshot.revision === revision
+    ) {
+      return snapshot;
+    }
+    localRevision = Math.max(localRevision, revision);
+    snapshot = Object.freeze({ preference, resolvedTheme, revision });
     applyTheme(snapshot.resolvedTheme);
     for (const listener of listeners) listener(snapshot);
     return snapshot;
   };
 
   const acceptCommitted = (candidate: unknown) => {
-    if (!isAppearanceSnapshot(candidate) || candidate.revision < committedSnapshot.revision) return;
+    if (
+      disposed ||
+      !isAppearanceSnapshot(candidate) ||
+      candidate.revision < committedSnapshot.revision
+    )
+      return;
     committedSnapshot = Object.freeze({ ...candidate });
     localRevision = Math.max(localRevision, committedSnapshot.revision);
     if (pendingRequestId === 0)
-      publish(committedSnapshot.preference, committedSnapshot.resolvedTheme);
+      publish(
+        committedSnapshot.preference,
+        committedSnapshot.resolvedTheme,
+        committedSnapshot.revision,
+      );
   };
 
   const unsubscribe = bridge?.subscribe((next) => acceptCommitted(next)) ?? (() => undefined);
+  void bridge
+    ?.getSnapshot()
+    .then(acceptCommitted)
+    .catch(() => undefined);
 
   return {
     getSnapshot: () => snapshot,

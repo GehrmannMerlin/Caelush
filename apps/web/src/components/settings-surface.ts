@@ -1,10 +1,5 @@
 import { createElement, useState, type FormEvent, type ReactElement } from "react";
 import { ArrowLeft, KeyRound, LoaderCircle, Sparkles, X } from "lucide-react";
-import {
-  AppearanceModeSelector,
-  type AppearanceSnapshot,
-  type ThemePreference,
-} from "@caelush/ui-theme";
 import type { ModelView, ProviderView } from "@caelush/protocol";
 import type { ProviderConnectionResult } from "../application/session-manager.js";
 import anthropicIcon from "../assets/providers/anthropic.svg";
@@ -41,25 +36,11 @@ export interface SettingsSurfaceProps {
   readonly onClose: () => void;
   readonly onConnect: (providerId: string, apiKey: string) => Promise<ProviderConnectionResult>;
   readonly onDisconnect: (providerId: string) => Promise<boolean>;
-  readonly appearanceSnapshot: AppearanceSnapshot;
-  readonly onPreferenceChange: (preference: ThemePreference) => Promise<unknown>;
-  readonly appearanceSupported?: boolean | undefined;
-  readonly appearanceSaveError?: string | undefined;
 }
 
 export function SettingsSurface(props: SettingsSurfaceProps): ReactElement {
   const [selectedProviderId, setSelectedProviderId] = useState<string | undefined>();
-  const [activeTab, setActiveTab] = useState<"models" | "appearance">("models");
-  const [appearanceError, setAppearanceError] = useState<string | undefined>();
   const selected = props.providers.find((provider) => provider.id === selectedProviderId);
-  const saveAppearance = async (preference: ThemePreference) => {
-    setAppearanceError(undefined);
-    try {
-      await props.onPreferenceChange(preference);
-    } catch {
-      setAppearanceError(props.appearanceSaveError ?? "已应用，当前浏览器未能保存");
-    }
-  };
   return createElement(
     "div",
     { className: "settings-surface", role: "dialog", "aria-modal": true, "aria-label": "设置" },
@@ -73,7 +54,7 @@ export function SettingsSurface(props: SettingsSurfaceProps): ReactElement {
           "div",
           null,
           createElement("span", { className: "settings-eyebrow" }, "WORKSPACE SETTINGS"),
-          createElement("h2", null, activeTab === "models" ? "模型与 API" : "外观"),
+          createElement("h2", null, "模型与 API"),
         ),
         createElement(
           "button",
@@ -88,70 +69,11 @@ export function SettingsSurface(props: SettingsSurfaceProps): ReactElement {
       ),
       createElement(
         "div",
-        { className: "settings-tabs", role: "tablist", "aria-label": "设置类别" },
-        createElement(
-          "button",
-          {
-            type: "button",
-            className: "settings-tab",
-            role: "tab",
-            id: "settings-tab-models",
-            "aria-selected": activeTab === "models",
-            "aria-controls": "settings-panel-models",
-            tabIndex: activeTab === "models" ? 0 : -1,
-            onClick: () => setActiveTab("models"),
-          },
-          "模型与 API",
-        ),
-        createElement(
-          "button",
-          {
-            type: "button",
-            className: "settings-tab",
-            role: "tab",
-            id: "settings-tab-appearance",
-            "aria-selected": activeTab === "appearance",
-            "aria-controls": "settings-panel-appearance",
-            tabIndex: activeTab === "appearance" ? 0 : -1,
-            onClick: () => setActiveTab("appearance"),
-          },
-          "外观",
-        ),
-      ),
-      createElement(
-        "div",
-        { className: "settings-tab-panels" },
+        { className: "settings-provider-content" },
         createElement(
           "div",
           {
-            id: "settings-panel-appearance",
-            className: "settings-tab-panel settings-tab-panel--appearance",
-            role: "tabpanel",
-            "aria-labelledby": "settings-tab-appearance",
-            tabIndex: 0,
-            hidden: activeTab !== "appearance",
-          },
-          props.appearanceSupported === false
-            ? createElement(
-                "p",
-                { className: "settings-appearance-unavailable", role: "status" },
-                "当前 Desktop 版本不支持外观设置，请更新应用后重试。",
-              )
-            : createElement(AppearanceModeSelector, {
-                snapshot: props.appearanceSnapshot,
-                error: appearanceError,
-                onPreferenceChange: saveAppearance,
-              }),
-        ),
-        createElement(
-          "div",
-          {
-            id: "settings-panel-models",
-            className: "settings-tab-panel",
-            role: "tabpanel",
-            "aria-labelledby": "settings-tab-models",
-            tabIndex: 0,
-            hidden: activeTab !== "models",
+            className: "settings-provider-panel",
           },
           selected === undefined
             ? createElement(
