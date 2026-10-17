@@ -211,6 +211,19 @@ function renderSession(
   const selected =
     summary.session.id === props.selectedSessionId && workspace.id === props.selectedWorkspaceId;
   const title = derivePromptTitle(latestRun?.goal ?? summary.session.title ?? "新会话");
+  const statusIcon =
+    status === "RUNNING" || status === "VERIFYING" || status === "FAILED"
+      ? createElement(
+          "span",
+          {
+            className: `session-status-icon ${runStatusClass(status)}`,
+            role: "img",
+            "aria-label": runStatusLabel(status),
+            title: runStatusLabel(status),
+          },
+          createElement(RunStatusIcon, { status }),
+        )
+      : null;
   return createElement(
     "div",
     {
@@ -226,16 +239,7 @@ function renderSession(
         disabled: !props.canNavigate,
         "aria-current": selected ? "page" : undefined,
       },
-      createElement(
-        "span",
-        {
-          className: `session-status-icon ${runStatusClass(status)}`,
-          role: "img",
-          "aria-label": runStatusLabel(status),
-          title: runStatusLabel(status),
-        },
-        createElement(RunStatusIcon, { status }),
-      ),
+      statusIcon,
       createElement("span", { className: "workspace-session-title" }, title),
     ),
     createElement(

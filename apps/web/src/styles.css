@@ -9028,3 +9028,14 @@ select {
     transition: none;
   }
 }
+
+/* Bring session titles closer to their workspace, matching the compact tree layout. */
+.workspace-sidebar .workspace-session-group {
+  margin-left: 8px;
+  padding-left: 0;
+}
+
+.workspace-sidebar .workspace-session-row .workspace-session-item {
+  gap: 6px;
+  padding-left: 4px;
+}
