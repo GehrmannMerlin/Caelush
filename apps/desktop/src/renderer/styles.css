@@ -1306,6 +1306,47 @@ button:disabled {
   max-width: 1120px;
   gap: 16px;
 }
+.update-skeleton-symbol {
+  width: 43px;
+  height: 43px;
+  flex: 0 0 auto;
+  border-radius: 12px;
+}
+.update-skeleton-title-group {
+  display: grid;
+  gap: 9px;
+  padding-top: 5px;
+}
+.update-skeleton-title {
+  width: 154px;
+  height: 16px;
+}
+.update-skeleton-version {
+  width: 204px;
+  height: 10px;
+}
+.update-skeleton-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 19px;
+  border-top: 1px solid var(--line);
+}
+.update-skeleton-button {
+  width: 108px;
+  height: 38px;
+  border-radius: 8px;
+}
+.update-skeleton-message {
+  width: 100%;
+  height: 42px;
+  border-radius: 8px;
+}
+.update-skeleton-note {
+  width: min(82%, 640px);
+  height: 10px;
+}
 .update-status-card {
   position: relative;
   display: grid;
@@ -1397,6 +1438,17 @@ button:disabled {
   border-radius: 11px;
   background: var(--surface);
   box-shadow: 0 18px 45px rgb(23 43 77 / 16%);
+}
+.update-history-skeleton {
+  display: grid;
+  grid-column: 1 / -1;
+  align-content: start;
+  gap: 8px;
+  padding: 10px;
+}
+.update-history-skeleton > .skeleton-block {
+  height: 34px;
+  border-radius: 7px;
 }
 .update-release-list {
   display: grid;
@@ -2712,8 +2764,7 @@ button:disabled {
 .account-layout--loading .account-content-inner {
   min-height: 100%;
 }
-.account-skeleton-panel-heading,
-.account-skeleton-update-heading {
+.account-skeleton-panel-heading {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -2774,8 +2825,7 @@ button:disabled {
   justify-content: space-between;
   min-height: 36px;
 }
-.account-skeleton-panel-heading > div,
-.account-skeleton-update-heading > div {
+.account-skeleton-panel-heading > div {
   display: grid;
   gap: 9px;
 }
@@ -2840,22 +2890,10 @@ button:disabled {
 .account-skeleton-panel-heading > .account-skeleton-icon-large {
   margin-right: 0;
 }
-.account-skeleton-button,
-.account-skeleton-button-small,
-.account-skeleton-submit {
-  height: 34px;
-  border-radius: 8px;
-}
-.account-skeleton-button {
-  width: 102px;
-}
 .account-skeleton-button-small {
   width: 46px;
   height: 27px;
-}
-.account-skeleton-note {
-  width: 82%;
-  height: 10px;
+  border-radius: 8px;
 }
 .account-skeleton-device-row {
   min-height: 66px;
@@ -2891,12 +2929,86 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: 9px;
 }
-.account-skeleton-submit {
-  width: 92px;
-  margin-top: 2px;
+.account-profile-page-skeleton {
+  width: 100%;
 }
-.account-skeleton-update-heading {
-  align-items: flex-start;
+.account-profile-skeleton-action {
+  width: 72px;
+  height: 10px;
+}
+.account-profile-skeleton-session-list {
+  gap: 5px;
+}
+.account-profile-skeleton-session .account-center-session-copy {
+  flex: 1;
+}
+.account-profile-skeleton-session-title {
+  width: min(460px, 72%);
+  height: 12px;
+}
+.account-profile-skeleton-session-date {
+  width: 74px;
+  height: 9px;
+}
+.account-profile-skeleton-chevron {
+  width: 8px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+.account-profile-skeleton-metric-value {
+  width: 72px;
+  height: 15px;
+}
+.account-profile-skeleton-metric-label {
+  width: 86px;
+  height: 9px;
+}
+.account-profile-skeleton-activity-title {
+  width: 158px;
+  height: 10px;
+}
+.account-profile-skeleton-activity-legend {
+  width: 58px;
+  height: 9px;
+}
+.account-profile-skeleton-activity-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 8px;
+  grid-template-rows: repeat(7, 8px);
+  gap: 3px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+.account-profile-skeleton-activity-grid > span {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.account-profile-skeleton-model-label {
+  width: 92px;
+  height: 11px;
+}
+.account-profile-skeleton-row-title {
+  width: 82px;
+  height: 11px;
+}
+.account-profile-skeleton-row-detail {
+  width: 118px;
+  height: 9px;
+}
+.account-appearance-skeleton-title {
+  width: 92px;
+  height: 17px;
+}
+.account-appearance-skeleton-description {
+  width: min(260px, 60%);
+  height: 12px;
+  margin: 8px 0 16px;
+}
+.account-appearance-skeleton-label {
+  width: 76px;
+  height: 12px;
 }
 
 @media (max-width: 640px) {
@@ -2969,11 +3081,6 @@ button:disabled {
   gap: 12px;
   padding-top: 18px;
   border-top: 1px solid var(--line);
-}
-.account-skeleton-message {
-  width: 100%;
-  height: 42px;
-  border-radius: 8px;
 }
 .account-skeleton-panel .account-skeleton-detail-line {
   margin-top: -8px;
@@ -3397,13 +3504,105 @@ button:disabled {
 .archive-empty p {
   margin: 5px 0;
 }
-.archive-skeleton {
-  min-height: 128px;
-  padding: 42px 20px;
-  border-radius: 12px;
-  background: #f7f9fc;
-  color: var(--archive-muted);
-  text-align: center;
+.account-archive-content-skeleton .archive-heading {
+  min-height: 34px;
+}
+.account-archive-skeleton-title {
+  width: 122px;
+  height: 29px;
+  border-radius: 7px;
+}
+.account-archive-skeleton-bulk {
+  width: 172px;
+  height: 34px;
+  border-radius: 8px;
+}
+.account-archive-skeleton-tab {
+  width: 56px;
+  height: 12px;
+  align-self: end;
+  margin: 14px 0;
+}
+.account-archive-skeleton-tab.is-selected {
+  border-bottom: 2px solid var(--archive-accent);
+  border-radius: 0;
+}
+.account-archive-skeleton-search {
+  pointer-events: none;
+}
+.account-archive-skeleton-search-line {
+  width: 70%;
+  height: 10px;
+}
+.account-archive-skeleton-filter {
+  display: flex;
+  flex: 0 1 260px;
+  max-width: 260px;
+  align-items: center;
+  padding: 0 11px;
+  border: 1px solid var(--archive-line);
+  border-radius: 9px;
+}
+.account-archive-skeleton-filter-line {
+  width: 76%;
+  height: 10px;
+}
+.account-archive-skeleton-folder {
+  width: 15px;
+  height: 15px;
+}
+.account-archive-skeleton-group-title {
+  width: min(220px, 42vw);
+  height: 12px;
+}
+.account-archive-skeleton-count {
+  width: 82px;
+  height: 10px;
+}
+.account-archive-skeleton-row-title {
+  width: min(460px, 70%);
+  height: 12px;
+}
+.account-archive-skeleton-row-date {
+  width: 172px;
+  height: 9px;
+  margin-top: 7px;
+}
+.account-archive-skeleton-row-action {
+  width: 64px;
+  height: 28px;
+}
+.account-archive-skeleton-row-icon {
+  width: 30px;
+  height: 30px;
+}
+.account-archive-results-skeleton .archive-list {
+  pointer-events: none;
+}
+.account-archive-history-skeleton {
+  display: grid;
+  gap: 25px;
+}
+.account-archive-history-skeleton .archive-message {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+.account-archive-history-author {
+  width: 70px;
+  height: 12px;
+}
+.account-archive-history-line {
+  width: 100%;
+  height: 10px;
+}
+.account-archive-history-line.is-short {
+  width: 68%;
+}
+.account-archive-history-paragraph {
+  width: 84%;
+  height: 34px;
+  margin-top: 4px;
 }
 .archive-error {
   padding: 10px 12px;
@@ -3681,9 +3880,6 @@ button:disabled {
 :root[data-caelush-theme="dark"] .archive-delete-icon:hover,
 :root[data-caelush-theme="dark"] .archive-delete-icon:focus-visible {
   background: var(--caelush-danger-soft);
-}
-:root[data-caelush-theme="dark"] .archive-skeleton {
-  background: var(--caelush-card);
 }
 :root[data-caelush-theme="dark"] .archive-danger {
   color: var(--caelush-accent-contrast);

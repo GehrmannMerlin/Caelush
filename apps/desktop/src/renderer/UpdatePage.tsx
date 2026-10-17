@@ -222,7 +222,7 @@ export function UpdatePage() {
   );
 }
 
-function UpdatePageSkeleton() {
+export function UpdatePageSkeleton() {
   return (
     <div
       className="update-page update-page--loading"

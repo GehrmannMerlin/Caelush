@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import type { TranscriptEntry } from "@caelush/protocol";
 import { ArrowLeft } from "lucide-react";
+import { ArchiveHistorySkeleton } from "./account-page-skeletons.js";
 export function ArchiveHistory(props: {
   readonly title: string;
   readonly entries: readonly TranscriptEntry[];
@@ -17,7 +18,7 @@ export function ArchiveHistory(props: {
       </button>
       <h1 tabIndex={-1}>{props.title}</h1>
       <p className="archive-muted">已归档 · 只读</p>
-      <div className="archive-transcript">
+      <div className="archive-transcript" aria-busy={props.loading}>
         {props.entries.map((entry) => (
           <article
             className={`archive-message archive-message--${entry.kind.toLowerCase()}`}
@@ -41,10 +42,14 @@ export function ArchiveHistory(props: {
               ))}
           </article>
         ))}
+        {props.loading && <ArchiveHistorySkeleton />}
       </div>
-      {props.loading ? (
-        <p role="status">正在加载历史…</p>
-      ) : props.entries.length === 0 ? (
+      {props.loading && (
+        <span className="visually-hidden" role="status">
+          正在加载历史
+        </span>
+      )}
+      {!props.loading && props.entries.length === 0 ? (
         <p className="archive-empty">暂无可展示的历史记录</p>
       ) : null}
       {props.hasMore && (

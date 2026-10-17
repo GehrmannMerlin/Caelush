@@ -9,6 +9,7 @@ import type {
 import { useAccountArchives } from "../archive/use-account-archives.js";
 import { ArchiveDeleteDialog } from "./archive-delete-dialog.js";
 import { ArchiveHistory } from "./archive-history.js";
+import { AccountArchiveContentSkeleton } from "./account-page-skeletons.js";
 
 export function AccountArchiveEntry(props: {
   readonly api?: DesktopArchiveApi | undefined;
@@ -235,6 +236,7 @@ export function AccountArchiveView({
     ? { type: "SESSION_FILTER" as const, filter: state.sessionFilter }
     : { type: "WORKSPACE_FILTER" as const, filter: state.workspaceFilter };
   const busy = state.status === "LOADING" || state.deletion?.status === "SUBMITTING";
+  if (state.status === "LOADING" && result === undefined) return <AccountArchiveContentSkeleton />;
   return (
     <>
       <header className="archive-heading">
@@ -385,11 +387,7 @@ export function AccountArchiveView({
         aria-label={sessions ? "已归档会话" : "已归档工作区"}
         aria-busy={state.status === "LOADING"}
       >
-        {state.status === "LOADING" && result === undefined ? (
-          <div className="archive-skeleton" role="status">
-            正在加载归档记录…
-          </div>
-        ) : result?.items.length === 0 ? (
+        {result?.items.length === 0 ? (
           <div className="archive-empty">
             <Archive size={28} strokeWidth={1.5} />
             <p>

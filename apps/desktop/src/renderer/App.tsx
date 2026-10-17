@@ -3,10 +3,10 @@ import { UpdatePage } from "./UpdatePage.js";
 import { AccountProfileScreen } from "./components/account-profile-screen.js";
 import { AccountArchiveEntry } from "./components/account-archive-screen.js";
 import { AccountAppearanceScreen } from "./components/account-appearance-screen.js";
+import { AccountPageSkeleton } from "./components/account-page-skeletons.js";
 import {
   DeviceManagementDialog,
   DeviceManagementPanel,
-  DeviceRowsSkeleton,
   formatDeviceLabel,
 } from "./components/device-management-dialog.js";
 import type {
@@ -579,6 +579,7 @@ export function DesktopApp() {
         busy={busy}
         feedback={apiError}
         onNavigate={(nextView) => {
+          if (nextView === "profile" && activeView !== "profile") setProfileLoading(true);
           setScreen(nextView);
         }}
         onRevoke={(device) => void revokeDevice(device)}
@@ -1036,13 +1037,17 @@ function AccountLoadingScreen(props: { view: AccountScreen }) {
           <span className="skeleton-block account-skeleton-home-icon" />
         </div>
       </aside>
-      <section className="account-content">
+      <section
+        className={`account-content${props.view === "archives" ? " account-content--archives" : ""}`}
+      >
         <div
-          className={`account-content-inner${props.view === "profile" ? " is-profile-view" : ""}`}
+          className={`account-content-inner${props.view === "profile" ? " is-profile-view" : props.view === "archives" ? " is-archives-view" : ""}`}
         >
-          <div className="account-page-head">
-            <span className="skeleton-block account-skeleton-title" />
-          </div>
+          {props.view !== "archives" && (
+            <div className="account-page-head">
+              <span className="skeleton-block account-skeleton-title" />
+            </div>
+          )}
           <AccountPageSkeleton view={props.view} />
         </div>
       </section>
@@ -1050,94 +1055,6 @@ function AccountLoadingScreen(props: { view: AccountScreen }) {
         正在加载账户页面
       </span>
     </main>
-  );
-}
-
-function AccountPageSkeleton(props: { view: AccountScreen }) {
-  if (props.view === "archives")
-    return (
-      <div className="archive-skeleton" aria-hidden="true">
-        正在加载归档记录…
-      </div>
-    );
-  if (props.view === "profile") {
-    return (
-      <div className="account-profile-stack" aria-hidden="true">
-        <section className="profile-card">
-          <div className="profile-edit-form">
-            <div className="profile-avatar-row">
-              <span className="skeleton-block account-skeleton-profile-avatar" />
-            </div>
-            <span className="skeleton-block account-skeleton-profile-name" />
-            <span className="skeleton-block account-skeleton-profile-email" />
-          </div>
-        </section>
-      </div>
-    );
-  }
-
-  if (props.view === "updates") {
-    return (
-      <div className="update-page" aria-hidden="true">
-        <section className="update-status-card account-skeleton-panel">
-          <div className="account-skeleton-update-heading">
-            <span className="skeleton-block account-skeleton-icon-large" />
-            <div>
-              <span className="skeleton-block account-skeleton-section-title" />
-              <span className="skeleton-block account-skeleton-copy" />
-            </div>
-          </div>
-          <div className="account-skeleton-update-toolbar">
-            <span className="skeleton-block account-skeleton-button" />
-            <span className="skeleton-block account-skeleton-button" />
-          </div>
-          <span className="skeleton-block account-skeleton-message" />
-        </section>
-        <span className="skeleton-block account-skeleton-note" />
-      </div>
-    );
-  }
-
-  if (props.view === "appearance") {
-    return (
-      <div className="account-appearance-skeleton" aria-hidden="true">
-        <span className="skeleton-block account-skeleton-section-title" />
-        <span className="skeleton-block account-skeleton-copy" />
-        <span className="skeleton-block account-skeleton-panel" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="account-skeleton-overview" aria-hidden="true">
-      <span className="skeleton-block account-skeleton-connection" />
-      <section className="detail-panel account-skeleton-panel">
-        <div className="account-skeleton-panel-heading">
-          <span className="skeleton-block account-skeleton-section-title" />
-          <span className="skeleton-block account-skeleton-icon-large" />
-        </div>
-        <div className="account-skeleton-device-line">
-          <span className="skeleton-block account-skeleton-device-icon" />
-          <span className="skeleton-block account-skeleton-value" />
-        </div>
-        <span className="skeleton-block account-skeleton-detail-line" />
-        <DeviceRowsSkeleton />
-      </section>
-      <section className="legacy-import-panel account-skeleton-panel">
-        <div className="account-skeleton-panel-heading">
-          <span className="skeleton-block account-skeleton-icon-large" />
-          <div>
-            <span className="skeleton-block account-skeleton-section-title" />
-          </div>
-        </div>
-        <span className="skeleton-block account-skeleton-copy" />
-        <div className="account-skeleton-count-grid">
-          {Array.from({ length: 10 }, (_, index) => (
-            <span className="skeleton-block account-skeleton-count" key={index} />
-          ))}
-        </div>
-      </section>
-    </div>
   );
 }
 

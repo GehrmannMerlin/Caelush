@@ -17,6 +17,11 @@ import type { AccountProfileUpdateInput } from "../../main/cloud/schemas.js";
 import type { AccountCenterSnapshot } from "../../main/profile-center/contract.js";
 import type { DesktopModelSettingsSnapshot } from "../../main/profile-center/contract.js";
 import type { DesktopProfileCenterApi } from "../../preload/api-types.js";
+import {
+  AccountProfileRecentWorkSkeleton,
+  AccountProfileSkeleton,
+  AccountProfileUsageSkeleton,
+} from "./account-page-skeletons.js";
 import { SettingsSurface } from "@caelush/ui-theme/settings-surface";
 
 type AvatarMimeType = "image/png" | "image/jpeg" | "image/webp";
@@ -267,6 +272,9 @@ export function AccountProfileScreen(props: Props) {
     });
   };
 
+  if (props.loading || (props.profile === null && props.loadError === null))
+    return <AccountProfileSkeleton />;
+
   return (
     <div className="account-profile-stack">
       <section className="profile-card" aria-label="个人信息">
@@ -280,7 +288,6 @@ export function AccountProfileScreen(props: Props) {
             </span>
           </div>
         )}
-        {props.loading && <p className="account-profile-feedback">正在读取个人信息…</p>}
         {!props.loading && props.loadError !== null && (
           <p className="account-profile-feedback is-error" role="alert">
             {props.loadError}
@@ -389,7 +396,11 @@ export function AccountProfileScreen(props: Props) {
       </section>
 
       <div className="account-center-sections">
-        <section className="account-center-section" aria-labelledby="profile-recent-work-heading">
+        <section
+          className="account-center-section"
+          aria-labelledby="profile-recent-work-heading"
+          aria-busy={centerLoading && centerSnapshot === null}
+        >
           <div className="account-center-heading">
             <h3 id="profile-recent-work-heading">最近工作</h3>
             <button
@@ -401,9 +412,12 @@ export function AccountProfileScreen(props: Props) {
             </button>
           </div>
           {centerLoading && centerSnapshot === null ? (
-            <p className="account-center-message" role="status">
-              正在读取最近会话…
-            </p>
+            <>
+              <AccountProfileRecentWorkSkeleton />
+              <span className="visually-hidden" role="status">
+                正在加载最近工作与用量
+              </span>
+            </>
           ) : centerSnapshot?.recentSessions.length ? (
             <div className="account-center-session-list">
               {centerSnapshot.recentSessions.map((session) => (
@@ -444,7 +458,7 @@ export function AccountProfileScreen(props: Props) {
           <div className="account-center-heading">
             <h3 id="profile-usage-heading">模型与用量</h3>
           </div>
-          {centerSnapshot !== null && (
+          {centerSnapshot !== null ? (
             <div className="account-center-usage-summary" aria-label="模型调用用量">
               <UsageMetric
                 label="本月成功请求"
@@ -459,7 +473,9 @@ export function AccountProfileScreen(props: Props) {
                 value={formatUsageTokens(centerSnapshot.usage.allTime)}
               />
             </div>
-          )}
+          ) : centerLoading ? (
+            <AccountProfileUsageSkeleton />
+          ) : null}
           {centerSnapshot !== null && <UsageActivityChart days={centerSnapshot.activity} />}
           <button
             className="account-center-row is-action"
