@@ -15,7 +15,9 @@ import type { AccountEntitlement } from "../../main/cloud/schemas.js";
 import type { DesktopAccountProfile } from "../../main/account/state.js";
 import type { AccountProfileUpdateInput } from "../../main/cloud/schemas.js";
 import type { AccountCenterSnapshot } from "../../main/profile-center/contract.js";
+import type { DesktopModelSettingsSnapshot } from "../../main/profile-center/contract.js";
 import type { DesktopProfileCenterApi } from "../../preload/api-types.js";
+import { SettingsSurface } from "@caelush/ui-theme";
 
 type AvatarMimeType = "image/png" | "image/jpeg" | "image/webp";
 type CropRect = {
@@ -40,7 +42,6 @@ interface Props {
   readonly profileCenterApi?: DesktopProfileCenterApi | undefined;
   onOpenSession(sessionId: string): void;
   onOpenWorkbench(): void;
-  onOpenModelSettings(): void;
   onManageDevices(): void;
   onLogout(): void;
   onSelectAvatar(): Promise<{
@@ -68,6 +69,10 @@ export function AccountProfileScreen(props: Props) {
   const [centerLoading, setCenterLoading] = useState(false);
   const [centerError, setCenterError] = useState<string | null>(null);
   const [centerReloadToken, setCenterReloadToken] = useState(0);
+  const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
+  const [modelSettings, setModelSettings] = useState<DesktopModelSettingsSnapshot | null>(null);
+  const [modelSettingsLoading, setModelSettingsLoading] = useState(false);
+  const [modelSettingsError, setModelSettingsError] = useState<string | undefined>();
   const skipNameBlur = useRef(false);
   const imageUrl = useMemo(() => {
     if (props.profile?.avatarBytes === null || props.profile === null) return null;
@@ -108,7 +113,7 @@ export function AccountProfileScreen(props: Props) {
     setCenterLoading(true);
     setCenterError(null);
     void api
-      .getSnapshot({ sinceMs: monthStart })
+      .getSnapshot({ sinceMs: monthStart, timezoneOffsetMinutes: -now.getTimezoneOffset() })
       .then((snapshot) => {
         if (active) setCenterSnapshot(snapshot);
       })
@@ -123,6 +128,50 @@ export function AccountProfileScreen(props: Props) {
       active = false;
     };
   }, [props.profileCenterApi, centerReloadToken]);
+
+  const loadModelSettings = useCallback(async () => {
+    const api = props.profileCenterApi;
+    if (api === undefined) {
+      setModelSettingsError("当前版本暂不支持模型配置。");
+      setModelSettingsLoading(false);
+      return;
+    }
+    setModelSettingsLoading(true);
+    setModelSettingsError(undefined);
+    try {
+      setModelSettings(await api.getModelSettings());
+    } catch (error) {
+      setModelSettingsError(
+        error instanceof Error ? error.message : "无法读取模型配置，请稍后重试。",
+      );
+    } finally {
+      setModelSettingsLoading(false);
+    }
+  }, [props.profileCenterApi]);
+
+  const connectModelProvider = async (providerId: string, apiKey: string) => {
+    const api = props.profileCenterApi;
+    if (api === undefined) return { ok: false, message: "模型配置功能暂不可用。" } as const;
+    try {
+      const result = await api.connectProvider({ providerId, apiKey });
+      if (result.ok) await loadModelSettings();
+      return result;
+    } catch {
+      return { ok: false, message: "Provider 连接失败，请稍后重试。" } as const;
+    }
+  };
+
+  const disconnectModelProvider = async (providerId: string): Promise<boolean> => {
+    const api = props.profileCenterApi;
+    if (api === undefined) return false;
+    try {
+      const disconnected = await api.disconnectProvider({ providerId });
+      if (disconnected) await loadModelSettings();
+      return disconnected;
+    } catch {
+      return false;
+    }
+  };
 
   const visibleAvatarUrl = selection !== null ? previewUrl : removeAvatar ? null : imageUrl;
   const canEdit = props.online && props.profile?.canEdit === true && !saving && !props.busy;
@@ -396,7 +445,7 @@ export function AccountProfileScreen(props: Props) {
             <h3 id="profile-usage-heading">模型与用量</h3>
           </div>
           {centerSnapshot !== null && (
-            <div className="account-center-usage" aria-label="模型调用用量">
+            <div className="account-center-usage-summary" aria-label="模型调用用量">
               <UsageMetric
                 label="本月成功请求"
                 value={formatUsageCount(centerSnapshot.usage.since.successfulRequests)}
@@ -411,14 +460,18 @@ export function AccountProfileScreen(props: Props) {
               />
             </div>
           )}
+          {centerSnapshot !== null && <UsageActivityChart days={centerSnapshot.activity} />}
           <button
             className="account-center-row is-action"
             type="button"
-            onClick={props.onOpenModelSettings}
+            onClick={() => {
+              setModelSettings(null);
+              setModelSettingsOpen(true);
+              void loadModelSettings();
+            }}
           >
             <span className="account-center-row-copy">
-              <b>模型与 API Key</b>
-              <small>管理已连接的模型服务与密钥</small>
+              <span>模型与 API Key</span>
             </span>
             <span className="account-center-row-action">
               管理模型 <ChevronRight size={15} aria-hidden="true" />
@@ -453,8 +506,7 @@ export function AccountProfileScreen(props: Props) {
             onClick={props.onManageDevices}
           >
             <span className="account-center-row-copy">
-              <b>登录设备</b>
-              <small>查看已授权设备，或撤销不再使用的设备</small>
+              <span>登录设备</span>
             </span>
             <span className="account-center-row-action">
               管理设备 <ChevronRight size={15} aria-hidden="true" />
@@ -467,8 +519,7 @@ export function AccountProfileScreen(props: Props) {
             onClick={props.onLogout}
           >
             <span className="account-center-row-copy">
-              <b>切换账户</b>
-              <small>退出当前账户后，可以登录其他账户</small>
+              <span>切换账户</span>
             </span>
             <span className="account-center-row-action">
               <LogOut size={14} aria-hidden="true" /> 退出登录
@@ -485,6 +536,18 @@ export function AccountProfileScreen(props: Props) {
           onConfirm={acceptCrop}
         />
       )}
+      {modelSettingsOpen && (
+        <SettingsSurface
+          providers={modelSettings?.providers ?? []}
+          models={modelSettings?.models ?? []}
+          loading={modelSettingsLoading}
+          loadError={modelSettingsError}
+          onRetry={() => void loadModelSettings()}
+          onClose={() => setModelSettingsOpen(false)}
+          onConnect={connectModelProvider}
+          onDisconnect={disconnectModelProvider}
+        />
+      )}
     </div>
   );
 }
@@ -495,6 +558,95 @@ function UsageMetric(props: { label: string; value: string }) {
       <b>{props.value}</b>
       <span>{props.label}</span>
     </div>
+  );
+}
+
+function UsageActivityChart(props: { days: AccountCenterSnapshot["activity"] }) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayCount = Math.round((today.getTime() - start.getTime()) / 86_400_000) + 1;
+  const startWeekday = start.getDay();
+  const usageByDay = new Map((props.days ?? []).map((day) => [day.date, day]));
+  const days = Array.from({ length: dayCount }, (_, index) => {
+    const date = new Date(start.getFullYear(), start.getMonth(), start.getDate() + index);
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    return {
+      date: key,
+      value: date,
+      usage: usageByDay.get(key),
+      week: Math.floor((startWeekday + index) / 7),
+      weekday: (startWeekday + index) % 7,
+    };
+  });
+  const intensityValues = days.map(({ usage }) =>
+    usage === undefined ? 0 : (usage.totalTokens ?? usage.successfulRequests),
+  );
+  const maxUsage = Math.max(1, ...intensityValues);
+  const chartWidth = 744;
+  const cellSize = 10;
+  const cellStep = 13;
+  const monthFormatter = new Intl.DateTimeFormat("zh-CN", { month: "numeric" });
+
+  return (
+    <section className="account-center-activity" aria-labelledby="profile-activity-heading">
+      <div className="account-center-activity-heading">
+        <h4 id="profile-activity-heading">近 12 个月 Token 活动</h4>
+        <span>少</span>
+        <span className="account-center-activity-legend" aria-hidden="true">
+          <i data-level="1" />
+          <i data-level="2" />
+          <i data-level="3" />
+          <i data-level="4" />
+        </span>
+        <span>多</span>
+      </div>
+      <svg
+        className="account-center-activity-chart"
+        viewBox={`0 0 ${chartWidth} 120`}
+        role="img"
+        aria-label={`近 12 个月每日 Token 活动，共 ${dayCount} 天`}
+        preserveAspectRatio="none"
+      >
+        {days
+          .filter(({ value }) => value.getDate() === 1)
+          .map(({ date, value, week }) => (
+            <text key={`month-${date}`} x={week * cellStep + 2} y="11">
+              {monthFormatter.format(value)}
+            </text>
+          ))}
+        {days.map(({ date, week, weekday, usage }, index) => {
+          const amount = intensityValues[index] ?? 0;
+          const level =
+            amount === 0
+              ? 0
+              : Math.max(1, Math.ceil((Math.log1p(amount) / Math.log1p(maxUsage)) * 4));
+          const x = week * cellStep + 2;
+          const y = 19 + weekday * cellStep;
+          const tokenLabel =
+            usage === undefined
+              ? "0 Token"
+              : usage.totalTokens === null
+                ? "Token 未完整上报"
+                : `${formatUsageCount(usage.totalTokens)} Token`;
+          return (
+            <g key={`day-${date}`}>
+              <rect
+                className={usage?.totalTokens === null ? "is-unmetered" : ""}
+                data-level={level}
+                x={x}
+                y={y}
+                width={cellSize}
+                height={cellSize}
+                rx="2.5"
+              >
+                <title>{`${date} · ${tokenLabel} · ${formatUsageCount(usage?.successfulRequests ?? 0)} 次成功请求`}</title>
+              </rect>
+            </g>
+          );
+        })}
+      </svg>
+    </section>
   );
 }
 

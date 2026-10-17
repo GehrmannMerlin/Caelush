@@ -48,6 +48,7 @@ import {
   registerUsageSummaryRoute,
   type ProviderUsageSummaryReader,
 } from "./routes/usage-summary.js";
+import { registerUsageActivityRoute } from "./routes/usage-activity.js";
 
 export interface DaemonDependencies {
   readonly archiveService?: ArchiveService;
@@ -161,8 +162,11 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   if (dependencies.aiConfiguration !== undefined) {
     registerAIRoutes(app, dependencies.aiConfiguration);
   }
-  if (dependencies.providerUsage !== undefined)
+  if (dependencies.providerUsage !== undefined) {
     registerUsageSummaryRoute(app, dependencies.providerUsage);
+    const getActivity = dependencies.providerUsage.getActivity;
+    if (getActivity !== undefined) registerUsageActivityRoute(app, { getActivity });
+  }
   if (dependencies.execution !== undefined) registerExecutionRoutes(app, dependencies.execution);
   if (dependencies.web !== undefined) registerWebStaticHost(app, dependencies.web);
   app.after(() => {

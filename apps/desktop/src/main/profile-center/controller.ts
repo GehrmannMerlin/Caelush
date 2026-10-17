@@ -1,9 +1,18 @@
 import { CaelushClient, CaelushClientHttpError, CaelushClientProtocolError } from "@caelush/client";
-import { UsageSummaryQuerySchema, type UsageSummaryQuery } from "@caelush/protocol";
 import type { DesktopDaemonSupervisor } from "../daemon/supervisor.js";
 import type { DesktopDaemonProxyLease } from "../protocol/local-proxy.js";
 import { ownedDaemonHeaders } from "../protocol/daemon-authorization.js";
-import { AccountCenterSnapshotSchema, type AccountCenterSnapshot } from "./contract.js";
+import {
+  AccountCenterQuerySchema,
+  AccountCenterSnapshotSchema,
+  DesktopModelSettingsSnapshotSchema,
+  type AccountCenterQuery,
+  type AccountCenterSnapshot,
+  type DesktopModelSettingsSnapshot,
+  type DesktopProviderSettingsConnectInput,
+  type DesktopProviderSettingsConnectionResult,
+  type DesktopProviderSettingsDisconnectInput,
+} from "./contract.js";
 
 export class DesktopProfileCenterError extends Error {
   constructor(
@@ -38,20 +47,80 @@ export interface DesktopProfileCenterControllerOptions {
 export class DesktopProfileCenterController {
   constructor(private readonly options: DesktopProfileCenterControllerOptions) {}
 
-  getSnapshot(input: UsageSummaryQuery, signal: AbortSignal): Promise<AccountCenterSnapshot> {
-    const query = UsageSummaryQuerySchema.parse(input);
+  getSnapshot(input: AccountCenterQuery, signal: AbortSignal): Promise<AccountCenterSnapshot> {
+    const query = AccountCenterQuerySchema.parse(input);
     return this.withClient(signal, async (client, signal) => {
-      const [sessions, usage] = await Promise.all([
+      const [sessions, usage, activity] = await Promise.all([
         client.listSessions({ limit: 20 }, { signal }),
-        client.getUsageSummary(query, { signal }),
+        client.getUsageSummary({ sinceMs: query.sinceMs }, { signal }),
+        input.timezoneOffsetMinutes === undefined
+          ? Promise.resolve(undefined)
+          : client
+              .getUsageActivity(
+                {
+                  sinceMs: usageActivityTrendStart(query.sinceMs),
+                  timezoneOffsetMinutes: query.timezoneOffsetMinutes,
+                },
+                { signal },
+              )
+              .catch((error: unknown) => {
+                if (error instanceof CaelushClientHttpError && error.status === 404)
+                  return { days: [] };
+                throw error;
+              }),
       ]);
       const recentSessions = sessions.items.slice(0, 3).map((session) => ({
         id: session.id,
         title: safeSessionTitle(session.title),
         updatedAt: session.updatedAt,
       }));
-      return AccountCenterSnapshotSchema.parse({ recentSessions, usage });
+      return AccountCenterSnapshotSchema.parse({
+        recentSessions,
+        usage,
+        ...(activity === undefined ? {} : { activity: activity.days }),
+      });
     });
+  }
+
+  getModelSettings(signal: AbortSignal): Promise<DesktopModelSettingsSnapshot> {
+    return this.withClient(signal, async (client, signal) => {
+      const [providers, directory] = await Promise.all([
+        client.listAIProviders({ signal }),
+        client.getAIModelDirectory(undefined, { signal }),
+      ]);
+      return DesktopModelSettingsSnapshotSchema.parse({
+        providers: providers.providers,
+        models: directory.models,
+      });
+    });
+  }
+
+  async connectProvider(
+    input: DesktopProviderSettingsConnectInput,
+    signal: AbortSignal,
+  ): Promise<DesktopProviderSettingsConnectionResult> {
+    try {
+      await this.withClient(signal, (client, signal) =>
+        client.connectAIProvider(input.providerId, { apiKey: input.apiKey }, { signal }),
+      );
+      return { ok: true };
+    } catch {
+      return { ok: false, message: "Provider 连接失败，请检查 API Key 和服务商配置。" };
+    }
+  }
+
+  async disconnectProvider(
+    input: DesktopProviderSettingsDisconnectInput,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    try {
+      await this.withClient(signal, (client, signal) =>
+        client.disconnectAIProvider(input.providerId, { signal }),
+      );
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private assertCurrent(
@@ -119,4 +188,10 @@ function safeSessionTitle(value: string | undefined): string {
   return Array.from(normalized || "新对话")
     .slice(0, 96)
     .join("");
+}
+
+function usageActivityTrendStart(monthStart: number): number {
+  const date = new Date(monthStart);
+  date.setMonth(date.getMonth() - 11);
+  return date.getTime();
 }

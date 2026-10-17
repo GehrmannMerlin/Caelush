@@ -11,6 +11,16 @@ export type {
   UsageSummaryResponse,
 } from "./usage-summary.js";
 export {
+  UsageActivityDaySchema,
+  UsageActivityQuerySchema,
+  UsageActivityResponseSchema,
+} from "./usage-activity.js";
+export type {
+  UsageActivityDay,
+  UsageActivityQuery,
+  UsageActivityResponse,
+} from "./usage-activity.js";
+export {
   ClientModelSelectionSchema,
   ClientModelSelectionWithReasoningSchema,
   ReasoningLevelSchema,

@@ -39,6 +39,12 @@ export interface ProviderInvocationUsageSummary {
   readonly since: ProviderInvocationUsageSummaryBucket;
 }
 
+export interface ProviderInvocationUsageActivity {
+  readonly date: string;
+  readonly successfulRequests: number;
+  readonly totalTokens: number | null;
+}
+
 export interface ProviderInvocationUsageSummaryBucket {
   readonly successfulRequests: number;
   readonly totalTokens: number | null;
@@ -227,6 +233,60 @@ export class SqliteProviderInvocationUsageStore {
       }),
     });
   }
+
+  async getActivity(
+    since: TimestampMs,
+    timezoneOffsetMinutes = 0,
+  ): Promise<readonly ProviderInvocationUsageActivity[]> {
+    if (
+      !Number.isSafeInteger(since) ||
+      since < 0 ||
+      !Number.isSafeInteger(timezoneOffsetMinutes) ||
+      timezoneOffsetMinutes < -840 ||
+      timezoneOffsetMinutes > 840
+    ) {
+      throw new StorageError("Provider usage activity query is invalid.");
+    }
+    const rows = this.database.client
+      .prepare(
+        `WITH completed AS (
+           SELECT
+             strftime('%Y-%m-%d', CAST(observed_at_ms / 1000 AS INTEGER), 'unixepoch', ?) AS local_date,
+             total_tokens,
+             input_tokens,
+             output_tokens
+           FROM provider_invocation_usage
+           WHERE status = 'COMPLETE' AND observed_at_ms >= ?
+         )
+         SELECT
+           local_date,
+           COUNT(*) AS successful_requests,
+           SUM(CASE WHEN COALESCE(total_tokens, CASE
+             WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL
+             THEN input_tokens + output_tokens
+           END) IS NULL THEN 1 ELSE 0 END) AS unmetered_requests,
+           SUM(COALESCE(total_tokens, CASE
+             WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL
+             THEN input_tokens + output_tokens
+           END)) AS total_tokens
+         FROM completed
+         GROUP BY local_date
+         ORDER BY local_date DESC
+         LIMIT 366`,
+      )
+      .all(sqliteTimezoneOffset(timezoneOffsetMinutes), since) as unknown as UsageActivityRow[];
+    const days = rows.map((row) => {
+      if (row.local_date === null || !/^\d{4}-\d{2}-\d{2}$/u.test(row.local_date)) {
+        throw new StorageError("Provider usage activity contains an invalid date.");
+      }
+      return Object.freeze({
+        date: row.local_date,
+        successfulRequests: decodeCounter(row.successful_requests),
+        totalTokens: decodeAggregateTokens(row.total_tokens, row.unmetered_requests),
+      });
+    });
+    return Object.freeze(days.reverse());
+  }
 }
 
 interface UsageSummaryRow {
@@ -236,6 +296,13 @@ interface UsageSummaryRow {
   readonly since_requests: number | bigint | null;
   readonly since_tokens: number | bigint | null;
   readonly since_unmetered_requests: number | bigint | null;
+}
+
+interface UsageActivityRow {
+  readonly local_date: string | null;
+  readonly successful_requests: number | bigint | null;
+  readonly unmetered_requests: number | bigint | null;
+  readonly total_tokens: number | bigint | null;
 }
 
 function decodeCounter(value: number | bigint | null): number {
@@ -256,6 +323,10 @@ function decodeAggregateTokens(
 ): number | null {
   if (decodeCounter(unmeteredRequests) > 0) return null;
   return decodeOptionalCounter(tokens);
+}
+
+function sqliteTimezoneOffset(timezoneOffsetMinutes: number): string {
+  return `${timezoneOffsetMinutes >= 0 ? "+" : ""}${timezoneOffsetMinutes} minutes`;
 }
 
 interface ProviderInvocationRow {

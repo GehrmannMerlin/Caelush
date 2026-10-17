@@ -8,6 +8,7 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./settings-surface.css": "./src/styles/settings-surface.css",
     "./styles.css": "./src/styles/index.css",
     "./styles/light.css": "./src/styles/light.css",
     "./styles/dark.css": "./src/styles/dark.css",
@@ -18,6 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "lucide-react": "1.48.0",
     "react": "19.2.8"
   },
   "devDependencies": {

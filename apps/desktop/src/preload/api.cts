@@ -24,6 +24,9 @@ const channels = {
   },
   profileCenter: {
     getSnapshot: "caelush:profile-center:get-snapshot",
+    getModelSettings: "caelush:profile-center:get-model-settings",
+    connectProvider: "caelush:profile-center:connect-provider",
+    disconnectProvider: "caelush:profile-center:disconnect-provider",
   },
   account: {
     state: "caelush:account:state",
@@ -476,6 +479,16 @@ const api: DesktopApi = Object.freeze({
     capabilityVersion: 1,
     getSnapshot: async (input) =>
       unwrapIpcResult(await electron.ipcRenderer.invoke(channels.profileCenter.getSnapshot, input)),
+    getModelSettings: async () =>
+      unwrapIpcResult(await electron.ipcRenderer.invoke(channels.profileCenter.getModelSettings)),
+    connectProvider: async (input) =>
+      unwrapIpcResult(
+        await electron.ipcRenderer.invoke(channels.profileCenter.connectProvider, input),
+      ),
+    disconnectProvider: async (input) =>
+      unwrapIpcResult(
+        await electron.ipcRenderer.invoke(channels.profileCenter.disconnectProvider, input),
+      ),
   }),
   protocolVersion: 1,
   account: Object.freeze(accountApi),

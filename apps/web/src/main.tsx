@@ -7,6 +7,7 @@ import { createDesktopAppearanceController } from "./host/desktop-appearance.js"
 import { resolveClientHostIntegration } from "./host/desktop-integration.js";
 import { parseWorkbenchDeepLink } from "./host/workbench-deep-link.js";
 import "@caelush/ui-theme/styles.css";
+import "@caelush/ui-theme/settings-surface.css";
 import "./styles.css";
 
 const clientHost = resolveClientHostIntegration();

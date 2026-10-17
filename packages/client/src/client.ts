@@ -26,6 +26,8 @@ import {
   SessionListResponseSchema,
   SessionTranscriptQuerySchema,
   SessionTranscriptResponseSchema,
+  UsageActivityQuerySchema,
+  UsageActivityResponseSchema,
   UsageSummaryQuerySchema,
   UsageSummaryResponseSchema,
   SessionContinuityPreflightQuerySchema,
@@ -65,6 +67,8 @@ import {
   type SessionListResponse,
   type SessionTranscriptQuery,
   type SessionTranscriptResponse,
+  type UsageActivityQuery,
+  type UsageActivityResponse,
   type UsageSummaryQuery,
   type UsageSummaryResponse,
   type SessionContinuityPreflightQuery,
@@ -506,6 +510,24 @@ export class CaelushClient {
       `/api/v1/usage/summary?${search.toString()}`,
       { method: "GET" },
       UsageSummaryResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async getUsageActivity(
+    query: UsageActivityQuery,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<UsageActivityResponse> {
+    const parsed = UsageActivityQuerySchema.parse(query);
+    const search = new URLSearchParams({
+      sinceMs: String(parsed.sinceMs),
+      timezoneOffsetMinutes: String(parsed.timezoneOffsetMinutes),
+    });
+    return this.request(
+      `/api/v1/usage/activity?${search.toString()}`,
+      { method: "GET" },
+      UsageActivityResponseSchema,
       [200],
       options,
     );

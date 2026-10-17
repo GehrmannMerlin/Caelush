@@ -579,9 +579,6 @@ export function DesktopApp() {
         onResumeLegacy={() => void resumeLegacyImport()}
         onOpenSession={(sessionId) => window.location.assign(createAgentDeepLink({ sessionId }))}
         onOpenWorkbench={() => window.location.assign(createAgentDeepLink())}
-        onOpenModelSettings={() =>
-          window.location.assign(createAgentDeepLink({ settings: "models" }))
-        }
         onProfileLogout={async () => {
           if (!window.confirm("确定退出当前账户吗？此设备上的本地工作内容会保留。")) return;
           setBusy(true);
@@ -1170,7 +1167,6 @@ function AccountHome(props: {
   onResumeLegacy(): void;
   onOpenSession(sessionId: SessionId): void;
   onOpenWorkbench(): void;
-  onOpenModelSettings(): void;
   onProfileLogout(): void;
   profile: DesktopAccountProfile | null;
   profileLoading: boolean;
@@ -1197,7 +1193,7 @@ function AccountHome(props: {
           className={`side-nav ${props.activeView === "profile" ? "is-current" : ""}`}
           onClick={() => props.onNavigate("profile")}
         >
-          <BadgeCheck size={16} /> 个人信息
+          <span className="side-nav-profile-icon" aria-hidden="true" /> 个人信息
         </button>
         <button
           className={`side-nav ${props.activeView === "appearance" ? "is-current" : ""}`}
@@ -1279,7 +1275,6 @@ function AccountHome(props: {
               profileCenterApi={props.profileCenterApi}
               onOpenSession={props.onOpenSession}
               onOpenWorkbench={props.onOpenWorkbench}
-              onOpenModelSettings={props.onOpenModelSettings}
               onManageDevices={() => props.onNavigate("home")}
               onLogout={props.onProfileLogout}
               onSelectAvatar={props.onSelectAvatar}

@@ -8,6 +8,16 @@ import type { FastifyInstance } from "fastify";
 
 export interface ProviderUsageSummaryReader {
   getSummary(since: number): Promise<ProviderInvocationUsageSummary>;
+  getActivity?(
+    since: number,
+    timezoneOffsetMinutes: number,
+  ): Promise<
+    readonly {
+      readonly date: string;
+      readonly successfulRequests: number;
+      readonly totalTokens: number | null;
+    }[]
+  >;
 }
 
 export function registerUsageSummaryRoute(

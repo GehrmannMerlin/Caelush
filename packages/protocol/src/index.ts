@@ -409,6 +409,9 @@ export {
   UsageSummaryBucketSchema,
   UsageSummaryQuerySchema,
   UsageSummaryResponseSchema,
+  UsageActivityDaySchema,
+  UsageActivityQuerySchema,
+  UsageActivityResponseSchema,
 } from "./api/index.js";
 export type {
   ApiError,
@@ -506,6 +509,9 @@ export type {
   UsageSummaryBucket,
   UsageSummaryQuery,
   UsageSummaryResponse,
+  UsageActivityDay,
+  UsageActivityQuery,
+  UsageActivityResponse,
 } from "./api/index.js";
 
 export {

@@ -40,10 +40,16 @@ import type {
   SessionId,
   SessionTranscriptQuery,
   SessionTranscriptResponse,
-  UsageSummaryQuery,
+  UsageActivityQuery,
 } from "@caelush/protocol";
 import type { AppearanceSnapshot, ThemePreference } from "@caelush/ui-theme";
-import type { AccountCenterSnapshot } from "../main/profile-center/contract.js";
+import type {
+  AccountCenterSnapshot,
+  DesktopModelSettingsSnapshot,
+  DesktopProviderSettingsConnectInput,
+  DesktopProviderSettingsConnectionResult,
+  DesktopProviderSettingsDisconnectInput,
+} from "../main/profile-center/contract.js";
 
 export interface DesktopAppearanceApi {
   readonly capabilityVersion: 1;
@@ -73,7 +79,12 @@ export interface DesktopArchiveApi {
 
 export interface DesktopProfileCenterApi {
   readonly capabilityVersion: 1;
-  getSnapshot(input: UsageSummaryQuery): Promise<AccountCenterSnapshot>;
+  getSnapshot(input: UsageActivityQuery): Promise<AccountCenterSnapshot>;
+  getModelSettings(): Promise<DesktopModelSettingsSnapshot>;
+  connectProvider(
+    input: DesktopProviderSettingsConnectInput,
+  ): Promise<DesktopProviderSettingsConnectionResult>;
+  disconnectProvider(input: DesktopProviderSettingsDisconnectInput): Promise<boolean>;
 }
 
 export interface DesktopApi {

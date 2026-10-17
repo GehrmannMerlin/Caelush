@@ -34,6 +34,7 @@ export {
   SqliteProviderInvocationUsageStore,
   type ProviderInvocationObservationInput,
   type ProviderInvocationStatus,
+  type ProviderInvocationUsageActivity,
   type ProviderInvocationUsageRecord,
   type ProviderInvocationUsageSummary,
   type ProviderInvocationUsageSummaryBucket,
