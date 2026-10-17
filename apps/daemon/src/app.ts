@@ -44,6 +44,10 @@ import type { SecurityCapabilityService } from "./services/security-capability-s
 import { registerSecurityRoutes } from "./routes/security.js";
 import { registerArchiveRoutes } from "./routes/archives.js";
 import type { ArchiveService } from "./services/archive-service.js";
+import {
+  registerUsageSummaryRoute,
+  type ProviderUsageSummaryReader,
+} from "./routes/usage-summary.js";
 
 export interface DaemonDependencies {
   readonly archiveService?: ArchiveService;
@@ -70,6 +74,7 @@ export interface DaemonDependencies {
   readonly web?: WebStaticHostOptions;
   readonly aiConfiguration?: AIConfigurationService;
   readonly securityCapabilityService?: SecurityCapabilityService;
+  readonly providerUsage?: ProviderUsageSummaryReader;
 }
 
 export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstance {
@@ -156,6 +161,8 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   if (dependencies.aiConfiguration !== undefined) {
     registerAIRoutes(app, dependencies.aiConfiguration);
   }
+  if (dependencies.providerUsage !== undefined)
+    registerUsageSummaryRoute(app, dependencies.providerUsage);
   if (dependencies.execution !== undefined) registerExecutionRoutes(app, dependencies.execution);
   if (dependencies.web !== undefined) registerWebStaticHost(app, dependencies.web);
   app.after(() => {

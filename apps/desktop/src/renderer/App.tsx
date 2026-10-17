@@ -3,7 +3,11 @@ import { UpdatePage } from "./UpdatePage.js";
 import { AccountProfileScreen } from "./components/account-profile-screen.js";
 import { AccountArchiveEntry } from "./components/account-archive-screen.js";
 import { AccountAppearanceScreen } from "./components/account-appearance-screen.js";
-import type { DesktopArchiveApi, DesktopAppearanceApi } from "../preload/api-types.js";
+import type {
+  DesktopArchiveApi,
+  DesktopAppearanceApi,
+  DesktopProfileCenterApi,
+} from "../preload/api-types.js";
 import { CaelushBrand, type AppearanceSnapshot, type ThemePreference } from "@caelush/ui-theme";
 import caelushLogoLight from "@caelush/ui-theme/assets/caelush-logo.png";
 import caelushLogoDark from "@caelush/ui-theme/assets/caelush-logo-white.png";
@@ -32,10 +36,12 @@ import {
 } from "lucide-react";
 import type { AccountState, DesktopAccountProfile, SafeDevice } from "../main/account/state.js";
 import type { AccountProfileUpdateInput } from "../main/cloud/schemas.js";
+import { createAgentDeepLink } from "./agent-link.js";
 import type {
   LegacyDataImportSummary,
   LegacyImportProgress,
 } from "../shared/legacy-data-contract.js";
+import type { SessionId } from "@caelush/protocol";
 
 type AuthScreen = "login" | "register" | "verify" | "forgot" | "reset";
 type AccountScreen = "home" | "profile" | "appearance" | "archives" | "updates";
@@ -537,6 +543,7 @@ export function DesktopApp() {
     ) : authenticated && !reconnectingOffline ? (
       <AccountHome
         archiveApi={window.caelushDesktop.archive}
+        profileCenterApi={window.caelushDesktop.profileCenter}
         onArchiveMutation={() => {
           setLegacySummary(null);
           setLegacyDismissed(false);
@@ -570,6 +577,25 @@ export function DesktopApp() {
         onDismissLegacy={() => setLegacyDismissed(true)}
         onImportLegacy={(candidateId) => void importLegacyData(candidateId)}
         onResumeLegacy={() => void resumeLegacyImport()}
+        onOpenSession={(sessionId) => window.location.assign(createAgentDeepLink({ sessionId }))}
+        onOpenWorkbench={() => window.location.assign(createAgentDeepLink())}
+        onOpenModelSettings={() =>
+          window.location.assign(createAgentDeepLink({ settings: "models" }))
+        }
+        onProfileLogout={async () => {
+          if (!window.confirm("确定退出当前账户吗？此设备上的本地工作内容会保留。")) return;
+          setBusy(true);
+          setFeedback(null);
+          try {
+            await window.caelushDesktop.account.logout();
+            setPassword("");
+            setScreen("login");
+          } catch (error) {
+            setFeedback(errorMessage(error));
+          } finally {
+            setBusy(false);
+          }
+        }}
         profile={profile}
         profileLoading={profileLoading}
         profileLoadError={profileLoadError}
@@ -1118,6 +1144,7 @@ function DeviceRowsSkeleton() {
 
 function AccountHome(props: {
   archiveApi?: DesktopArchiveApi | undefined;
+  profileCenterApi?: DesktopProfileCenterApi | undefined;
   appearanceApi?: DesktopAppearanceApi | undefined;
   appearanceSnapshot: AppearanceSnapshot;
   appearanceError: string | null;
@@ -1141,6 +1168,10 @@ function AccountHome(props: {
   onDismissLegacy(): void;
   onImportLegacy(candidateId: string): void;
   onResumeLegacy(): void;
+  onOpenSession(sessionId: SessionId): void;
+  onOpenWorkbench(): void;
+  onOpenModelSettings(): void;
+  onProfileLogout(): void;
   profile: DesktopAccountProfile | null;
   profileLoading: boolean;
   profileLoadError: string | null;
@@ -1244,6 +1275,13 @@ function AccountHome(props: {
               loadError={props.profileLoadError}
               online={!offline}
               busy={props.busy}
+              entitlements={accountState.account?.entitlements ?? []}
+              profileCenterApi={props.profileCenterApi}
+              onOpenSession={props.onOpenSession}
+              onOpenWorkbench={props.onOpenWorkbench}
+              onOpenModelSettings={props.onOpenModelSettings}
+              onManageDevices={() => props.onNavigate("home")}
+              onLogout={props.onProfileLogout}
               onSelectAvatar={props.onSelectAvatar}
               onSave={props.onSaveProfile}
             />

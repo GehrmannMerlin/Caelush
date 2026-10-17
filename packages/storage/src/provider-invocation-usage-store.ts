@@ -34,6 +34,16 @@ export interface ProviderInvocationUsageRecord {
   readonly reasoningTokens?: number;
 }
 
+export interface ProviderInvocationUsageSummary {
+  readonly allTime: ProviderInvocationUsageSummaryBucket;
+  readonly since: ProviderInvocationUsageSummaryBucket;
+}
+
+export interface ProviderInvocationUsageSummaryBucket {
+  readonly successfulRequests: number;
+  readonly totalTokens: number | null;
+}
+
 export interface ProviderInvocationObservationInput {
   readonly callId: LLMCallId;
   readonly runId: RunId;
@@ -169,6 +179,83 @@ export class SqliteProviderInvocationUsageStore {
       .all(runId, stepId) as unknown as ProviderInvocationRow[];
     return Object.freeze(rows.map(decode));
   }
+
+  async getSummary(since: TimestampMs): Promise<ProviderInvocationUsageSummary> {
+    const row = this.database.client
+      .prepare(
+        `SELECT
+           SUM(CASE WHEN status = 'COMPLETE' THEN 1 ELSE 0 END) AS all_time_requests,
+           SUM(CASE WHEN status = 'COMPLETE' THEN
+             COALESCE(total_tokens, CASE
+               WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL
+               THEN input_tokens + output_tokens
+             END)
+           END) AS all_time_tokens,
+           SUM(CASE WHEN status = 'COMPLETE' AND
+             COALESCE(total_tokens, CASE
+               WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL
+               THEN input_tokens + output_tokens
+             END) IS NULL
+             THEN 1 ELSE 0 END) AS all_time_unmetered_requests,
+           SUM(CASE WHEN status = 'COMPLETE' AND observed_at_ms >= ? THEN 1 ELSE 0 END) AS since_requests,
+           SUM(CASE WHEN status = 'COMPLETE' AND observed_at_ms >= ? THEN
+             COALESCE(total_tokens, CASE
+               WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL
+               THEN input_tokens + output_tokens
+             END)
+           END) AS since_tokens
+           ,SUM(CASE WHEN status = 'COMPLETE' AND observed_at_ms >= ? AND
+             COALESCE(total_tokens, CASE
+               WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL
+               THEN input_tokens + output_tokens
+             END) IS NULL
+             THEN 1 ELSE 0 END) AS since_unmetered_requests
+         FROM provider_invocation_usage`,
+      )
+      .get(since, since, since) as UsageSummaryRow | undefined;
+    if (row === undefined) throw new StorageError("Provider usage summary could not be read.");
+    const allTimeRequests = decodeCounter(row.all_time_requests);
+    const sinceRequests = decodeCounter(row.since_requests);
+    return Object.freeze({
+      allTime: Object.freeze({
+        successfulRequests: allTimeRequests,
+        totalTokens: decodeAggregateTokens(row.all_time_tokens, row.all_time_unmetered_requests),
+      }),
+      since: Object.freeze({
+        successfulRequests: sinceRequests,
+        totalTokens: decodeAggregateTokens(row.since_tokens, row.since_unmetered_requests),
+      }),
+    });
+  }
+}
+
+interface UsageSummaryRow {
+  readonly all_time_requests: number | bigint | null;
+  readonly all_time_tokens: number | bigint | null;
+  readonly all_time_unmetered_requests: number | bigint | null;
+  readonly since_requests: number | bigint | null;
+  readonly since_tokens: number | bigint | null;
+  readonly since_unmetered_requests: number | bigint | null;
+}
+
+function decodeCounter(value: number | bigint | null): number {
+  const count = value === null ? 0 : Number(value);
+  if (!Number.isSafeInteger(count) || count < 0)
+    throw new StorageError("Provider usage summary contains an invalid counter.");
+  return count;
+}
+
+function decodeOptionalCounter(value: number | bigint | null): number | null {
+  if (value === null) return null;
+  return decodeCounter(value);
+}
+
+function decodeAggregateTokens(
+  tokens: number | bigint | null,
+  unmeteredRequests: number | bigint | null,
+): number | null {
+  if (decodeCounter(unmeteredRequests) > 0) return null;
+  return decodeOptionalCounter(tokens);
 }
 
 interface ProviderInvocationRow {

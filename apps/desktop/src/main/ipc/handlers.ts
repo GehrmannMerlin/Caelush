@@ -29,6 +29,11 @@ import { safeErrorForIpc } from "./safe-error.js";
 import { DesktopWorkspacePanelController } from "../workspace/panel-controller.js";
 import type { DesktopArchiveController } from "../archive/controller.js";
 import { ARCHIVE_IPC_CHANNELS, registerArchiveHandlers } from "./archive-handlers.js";
+import type { DesktopProfileCenterController } from "../profile-center/controller.js";
+import {
+  PROFILE_CENTER_IPC_CHANNELS,
+  registerProfileCenterHandlers,
+} from "./profile-center-handlers.js";
 import type { DesktopUpdateCoordinator } from "../update/coordinator.js";
 import type { DesktopAppearanceController } from "../appearance/appearance-controller.js";
 import type { AppearanceSnapshot } from "@caelush/ui-theme";
@@ -45,6 +50,7 @@ export const IPC_CHANNELS = Object.freeze({
     snapshot: "caelush:appearance:snapshot",
   }),
   archive: ARCHIVE_IPC_CHANNELS,
+  profileCenter: PROFILE_CENTER_IPC_CHANNELS,
   account: Object.freeze({
     state: "caelush:account:state",
     getState: "caelush:account:get-state",
@@ -398,6 +404,7 @@ export interface DesktopRendererTrust {
 
 export interface RegisterDesktopIpcOptions {
   readonly archiveController?: DesktopArchiveController;
+  readonly profileCenterController?: DesktopProfileCenterController;
   readonly ipcMain?: IpcMain;
   readonly window: BrowserWindow;
   readonly controller: AccountController;
@@ -504,6 +511,8 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
 
   if (options.archiveController !== undefined)
     registerArchiveHandlers(register, options.archiveController);
+  if (options.profileCenterController !== undefined)
+    registerProfileCenterHandlers(register, options.profileCenterController);
 
   if (options.appearanceController !== undefined) {
     const appearanceController = options.appearanceController;

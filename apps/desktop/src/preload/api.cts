@@ -22,6 +22,9 @@ const channels = {
     permanentlyDelete: "caelush:archive:permanently-delete",
     readTranscript: "caelush:archive:read-transcript",
   },
+  profileCenter: {
+    getSnapshot: "caelush:profile-center:get-snapshot",
+  },
   account: {
     state: "caelush:account:state",
     getState: "caelush:account:get-state",
@@ -468,6 +471,11 @@ const api: DesktopApi = Object.freeze({
       unwrapIpcResult(await electron.ipcRenderer.invoke(channels.archive.permanentlyDelete, input)),
     readTranscript: async (input) =>
       unwrapIpcResult(await electron.ipcRenderer.invoke(channels.archive.readTranscript, input)),
+  }),
+  profileCenter: Object.freeze<NonNullable<DesktopApi["profileCenter"]>>({
+    capabilityVersion: 1,
+    getSnapshot: async (input) =>
+      unwrapIpcResult(await electron.ipcRenderer.invoke(channels.profileCenter.getSnapshot, input)),
   }),
   protocolVersion: 1,
   account: Object.freeze(accountApi),

@@ -16,6 +16,117 @@ afterEach(async () => {
 });
 
 describe("SqliteProviderInvocationUsageStore", () => {
+  it("summarizes completed request and token usage across lifetime and a requested period", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "caelush-provider-usage-summary-"));
+    directories.push(directory);
+    const storage = await openCaelushStorage({ path: join(directory, "usage.sqlite") });
+    try {
+      const session = makeSession();
+      const run = makeRun(session.id, { status: "RUNNING", startedAt: createTimestampMs(10) });
+      await storage.sessions.insert(session);
+      await storage.runs.insert(run);
+
+      const addUsage = async (input: {
+        readonly observedAt: number;
+        readonly status: "COMPLETE" | "FAILED";
+        readonly totalTokens?: number;
+        readonly inputTokens?: number;
+        readonly outputTokens?: number;
+      }) => {
+        const callId = createLLMCallId();
+        await storage.providerInvocationUsage.observe({
+          callId,
+          runId: run.id,
+          purpose: "MAIN_AGENT",
+          providerId: "deepseek",
+          modelId: "deepseek-chat",
+          api: "openai-compatible",
+          continuityGroup: "a".repeat(64),
+          requestFingerprint: "b".repeat(64),
+          observedAt: createTimestampMs(input.observedAt),
+        });
+        await storage.providerInvocationUsage.settle({
+          callId,
+          status: input.status,
+          settledAt: createTimestampMs(input.observedAt + 1),
+          ...(input.totalTokens === undefined ? {} : { totalTokens: input.totalTokens }),
+          ...(input.inputTokens === undefined ? {} : { inputTokens: input.inputTokens }),
+          ...(input.outputTokens === undefined ? {} : { outputTokens: input.outputTokens }),
+        });
+      };
+
+      await addUsage({ observedAt: 1_100, status: "COMPLETE", totalTokens: 7 });
+      await addUsage({ observedAt: 1_200, status: "COMPLETE", inputTokens: 4, outputTokens: 5 });
+      await addUsage({ observedAt: 900, status: "COMPLETE", totalTokens: 11 });
+      await addUsage({ observedAt: 1_300, status: "FAILED", totalTokens: 100 });
+
+      await expect(
+        storage.providerInvocationUsage.getSummary(createTimestampMs(1_000)),
+      ).resolves.toEqual({
+        allTime: { successfulRequests: 3, totalTokens: 27 },
+        since: { successfulRequests: 2, totalTokens: 16 },
+      });
+    } finally {
+      await storage.close();
+    }
+  });
+
+  it("leaves token totals unknown when any completed request has no provider usage counters", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "caelush-provider-usage-unknown-summary-"));
+    directories.push(directory);
+    const storage = await openCaelushStorage({ path: join(directory, "usage.sqlite") });
+    try {
+      const session = makeSession();
+      const run = makeRun(session.id, { status: "RUNNING", startedAt: createTimestampMs(10) });
+      await storage.sessions.insert(session);
+      await storage.runs.insert(run);
+      const callId = createLLMCallId();
+      await storage.providerInvocationUsage.observe({
+        callId,
+        runId: run.id,
+        purpose: "MAIN_AGENT",
+        providerId: "deepseek",
+        modelId: "deepseek-chat",
+        api: "openai-compatible",
+        continuityGroup: "a".repeat(64),
+        requestFingerprint: "b".repeat(64),
+        observedAt: createTimestampMs(20),
+      });
+      await storage.providerInvocationUsage.settle({
+        callId,
+        status: "COMPLETE",
+        settledAt: createTimestampMs(21),
+      });
+      const meteredCallId = createLLMCallId();
+      await storage.providerInvocationUsage.observe({
+        callId: meteredCallId,
+        runId: run.id,
+        purpose: "MAIN_AGENT",
+        providerId: "deepseek",
+        modelId: "deepseek-chat",
+        api: "openai-compatible",
+        continuityGroup: "c".repeat(64),
+        requestFingerprint: "d".repeat(64),
+        observedAt: createTimestampMs(22),
+      });
+      await storage.providerInvocationUsage.settle({
+        callId: meteredCallId,
+        status: "COMPLETE",
+        settledAt: createTimestampMs(23),
+        totalTokens: 15,
+      });
+
+      await expect(
+        storage.providerInvocationUsage.getSummary(createTimestampMs(10)),
+      ).resolves.toEqual({
+        allTime: { successfulRequests: 2, totalTokens: null },
+        since: { successfulRequests: 2, totalTokens: null },
+      });
+    } finally {
+      await storage.close();
+    }
+  });
+
   it("persists one identified Provider sample, settles idempotently, and restores it after reopen", async () => {
     const directory = await mkdtemp(join(tmpdir(), "caelush-provider-usage-"));
     directories.push(directory);

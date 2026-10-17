@@ -11,6 +11,7 @@ import { DesktopEditorError } from "../ide/editor-resolver.js";
 import { DesktopUpdateError } from "../update/error.js";
 import { CaelushClientHttpError } from "@caelush/client";
 import { DesktopArchiveError } from "../archive/controller.js";
+import { DesktopProfileCenterError } from "../profile-center/controller.js";
 
 export interface SafeIpcError {
   readonly code: string;
@@ -19,6 +20,8 @@ export interface SafeIpcError {
 
 export function safeErrorForIpc(error: unknown): SafeIpcError {
   if (error instanceof DesktopArchiveError) return { code: error.code, message: error.message };
+  if (error instanceof DesktopProfileCenterError)
+    return { code: error.code, message: error.message };
   if (error instanceof CaelushClientHttpError) {
     const messages: Partial<Record<typeof error.code, string>> = {
       INVALID_REQUEST: "归档请求无效，请重新操作。",

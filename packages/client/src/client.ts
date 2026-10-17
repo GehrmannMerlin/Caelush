@@ -26,6 +26,8 @@ import {
   SessionListResponseSchema,
   SessionTranscriptQuerySchema,
   SessionTranscriptResponseSchema,
+  UsageSummaryQuerySchema,
+  UsageSummaryResponseSchema,
   SessionContinuityPreflightQuerySchema,
   SessionContinuityPreflightResponseSchema,
   SessionTurnPresentationQuerySchema,
@@ -63,6 +65,8 @@ import {
   type SessionListResponse,
   type SessionTranscriptQuery,
   type SessionTranscriptResponse,
+  type UsageSummaryQuery,
+  type UsageSummaryResponse,
   type SessionContinuityPreflightQuery,
   type SessionContinuityPreflightResponse,
   type SessionTurnPresentationQuery,
@@ -487,6 +491,21 @@ export class CaelushClient {
       `/api/v1/sessions?limit=${encodeURIComponent(String(parsed.limit))}`,
       { method: "GET" },
       SessionListResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async getUsageSummary(
+    query: UsageSummaryQuery,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<UsageSummaryResponse> {
+    const parsed = UsageSummaryQuerySchema.parse(query);
+    const search = new URLSearchParams({ sinceMs: String(parsed.sinceMs) });
+    return this.request(
+      `/api/v1/usage/summary?${search.toString()}`,
+      { method: "GET" },
+      UsageSummaryResponseSchema,
       [200],
       options,
     );

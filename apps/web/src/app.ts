@@ -112,6 +112,8 @@ export function WebHostApp(props: {
   readonly appearanceController: AppearanceController;
   readonly launchContext?: unknown | undefined;
   readonly initialWorkspaceId?: WorkspaceId | undefined;
+  readonly initialSessionId?: SessionId | undefined;
+  readonly initialSettingsOpen?: boolean | undefined;
 }): ReactElement {
   const clientHost = useMemo(() => resolveClientHostIntegration(), []);
   const desktopHostLoadingUI = clientHost.loadingUi;
@@ -121,7 +123,7 @@ export function WebHostApp(props: {
   const [workspacePath, setWorkspacePath] = useState("");
   const [workspacePickerBusy, setWorkspacePickerBusy] = useState(false);
   const [workspaceActionError, setWorkspaceActionError] = useState<string | undefined>();
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(props.initialSettingsOpen ?? false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [archivesOpen, setArchivesOpen] = useState(false);
   const [desktopPanelApi, setDesktopPanelApi] = useState<DesktopPanelApi | null>(null);
@@ -129,6 +131,7 @@ export function WebHostApp(props: {
     null,
   );
   const pendingDraftWorkspaceId = useRef<WorkspaceId | undefined>(undefined);
+  const initialSessionLookupId = useRef<SessionId | undefined>(undefined);
 
   const appearanceSubscribe = useCallback(
     (listener: () => void) => props.appearanceController.subscribe(() => listener()),
@@ -241,8 +244,9 @@ export function WebHostApp(props: {
       workspace: selectedWorkspaceRef,
       selectionStore: sessionSelectionStore,
       permissionPresetStore: permissionPresetSelectionStore,
+      initialSessionId: props.initialSessionId,
     });
-  }, [props.client, selectedWorkspaceRef, state.bootstrap, state.info]);
+  }, [props.client, props.initialSessionId, selectedWorkspaceRef, state.bootstrap, state.info]);
 
   useEffect(() => {
     if (sessionManager === undefined) return;
@@ -282,6 +286,39 @@ export function WebHostApp(props: {
     sessionGetSnapshot,
     sessionGetSnapshot,
   );
+
+  useEffect(() => {
+    const sessionId = props.initialSessionId;
+    if (
+      sessionId === undefined ||
+      props.client.getSession === undefined ||
+      workspaceManager === undefined ||
+      workspaceState.status !== "READY" ||
+      initialSessionLookupId.current === sessionId
+    ) {
+      return;
+    }
+    initialSessionLookupId.current = sessionId;
+    void props.client
+      .getSession(sessionId)
+      .then((session) => {
+        const workspaceId = session.workspaceId;
+        if (
+          workspaceId !== undefined &&
+          workspaceState.workspaces.some((workspace) => workspace.id === workspaceId) &&
+          workspaceManager.getSnapshot().selectedWorkspaceId !== workspaceId
+        ) {
+          void workspaceManager.selectWorkspace(workspaceId);
+        }
+      })
+      .catch(() => undefined);
+  }, [
+    props.client,
+    props.initialSessionId,
+    workspaceManager,
+    workspaceState.status,
+    workspaceState.workspaces,
+  ]);
   const sessionCandidateFingerprint = useMemo(
     () =>
       sessionSnapshot.candidates

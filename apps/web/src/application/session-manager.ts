@@ -83,6 +83,7 @@ import {
 } from "./permission-presets.js";
 
 export interface WebSessionClient extends SessionCandidateClient, WebHostClient {
+  getSession?: CaelushClient["getSession"];
   archiveSession?: CaelushClient["archiveSession"];
   getArchiveState?: CaelushClient["getArchiveState"];
   listWorkspaceSessions?(workspaceId: WorkspaceRef["id"]): Promise<{
@@ -311,6 +312,7 @@ export class WebSessionManager {
       readonly frameScheduler?: FrameScheduler;
       readonly selectionStore?: SessionSelectionStore;
       readonly permissionPresetStore?: PermissionPresetSelectionStore;
+      readonly initialSessionId?: SessionId | undefined;
     },
   ) {
     this.frameScheduler = options.frameScheduler ?? browserFrameScheduler;
@@ -342,8 +344,12 @@ export class WebSessionManager {
         this.options.workspace.id,
         candidates.map((candidate) => candidate.session.id),
       );
+      const linkedSessionId = this.options.initialSessionId;
       const selectedId =
-        selectionStore?.read(this.options.workspace.id) ?? this.snapshot.selectedSessionId;
+        linkedSessionId !== undefined &&
+        candidates.some((candidate) => candidate.session.id === linkedSessionId)
+          ? linkedSessionId
+          : (selectionStore?.read(this.options.workspace.id) ?? this.snapshot.selectedSessionId);
       this.publish({ status: "READY", candidates, error: undefined });
       if (selectedId !== undefined && candidates.some((item) => item.session.id === selectedId)) {
         await this.selectSession(selectedId);

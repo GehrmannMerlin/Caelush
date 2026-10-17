@@ -1,7 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
-import { LoaderCircle, Pencil, ShieldCheck, Trash2, Upload, X } from "lucide-react";
+import {
+  ArrowUpRight,
+  Check,
+  ChevronRight,
+  LoaderCircle,
+  LogOut,
+  Pencil,
+  ShieldCheck,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
+import type { AccountEntitlement } from "../../main/cloud/schemas.js";
 import type { DesktopAccountProfile } from "../../main/account/state.js";
 import type { AccountProfileUpdateInput } from "../../main/cloud/schemas.js";
+import type { AccountCenterSnapshot } from "../../main/profile-center/contract.js";
+import type { DesktopProfileCenterApi } from "../../preload/api-types.js";
 
 type AvatarMimeType = "image/png" | "image/jpeg" | "image/webp";
 type CropRect = {
@@ -22,6 +36,13 @@ interface Props {
   readonly online: boolean;
   readonly busy: boolean;
   readonly loadError: string | null;
+  readonly entitlements: readonly AccountEntitlement[];
+  readonly profileCenterApi?: DesktopProfileCenterApi | undefined;
+  onOpenSession(sessionId: string): void;
+  onOpenWorkbench(): void;
+  onOpenModelSettings(): void;
+  onManageDevices(): void;
+  onLogout(): void;
   onSelectAvatar(): Promise<{
     readonly mimeType: AvatarMimeType;
     readonly bytes: Uint8Array;
@@ -43,6 +64,10 @@ export function AccountProfileScreen(props: Props) {
   const [choosing, setChoosing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [centerSnapshot, setCenterSnapshot] = useState<AccountCenterSnapshot | null>(null);
+  const [centerLoading, setCenterLoading] = useState(false);
+  const [centerError, setCenterError] = useState<string | null>(null);
+  const [centerReloadToken, setCenterReloadToken] = useState(0);
   const skipNameBlur = useRef(false);
   const imageUrl = useMemo(() => {
     if (props.profile?.avatarBytes === null || props.profile === null) return null;
@@ -69,6 +94,35 @@ export function AccountProfileScreen(props: Props) {
       active = false;
     };
   }, [selection]);
+
+  useEffect(() => {
+    const api = props.profileCenterApi;
+    if (api === undefined) {
+      setCenterSnapshot(null);
+      setCenterError("当前版本暂不支持读取最近工作与用量。");
+      return undefined;
+    }
+    let active = true;
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    setCenterLoading(true);
+    setCenterError(null);
+    void api
+      .getSnapshot({ sinceMs: monthStart })
+      .then((snapshot) => {
+        if (active) setCenterSnapshot(snapshot);
+      })
+      .catch((error: unknown) => {
+        if (active)
+          setCenterError(error instanceof Error ? error.message : "无法读取最近工作与用量。");
+      })
+      .finally(() => {
+        if (active) setCenterLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [props.profileCenterApi, centerReloadToken]);
 
   const visibleAvatarUrl = selection !== null ? previewUrl : removeAvatar ? null : imageUrl;
   const canEdit = props.online && props.profile?.canEdit === true && !saving && !props.busy;
@@ -285,6 +339,144 @@ export function AccountProfileScreen(props: Props) {
         )}
       </section>
 
+      <div className="account-center-sections">
+        <section className="account-center-section" aria-labelledby="profile-recent-work-heading">
+          <div className="account-center-heading">
+            <h3 id="profile-recent-work-heading">最近工作</h3>
+            <button
+              className="account-center-heading-action"
+              type="button"
+              onClick={props.onOpenWorkbench}
+            >
+              进入工作台 <ArrowUpRight size={14} aria-hidden="true" />
+            </button>
+          </div>
+          {centerLoading && centerSnapshot === null ? (
+            <p className="account-center-message" role="status">
+              正在读取最近会话…
+            </p>
+          ) : centerSnapshot?.recentSessions.length ? (
+            <div className="account-center-session-list">
+              {centerSnapshot.recentSessions.map((session) => (
+                <button
+                  className="account-center-session"
+                  key={session.id}
+                  type="button"
+                  aria-label={`继续会话：${session.title}`}
+                  onClick={() => props.onOpenSession(session.id)}
+                >
+                  <span className="account-center-session-copy">
+                    <b>{session.title}</b>
+                    <small>{formatSessionDate(session.updatedAt)}</small>
+                  </span>
+                  <ChevronRight size={16} aria-hidden="true" />
+                </button>
+              ))}
+            </div>
+          ) : centerError !== null ? (
+            <div className="account-center-empty">
+              <p className="account-center-message is-error" role="alert">
+                {centerError}
+              </p>
+              <button
+                className="account-center-inline-action"
+                type="button"
+                onClick={() => setCenterReloadToken((value) => value + 1)}
+              >
+                重试
+              </button>
+            </div>
+          ) : (
+            <p className="account-center-message">完成一次工作后，最近会话会显示在这里。</p>
+          )}
+        </section>
+
+        <section className="account-center-section" aria-labelledby="profile-usage-heading">
+          <div className="account-center-heading">
+            <h3 id="profile-usage-heading">模型与用量</h3>
+          </div>
+          {centerSnapshot !== null && (
+            <div className="account-center-usage" aria-label="模型调用用量">
+              <UsageMetric
+                label="本月成功请求"
+                value={formatUsageCount(centerSnapshot.usage.since.successfulRequests)}
+              />
+              <UsageMetric
+                label="本月 Token"
+                value={formatUsageTokens(centerSnapshot.usage.since)}
+              />
+              <UsageMetric
+                label="累计 Token"
+                value={formatUsageTokens(centerSnapshot.usage.allTime)}
+              />
+            </div>
+          )}
+          <button
+            className="account-center-row is-action"
+            type="button"
+            onClick={props.onOpenModelSettings}
+          >
+            <span className="account-center-row-copy">
+              <b>模型与 API Key</b>
+              <small>管理已连接的模型服务与密钥</small>
+            </span>
+            <span className="account-center-row-action">
+              管理模型 <ChevronRight size={15} aria-hidden="true" />
+            </span>
+          </button>
+        </section>
+
+        <section className="account-center-section" aria-labelledby="profile-account-heading">
+          <div className="account-center-heading">
+            <h3 id="profile-account-heading">账号管理</h3>
+          </div>
+          <div className="account-center-row">
+            <span className="account-center-row-copy">
+              <b>桌面版权益</b>
+              <small>Caelush Desktop</small>
+            </span>
+            <span
+              className={`account-center-entitlement ${hasDesktopEntitlement(props.entitlements) ? "is-enabled" : ""}`}
+            >
+              {hasDesktopEntitlement(props.entitlements) ? (
+                <>
+                  <Check size={14} aria-hidden="true" /> 已启用
+                </>
+              ) : (
+                "未启用"
+              )}
+            </span>
+          </div>
+          <button
+            className="account-center-row is-action"
+            type="button"
+            onClick={props.onManageDevices}
+          >
+            <span className="account-center-row-copy">
+              <b>登录设备</b>
+              <small>查看已授权设备，或撤销不再使用的设备</small>
+            </span>
+            <span className="account-center-row-action">
+              管理设备 <ChevronRight size={15} aria-hidden="true" />
+            </span>
+          </button>
+          <button
+            className="account-center-row is-action is-danger"
+            type="button"
+            disabled={props.busy}
+            onClick={props.onLogout}
+          >
+            <span className="account-center-row-copy">
+              <b>切换账户</b>
+              <small>退出当前账户后，可以登录其他账户</small>
+            </span>
+            <span className="account-center-row-action">
+              <LogOut size={14} aria-hidden="true" /> 退出登录
+            </span>
+          </button>
+        </section>
+      </div>
+
       {cropSource !== null && (
         <AvatarCropDialog
           bytes={cropSource.bytes}
@@ -293,6 +485,15 @@ export function AccountProfileScreen(props: Props) {
           onConfirm={acceptCrop}
         />
       )}
+    </div>
+  );
+}
+
+function UsageMetric(props: { label: string; value: string }) {
+  return (
+    <div className="account-center-usage-metric">
+      <b>{props.value}</b>
+      <span>{props.label}</span>
     </div>
   );
 }
@@ -537,6 +738,30 @@ function bytesToDataUrl(bytes: Uint8Array, mimeType: AvatarMimeType | "image/web
 function avatarFallback(value: string): string {
   const first = Array.from(value.trim())[0];
   return first?.toLocaleUpperCase() ?? "C";
+}
+
+function hasDesktopEntitlement(entitlements: readonly AccountEntitlement[]): boolean {
+  return entitlements.some((item) => item.code === "CAELUSH_DESKTOP_BASIC" && item.enabled);
+}
+
+function formatUsageCount(value: number): string {
+  return new Intl.NumberFormat("zh-CN").format(value);
+}
+
+function formatUsageTokens(bucket: AccountCenterSnapshot["usage"]["since"]): string {
+  if (bucket.successfulRequests === 0) return "0";
+  return bucket.totalTokens === null ? "—" : formatUsageCount(bucket.totalTokens);
+}
+
+function formatSessionDate(value: number): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "最近更新";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

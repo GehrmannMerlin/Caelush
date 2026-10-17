@@ -45,6 +45,28 @@ const otherWorkspace: WorkspaceRef = {
 };
 
 describe("WebSessionManager", () => {
+  it("opens a validated deep-linked session ahead of the persisted selection", async () => {
+    const persisted = makeSession({ defaultWorkspace: workspace });
+    const requested = makeSession({ defaultWorkspace: workspace });
+    const store = new SessionSelectionStore(new Map<string, string>());
+    store.setCandidates(workspace.id, [persisted.id, requested.id]);
+    store.write(workspace.id, persisted.id);
+    const client = makeClient({ sessions: [persisted, requested] });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo(),
+      selectionStore: store,
+      initialSessionId: requested.id,
+    });
+
+    await manager.loadSessions();
+
+    expect(manager.getSnapshot().selectedSessionId).toBe(requested.id);
+    expect(manager.getSnapshot().history).toEqual([]);
+    manager.dispose();
+  });
+
   it("archives only after server acceptance and clears the selected history and draft input identity", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const client = makeClient({ sessions: [session] });

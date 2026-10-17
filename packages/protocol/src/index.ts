@@ -406,6 +406,9 @@ export {
   TurnPresentationItemStatusSchema,
   UserPresentationItemSchema,
   VerificationPresentationItemSchema,
+  UsageSummaryBucketSchema,
+  UsageSummaryQuerySchema,
+  UsageSummaryResponseSchema,
 } from "./api/index.js";
 export type {
   ApiError,
@@ -500,6 +503,9 @@ export type {
   TurnPresentationItemStatus,
   UserPresentationItem,
   VerificationPresentationItem,
+  UsageSummaryBucket,
+  UsageSummaryQuery,
+  UsageSummaryResponse,
 } from "./api/index.js";
 
 export {

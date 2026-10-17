@@ -23,7 +23,15 @@ const initialProfile = {
   canEdit: true,
 };
 
-window.avatarTest = { saved: null, calls: [] };
+window.avatarTest = {
+  saved: null,
+  calls: [],
+  openedSession: null,
+  openedWorkbench: false,
+  openedModelSettings: false,
+  managedDevices: false,
+  loggedOut: false,
+};
 
 function TestHarness() {
   const [profile, setProfile] = useState(initialProfile);
@@ -34,6 +42,27 @@ function TestHarness() {
       online={true}
       busy={false}
       loadError={null}
+      entitlements={[{ code: "CAELUSH_DESKTOP_BASIC", enabled: true }]}
+      profileCenterApi={{
+        getSnapshot: async () => ({
+          recentSessions: [
+            {
+              id: "ses_00000000-0000-7000-8000-000000000001",
+              title: "修复登录流程",
+              updatedAt: 1792026000000,
+            },
+          ],
+          usage: {
+            allTime: { successfulRequests: 21, totalTokens: 9600 },
+            since: { successfulRequests: 3, totalTokens: 1200 },
+          },
+        }),
+      }}
+      onOpenSession={(sessionId) => (window.avatarTest.openedSession = sessionId)}
+      onOpenWorkbench={() => (window.avatarTest.openedWorkbench = true)}
+      onOpenModelSettings={() => (window.avatarTest.openedModelSettings = true)}
+      onManageDevices={() => (window.avatarTest.managedDevices = true)}
+      onLogout={() => (window.avatarTest.loggedOut = true)}
       onSelectAvatar={() => {
         const { base64, delay } = window.avatarFixture;
         const selected = {
@@ -189,6 +218,77 @@ describe.skipIf(!existsSync(chromium.executablePath()))("account profile editing
 
     expect(await page.getByText("crop@example.test", { exact: true }).isVisible()).toBe(true);
     expect(await page.locator("#profile-email").count()).toBe(0);
+  });
+
+  it("shows real recent work, provider usage, and the account entitlement without adding another identity layout", async () => {
+    await mountProfile();
+
+    await expect
+      .poll(() => page.getByRole("button", { name: "继续会话：修复登录流程" }).isVisible())
+      .toBe(true);
+    expect(await page.getByText("1,200", { exact: true }).isVisible()).toBe(true);
+    expect(await page.getByText("9,600", { exact: true }).isVisible()).toBe(true);
+    expect(await page.getByText("Caelush Desktop", { exact: true }).isVisible()).toBe(true);
+    expect(await page.getByText("已启用", { exact: true }).isVisible()).toBe(true);
+
+    const alignment = await page.evaluate(() => {
+      const centerX = (selector: string) => {
+        const rect = document.querySelector(selector)!.getBoundingClientRect();
+        return rect.left + rect.width / 2;
+      };
+      const stack = document.querySelector(".account-profile-stack")!.getBoundingClientRect();
+      const section = document.querySelector(".account-center-section")!.getBoundingClientRect();
+      return {
+        avatar: centerX(".profile-avatar-frame"),
+        displayName: centerX(".profile-name-button"),
+        email: centerX(".profile-email"),
+        contentLeft: stack.left,
+        sectionLeft: section.left,
+        contentWidth: stack.width,
+        sectionWidth: section.width,
+      };
+    });
+    expect(alignment.avatar).toBeCloseTo(alignment.displayName, 0);
+    expect(alignment.displayName).toBeCloseTo(alignment.email, 0);
+    expect(alignment.contentLeft).toBeCloseTo(alignment.sectionLeft, 0);
+    expect(alignment.contentWidth).toBeCloseTo(alignment.sectionWidth, 0);
+  });
+
+  it("opens the selected session, model settings, device management, and account switching actions", async () => {
+    await mountProfile();
+
+    await page.getByRole("button", { name: "继续会话：修复登录流程" }).click();
+    await page.getByRole("button", { name: /管理模型/u }).click();
+    await page.getByRole("button", { name: /管理设备/u }).click();
+    await page.locator(".account-center-row.is-danger").click();
+
+    expect(await page.evaluate("window.avatarTest.openedSession")).toBe(
+      "ses_00000000-0000-7000-8000-000000000001",
+    );
+    expect(await page.evaluate("window.avatarTest.openedModelSettings")).toBe(true);
+    expect(await page.evaluate("window.avatarTest.managedDevices")).toBe(true);
+    expect(await page.evaluate("window.avatarTest.loggedOut")).toBe(true);
+  });
+
+  it("keeps the aligned sections and right-side actions usable on a narrow window", async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await mountProfile();
+
+    const layout = await page.evaluate(() => {
+      const stack = document.querySelector(".account-profile-stack")!.getBoundingClientRect();
+      const section = document.querySelector(".account-center-section")!.getBoundingClientRect();
+      return {
+        viewportWidth: document.documentElement.clientWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        stackLeft: stack.left,
+        sectionLeft: section.left,
+        sectionRight: section.right,
+      };
+    });
+    expect(layout.documentWidth).toBe(layout.viewportWidth);
+    expect(layout.sectionLeft).toBeCloseTo(layout.stackLeft, 0);
+    expect(layout.sectionRight).toBeLessThanOrEqual(layout.viewportWidth);
+    expect(await page.getByRole("button", { name: /管理模型/u }).isVisible()).toBe(true);
   });
 
   it("shows avatar actions only while hovering the avatar", async () => {

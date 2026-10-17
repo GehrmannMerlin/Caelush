@@ -623,6 +623,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       contextBudgetPolicyResolver: composition.contextBudgetPolicyResolver,
       aiConfiguration,
       securityCapabilityService: composition.securityCapabilityService,
+      providerUsage: storage.providerInvocationUsage,
       transcript: new SessionTranscriptService({
         sessions: storage.sessions,
         runs: storage.runs,

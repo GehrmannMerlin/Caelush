@@ -35,6 +35,8 @@ export {
   type ProviderInvocationObservationInput,
   type ProviderInvocationStatus,
   type ProviderInvocationUsageRecord,
+  type ProviderInvocationUsageSummary,
+  type ProviderInvocationUsageSummaryBucket,
 } from "./provider-invocation-usage-store.js";
 export { createSqliteToolBudgetAdmission, SqliteRunBudgetPort } from "./run-budget-port.js";
 export type { SqliteRunBudgetPortOptions, ToolBudgetAdmissionLegacy } from "./run-budget-port.js";

@@ -1,6 +1,16 @@
 export { ApiErrorCodeSchema, ApiErrorResponseSchema, ApiErrorSchema } from "./common.js";
 export type { ApiError, ApiErrorCode, ApiErrorResponse } from "./common.js";
 export {
+  UsageSummaryBucketSchema,
+  UsageSummaryQuerySchema,
+  UsageSummaryResponseSchema,
+} from "./usage-summary.js";
+export type {
+  UsageSummaryBucket,
+  UsageSummaryQuery,
+  UsageSummaryResponse,
+} from "./usage-summary.js";
+export {
   ClientModelSelectionSchema,
   ClientModelSelectionWithReasoningSchema,
   ReasoningLevelSchema,
