@@ -3,6 +3,12 @@ import { UpdatePage } from "./UpdatePage.js";
 import { AccountProfileScreen } from "./components/account-profile-screen.js";
 import { AccountArchiveEntry } from "./components/account-archive-screen.js";
 import { AccountAppearanceScreen } from "./components/account-appearance-screen.js";
+import {
+  DeviceManagementDialog,
+  DeviceManagementPanel,
+  DeviceRowsSkeleton,
+  formatDeviceLabel,
+} from "./components/device-management-dialog.js";
 import type {
   DesktopArchiveApi,
   DesktopAppearanceApi,
@@ -25,7 +31,6 @@ import {
   EyeOff,
   House,
   KeyRound,
-  LaptopMinimal,
   LoaderCircle,
   LockKeyhole,
   Mail,
@@ -106,6 +111,8 @@ export function DesktopApp() {
   const agentLaunchRetryStarted = useRef(false);
   const [devices, setDevices] = useState<readonly SafeDevice[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
+  const [devicesReloadToken, setDevicesReloadToken] = useState(0);
   const [profile, setProfile] = useState<DesktopAccountProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
@@ -352,17 +359,23 @@ export function DesktopApp() {
     if (!online) {
       setDevicesLoading(false);
       setDevices([]);
+      setDevicesError(null);
       return;
     }
     let active = true;
     setDevicesLoading(true);
+    setDevicesError(null);
     void window.caelushDesktop.account
       .listDevices()
       .then((result) => {
         if (active) setDevices(result);
       })
       .catch((error: unknown) => {
-        if (active) setFeedback(errorMessage(error));
+        if (active) {
+          const message = errorMessage(error);
+          setDevicesError(message);
+          setFeedback(message);
+        }
       })
       .finally(() => {
         if (active) setDevicesLoading(false);
@@ -370,7 +383,7 @@ export function DesktopApp() {
     return () => {
       active = false;
     };
-  }, [online]);
+  }, [online, devicesReloadToken]);
 
   useEffect(() => {
     if (!authenticated || accountState.account?.userId === undefined) {
@@ -472,14 +485,18 @@ export function DesktopApp() {
 
   async function revokeDevice(device: SafeDevice) {
     const label = device.current ? "此设备" : formatDeviceLabel(device.label);
-    if (!window.confirm(`确定撤销“${label}”的访问权限吗？该设备需要重新登录。`)) return;
+    if (!window.confirm(`确定撤销“${label}”的访问权限吗？该设备身份下的所有在线会话都会失效。`))
+      return;
     setBusy(true);
     setFeedback(null);
+    setDevicesError(null);
     try {
       await window.caelushDesktop.account.revokeDevice({ deviceId: device.deviceId });
       setDevices((current) => current.filter((item) => item.deviceId !== device.deviceId));
     } catch (error) {
-      setFeedback(errorMessage(error));
+      const message = errorMessage(error);
+      setDevicesError(message);
+      setFeedback(message);
     } finally {
       setBusy(false);
     }
@@ -557,6 +574,8 @@ export function DesktopApp() {
         onAppearancePreferenceChange={changeAppearance}
         devices={devices}
         devicesLoading={devicesLoading}
+        devicesError={devicesError}
+        onRefreshDevices={() => setDevicesReloadToken((current) => current + 1)}
         busy={busy}
         feedback={apiError}
         onNavigate={(nextView) => {
@@ -1122,24 +1141,6 @@ function AccountPageSkeleton(props: { view: AccountScreen }) {
   );
 }
 
-function DeviceRowsSkeleton() {
-  return (
-    <div className="device-list account-skeleton-device-list" aria-hidden="true">
-      {[0, 1].map((row) => (
-        <div className="device-row account-skeleton-device-row" key={row}>
-          <span className="skeleton-block account-skeleton-device-icon" />
-          <div className="account-skeleton-device-copy">
-            <span className="skeleton-block account-skeleton-value" />
-            <span className="skeleton-block account-skeleton-copy" />
-          </div>
-          <span className="skeleton-block account-skeleton-device-status" />
-          <span className="skeleton-block account-skeleton-button-small" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function AccountHome(props: {
   archiveApi?: DesktopArchiveApi | undefined;
   profileCenterApi?: DesktopProfileCenterApi | undefined;
@@ -1152,6 +1153,8 @@ function AccountHome(props: {
   activeView: AccountScreen;
   devices: readonly SafeDevice[];
   devicesLoading: boolean;
+  devicesError: string | null;
+  onRefreshDevices(): void;
   busy: boolean;
   feedback: string | null;
   onNavigate(screen: AccountScreen): void;
@@ -1180,6 +1183,7 @@ function AccountHome(props: {
 }) {
   const { accountState } = props;
   const offline = accountState.status === "AUTHORIZED_OFFLINE";
+  const [deviceManagementOpen, setDeviceManagementOpen] = useState(false);
   return (
     <main className="account-layout">
       <aside className="account-sidebar">
@@ -1251,6 +1255,7 @@ function AccountHome(props: {
               state={accountState}
               devices={props.devices}
               devicesLoading={props.devicesLoading}
+              online={!offline}
               onReconnect={props.onReconnect}
               onRevoke={props.onRevoke}
               busy={props.busy}
@@ -1276,7 +1281,10 @@ function AccountHome(props: {
               profileCenterApi={props.profileCenterApi}
               onOpenSession={props.onOpenSession}
               onOpenWorkbench={props.onOpenWorkbench}
-              onManageDevices={() => props.onNavigate("home")}
+              onManageDevices={() => {
+                setDeviceManagementOpen(true);
+                props.onRefreshDevices();
+              }}
               onLogout={props.onProfileLogout}
               onSelectAvatar={props.onSelectAvatar}
               onSave={props.onSaveProfile}
@@ -1300,6 +1308,18 @@ function AccountHome(props: {
           )}
         </div>
       </section>
+      {deviceManagementOpen && (
+        <DeviceManagementDialog
+          state={accountState}
+          devices={props.devices}
+          loading={props.devicesLoading}
+          online={!offline}
+          busy={props.busy}
+          error={props.devicesError}
+          onClose={() => setDeviceManagementOpen(false)}
+          onRevoke={props.onRevoke}
+        />
+      )}
     </main>
   );
 }
@@ -1308,6 +1328,7 @@ function Overview(props: {
   state: AccountState;
   devices: readonly SafeDevice[];
   devicesLoading: boolean;
+  online: boolean;
   onReconnect(): void;
   onRevoke(device: SafeDevice): void;
   busy: boolean;
@@ -1324,11 +1345,6 @@ function Overview(props: {
   const { state } = props;
   const offline = state.status === "AUTHORIZED_OFFLINE";
   const grant = state.offlineGrant;
-  const currentDevice = props.devices.find((device) => device.current) ?? state.device;
-  const currentDeviceCanBeRevoked =
-    currentDevice !== undefined &&
-    props.devices.some((device) => device.deviceId === currentDevice.deviceId && !device.revokedAt);
-  const otherDevices = props.devices.filter((device) => !device.current);
   return (
     <>
       <section className={`connection-banner ${offline ? "is-offline" : ""}`}>
@@ -1381,79 +1397,14 @@ function Overview(props: {
         </section>
       )}
       <div className="overview-grid">
-        <section className="detail-panel device-summary">
-          <div className="panel-heading">
-            <h3>Windows 桌面端</h3>
-            <LaptopMinimal size={18} />
-          </div>
-          <div className="device-name">
-            <div className="device-tile">
-              <LaptopMinimal size={19} />
-            </div>
-            <div>
-              <b>{formatDeviceLabel(currentDevice?.label ?? "Caelush Desktop")}</b>
-              <span>{currentDevice ? "当前设备" : "设备尚未验证"}</span>
-            </div>
-          </div>
-          <div className="detail-row">
-            <span>设备 ID</span>
-            <b className="mono-value">{currentDevice?.deviceId ?? "—"}</b>
-          </div>
-          {currentDeviceCanBeRevoked && currentDevice && (
-            <button
-              type="button"
-              className="revoke-button device-current-revoke"
-              disabled={offline || props.busy}
-              onClick={() => props.onRevoke(currentDevice)}
-            >
-              撤销此设备
-            </button>
-          )}
-          <div className="device-list-heading">其他已登录设备</div>
-          {offline ? (
-            <p className="device-list-message">连接云端后可管理其他登录设备。</p>
-          ) : props.devicesLoading ? (
-            <DeviceRowsSkeleton />
-          ) : otherDevices.length === 0 ? (
-            <p className="device-list-message">暂无其他已登录设备。</p>
-          ) : (
-            <div className="device-list">
-              {otherDevices.map((device) => (
-                <div className="device-row" key={device.deviceId}>
-                  <div className="device-tile">
-                    <LaptopMinimal size={18} />
-                  </div>
-                  <div className="device-row-main">
-                    <b>{formatDeviceLabel(device.label)}</b>
-                    <span>
-                      最近活动：{device.lastSeenAt ? formatDate(device.lastSeenAt) : "暂无记录"}
-                    </span>
-                  </div>
-                  <div className="device-row-status">
-                    <span className={`status-dot ${device.revokedAt ? "is-revoked" : ""}`} />
-                    {device.revokedAt ? "已撤销" : "使用中"}
-                  </div>
-                  {!device.revokedAt && (
-                    <button
-                      type="button"
-                      className="revoke-button"
-                      disabled={props.busy}
-                      onClick={() => props.onRevoke(device)}
-                    >
-                      撤销
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="table-note">
-            <ShieldCheck size={15} />
-            <span>
-              撤销设备后，其在线会话会立即失效。设备重新连接时，系统也会重新检查离线授权。
-            </span>
-          </div>
-        </section>
+        <DeviceManagementPanel
+          state={state}
+          devices={props.devices}
+          loading={props.devicesLoading}
+          online={props.online}
+          busy={props.busy}
+          onRevoke={props.onRevoke}
+        />
       </div>
       <LegacyImportPanel
         summary={props.legacySummary}
@@ -1823,12 +1774,6 @@ function formatDate(value: string): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "未知时间";
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
-}
-
-function formatDeviceLabel(label: string): string {
-  if (label === "Caelush Desktop") return "Caelush 桌面端";
-  if (label === "Windows desktop") return "Windows 桌面端";
-  return label;
 }
 
 function formatImportSourceLabel(label: string): string {

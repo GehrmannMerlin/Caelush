@@ -1142,6 +1142,75 @@ button:disabled {
   color: var(--muted);
   font-size: 0.62rem;
 }
+.device-management-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(11 22 40 / 42%);
+  backdrop-filter: blur(3px);
+}
+.device-management-dialog {
+  display: grid;
+  width: min(760px, 100%);
+  max-height: min(820px, calc(100vh - 48px));
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 22px 70px rgb(20 38 70 / 22%);
+}
+.device-management-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 22px 24px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.device-management-dialog-header h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.08rem;
+  font-weight: 650;
+}
+.device-management-dialog-header p {
+  max-width: 600px;
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.55;
+}
+.device-management-close {
+  flex: 0 0 auto;
+}
+.device-management-dialog-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 24px 24px;
+}
+.device-management-dialog .detail-panel {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.device-management-dialog .device-row-main > span {
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+.device-management-error {
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  border: 1px solid var(--danger-line);
+  border-radius: 8px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: 0.72rem;
+}
 .status-dot.is-revoked {
   background: var(--danger);
   box-shadow: none;
@@ -2878,6 +2947,30 @@ button:disabled {
   }
   .profile-crop-dialog {
     padding: 18px;
+  }
+  .device-management-backdrop {
+    padding: 12px;
+  }
+  .device-management-dialog {
+    max-height: calc(100vh - 24px);
+    border-radius: 12px;
+  }
+  .device-management-dialog-header {
+    padding: 18px 18px 14px;
+  }
+  .device-management-dialog-body {
+    padding: 15px 18px 18px;
+  }
+  .device-management-dialog .device-row {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 0;
+  }
+  .device-management-dialog .device-row-main {
+    flex: 1 1 calc(100% - 50px);
+  }
+  .device-management-dialog .device-row-status {
+    margin-left: 43px;
   }
 }
 @media (hover: none) {
