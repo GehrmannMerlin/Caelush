@@ -5,7 +5,7 @@ import {
   type AppearanceSnapshot,
   type ResolvedTheme,
   type ThemePreference,
-} from "@caelush/ui-theme";
+} from "@caelush/ui-theme/appearance";
 
 export const WEB_APPEARANCE_STORAGE_KEY = "caelush.appearance.v1";
 

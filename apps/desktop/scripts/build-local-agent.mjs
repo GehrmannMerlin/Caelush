@@ -26,6 +26,7 @@ const excludedAccessSids = ["S-1-1-0", "S-1-5-11", "S-1-5-32-545"];
 runPnpm(["--filter", "@caelush/protocol", "build"]);
 runPnpm(["--filter", "@caelush/client", "build"]);
 runPnpm(["--filter", "@caelush/daemon...", "build"]);
+runPnpm(["--filter", "@caelush/ui-theme", "build"]);
 runPnpm(["--filter", "@caelush/web", "build:desktop"]);
 
 if (process.platform !== "win32") {

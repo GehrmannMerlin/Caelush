@@ -1,6 +1,6 @@
 import { createElement, type ReactElement } from "react";
 import type { WorkspaceId, WorkspaceRecord } from "@caelush/protocol";
-import type { ResolvedTheme } from "@caelush/ui-theme";
+import type { ResolvedTheme } from "@caelush/ui-theme/appearance";
 import { ConversationStartPanel } from "./conversation-start-panel.js";
 
 export function WorkspaceEmptyState(props: {

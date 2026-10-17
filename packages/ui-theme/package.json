@@ -8,6 +8,22 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./appearance": {
+      "types": "./dist/appearance.d.ts",
+      "import": "./dist/appearance.js"
+    },
+    "./appearance-selector": {
+      "types": "./dist/appearance-mode-selector.d.ts",
+      "import": "./dist/appearance-mode-selector.js"
+    },
+    "./brand": {
+      "types": "./dist/brand.d.ts",
+      "import": "./dist/brand.js"
+    },
+    "./settings-surface": {
+      "types": "./dist/settings-surface.d.ts",
+      "import": "./dist/settings-surface.js"
+    },
     "./settings-surface.css": "./src/styles/settings-surface.css",
     "./styles.css": "./src/styles/index.css",
     "./styles/light.css": "./src/styles/light.css",

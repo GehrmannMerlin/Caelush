@@ -36,7 +36,7 @@ import {
 } from "./profile-center-handlers.js";
 import type { DesktopUpdateCoordinator } from "../update/coordinator.js";
 import type { DesktopAppearanceController } from "../appearance/appearance-controller.js";
-import type { AppearanceSnapshot } from "@caelush/ui-theme";
+import type { AppearanceSnapshot } from "@caelush/ui-theme/appearance";
 import {
   DesktopReleaseHistoryItemSchema,
   UpdateStateSchema,

@@ -9,7 +9,7 @@ import {
   type ReactElement,
 } from "react";
 import { Files, PanelRightClose, PanelRightOpen, TerminalSquare, Globe2 } from "lucide-react";
-import type { ResolvedTheme } from "@caelush/ui-theme";
+import type { ResolvedTheme } from "@caelush/ui-theme/appearance";
 import type { DesktopPanelApi } from "../host/desktop-panel-api.js";
 import { DesktopFileExplorer } from "./desktop-file-explorer.js";
 import { DesktopBrowserControls } from "./desktop-browser-controls.js";

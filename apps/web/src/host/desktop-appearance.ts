@@ -4,7 +4,7 @@ import {
   type AppearanceSnapshot,
   type ResolvedTheme,
   type ThemePreference,
-} from "@caelush/ui-theme";
+} from "@caelush/ui-theme/appearance";
 import type { DesktopAppearanceBridge } from "./desktop-integration.js";
 
 const LIGHT_SNAPSHOT: AppearanceSnapshot = Object.freeze({

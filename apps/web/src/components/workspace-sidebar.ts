@@ -16,7 +16,8 @@ import {
   Plus,
 } from "lucide-react";
 import { derivePromptTitle } from "../application/prompt.js";
-import { CaelushBrand, type ResolvedTheme } from "@caelush/ui-theme";
+import { CaelushBrand } from "@caelush/ui-theme/brand";
+import type { ResolvedTheme } from "@caelush/ui-theme/appearance";
 import { caelushBrandAssets } from "../brand-assets.js";
 import archiveIcon from "../assets/icons/archive.svg";
 import { RunStatusIcon, runStatusClass, runStatusLabel } from "./run-status.js";

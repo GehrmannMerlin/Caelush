@@ -6,15 +6,28 @@ export default defineConfig(({ mode }) => {
   const desktopBuild = mode === "desktop";
   return {
     base: desktopBuild ? "/agent/" : "/",
-    ...(desktopBuild
-      ? {
-          build: {
+    build: {
+      ...(desktopBuild
+        ? {
             outDir: fileURLToPath(new URL("../desktop/.stage/web", import.meta.url)),
             emptyOutDir: true,
             sourcemap: false,
+          }
+        : {}),
+      rolldownOptions: {
+        output: {
+          codeSplitting: {
+            groups: [
+              {
+                name: "react-vendor",
+                test: /node_modules[\\/]\.pnpm[\\/](?:react-dom|react|scheduler)@/,
+                priority: 20,
+              },
+            ],
           },
-        }
-      : {}),
+        },
+      },
+    },
     plugins: [
       {
         name: "caelush-web-development-bootstrap",

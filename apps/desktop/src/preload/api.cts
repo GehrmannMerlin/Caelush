@@ -1,7 +1,7 @@
 import electron = require("electron");
 import type { AccountState } from "../main/account/state.js";
 import type { DesktopApi } from "./api-types.js";
-import type { AppearanceSnapshot, ThemePreference } from "@caelush/ui-theme";
+import type { AppearanceSnapshot, ThemePreference } from "@caelush/ui-theme/appearance";
 import type { LegacyImportProgress } from "../shared/legacy-data-contract.js";
 import type { DesktopReleaseHistoryItem, DesktopUpdateState } from "../shared/update-contract.js";
 

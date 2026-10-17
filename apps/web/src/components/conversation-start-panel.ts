@@ -1,6 +1,7 @@
 import { createElement, type ReactElement } from "react";
 import type { WorkspaceId, WorkspaceRecord } from "@caelush/protocol";
-import { CaelushBrand, type ResolvedTheme } from "@caelush/ui-theme";
+import { CaelushBrand } from "@caelush/ui-theme/brand";
+import type { ResolvedTheme } from "@caelush/ui-theme/appearance";
 import { caelushBrandAssets } from "../brand-assets.js";
 import { WorkspacePicker } from "./workspace-picker.js";
 

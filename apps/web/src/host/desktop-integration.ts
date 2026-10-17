@@ -1,5 +1,5 @@
 import type { DesktopPanelApi } from "./desktop-panel-api.js";
-import type { AppearanceSnapshot, ThemePreference } from "@caelush/ui-theme";
+import type { AppearanceSnapshot, ThemePreference } from "@caelush/ui-theme/appearance";
 
 export const CAELUSH_DESKTOP_PROTOCOL_VERSION = 1 as const;
 

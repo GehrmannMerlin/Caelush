@@ -31,7 +31,8 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import { toolPresentationCategory } from "@caelush/protocol";
-import { CaelushBrand, type ResolvedTheme } from "@caelush/ui-theme";
+import { CaelushBrand } from "@caelush/ui-theme/brand";
+import type { ResolvedTheme } from "@caelush/ui-theme/appearance";
 import { caelushBrandAssets } from "../brand-assets.js";
 import {
   browserFrameScheduler,

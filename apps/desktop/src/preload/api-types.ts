@@ -42,7 +42,7 @@ import type {
   SessionTranscriptResponse,
   UsageActivityQuery,
 } from "@caelush/protocol";
-import type { AppearanceSnapshot, ThemePreference } from "@caelush/ui-theme";
+import type { AppearanceSnapshot, ThemePreference } from "@caelush/ui-theme/appearance";
 import type {
   AccountCenterSnapshot,
   DesktopModelSettingsSnapshot,

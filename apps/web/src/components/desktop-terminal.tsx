@@ -2,7 +2,7 @@ import { createElement, useCallback, useEffect, useRef, useState, type ReactElem
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import type { ResolvedTheme } from "@caelush/ui-theme";
+import type { ResolvedTheme } from "@caelush/ui-theme/appearance";
 import type { DesktopPanelApi, DesktopTerminalSession } from "../host/desktop-panel-api.js";
 import { resolveDesktopTerminalTheme } from "./desktop-terminal-theme.js";
 

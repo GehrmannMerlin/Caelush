@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { parseThemePreference, type ThemePreference } from "@caelush/ui-theme";
+import { parseThemePreference, type ThemePreference } from "@caelush/ui-theme/appearance";
 
 const DOCUMENT_VERSION = 1;
 const MAX_DOCUMENT_BYTES = 512;

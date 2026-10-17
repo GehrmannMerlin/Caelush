@@ -8,7 +8,8 @@ import type {
   DesktopAppearanceApi,
   DesktopProfileCenterApi,
 } from "../preload/api-types.js";
-import { CaelushBrand, type AppearanceSnapshot, type ThemePreference } from "@caelush/ui-theme";
+import { CaelushBrand } from "@caelush/ui-theme/brand";
+import type { AppearanceSnapshot, ThemePreference } from "@caelush/ui-theme/appearance";
 import caelushLogoLight from "@caelush/ui-theme/assets/caelush-logo.png";
 import caelushLogoDark from "@caelush/ui-theme/assets/caelush-logo-white.png";
 import {

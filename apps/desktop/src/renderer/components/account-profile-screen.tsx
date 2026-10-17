@@ -17,7 +17,7 @@ import type { AccountProfileUpdateInput } from "../../main/cloud/schemas.js";
 import type { AccountCenterSnapshot } from "../../main/profile-center/contract.js";
 import type { DesktopModelSettingsSnapshot } from "../../main/profile-center/contract.js";
 import type { DesktopProfileCenterApi } from "../../preload/api-types.js";
-import { SettingsSurface } from "@caelush/ui-theme";
+import { SettingsSurface } from "@caelush/ui-theme/settings-surface";
 
 type AvatarMimeType = "image/png" | "image/jpeg" | "image/webp";
 type CropRect = {

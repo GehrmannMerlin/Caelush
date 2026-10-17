@@ -1,9 +1,6 @@
 import { createElement, type ReactElement } from "react";
-import {
-  AppearanceModeSelector,
-  type AppearanceSnapshot,
-  type ThemePreference,
-} from "@caelush/ui-theme";
+import { AppearanceModeSelector } from "@caelush/ui-theme/appearance-selector";
+import type { AppearanceSnapshot, ThemePreference } from "@caelush/ui-theme/appearance";
 import type { DesktopAppearanceApi } from "../../preload/api-types.js";
 
 export interface AccountAppearanceScreenProps {

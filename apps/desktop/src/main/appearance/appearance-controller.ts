@@ -4,7 +4,7 @@ import {
   type AppearanceSnapshot,
   type ResolvedTheme,
   type ThemePreference,
-} from "@caelush/ui-theme";
+} from "@caelush/ui-theme/appearance";
 
 export interface DesktopAppearanceNativeTheme {
   themeSource: ThemePreference;

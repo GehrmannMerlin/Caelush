@@ -1,4 +1,4 @@
-import type { ResolvedTheme } from "@caelush/ui-theme";
+import type { ResolvedTheme } from "@caelush/ui-theme/appearance";
 
 export interface DesktopTerminalTheme {
   readonly background: string;

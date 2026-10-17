@@ -1,10 +1,7 @@
 import { createElement, Fragment, useState, type ReactElement } from "react";
 import { ArrowLeft } from "lucide-react";
-import {
-  AppearanceModeSelector,
-  type AppearanceSnapshot,
-  type ThemePreference,
-} from "@caelush/ui-theme";
+import { AppearanceModeSelector } from "@caelush/ui-theme/appearance-selector";
+import type { AppearanceSnapshot, ThemePreference } from "@caelush/ui-theme/appearance";
 
 export interface AppearancePageProps {
   readonly snapshot: AppearanceSnapshot;

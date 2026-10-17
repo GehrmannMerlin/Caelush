@@ -1,1 +1,1 @@
-export { SettingsSurface, type SettingsSurfaceProps } from "@caelush/ui-theme";
+export { SettingsSurface, type SettingsSurfaceProps } from "@caelush/ui-theme/settings-surface";

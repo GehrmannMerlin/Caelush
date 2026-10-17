@@ -4,7 +4,7 @@ import { type LiveActivityState, type TimelineState, type TranscriptEntry } from
 import type { ApprovalResolution, RunId } from "@caelush/protocol";
 import type { ApprovalView } from "@caelush/client";
 import type { SessionTurnPresentationResponse } from "@caelush/protocol";
-import type { ResolvedTheme } from "@caelush/ui-theme";
+import type { ResolvedTheme } from "@caelush/ui-theme/appearance";
 import type { WebControlMode } from "../application/session-manager.js";
 import { runStatusClass, runStatusLabel } from "./run-status.js";
 import { Timeline } from "./timeline.js";

@@ -12,7 +12,7 @@ import {
   type ReactElement,
 } from "react";
 import type { SessionId, WorkspaceId, WorkspaceRecord, WorkspaceRef } from "@caelush/protocol";
-import type { AppearanceController } from "@caelush/ui-theme";
+import type { AppearanceController } from "@caelush/ui-theme/appearance";
 import {
   canCancelRunStatus,
   createInitialLiveActivityState,
