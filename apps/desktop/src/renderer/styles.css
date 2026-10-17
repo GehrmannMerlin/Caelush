@@ -1178,13 +1178,6 @@ button:disabled {
   font-size: 1.08rem;
   font-weight: 650;
 }
-.device-management-dialog-header p {
-  max-width: 600px;
-  margin: 7px 0 0;
-  color: var(--muted);
-  font-size: 0.72rem;
-  line-height: 1.55;
-}
 .device-management-close {
   flex: 0 0 auto;
 }
@@ -1211,10 +1204,6 @@ button:disabled {
   background: var(--danger-soft);
   font-size: 0.72rem;
 }
-.status-dot.is-revoked {
-  background: var(--danger);
-  box-shadow: none;
-}
 .revoke-button {
   padding: 6px 8px;
   border: 1px solid var(--danger-line);
@@ -1228,21 +1217,6 @@ button:disabled {
   border-color: var(--danger-line);
   color: var(--danger);
   background: var(--danger-soft);
-}
-.table-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin-top: 15px;
-  padding-top: 13px;
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 0.63rem;
-  line-height: 1.5;
-}
-.table-note svg {
-  flex: 0 0 auto;
-  color: var(--text);
 }
 .account-profile-stack {
   display: grid;
@@ -2506,12 +2480,10 @@ button:disabled {
   font-size: 0.66rem;
 }
 .legacy-source,
-.device-row,
-.table-note {
+.device-row {
   border-top-color: var(--line);
 }
-.device-row-status,
-.table-note {
+.device-row-status {
   color: var(--muted);
   font-size: 0.72rem;
 }

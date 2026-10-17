@@ -1,5 +1,5 @@
 import { useEffect, useRef, type MouseEvent, type ReactElement } from "react";
-import { LaptopMinimal, ShieldCheck, X } from "lucide-react";
+import { LaptopMinimal, X } from "lucide-react";
 import type { AccountState, SafeDevice } from "../../main/account/state.js";
 
 interface DeviceManagementPanelProps {
@@ -16,7 +16,7 @@ export function DeviceManagementPanel(props: DeviceManagementPanelProps): ReactE
   const currentDeviceCanBeRevoked =
     currentDevice !== undefined &&
     props.devices.some((device) => device.deviceId === currentDevice.deviceId && !device.revokedAt);
-  const otherDevices = props.devices.filter((device) => !device.current);
+  const otherDevices = props.devices.filter((device) => !device.current && !device.revokedAt);
 
   return (
     <section className="detail-panel device-summary">
@@ -69,27 +69,21 @@ export function DeviceManagementPanel(props: DeviceManagementPanelProps): ReactE
                 </span>
               </div>
               <div className="device-row-status">
-                <span className={`status-dot ${device.revokedAt ? "is-revoked" : ""}`} />
-                {device.revokedAt ? "已撤销" : "已授权"}
+                <span className="status-dot" />
+                已授权
               </div>
-              {!device.revokedAt && (
-                <button
-                  type="button"
-                  className="revoke-button"
-                  disabled={props.busy}
-                  onClick={() => props.onRevoke(device)}
-                >
-                  撤销
-                </button>
-              )}
+              <button
+                type="button"
+                className="revoke-button"
+                disabled={props.busy}
+                onClick={() => props.onRevoke(device)}
+              >
+                撤销
+              </button>
             </div>
           ))}
         </div>
       )}
-      <div className="table-note">
-        <ShieldCheck size={15} />
-        <span>“已授权”不代表设备此刻在线。撤销后，该设备的全部在线会话会立即失效。</span>
-      </div>
     </section>
   );
 }
@@ -152,15 +146,11 @@ export function DeviceManagementDialog(props: {
         role="dialog"
         aria-modal="true"
         aria-labelledby="device-management-title"
-        aria-describedby="device-management-description"
         ref={root}
       >
         <header className="device-management-dialog-header">
           <div>
             <h2 id="device-management-title">登录设备</h2>
-            <p id="device-management-description">
-              同名设备可能来自不同的本地应用数据目录。撤销设备会使该设备身份下的全部在线会话失效。
-            </p>
           </div>
           <button
             ref={closeButton}
