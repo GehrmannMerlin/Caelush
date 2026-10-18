@@ -78,6 +78,28 @@ export type {
   SubmissionRecord,
   VerifiedAttachmentMetadata,
 } from "./attachment.js";
+export {
+  AttachmentProcessingManifestSchema,
+  AttachmentReadItemSchema,
+  AttachmentReadLocationSchema,
+  AttachmentReadRangeSchema,
+  AttachmentReadResultSchema,
+  MAX_ATTACHMENT_DOCUMENT_TEXT_BYTES,
+  MAX_ATTACHMENT_TEXT_LINES,
+  MAX_ATTACHMENT_DOCUMENT_BLOCKS,
+  MAX_ATTACHMENT_DOCUMENT_PAGES,
+  MAX_ATTACHMENT_READ_ITEMS,
+  MAX_ATTACHMENT_READ_RESULT_BYTES,
+  MAX_ATTACHMENT_WORKSHEETS,
+  MAX_ATTACHMENT_XLSX_RANGE_CELLS,
+} from "./attachment-processing.js";
+export type {
+  AttachmentProcessingManifest,
+  AttachmentReadItem,
+  AttachmentReadLocation,
+  AttachmentReadRange,
+  AttachmentReadResult,
+} from "./attachment-processing.js";
 export { TimestampMsSchema, createTimestampMs } from "./primitives/time.js";
 export type { TimestampMs } from "./primitives/time.js";
 export { AgentErrorCodeSchema, AgentErrorPhaseSchema, AgentErrorSchema } from "./error.js";

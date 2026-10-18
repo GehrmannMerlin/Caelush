@@ -618,7 +618,15 @@ function fileTypeFor(resourcePath) {
 
 function runtimeIdentityFor(resourcePath) {
   if (resourcePath === "daemon/node.exe") return "Node.js 24.18.0 win32-x64; modules=137; N-API=10";
-  if (resourcePath.endsWith(".node")) return "node-pty 1.1.0 win32-x64 N-API native addon";
+  if (resourcePath.endsWith(".node") && resourcePath.includes("/node-pty/")) {
+    return "node-pty 1.1.0 N-API native addon";
+  }
+  if (resourcePath.endsWith(".node") && resourcePath.includes("/canvas-win32-x64-msvc/")) {
+    return "@napi-rs/canvas 1.0.11 win32-x64 N-API native addon";
+  }
+  if (resourcePath.endsWith(".node")) {
+    return "Node-API native addon in the production Daemon dependency closure";
+  }
   if (resourcePath === "sandbox-runner/caelush-sandbox-runner.exe") {
     return "Caelush Windows x64 Sandbox Runner; control protocol v1";
   }
