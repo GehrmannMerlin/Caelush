@@ -144,6 +144,10 @@ const MAX_RENDER_PIXELS = limits.maxRenderPixels;
 const MAX_WORKSHEETS = limits.maxWorksheets;
 const MAX_XLSX_CELLS = limits.maxXlsxCells;
 const MAX_OFFICE_IMAGES_PER_READ = 2;
+const MAX_ATTACHMENT_TEXT_LINES_PER_AUTO_READ = 500;
+const MAX_ATTACHMENT_BLOCKS_PER_AUTO_READ = 50;
+const MAX_AUTO_XLSX_CELLS = 500;
+const MAX_AUTO_XLSX_COLUMNS = 26;
 const MAX_DOCX_TABLE_CELLS = 100_000;
 const MAX_PDF_TEXT_ITEMS_PER_PAGE = 100_000;
 const MAX_PDF_OPERATORS_PER_PAGE = 500_000;
@@ -1383,7 +1387,9 @@ async function readAttachment(
   untrustedRange: AttachmentReadRange,
 ): Promise<AttachmentReadResult> {
   const manifest = AttachmentProcessingManifestSchema.parse(untrustedManifest);
-  const range = AttachmentReadRangeSchema.parse(untrustedRange);
+  const requested = AttachmentReadRangeSchema.parse(untrustedRange);
+  const formatNeutral = requested.kind === "AUTO";
+  const range = resolveReadRange(requested, manifest);
   const hash = sha256(bytes);
   if (hash !== manifest.sha256) fail("CONTENT_HASH_MISMATCH");
   if (manifest.processorVersion !== ATTACHMENT_PROCESSOR_VERSION) fail("UNSUPPORTED_FORMAT");
@@ -1778,9 +1784,112 @@ async function readAttachment(
       });
     }
     naturalNextRange = matches.nextRange;
+  } else {
+    fail("INVALID_DOCUMENT");
+  }
+
+  if (formatNeutral && naturalNextRange === undefined) {
+    naturalNextRange = formatNeutralContinuation(manifest, range);
   }
 
   return makeReadResult(manifest.artifactId, hash, range, candidates, naturalNextRange);
+}
+
+/**
+ * Resolve a format-neutral request into the concrete range this processor understands.
+ *
+ * `AUTO` is the only place a format's "start from the beginning" policy lives; a caller (or a model)
+ * never has to know a page number, a block index or a sheet name to begin reading. `CONTINUE` replays
+ * a range a previous result already returned, so it can never introduce a new shape.
+ */
+function resolveReadRange(
+  range: AttachmentReadRange,
+  manifest: AttachmentProcessingManifest,
+): AttachmentReadRange {
+  if (range.kind === "AUTO") return formatNeutralStartRange(manifest);
+  if (range.kind === "CONTINUE") return parseContinuationCursor(range.cursor);
+  return range;
+}
+
+function formatNeutralStartRange(manifest: AttachmentProcessingManifest): AttachmentReadRange {
+  if (manifest.kind === "TEXT") {
+    return { kind: "TEXT_LINES", startLine: 1, lineCount: MAX_ATTACHMENT_TEXT_LINES_PER_AUTO_READ };
+  }
+  if (manifest.kind === "IMAGE") return { kind: "IMAGE" };
+  if (manifest.kind === "PDF") return { kind: "PDF_PAGE", pageNumber: 1 };
+  if (manifest.kind === "DOCX") {
+    return {
+      kind: "DOCX_BLOCKS",
+      startIndex: 0,
+      blockCount: Math.min(MAX_ATTACHMENT_BLOCKS_PER_AUTO_READ, Math.max(1, manifest.blockCount)),
+    };
+  }
+  const sheet =
+    manifest.sheets.find((candidate) => candidate.state === "VISIBLE") ?? manifest.sheets[0];
+  if (sheet === undefined) fail("INVALID_DOCUMENT");
+  const columns = Math.min(Math.max(1, sheet.columnCount), MAX_AUTO_XLSX_COLUMNS);
+  const rows = Math.min(
+    Math.max(1, sheet.rowCount),
+    Math.max(1, Math.floor(MAX_AUTO_XLSX_CELLS / columns)),
+  );
+  return {
+    kind: "XLSX_RANGE",
+    sheetName: sheet.name,
+    range: `A1:${columnLetters(columns)}${rows}`,
+  };
+}
+
+function parseContinuationCursor(cursor: string): AttachmentReadRange {
+  let value: unknown;
+  try {
+    value = JSON.parse(cursor);
+  } catch {
+    fail("INVALID_DOCUMENT");
+  }
+  const parsed = AttachmentReadRangeSchema.safeParse(value);
+  if (!parsed.success) fail("INVALID_DOCUMENT");
+  if (parsed.data.kind === "AUTO" || parsed.data.kind === "CONTINUE") fail("INVALID_DOCUMENT");
+  return parsed.data;
+}
+
+/** Where a format-neutral read would continue when the document has more of the same shape. */
+function formatNeutralContinuation(
+  manifest: AttachmentProcessingManifest,
+  range: AttachmentReadRange,
+): AttachmentReadRange | undefined {
+  if (
+    manifest.kind === "PDF" &&
+    range.kind === "PDF_PAGE" &&
+    range.pageNumber < manifest.pageCount
+  ) {
+    return { kind: "PDF_PAGE", pageNumber: range.pageNumber + 1 };
+  }
+  if (
+    manifest.kind === "DOCX" &&
+    range.kind === "DOCX_BLOCKS" &&
+    range.startIndex + range.blockCount < manifest.blockCount
+  ) {
+    return {
+      kind: "DOCX_BLOCKS",
+      startIndex: range.startIndex + range.blockCount,
+      blockCount: range.blockCount,
+    };
+  }
+  if (manifest.kind === "XLSX" && range.kind === "XLSX_RANGE" && range.startCell === undefined) {
+    const sheet = manifest.sheets.find((candidate) => candidate.name === range.sheetName);
+    if (sheet === undefined) return undefined;
+    const cells = parseCellRange(range.range);
+    if (cells.end.row >= sheet.rowCount) return undefined;
+    const height = cells.end.row - cells.start.row + 1;
+    const nextEnd = Math.min(sheet.rowCount, cells.end.row + height);
+    if (nextEnd <= cells.end.row) return undefined;
+    return {
+      kind: "XLSX_RANGE",
+      sheetName: range.sheetName,
+      range: `${cellAddress(cells.start.row + height, cells.start.column)}:${cellAddress(nextEnd, cells.end.column)}`,
+    };
+  }
+  return undefined;
 }
 
 function takeUtf8Chunk(

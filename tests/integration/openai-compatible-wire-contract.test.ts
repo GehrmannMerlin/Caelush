@@ -211,9 +211,9 @@ describe("OpenAI-compatible wire tool contract", () => {
           "schemaHash": "a3b921c3d1ca57d803c5eaf9ce175d01cc2cbf1b710f59111f5ce128e64e623e",
         },
         {
-          "inputSchemaHash": "360415584f8dee6b5d802c8c3e76441d6128c416de7d7524d73ae0b9b46c4c6a",
+          "inputSchemaHash": "13267efe0326c60018d95a55be8b75cc7c657eebd4a7c03189878bdf7391b1fb",
           "name": "read_attachment",
-          "schemaHash": "cfda3437ef10bf592ea94d47d12d756974aff3e9a994efbfdde0e3a8423b2c9d",
+          "schemaHash": "43024de0396d18d0ddca29d6205b37d5255bfbffdf889ea3c1f865b17ad0ab2e",
         },
       ]
     `);

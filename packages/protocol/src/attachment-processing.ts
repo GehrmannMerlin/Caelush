@@ -14,6 +14,8 @@ export const MAX_ATTACHMENT_DOCUMENT_TEXT_BYTES = 64 * 1024 * 1024;
 export const MAX_ATTACHMENT_TEXT_LINES = 1_000_000;
 export const MAX_ATTACHMENT_READ_ITEMS = 256;
 export const MAX_ATTACHMENT_XLSX_RANGE_CELLS = 2_000;
+/** A continuation cursor is the canonical JSON of one concrete read range. */
+export const MAX_ATTACHMENT_READ_CURSOR_CHARS = 4_096;
 
 const ProcessingManifestBaseSchema = z.object({
   artifactId: AttachmentIdSchema,
@@ -142,6 +144,21 @@ const xlsxRangeCellCount = (range: string): number | null => {
 };
 
 export const AttachmentReadRangeSchema = z.discriminatedUnion("kind", [
+  /**
+   * A format-neutral first read. The processor resolves it against the manifest, so a caller can
+   * start reading a document without knowing any format-specific field name.
+   */
+  z.object({ kind: z.literal("AUTO") }).strict(),
+  /**
+   * Replay a range a previous result returned as `nextRange`, verbatim. The cursor is the canonical
+   * JSON of one concrete range; AUTO and CONTINUE cannot nest.
+   */
+  z
+    .object({
+      kind: z.literal("CONTINUE"),
+      cursor: z.string().min(2).max(MAX_ATTACHMENT_READ_CURSOR_CHARS),
+    })
+    .strict(),
   z.object({ kind: z.literal("MANIFEST") }).strict(),
   z
     .object({

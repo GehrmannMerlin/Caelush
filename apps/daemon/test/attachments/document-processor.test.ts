@@ -170,6 +170,81 @@ describe("bounded conversation document processing", () => {
     );
   });
 
+  it("starts and continues a document without any format-specific field", async () => {
+    const bytes = await fixture("many-lines.txt");
+    const manifest = await processor.inspect({
+      artifactId: artifactId("auto"),
+      bytes,
+      name: "many.txt",
+      detectedMediaType: "text/plain",
+    });
+
+    const first = await processor.read({ bytes, manifest, range: { kind: "AUTO" } });
+    expect(first.range).toEqual({ kind: "TEXT_LINES", startLine: 1, lineCount: 500 });
+    expect(first.truncated).toBe(true);
+
+    const next = first.nextRange;
+    if (next?.kind !== "TEXT_LINES") throw new Error("Expected a text continuation range.");
+    const second = await processor.read({
+      bytes,
+      manifest,
+      range: { kind: "CONTINUE", cursor: JSON.stringify(next) },
+    });
+    expect(second.items[0]).toMatchObject({
+      type: "TEXT",
+      location: { kind: "TEXT_LINES", startLine: next.startLine },
+    });
+  }, 20_000);
+
+  it("resolves a format-neutral first read from each manifest kind", async () => {
+    const pdf = await fixture("text.pdf");
+    const pdfManifest = await processor.inspect({
+      artifactId: artifactId("autopdf"),
+      bytes: pdf,
+      name: "brief.pdf",
+      detectedMediaType: "application/pdf",
+    });
+    await expect(
+      processor.read({ bytes: pdf, manifest: pdfManifest, range: { kind: "AUTO" } }),
+    ).resolves.toMatchObject({ range: { kind: "PDF_PAGE", pageNumber: 1 } });
+
+    const docx = await fixture("synthetic.docx");
+    const docxManifest = await processor.inspect({
+      artifactId: artifactId("autodocx"),
+      bytes: docx,
+      name: "brief.docx",
+      detectedMediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    const docxAuto = await processor.read({
+      bytes: docx,
+      manifest: docxManifest,
+      range: { kind: "AUTO" },
+    });
+    expect(docxAuto.range).toEqual({
+      kind: "DOCX_BLOCKS",
+      startIndex: 0,
+      blockCount: Math.min(50, docxManifest.kind === "DOCX" ? docxManifest.blockCount : 0),
+    });
+  }, 20_000);
+
+  it("rejects an AUTO range nested inside a continuation cursor", async () => {
+    const bytes = await fixture("many-lines.txt");
+    const manifest = await processor.inspect({
+      artifactId: artifactId("cursor"),
+      bytes,
+      name: "many.txt",
+      detectedMediaType: "text/plain",
+    });
+
+    await expect(
+      processor.read({
+        bytes,
+        manifest,
+        range: { kind: "CONTINUE", cursor: JSON.stringify({ kind: "AUTO" }) },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_DOCUMENT" });
+  }, 20_000);
+
   it("rejects encrypted, corrupt and over-expanded documents with stable errors", async () => {
     await expect(
       processor.inspect({

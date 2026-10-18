@@ -364,11 +364,18 @@ describe("Core attachment model materialization", () => {
         role: "tool",
         toolCallId: "call_page_image",
         toolName: "read_attachment",
+        content: "Page 2 contains a diagram.",
+        isError: false,
+      },
+      {
+        role: "user",
         content: [
-          { type: "text", text: "Page 2 contains a diagram." },
+          {
+            type: "text",
+            text: "[attachment images returned by read_attachment call call_page_image]",
+          },
           { type: "image", mediaType: "image/png", data: "aGVsbG8=" },
         ],
-        isError: false,
       },
     ]);
     expect(result.report.estimatedInputTokens).toBeGreaterThan(100);
@@ -419,7 +426,7 @@ describe("Core attachment model materialization", () => {
     expect(calls).toBe(0);
   });
 
-  it("keeps a large document as a durable reference instead of silently sending a prefix", async () => {
+  it("reads a bounded beginning once and keeps the continuation instead of sending the whole file", async () => {
     const large = snapshot({
       descriptor: { ...snapshot().descriptor, byteLength: 1_000_000 },
       manifest: {
@@ -435,15 +442,30 @@ describe("Core attachment model materialization", () => {
       },
     });
     let reads = 0;
-    const noReadPort: AttachmentContextPort = {
+    const port: AttachmentContextPort = {
       async readSnapshot() {
         return {
           ...large,
           contentReference: {
             ...large.contentReference,
-            async read() {
+            async read({ range }) {
               reads += 1;
-              throw new Error("large attachments must not be auto-read");
+              return {
+                artifactId: ARTIFACT_ID,
+                sha256: SHA256,
+                processorVersion: "attachments-v1",
+                range,
+                items: [
+                  {
+                    type: "TEXT",
+                    location: { kind: "TEXT_LINES", startLine: 1, endLine: 500 },
+                    text: "line 1",
+                  },
+                ],
+                truncated: true,
+                nextRange: { kind: "TEXT_LINES", startLine: 501, lineCount: 500 },
+                outputBytes: 64,
+              };
             },
           },
         };
@@ -451,14 +473,75 @@ describe("Core attachment model materialization", () => {
     };
     const marker = attachmentMarkerV2({ artifactId: ARTIFACT_ID });
     const base = prepared({ role: "user", content: `Please inspect this.\n${marker}` });
-    const engine = createAttachmentAwareContextEngine(hostEngine(base), noReadPort);
+    const engine = createAttachmentAwareContextEngine(hostEngine(base), port);
 
     const result = await engine.prepare(fixtureInput());
 
-    expect(result.messages).toEqual(base.messages);
-    expect(reads).toBe(0);
+    expect(reads).toBe(2);
+    expect(JSON.stringify(result.messages)).toContain("line 1");
+    expect(JSON.stringify(result.messages)).toContain("Content is incomplete");
+    expect(JSON.stringify(result.messages)).toContain("startLine");
     expect(result.report.contributions).toContainEqual(
-      expect.objectContaining({ providerId: "conversation.attachments", droppedItems: 1 }),
+      expect.objectContaining({
+        providerId: "conversation.attachments",
+        itemCount: 1,
+        truncatedItems: 1,
+      }),
     );
+  });
+
+  it("freezes the attachment projection so a later smaller budget cannot rewrite it", async () => {
+    const marker = attachmentMarkerV2({ artifactId: ARTIFACT_ID });
+    const base = prepared({ role: "user", content: `Please inspect this.\n${marker}` });
+    let turn = 0;
+    let reads = 0;
+    const port: AttachmentContextPort = {
+      async readSnapshot() {
+        const value = snapshot();
+        return {
+          ...value,
+          contentReference: {
+            ...value.contentReference,
+            async read({ range }) {
+              reads += 1;
+              return {
+                artifactId: ARTIFACT_ID,
+                sha256: SHA256,
+                processorVersion: "attachments-v1",
+                range,
+                items: [
+                  {
+                    type: "TEXT",
+                    location: { kind: "TEXT_LINES", startLine: 1, endLine: 1 },
+                    text: "hello",
+                  },
+                ],
+                truncated: false,
+                outputBytes: 32,
+              };
+            },
+          },
+        };
+      },
+    };
+    const engine = createAttachmentAwareContextEngine(
+      {
+        async prepare() {
+          turn += 1;
+          return {
+            ...base,
+            report: { ...base.report, remainingTokens: turn === 1 ? 200 : 1 },
+          };
+        },
+      },
+      port,
+    );
+
+    const first = await engine.prepare(fixtureInput());
+    const second = await engine.prepare(fixtureInput());
+
+    expect(reads).toBe(1);
+    expect(second.messages).toEqual(first.messages);
+    expect(JSON.stringify(second.messages)).toContain("hello");
   });
 });

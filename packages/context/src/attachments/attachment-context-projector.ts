@@ -48,6 +48,9 @@ export interface AttachmentContextDocumentProjection {
   readonly content: readonly AIUserContent[];
   readonly tokenEstimate: number;
   readonly omitted: boolean;
+  /** True when the parser stopped before the end of the document and `nextRange` continues it. */
+  readonly partial: boolean;
+  readonly nextRange?: AttachmentReadRange;
   readonly includedRanges: readonly AttachmentContextIncludedRange[];
 }
 
@@ -70,10 +73,11 @@ export class AttachmentContextProjectionError extends Error {
 }
 
 /**
- * Select complete attachment reads that fit one shared budget.
+ * Select attachment reads that fit one shared budget.
  *
- * A partial parser result is omitted as a whole. This leaves the durable reference available to
- * `read_attachment` without presenting a clipped document as though it were complete.
+ * A read that stopped before the end of the document is included **with its continuation**: the model
+ * receives the complete prefix plus the exact range that resumes it. Dropping such a read entirely
+ * would leave the model with an opaque reference and no way to discover what it is missing.
  */
 export function projectAttachmentContext(
   input: AttachmentContextProjectionInput,
@@ -95,7 +99,7 @@ export function projectAttachmentContext(
   for (const document of input.attachments) {
     const artifactId = validateDocument(document);
     const converted = convertReadResults(document, input.estimateTokens, input.estimateImageTokens);
-    if (!converted.complete || converted.tokenEstimate > remaining) {
+    if (converted.content.length === 0 || converted.tokenEstimate > remaining) {
       omittedIds.push(artifactId);
       attachments.push(
         Object.freeze({
@@ -103,6 +107,8 @@ export function projectAttachmentContext(
           content: Object.freeze([]),
           tokenEstimate: 0,
           omitted: true,
+          partial: converted.partial,
+          ...(converted.nextRange === undefined ? {} : { nextRange: converted.nextRange }),
           includedRanges: Object.freeze([]),
         }),
       );
@@ -117,6 +123,8 @@ export function projectAttachmentContext(
         content: Object.freeze(converted.content),
         tokenEstimate: converted.tokenEstimate,
         omitted: false,
+        partial: converted.partial,
+        ...(converted.nextRange === undefined ? {} : { nextRange: converted.nextRange }),
         includedRanges: Object.freeze(converted.includedRanges),
       }),
     );
@@ -169,6 +177,8 @@ function convertReadResults(
   estimateImageTokens: AttachmentContextProjectionInput["estimateImageTokens"],
 ): {
   readonly complete: boolean;
+  readonly partial: boolean;
+  readonly nextRange?: AttachmentReadRange;
   readonly content: AIUserContent[];
   readonly tokenEstimate: number;
   readonly includedRanges: AttachmentContextIncludedRange[];
@@ -176,10 +186,13 @@ function convertReadResults(
   const content: AIUserContent[] = [];
   const includedRanges: AttachmentContextIncludedRange[] = [];
   let tokenEstimate = 0;
+  let partial = false;
+  let nextRange: AttachmentReadRange | undefined;
 
   for (const result of document.readResults) {
     if (result.truncated || result.nextRange !== undefined) {
-      return { complete: false, content: [], tokenEstimate: 0, includedRanges: [] };
+      partial = true;
+      nextRange ??= result.nextRange;
     }
     const locations: AttachmentReadLocation[] = [];
     for (const item of result.items) {
@@ -221,7 +234,32 @@ function convertReadResults(
     includedRanges.push({ range: result.range, locations: Object.freeze(locations) });
   }
 
-  return { complete: document.readResults.length > 0, content, tokenEstimate, includedRanges };
+  if (partial) {
+    const note =
+      nextRange === undefined
+        ? "[Content is incomplete; request a narrower range to read the rest.]"
+        : `[Content is incomplete; continue with range ${JSON.stringify(nextRange)}.]`;
+    let estimate: number;
+    try {
+      estimate = estimateTokens(note);
+    } catch {
+      throw new AttachmentContextProjectionError("INVALID_ESTIMATE");
+    }
+    if (!Number.isSafeInteger(estimate) || estimate < 0) {
+      throw new AttachmentContextProjectionError("INVALID_ESTIMATE");
+    }
+    tokenEstimate += estimate;
+    content.push({ type: "text", text: note });
+  }
+
+  return {
+    complete: document.readResults.length > 0 && !partial,
+    partial,
+    ...(nextRange === undefined ? {} : { nextRange }),
+    content,
+    tokenEstimate,
+    includedRanges,
+  };
 }
 
 function formatCell(

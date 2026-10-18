@@ -4,6 +4,7 @@ import {
   AttachmentModelContentReferenceSchema,
   AttachmentReadRangeSchema,
   AttachmentReadResultSchema,
+  MAX_ATTACHMENT_READ_CURSOR_CHARS,
 } from "@caelush/protocol";
 import type {
   AttachmentModelContentReference,
@@ -24,7 +25,134 @@ import { projectReadAttachmentSecurityFacts } from "../security/security-facts.j
 import { READ_ATTACHMENT_PROMPT_SNIPPET } from "../prompt/prompt-snippets.js";
 
 const MAX_MODEL_IMAGE_REFERENCES = 8;
-const MAX_TOOL_TEXT_BYTES = 48 * 1024;
+/** One tool result may carry a full document page and still keep its continuation line. */
+const MAX_TOOL_TEXT_BYTES = 180 * 1024;
+
+interface RangeBranch {
+  readonly kind: string;
+  readonly description: string;
+  readonly properties: Readonly<Record<string, unknown>>;
+  readonly required: readonly string[];
+  /** The fields this kind accepts, rendered into a recoverable error message. */
+  readonly expects: string;
+}
+
+const RANGE_BRANCHES: readonly RangeBranch[] = [
+  {
+    kind: "AUTO",
+    description:
+      "Recommended first read. Returns a bounded beginning of the file plus an explicit continuation, without requiring any format-specific field.",
+    properties: {},
+    required: [],
+    expects: '"kind"',
+  },
+  {
+    kind: "CONTINUE",
+    description:
+      "Replay the exact next range a previous result returned, copied verbatim. Prefer this over reconstructing a range by hand.",
+    properties: {
+      cursor: {
+        type: "string",
+        minLength: 2,
+        maxLength: MAX_ATTACHMENT_READ_CURSOR_CHARS,
+        description:
+          "The JSON text of the range to replay, exactly as a previous result returned it.",
+      },
+    },
+    required: ["cursor"],
+    expects: '"kind", "cursor"',
+  },
+  {
+    kind: "MANIFEST",
+    description:
+      "File metadata only: page, block or sheet counts and which ranges can be read. Use it before a targeted read.",
+    properties: {},
+    required: [],
+    expects: '"kind"',
+  },
+  {
+    kind: "TEXT_LINES",
+    description: "Read a line range from a text file. Line numbers are 1-indexed.",
+    properties: {
+      startLine: { type: "integer", minimum: 1, maximum: 1_000_000 },
+      lineCount: { type: "integer", minimum: 1, maximum: 500 },
+      startCharacter: { type: "integer", minimum: 0 },
+    },
+    required: ["startLine", "lineCount"],
+    expects: '"kind", "startLine", "lineCount", optional "startCharacter"',
+  },
+  {
+    kind: "SEARCH",
+    description: "Search a text, PDF or DOCX document and return matching locations.",
+    properties: {
+      query: { type: "string", minLength: 1, maxLength: 512 },
+      maxMatches: { type: "integer", minimum: 1, maximum: 100 },
+      startMatch: { type: "integer", minimum: 0 },
+    },
+    required: ["query", "maxMatches"],
+    expects: '"kind", "query", "maxMatches", optional "startMatch"',
+  },
+  {
+    kind: "PDF_PAGE",
+    description: "Read one PDF page by its 1-indexed page number.",
+    properties: {
+      pageNumber: { type: "integer", minimum: 1, maximum: 250 },
+      textOffset: { type: "integer", minimum: 0 },
+    },
+    required: ["pageNumber"],
+    expects: '"kind", "pageNumber", optional "textOffset"',
+  },
+  {
+    kind: "DOCX_BLOCKS",
+    description:
+      "Read a block range from a Word document. Blocks are ordered paragraphs, tables and images.",
+    properties: {
+      startIndex: { type: "integer", minimum: 0, maximum: 4_999 },
+      blockCount: { type: "integer", minimum: 1, maximum: 100 },
+      tableRow: { type: "integer", minimum: 0 },
+      tableColumn: { type: "integer", minimum: 0 },
+      textOffset: { type: "integer", minimum: 0 },
+      imageIndex: { type: "integer", minimum: 0 },
+    },
+    required: ["startIndex", "blockCount"],
+    expects:
+      '"kind", "startIndex", "blockCount", optional "tableRow", "tableColumn", "textOffset", "imageIndex"',
+  },
+  {
+    kind: "XLSX_RANGE",
+    description:
+      'Read a rectangular spreadsheet range, for example sheetName "Summary" and range "A1:C10".',
+    properties: {
+      sheetName: { type: "string", minLength: 1, maxLength: 31 },
+      range: {
+        type: "string",
+        minLength: 1,
+        maxLength: 32,
+        pattern: "^\\$?[A-Z]{1,3}\\$?[1-9][0-9]*(?::\\$?[A-Z]{1,3}\\$?[1-9][0-9]*)?$",
+      },
+      startCell: { type: "string", pattern: "^[A-Z]{1,3}[1-9][0-9]*$" },
+      startImageIndex: { type: "integer", minimum: 0, maximum: 256 },
+      skipCell: { type: "boolean" },
+      textOffset: { type: "integer", minimum: 0 },
+    },
+    required: ["sheetName", "range"],
+    expects:
+      '"kind", "sheetName", "range", optional "startCell", "startImageIndex", "skipCell", "textOffset"',
+  },
+  {
+    kind: "IMAGE",
+    description: "Read the attached image itself. Only valid for an image attachment.",
+    properties: {},
+    required: [],
+    expects: '"kind"',
+  },
+];
+
+const RANGE_EXPECTS: Readonly<Record<string, string>> = Object.freeze(
+  Object.fromEntries(RANGE_BRANCHES.map((branch) => [branch.kind, branch.expects])),
+);
+
+const RANGE_KINDS = RANGE_BRANCHES.map((branch) => branch.kind);
 
 const inputSchema = {
   type: "object",
@@ -39,23 +167,18 @@ const inputSchema = {
       type: "object",
       minProperties: 1,
       maxProperties: 8,
-      properties: {
-        kind: {
-          type: "string",
-          enum: [
-            "MANIFEST",
-            "TEXT_LINES",
-            "SEARCH",
-            "PDF_PAGE",
-            "DOCX_BLOCKS",
-            "XLSX_RANGE",
-            "IMAGE",
-          ],
+      description:
+        'One bounded read request. Start with {"kind":"AUTO"}; continue with the exact range a previous result returned.',
+      oneOf: RANGE_BRANCHES.map((branch) => ({
+        type: "object",
+        properties: {
+          kind: { type: "string", enum: [branch.kind] },
+          ...branch.properties,
         },
-      },
-      required: ["kind"],
-      additionalProperties: true,
-      description: "One bounded manifest, line, page, block, sheet, search, or image range.",
+        required: ["kind", ...branch.required],
+        additionalProperties: false,
+        description: branch.description,
+      })),
     },
   },
   required: ["artifactId", "range"],
@@ -107,12 +230,20 @@ export function createReadAttachmentTool(
     resultDetailsSchema,
     execute: async (input) => {
       let artifactId: string;
-      let range: AttachmentReadRange;
       try {
         artifactId = AttachmentIdSchema.parse(input.args["artifactId"]);
+      } catch {
+        return errorResult(
+          "INVALID_ARTIFACT",
+          "Attachment read failed: INVALID_ARTIFACT. Use the opaque artifactId copied from the conversation, never a file name, label or host path.",
+        );
+      }
+
+      let range: AttachmentReadRange;
+      try {
         range = AttachmentReadRangeSchema.parse(input.args["range"]);
       } catch {
-        return errorResult("INVALID_RANGE", "Attachment read failed: INVALID_RANGE.");
+        return invalidRangeResult(input.args["range"]);
       }
 
       let result: AttachmentReadResult;
@@ -149,9 +280,7 @@ export function createReadAttachmentTool(
         );
       const modelReferences = references.slice(0, MAX_MODEL_IMAGE_REFERENCES);
       const omittedImageReferences = Math.max(0, references.length - modelReferences.length);
-      const content = boundOutputText(
-        renderResult(result, modelReferences, omittedImageReferences),
-      );
+      const content = renderResult(result, modelReferences, omittedImageReferences);
       const details = {
         ok: true,
         artifactId: result.artifactId,
@@ -182,12 +311,43 @@ export function createReadAttachmentTool(
 
 export { inputSchema as readAttachmentInputSchema };
 
+/**
+ * A range that failed validation gets a message the model can act on in one turn.
+ *
+ * The kind is echoed only when it looks like a range kind, so arbitrary model text never reaches the
+ * transcript. The accepted field list is static per kind and comes from the same table that builds
+ * the schema.
+ */
+function invalidRangeResult(raw: unknown): ReturnType<typeof errorResult> {
+  const kind =
+    typeof raw === "object" && raw !== null && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)["kind"]
+      : undefined;
+  if (typeof kind === "string" && /^[A-Z_]{1,32}$/u.test(kind)) {
+    const expected = RANGE_EXPECTS[kind];
+    if (expected !== undefined) {
+      return errorResult(
+        "INVALID_RANGE",
+        `Attachment read failed: INVALID_RANGE. Range kind "${kind}" accepts: ${expected}.`,
+      );
+    }
+    return errorResult(
+      "INVALID_RANGE",
+      `Attachment read failed: INVALID_RANGE. Unknown range kind "${kind}". Use one of: ${RANGE_KINDS.join(", ")}.`,
+    );
+  }
+  return errorResult(
+    "INVALID_RANGE",
+    `Attachment read failed: INVALID_RANGE. "range" must be an object with "kind" set to one of: ${RANGE_KINDS.join(", ")}.`,
+  );
+}
+
 function renderResult(
   result: AttachmentReadResult,
   imageReferences: readonly AttachmentModelContentReference[],
   omittedImageReferences: number,
 ): string {
-  const lines = result.items.map((item) => {
+  const blocks = result.items.map((item) => {
     if (item.type === "TEXT") return `[${formatLocation(item.location)}]\n${item.text}`;
     if (item.type === "CELL") {
       const formula = item.formula === undefined ? "" : ` formula=${item.formula}`;
@@ -196,10 +356,49 @@ function renderResult(
     }
     return `[${formatLocation(item.location)}] image ${item.mediaType} (${String(item.width)}×${String(item.height)}).`;
   });
-  if (lines.length === 0) lines.push("No content was found in this range.");
-  if (imageReferences.length > 0) {
+  if (blocks.length === 0) blocks.push("No content was found in this range.");
+
+  // Reserve the longest footer the fit could produce, then state the real one. The footer is the only
+  // line a model must never lose, so it is measured against the budget rather than truncated with the
+  // content it describes.
+  const reservedFooter = resultFooter(
+    result,
+    imageReferences.length,
+    omittedImageReferences,
+    blocks.length,
+  );
+  const budget = MAX_TOOL_TEXT_BYTES - byteLength(reservedFooter) - 8;
+  const kept: string[] = [];
+  let used = 0;
+  let dropped = 0;
+  for (const block of blocks) {
+    const size = byteLength(block) + 2;
+    if (used + size > budget) {
+      dropped = blocks.length - kept.length;
+      break;
+    }
+    kept.push(block);
+    used += size;
+  }
+  kept.push(resultFooter(result, imageReferences.length, omittedImageReferences, dropped));
+  return kept.join("\n\n");
+}
+
+/**
+ * The closing lines are the part a model must never lose: they say whether the read was complete and
+ * exactly which range continues it. `dropped` makes a size-truncated result say so instead of
+ * claiming complete coverage.
+ */
+function resultFooter(
+  result: AttachmentReadResult,
+  imageReferenceCount: number,
+  omittedImageReferences: number,
+  dropped: number,
+): string {
+  const lines: string[] = [];
+  if (imageReferenceCount > 0) {
     lines.push(
-      `${String(imageReferences.length)} image reference(s) will be available in the next model turn.`,
+      `${String(imageReferenceCount)} image reference(s) will be available in the next model turn.`,
     );
   }
   if (omittedImageReferences > 0) {
@@ -207,16 +406,21 @@ function renderResult(
       `${String(omittedImageReferences)} additional image reference(s) were omitted by the per-result limit.`,
     );
   }
-  if (result.truncated && result.nextRange !== undefined) {
+  if (dropped > 0) {
     lines.push(
-      `Read is incomplete. Continue with range ${canonicalJsonString(JSON.parse(JSON.stringify(result.nextRange)) as JsonObject)}.`,
+      `Read is incomplete: ${String(dropped)} item(s) exceeded the result text budget. Request a narrower range to read them.`,
+    );
+  } else if (result.truncated && result.nextRange !== undefined) {
+    const next = canonicalJsonString(JSON.parse(JSON.stringify(result.nextRange)) as JsonObject);
+    lines.push(
+      `Read is incomplete. Continue with range ${next}, or with {"kind":"CONTINUE","cursor":${JSON.stringify(next)}}.`,
     );
   } else if (result.truncated) {
     lines.push("Read is incomplete; request a narrower range to continue.");
   } else {
     lines.push("Coverage: complete for the requested range.");
   }
-  return lines.join("\n\n");
+  return lines.join("\n");
 }
 
 function formatLocation(location: AttachmentReadResult["items"][number]["location"]): string {
@@ -242,11 +446,8 @@ function formatLocation(location: AttachmentReadResult["items"][number]["locatio
   }
 }
 
-function boundOutputText(text: string): string {
-  const bytes = new TextEncoder().encode(text);
-  if (bytes.byteLength <= MAX_TOOL_TEXT_BYTES) return text;
-  const prefix = new TextDecoder().decode(bytes.subarray(0, MAX_TOOL_TEXT_BYTES - 64));
-  return `${prefix}\n\n[Tool output was shortened; use a narrower range to continue.]`;
+function byteLength(text: string): number {
+  return new TextEncoder().encode(text).byteLength;
 }
 
 function safeOperationError(code: AttachmentReadOperationErrorCode) {

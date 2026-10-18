@@ -73,6 +73,25 @@ describe("attachment processing contracts", () => {
     ).toBe(false);
   });
 
+  it("accepts a format-neutral first read and a bounded continuation cursor", () => {
+    expect(AttachmentReadRangeSchema.parse({ kind: "AUTO" })).toEqual({ kind: "AUTO" });
+    expect(
+      AttachmentReadRangeSchema.parse({
+        kind: "CONTINUE",
+        cursor: JSON.stringify({ kind: "PDF_PAGE", pageNumber: 2 }),
+      }),
+    ).toMatchObject({ kind: "CONTINUE" });
+    expect(AttachmentReadRangeSchema.safeParse({ kind: "AUTO", pageNumber: 1 }).success).toBe(
+      false,
+    );
+    expect(AttachmentReadRangeSchema.safeParse({ kind: "CONTINUE", cursor: "" }).success).toBe(
+      false,
+    );
+    expect(
+      AttachmentReadRangeSchema.safeParse({ kind: "CONTINUE", cursor: "x".repeat(4_097) }).success,
+    ).toBe(false);
+  });
+
   it("validates a bounded typed read result with exact locations", () => {
     expect(
       AttachmentReadResultSchema.parse({

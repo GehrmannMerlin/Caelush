@@ -1,4 +1,4 @@
-import { createReadAttachmentTool } from "@caelush/coding-agent";
+import { createReadAttachmentTool, readAttachmentInputSchema } from "@caelush/coding-agent";
 import { AttachmentIdSchema, type AttachmentReadResult } from "@caelush/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { executionInput, testSignal } from "./support/operations-fixtures.js";
@@ -88,5 +88,58 @@ describe("read_attachment Coding Tool", () => {
     expect(output.details).toHaveProperty("imageReferences");
     expect(output.details).not.toHaveProperty("items");
     expect(output.content).not.toContain("data:image");
+  });
+
+  it("advertises a format-neutral first read and every explicit range kind", () => {
+    const range = readAttachmentInputSchema.properties.range as unknown as {
+      readonly oneOf: readonly { readonly properties: Record<string, unknown> }[];
+    };
+
+    expect(range.oneOf).toHaveLength(9);
+    expect(range.oneOf[0]?.properties).toEqual({ kind: { type: "string", enum: ["AUTO"] } });
+    expect(range.oneOf[1]?.properties).toHaveProperty("cursor");
+    for (const branch of range.oneOf) {
+      expect(branch).toMatchObject({ additionalProperties: false, type: "object" });
+    }
+  });
+
+  it("passes a format-neutral range through to the read operation", async () => {
+    const read = vi.fn(async () => result);
+    const definition = createReadAttachmentTool({ read });
+
+    const output = await definition.tool.execute(
+      executionInput({ artifactId: result.artifactId, range: { kind: "AUTO" } }),
+    );
+
+    expect(read).toHaveBeenCalledWith(expect.objectContaining({ range: { kind: "AUTO" } }));
+    expect(output).toMatchObject({ isError: false, details: { ok: true } });
+  });
+
+  it("names the accepted fields when a range uses the wrong keys", async () => {
+    const read = vi.fn(async () => result);
+    const definition = createReadAttachmentTool({ read });
+
+    const output = await definition.tool.execute(
+      executionInput({
+        artifactId: result.artifactId,
+        range: { kind: "DOCX_BLOCKS", start: 0, count: 10 },
+      }),
+    );
+
+    expect(output).toMatchObject({ isError: true, details: { error: "INVALID_RANGE" } });
+    expect(output.content).toContain("startIndex");
+    expect(output.content).toContain("blockCount");
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes an invalid attachment id from an invalid range", async () => {
+    const definition = createReadAttachmentTool({ read: async () => result });
+
+    const output = await definition.tool.execute(
+      executionInput({ artifactId: "简历.pdf", range: { kind: "AUTO" } }),
+    );
+
+    expect(output).toMatchObject({ isError: true, details: { error: "INVALID_ARTIFACT" } });
+    expect(output.content).toContain("never a file name");
   });
 });

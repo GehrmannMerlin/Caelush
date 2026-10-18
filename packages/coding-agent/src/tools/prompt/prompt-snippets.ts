@@ -145,11 +145,12 @@ const SNIPPET_SOURCE: Readonly<Record<string, SnippetSource>> = {
     purpose: "Read one bounded range from a conversation attachment.",
     whenToUse: "Inspect an attached document, page, sheet, image, or extracted text.",
     whenNotToUse: "Workspace files; use read_file for those.",
-    argumentNotes: "Opaque attachment ID plus a bounded parser range; never a host path.",
+    argumentNotes:
+      'Opaque attachment ID plus one bounded range. Start with {"kind":"AUTO"}; continue with the exact range a result returned. Never a host path.',
     sideEffects: "Read-only; resolved for the current session.",
     safety: "Owner, integrity, parser, and output limits are enforced.",
     resultHandling:
-      "Use exact locations and continuation ranges; image references replay next turn.",
+      "Read the coverage line: complete, or the exact next range. Image references replay next turn.",
   },
 };
 

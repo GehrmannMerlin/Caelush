@@ -96,14 +96,19 @@ describe("attachment Context projection", () => {
     expect(projection.tokenEstimate).toBeGreaterThan(0);
   });
 
-  it("does not silently include a truncated read", () => {
+  it("includes a truncated read together with its explicit continuation", () => {
     const projection = project([textDocument({ text: "partial data", truncated: true })], 200);
 
-    expect(projection.omittedIds).toEqual([ARTIFACT_ID]);
+    expect(projection.omittedIds).toEqual([]);
     expect(projection.attachments[0]).toMatchObject({
-      omitted: true,
-      content: [],
-      includedRanges: [],
+      omitted: false,
+      partial: true,
+      nextRange: { kind: "TEXT_LINES", startLine: 1, lineCount: 1 },
+      includedRanges: [{ range: { kind: "TEXT_LINES", startLine: 1, lineCount: 1 } }],
+    });
+    expect(projection.attachments[0]?.content).toContainEqual({
+      type: "text",
+      text: expect.stringContaining("Content is incomplete"),
     });
   });
 
