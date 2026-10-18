@@ -43,6 +43,8 @@ export type ReasoningPresentation = z.infer<typeof ReasoningPresentationSchema>;
 
 export const ModelAvailabilitySchema = z.enum(["AVAILABLE", "UNAVAILABLE"]);
 export type ModelAvailability = z.infer<typeof ModelAvailabilitySchema>;
+export const ModelVisionSupportSchema = z.enum(["SUPPORTED", "UNSUPPORTED", "UNKNOWN"]);
+export type ModelVisionSupport = z.infer<typeof ModelVisionSupportSchema>;
 
 /** Secret-free model directory entry. Native adapter fields never cross this DTO. */
 export const ModelViewSchema = z
@@ -51,6 +53,8 @@ export const ModelViewSchema = z
     id: z.string().min(1),
     displayName: z.string().min(1),
     availability: ModelAvailabilitySchema,
+    /** Safe, explicit vision support from the host-owned model descriptor. */
+    vision: ModelVisionSupportSchema.optional(),
     reasoning: ReasoningPresentationSchema.optional(),
   })
   .strict();

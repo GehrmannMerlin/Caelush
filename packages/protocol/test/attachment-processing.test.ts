@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AttachmentProcessingManifestSchema,
+  AttachmentModelContentReferenceSchema,
   AttachmentReadRangeSchema,
   AttachmentReadResultSchema,
 } from "../src/index.js";
@@ -90,5 +91,28 @@ describe("attachment processing contracts", () => {
         outputBytes: 20,
       }),
     ).toMatchObject({ items: [{ location: { kind: "PDF_PAGE", pageNumber: 1 } }] });
+  });
+
+  it("accepts a durable image reference only when its artifact range and location agree", () => {
+    const reference = {
+      artifactId: "att_1234567890ab",
+      sha256: "a".repeat(64),
+      range: { kind: "PDF_PAGE", pageNumber: 4 },
+      location: { kind: "PDF_PAGE", pageNumber: 4 },
+      mediaType: "image/png",
+    };
+    expect(AttachmentModelContentReferenceSchema.parse(reference)).toEqual(reference);
+    expect(
+      AttachmentModelContentReferenceSchema.safeParse({
+        ...reference,
+        location: { kind: "PDF_PAGE", pageNumber: 5 },
+      }).success,
+    ).toBe(false);
+    expect(
+      AttachmentModelContentReferenceSchema.safeParse({
+        ...reference,
+        path: "C:/private/secret.pdf",
+      }).success,
+    ).toBe(false);
   });
 });

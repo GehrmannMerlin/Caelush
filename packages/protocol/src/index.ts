@@ -49,6 +49,7 @@ export type { JsonObject, JsonPrimitive, JsonValue } from "./primitives/json.js"
 export {
   ATTACHMENT_ONLY_RUN_GOAL,
   AttachmentDescriptorSchema,
+  AttachmentDraftItemSchema,
   AttachmentDraftSchema,
   AttachmentIdSchema,
   AttachmentIdsSchema,
@@ -69,6 +70,7 @@ export {
 } from "./attachment.js";
 export type {
   AttachmentDescriptor,
+  AttachmentDraftItem,
   AttachmentDraft,
   AttachmentId,
   AttachmentOwner,
@@ -82,11 +84,13 @@ export type {
 } from "./attachment.js";
 export {
   AttachmentProcessingManifestSchema,
+  AttachmentModelContentReferenceSchema,
   AttachmentReadItemSchema,
   AttachmentReadLocationSchema,
   AttachmentReadRangeSchema,
   AttachmentReadResultSchema,
   MAX_ATTACHMENT_DOCUMENT_TEXT_BYTES,
+  MAX_ATTACHMENT_MODEL_CONTENT_REFERENCES,
   MAX_ATTACHMENT_TEXT_LINES,
   MAX_ATTACHMENT_DOCUMENT_BLOCKS,
   MAX_ATTACHMENT_DOCUMENT_PAGES,
@@ -97,6 +101,7 @@ export {
 } from "./attachment-processing.js";
 export type {
   AttachmentProcessingManifest,
+  AttachmentModelContentReference,
   AttachmentReadItem,
   AttachmentReadLocation,
   AttachmentReadRange,
@@ -111,6 +116,7 @@ export {
   AttachmentDraftResponseSchema,
   AttachmentDraftWriteRequestSchema,
   AttachmentDownloadQuerySchema,
+  AttachmentMetadataResponseSchema,
   AttachmentSubmissionSchema,
   AttachmentUploadBeginRequestSchema,
   AttachmentUploadFinishRequestSchema,
@@ -121,6 +127,7 @@ export type {
   AttachmentDraftResponse,
   AttachmentDraftWriteRequest,
   AttachmentDownloadQuery,
+  AttachmentMetadataResponse,
   AttachmentSubmission,
   AttachmentUploadBeginRequest,
   AttachmentUploadFinishRequest,
@@ -408,6 +415,7 @@ export {
   ConnectProviderRequestSchema,
   CredentialSourceSchema,
   ModelAvailabilitySchema,
+  ModelVisionSupportSchema,
   ModelViewSchema,
   ProviderDiscoveryStateSchema,
   ProviderViewSchema,
@@ -508,6 +516,7 @@ export type {
   ConnectProviderRequest,
   CredentialSource,
   ModelAvailability,
+  ModelVisionSupport,
   ModelView,
   ProviderDiscoveryState,
   ProviderView,

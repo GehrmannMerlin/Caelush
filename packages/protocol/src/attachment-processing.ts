@@ -334,3 +334,47 @@ export const AttachmentReadResultSchema = z
   })
   .strict();
 export type AttachmentReadResult = z.infer<typeof AttachmentReadResultSchema>;
+
+export const MAX_ATTACHMENT_MODEL_CONTENT_REFERENCES = 8;
+
+const AttachmentModelImageLocationSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("PDF_PAGE"), pageNumber: z.number().int().min(1) }).strict(),
+  z.object({ kind: z.literal("DOCX_IMAGE"), imageIndex: z.number().int().min(0) }).strict(),
+  z
+    .object({
+      kind: z.literal("XLSX_IMAGE"),
+      sheetName: z.string().min(1).max(31),
+      cellAddress: z.string().regex(/^[A-Z]{1,3}[1-9][0-9]*$/u),
+    })
+    .strict(),
+  z.object({ kind: z.literal("IMAGE") }).strict(),
+]);
+
+/** A durable, bounded reference to one image produced by reading an attachment range. */
+export const AttachmentModelContentReferenceSchema = z
+  .object({
+    artifactId: AttachmentIdSchema,
+    sha256: AttachmentSha256Schema,
+    range: AttachmentReadRangeSchema,
+    location: AttachmentModelImageLocationSchema,
+    mediaType: z.enum(["image/png", "image/jpeg", "image/webp"]),
+  })
+  .strict()
+  .superRefine((reference, context) => {
+    const { range, location } = reference;
+    const matches =
+      (location.kind === "PDF_PAGE" &&
+        range.kind === "PDF_PAGE" &&
+        location.pageNumber === range.pageNumber) ||
+      (location.kind === "IMAGE" && range.kind === "IMAGE") ||
+      (location.kind === "DOCX_IMAGE" &&
+        range.kind === "DOCX_BLOCKS" &&
+        (range.imageIndex === undefined || range.imageIndex === location.imageIndex)) ||
+      (location.kind === "XLSX_IMAGE" &&
+        range.kind === "XLSX_RANGE" &&
+        location.sheetName === range.sheetName);
+    if (!matches) {
+      context.addIssue({ code: "custom", message: "Image location must match its read range." });
+    }
+  });
+export type AttachmentModelContentReference = z.infer<typeof AttachmentModelContentReferenceSchema>;

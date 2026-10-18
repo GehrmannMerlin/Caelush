@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   AttachmentDescriptorSchema,
+  AttachmentDraftItemSchema,
   AttachmentDraftSchema,
   AttachmentIdsSchema,
   AttachmentMediaTypeSchema,
@@ -59,6 +60,11 @@ export const AttachmentDownloadQuerySchema = z
   .object({ artifactId: AttachmentDescriptorSchema.shape.artifactId })
   .strict();
 export type AttachmentDownloadQuery = z.infer<typeof AttachmentDownloadQuerySchema>;
+
+export const AttachmentMetadataResponseSchema = z
+  .object({ attachment: AttachmentDraftItemSchema.nullable() })
+  .strict();
+export type AttachmentMetadataResponse = z.infer<typeof AttachmentMetadataResponseSchema>;
 
 export const AttachmentSubmissionSchema = z
   .object({

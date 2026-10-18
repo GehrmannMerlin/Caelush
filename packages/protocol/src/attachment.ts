@@ -20,6 +20,7 @@ export const AttachmentNameSchema = z
   .string()
   .min(1)
   .max(255)
+  // eslint-disable-next-line no-control-regex -- filenames must reject C0/DEL controls
   .refine((name) => name !== "." && name !== ".." && !/[\\/\u0000-\u001f\u007f]/u.test(name));
 
 export const AttachmentMediaTypeSchema = z
@@ -90,6 +91,18 @@ export const AttachmentDescriptorSchema = z
   })
   .strict();
 export type AttachmentDescriptor = z.infer<typeof AttachmentDescriptorSchema>;
+
+/** Safe metadata for displaying an attachment restored from a durable draft. */
+export const AttachmentDraftItemSchema = z
+  .object({
+    artifactId: AttachmentIdSchema,
+    name: AttachmentNameSchema,
+    mediaType: AttachmentMediaTypeSchema,
+    byteLength: z.number().int().min(0).max(MAX_ATTACHMENT_BYTES),
+    visualRequirement: AttachmentVisualRequirementSchema,
+  })
+  .strict();
+export type AttachmentDraftItem = z.infer<typeof AttachmentDraftItemSchema>;
 
 export const PendingAttachmentSchema = z
   .object({
