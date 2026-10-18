@@ -606,6 +606,7 @@ export function WebHostApp(props: {
           attachmentMetadata,
         });
         if (accepted) {
+          attachmentManager?.clear(sourceOwner);
           try {
             await attachmentDraftStore.clear(sourceOwner, prepared.revision);
             const cleared = attachmentDraftStore.getSnapshot(sourceOwner);
@@ -652,6 +653,7 @@ export function WebHostApp(props: {
               text: transferred.text,
               loading: false,
             });
+            attachmentManager?.clear(sourceOwner);
             await attachmentDraftStore.clear(sourceOwner, prepared.revision);
           } catch {
             setComposerDraft((previous) =>

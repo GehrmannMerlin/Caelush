@@ -361,9 +361,9 @@ function projectUserMessage(message: AgentUserMessage): TurnPresentationItemV3 {
     status: "COMPLETED",
     createdAt: message.createdAt,
     kind: "USER",
-    text: message.content
-      .map((part) => (part.type === "TEXT" ? part.text : "[已附加文件]"))
-      .join("\n"),
+    // Attachments travel in their own presentation field, so the bubble carries only what the user
+    // typed. A placeholder here would duplicate the cards and leave a stray line in the bubble.
+    text: message.content.flatMap((part) => (part.type === "TEXT" ? [part.text] : [])).join("\n"),
   };
 }
 

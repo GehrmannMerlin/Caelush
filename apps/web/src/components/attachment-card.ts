@@ -1,7 +1,9 @@
 import { createElement, useEffect, useState, type ReactElement } from "react";
-import { FileText, Image as ImageIcon, RefreshCw, X } from "lucide-react";
+import { RefreshCw, X } from "lucide-react";
 import type { AttachmentId, AttachmentOwner } from "@caelush/protocol";
 import type { AttachmentQueueItem } from "../application/attachment-manager.js";
+import { attachmentFormatOf } from "../application/attachment-format.js";
+import { AttachmentFormatGlyph } from "./attachment-format-glyph.js";
 
 export interface AttachmentCardProps {
   readonly item: AttachmentQueueItem;
@@ -55,6 +57,7 @@ export function AttachmentCard(props: AttachmentCardProps): ReactElement {
   }, [isImage, item.artifactId, item.file, item.owner, props.onLoadPreview]);
 
   const statusLabel = attachmentStatusLabel(item.status);
+  const format = attachmentFormatOf({ name: item.name, mediaType: item.mediaType });
   const progressCircumference = 2 * Math.PI * 16;
   const className = [
     "attachment-card",
@@ -66,6 +69,7 @@ export function AttachmentCard(props: AttachmentCardProps): ReactElement {
     "article",
     {
       className,
+      "data-format": format.key,
       "data-attachment-status": item.status.toLowerCase(),
       "aria-label": `${item.name}, ${statusLabel}`,
     },
@@ -73,8 +77,12 @@ export function AttachmentCard(props: AttachmentCardProps): ReactElement {
       ? createElement("img", { className: "attachment-card-preview", src: previewUrl, alt: "" })
       : createElement(
           "span",
-          { className: "attachment-card-icon", "aria-hidden": true },
-          isImage ? createElement(ImageIcon, { size: 19 }) : createElement(FileText, { size: 19 }),
+          {
+            className: "attachment-card-icon",
+            "data-format": format.key,
+            "aria-hidden": true,
+          },
+          createElement(AttachmentFormatGlyph, { format, size: 21 }),
         ),
     createElement(
       "div",
@@ -83,7 +91,13 @@ export function AttachmentCard(props: AttachmentCardProps): ReactElement {
       createElement(
         "span",
         { className: "attachment-card-meta" },
-        `${item.mediaType} · ${formatBytes(item.byteLength)} · ${statusLabel}`,
+        [
+          format.label,
+          formatBytes(item.byteLength),
+          item.status === "READY" ? undefined : statusLabel,
+        ]
+          .filter((value): value is string => value !== undefined)
+          .join(" · "),
       ),
       item.status === "FAILED" && item.error !== undefined
         ? createElement("span", { className: "attachment-card-error", role: "status" }, item.error)

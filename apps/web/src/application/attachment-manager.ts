@@ -190,6 +190,26 @@ export class AttachmentManager {
     }
   }
 
+  /**
+   * Drop every queued attachment for one owner after its message was accepted.
+   *
+   * The composer renders the queue, not the draft, so clearing only the durable draft left the cards
+   * in the composer even though the message had already been sent.
+   */
+  clear(owner: AttachmentOwner): void {
+    const key = ownerKey(owner);
+    const queue = this.queues.get(key);
+    if (queue === undefined || queue.items.length === 0) return;
+    for (const item of queue.items) {
+      this.uploads.get(item.id)?.abort();
+      this.uploads.delete(item.id);
+    }
+    queue.items = [];
+    queue.snapshot = EMPTY_QUEUE;
+    this.queues.set(key, queue);
+    this.publish();
+  }
+
   activate(): void {
     this.disposed = false;
   }

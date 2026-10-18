@@ -130,6 +130,19 @@ describe("AttachmentManager", () => {
     );
   });
 
+  it("clears the queue after its message was accepted", async () => {
+    const manager = new AttachmentManager({
+      uploadAttachment: vi.fn().mockResolvedValue(descriptor("notes.txt", 5)),
+    });
+    await manager.addFiles([file("notes.txt")], owner);
+    expect(manager.getSnapshot(owner)).toHaveLength(1);
+
+    manager.clear(owner);
+
+    expect(manager.getSnapshot(owner)).toEqual([]);
+    expect(manager.getReadyAttachmentIds(owner)).toEqual([]);
+  });
+
   it("rejects oversized and over-count selections before upload", async () => {
     const uploadAttachment = vi.fn().mockResolvedValue(descriptor("notes.txt", 5));
     const manager = new AttachmentManager({ uploadAttachment });

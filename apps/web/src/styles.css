@@ -9340,6 +9340,40 @@ select {
   color: var(--web-muted, #667085);
 }
 
+.attachment-card-icon {
+  overflow: visible;
+}
+
+.attachment-format-glyph {
+  position: relative;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  color: inherit;
+}
+
+.attachment-format-mark {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  box-sizing: border-box;
+  display: grid;
+  min-width: 15px;
+  height: 12px;
+  padding: 0 2px;
+  place-items: center;
+  border: 1.5px solid var(--web-surface, #fff);
+  border-radius: 4px;
+  background: var(--attachment-format, #667085);
+  color: #fff;
+  font-size: 0.4rem;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .attachment-card-preview {
   object-fit: cover;
 }
@@ -9555,6 +9589,164 @@ select {
 
 :root[data-caelush-theme="dark"] .attachment-card-name {
   color: var(--web-text, #edf1f8);
+}
+
+/* One accent per attachment format, shared by the composer and the transcript. */
+[data-format="pdf"] {
+  --attachment-format: #c63c34;
+}
+
+[data-format="word"] {
+  --attachment-format: #2f6fd0;
+}
+
+[data-format="excel"] {
+  --attachment-format: #2f8f5b;
+}
+
+[data-format="image"] {
+  --attachment-format: #7a5bd6;
+}
+
+[data-format="text"] {
+  --attachment-format: #5f6b7a;
+}
+
+[data-format="code"] {
+  --attachment-format: #0f766e;
+}
+
+[data-format="archive"] {
+  --attachment-format: #b7791f;
+}
+
+[data-format="other"] {
+  --attachment-format: #667085;
+}
+
+.attachment-card-icon[data-format],
+.transcript-attachment-icon[data-format] {
+  background: var(--web-surface-muted, #f1f3f6);
+  background: color-mix(in srgb, var(--attachment-format) 15%, transparent);
+  color: var(--attachment-format);
+}
+
+:root[data-caelush-theme="dark"] .attachment-card-icon[data-format],
+:root[data-caelush-theme="dark"] .transcript-attachment-icon[data-format] {
+  background: color-mix(in srgb, var(--attachment-format) 26%, transparent);
+  color: var(--attachment-format);
+}
+
+/* Transcript attachment: one row card above its user bubble, whole card downloads. */
+.transcript-attachment-list {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.transcript-attachment-card {
+  box-sizing: border-box;
+  display: flex;
+  width: min(100%, 340px);
+  margin: 0;
+  padding: 8px 10px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #e2e8f2;
+  border-radius: 12px;
+  background: var(--web-surface, #fff);
+  color: #193553;
+  font: inherit;
+  text-align: left;
+}
+
+button.transcript-attachment-card {
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+button.transcript-attachment-card:hover:not(:disabled) {
+  border-color: #b9cdea;
+  box-shadow: 0 3px 12px rgb(28 46 76 / 8%);
+}
+
+button.transcript-attachment-card:focus-visible {
+  outline: 2px solid #4f7fdb;
+  outline-offset: 2px;
+}
+
+button.transcript-attachment-card:disabled {
+  cursor: progress;
+  opacity: 0.72;
+}
+
+.transcript-attachment-icon,
+.transcript-attachment-thumb {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 9px;
+}
+
+.transcript-attachment-icon .attachment-format-glyph {
+  width: 38px;
+  height: 38px;
+}
+
+.transcript-attachment-icon {
+  overflow: visible;
+}
+
+.transcript-attachment-thumb {
+  background: #eef2f7;
+  object-fit: cover;
+}
+
+.transcript-attachment-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.transcript-attachment-name {
+  overflow: hidden;
+  color: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.transcript-attachment-meta {
+  color: var(--web-muted, #667085);
+  font-size: 0.66rem;
+}
+
+.transcript-attachment-error {
+  flex: 0 0 auto;
+  color: #b42318;
+  font-size: 0.66rem;
+}
+
+:root[data-caelush-theme="dark"] .transcript-attachment-card {
+  border-color: var(--web-line-strong, #414a58);
+  background: var(--web-surface, #232833);
+  color: var(--web-text, #edf1f8);
+}
+
+:root[data-caelush-theme="dark"] .transcript-attachment-thumb {
+  background: var(--web-surface-muted, #2d3440);
+}
+
+:root[data-caelush-theme="dark"] .transcript-attachment-meta {
+  color: #a8b2c1;
 }
 
 @container (max-width: 38rem) {

@@ -120,7 +120,53 @@ describe("attachment composer", () => {
 
     expect(html).toContain('class="attachment-card attachment-card--file"');
     expect(html).toContain("notes.txt");
+    expect(html).toContain('data-format="text"');
+    expect(html).toContain("TXT · 5 B");
+    expect(html).not.toContain("text/plain");
     expect(html).not.toContain("attachment-card-progress-overlay");
     expect(styles).toMatch(/\.attachment-card\s*\{[^}]*width:\s*176px;[^}]*min-height:\s*88px;/s);
+  });
+
+  it("gives each file format its own accent hook and label", () => {
+    const owner: AttachmentOwner = { kind: "WORKSPACE", workspaceId: createWorkspaceId() };
+    const base = {
+      id: "attachment-format",
+      owner,
+      status: "READY" as const,
+      loadedBytes: 2048,
+      totalBytes: 2048,
+      artifactId: "att_formatformat1" as AttachmentQueueItem["artifactId"],
+    };
+    const pdf = renderToStaticMarkup(
+      <AttachmentCard
+        item={{
+          ...base,
+          name: "报告.pdf",
+          mediaType: "application/pdf",
+          byteLength: 2048,
+        }}
+        onRemove={vi.fn()}
+      />,
+    );
+    const excel = renderToStaticMarkup(
+      <AttachmentCard
+        item={{
+          ...base,
+          name: "数据.xlsx",
+          mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          byteLength: 2048,
+        }}
+        onRemove={vi.fn()}
+      />,
+    );
+    const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+
+    expect(pdf).toContain('data-format="pdf"');
+    expect(pdf).toContain("PDF · 2.0 KiB");
+    expect(excel).toContain('data-format="excel"');
+    expect(excel).toContain("XLSX · 2.0 KiB");
+    expect(styles).toMatch(
+      /\.attachment-card-icon\[data-format\],\s*\.transcript-attachment-icon\[data-format\]\s*\{[^}]*color:\s*var\(--attachment-format\);/s,
+    );
   });
 });

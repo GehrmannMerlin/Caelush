@@ -1,4 +1,5 @@
 import { PassThrough } from "node:stream";
+import { readFileSync } from "node:fs";
 import type { ReactElement } from "react";
 import { renderToPipeableStream, renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -151,6 +152,61 @@ describe("TurnPresentationFeed", () => {
     expect(html).toContain('aria-label="下载附件 项目摘要.pdf"');
     expect(html).not.toContain("att_0192f5b14d3a7c2e8a913f0b6c7d8e9a");
     expect(html).not.toContain("sha256");
+    expect(html).not.toContain("transcript-attachment-download");
+    expect(html).toContain('data-format="pdf"');
+    expect(html.indexOf("transcript-attachment-list")).toBeLessThan(
+      html.indexOf("turn-presentation-user-bubble"),
+    );
+  });
+
+  it("keeps an attachment-only message to its cards with no empty bubble", () => {
+    const sessionId = createSessionId();
+    const transcriptUser = {
+      id: "user:attachment-only",
+      runId,
+      conversationTurnId: "turn-1",
+      createdAt: 1,
+      kind: "USER",
+      text: "",
+      attachments: [
+        {
+          artifactId: "att_0192f5b14d3a7c2e8a913f0b6c7d8e9a",
+          name: "数据.xlsx",
+          mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          byteLength: 4096,
+          previewAvailable: false,
+          downloadAvailable: true,
+        },
+      ],
+    } satisfies Extract<TranscriptEntry, { kind: "USER" }>;
+    const base = presentation();
+    const attachmentOnlyPresentation: SessionTurnPresentationResponse = {
+      ...base,
+      items: base.items.map((item) => (item.kind === "USER" ? { ...item, text: "" } : item)),
+    };
+    const props = {
+      presentation: attachmentOnlyPresentation,
+      transcriptUsers: [transcriptUser],
+      attachmentOwner: { kind: "SESSION", sessionId },
+      onDownloadAttachment: async () => new Blob(),
+    } as unknown as TurnPresentationFeedProps;
+
+    const html = renderToStaticMarkup(<TurnPresentationFeed {...props} />);
+
+    expect(html).toContain("数据.xlsx");
+    expect(html).toContain('data-format="excel"');
+    expect(html).not.toContain("turn-presentation-user-bubble");
+    expect(html).not.toContain("[已附加文件]");
+  });
+
+  it("sizes every transcript attachment the same, including image previews", () => {
+    const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+
+    expect(styles).toMatch(/\.transcript-attachment-card\s*\{[^}]*width:\s*min\(100%,\s*340px\);/s);
+    expect(styles).toMatch(
+      /\.transcript-attachment-icon,\s*\.transcript-attachment-thumb\s*\{[^}]*width:\s*38px;[^}]*height:\s*38px;/s,
+    );
+    expect(styles).toMatch(/\.transcript-attachment-thumb\s*\{[^}]*object-fit:\s*cover;/s);
   });
 
   it("renders a semantic tool row and keeps its safe invocation in collapsed details", () => {

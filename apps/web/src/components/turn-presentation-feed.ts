@@ -223,17 +223,19 @@ export function SessionConversation(props: SessionConversationProps): ReactEleme
         createElement(
           "div",
           { className: "turn-presentation-users", "aria-label": "任务" },
-          createElement(
-            "article",
-            { className: "turn-presentation-item turn-presentation-item--user" },
-            createElement("p", { className: "turn-presentation-user-bubble" }, item.text),
-          ),
           createElement(TranscriptAttachmentList, {
             attachments: item.attachments ?? [],
             owner: props.attachmentOwner,
             onLoad: props.onLoadAttachment,
             onDownload: props.onDownloadAttachment,
           }),
+          item.text.trim().length === 0
+            ? null
+            : createElement(
+                "article",
+                { className: "turn-presentation-item turn-presentation-item--user" },
+                createElement("p", { className: "turn-presentation-user-bubble" }, item.text),
+              ),
         ),
       ),
     ),
@@ -527,23 +529,25 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
       : createElement(
           "div",
           { className: "turn-presentation-users", "aria-label": "任务" },
-          userItems.length === 0
-            ? createElement(
-                "article",
-                { className: "turn-presentation-item turn-presentation-item--user" },
-                createElement(
-                  "p",
-                  { className: "turn-presentation-user-bubble" },
-                  props.optimisticUser?.text,
-                ),
-              )
-            : userItems.map((item) => renderItem(item)),
           createElement(TranscriptAttachmentList, {
             attachments: props.userAttachments ?? [],
             owner: props.attachmentOwner,
             onLoad: props.onLoadAttachment,
             onDownload: props.onDownloadAttachment,
           }),
+          userItems.length === 0
+            ? props.optimisticUser !== undefined && props.optimisticUser.text.trim().length > 0
+              ? createElement(
+                  "article",
+                  { className: "turn-presentation-item turn-presentation-item--user" },
+                  createElement(
+                    "p",
+                    { className: "turn-presentation-user-bubble" },
+                    props.optimisticUser.text,
+                  ),
+                )
+              : null
+            : userItems.map((item) => renderItem(item)),
         ),
     hasProcess
       ? createElement(
@@ -751,9 +755,10 @@ function renderItem(
   item: TurnPresentationItem | TurnPresentationItemV2 | TurnPresentationItemV3,
   now?: number,
   isCurrentVerifyingRun = false,
-): ReactElement {
+): ReactElement | null {
   switch (item.kind) {
     case "USER":
+      if (item.text.trim().length === 0) return null;
       return createElement(
         "article",
         { className: "turn-presentation-item turn-presentation-item--user", key: item.id },

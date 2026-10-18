@@ -1,11 +1,12 @@
 import { createElement, useEffect, useState, type ReactElement } from "react";
-import { Download, FileText, Image as ImageIcon } from "lucide-react";
 import {
   AttachmentIdSchema,
   type AttachmentId,
   type AttachmentOwner,
   type TranscriptAttachmentRef,
 } from "@caelush/protocol";
+import { attachmentFormatOf } from "../application/attachment-format.js";
+import { AttachmentFormatGlyph } from "./attachment-format-glyph.js";
 
 export interface TranscriptAttachmentListProps {
   readonly attachments: readonly TranscriptAttachmentRef[];
@@ -36,6 +37,13 @@ export function TranscriptAttachmentList(
   );
 }
 
+/**
+ * One attachment above its user bubble.
+ *
+ * The whole card is the download control: a separate download button made the row noisy and the
+ * transcript read like a file manager. Images render as a fixed 38 px thumbnail so a 4000 px photo
+ * never sets the size of the conversation.
+ */
 function TranscriptAttachmentCard(props: {
   readonly attachment: TranscriptAttachmentRef;
   readonly artifactId?: AttachmentId | undefined;
@@ -78,6 +86,9 @@ function TranscriptAttachmentCard(props: {
     };
   }, [artifactId, canPreview, owner, props.onLoad]);
 
+  const name = attachment.name ?? attachment.label ?? "附件";
+  const format = attachmentFormatOf({ name, mediaType: attachment.mediaType });
+
   const download = async () => {
     if (artifactId === undefined || owner === undefined || props.onDownload === undefined) return;
     setDownloadBusy(true);
@@ -88,7 +99,7 @@ function TranscriptAttachmentCard(props: {
       objectUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = objectUrl;
-      link.download = attachment.name ?? "attachment";
+      link.download = name;
       link.click();
     } catch {
       setDownloadError(true);
@@ -98,51 +109,40 @@ function TranscriptAttachmentCard(props: {
     }
   };
 
-  const name = attachment.name ?? attachment.label ?? "附件";
-  const isImage = attachment.mediaType?.startsWith("image/") === true;
-  return createElement(
-    "article",
-    { className: "transcript-attachment-card" },
+  const meta = [
+    format.label,
+    attachment.byteLength === undefined ? undefined : formatBytes(attachment.byteLength),
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join(" · ");
+  const canDownload =
+    attachment.downloadAvailable === true &&
+    artifactId !== undefined &&
+    owner !== undefined &&
+    props.onDownload !== undefined;
+
+  const content = [
     previewUrl !== undefined
       ? createElement("img", {
-          className: "transcript-attachment-preview",
+          className: "transcript-attachment-thumb",
           src: previewUrl,
-          alt: name,
+          alt: "",
         })
       : createElement(
           "span",
-          { className: "transcript-attachment-icon", "aria-hidden": true },
-          isImage ? createElement(ImageIcon, { size: 18 }) : createElement(FileText, { size: 18 }),
+          {
+            className: "transcript-attachment-icon",
+            "data-format": format.key,
+            "aria-hidden": true,
+          },
+          createElement(AttachmentFormatGlyph, { format, size: 20 }),
         ),
     createElement(
       "span",
       { className: "transcript-attachment-copy" },
       createElement("span", { className: "transcript-attachment-name", title: name }, name),
-      createElement(
-        "span",
-        { className: "transcript-attachment-meta" },
-        [
-          attachment.mediaType,
-          attachment.byteLength === undefined ? undefined : formatBytes(attachment.byteLength),
-        ]
-          .filter((value): value is string => value !== undefined)
-          .join(" · "),
-      ),
+      createElement("span", { className: "transcript-attachment-meta" }, meta),
     ),
-    attachment.downloadAvailable === true && artifactId !== undefined && owner !== undefined
-      ? createElement(
-          "button",
-          {
-            type: "button",
-            className: "transcript-attachment-download",
-            onClick: () => void download(),
-            disabled: downloadBusy,
-            "aria-label": `下载附件 ${name}`,
-            title: downloadBusy ? "正在下载" : "下载原件",
-          },
-          createElement(Download, { size: 15, "aria-hidden": true }),
-        )
-      : null,
     downloadError
       ? createElement(
           "span",
@@ -150,6 +150,27 @@ function TranscriptAttachmentCard(props: {
           "下载失败",
         )
       : null,
+  ];
+
+  if (!canDownload) {
+    return createElement(
+      "div",
+      { className: "transcript-attachment-card", "data-format": format.key },
+      ...content,
+    );
+  }
+  return createElement(
+    "button",
+    {
+      type: "button",
+      className: "transcript-attachment-card",
+      "data-format": format.key,
+      onClick: () => void download(),
+      disabled: downloadBusy,
+      "aria-label": `下载附件 ${name}`,
+      title: "点击下载原件",
+    },
+    ...content,
   );
 }
 
