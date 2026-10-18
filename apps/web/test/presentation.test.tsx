@@ -206,7 +206,7 @@ describe("Web presentation", () => {
     expect(html).toContain("prompt-submit-button--icon");
     expect(html).toContain("<svg");
     expect(html).not.toContain("运行 →");
-    expect(html).not.toContain("附件");
+    expect(html).toContain('aria-label="添加附件"');
     expect(html).not.toContain("@引用");
   });
 

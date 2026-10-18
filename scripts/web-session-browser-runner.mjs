@@ -1,6 +1,7 @@
-/* global URL, fetch, process, document, window, HTMLElement, getComputedStyle */
+/* global URL, fetch, process, document, window, HTMLElement, getComputedStyle, MutationObserver, Event, TextEncoder */
 
 import { chromium } from "@playwright/test";
+import { Buffer } from "node:buffer";
 
 const [url, artifactDirectory, workspaceJson, fixtureStatusUrl] = process.argv.slice(2);
 if (
@@ -17,7 +18,13 @@ const workspace = JSON.parse(workspaceJson);
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext();
 const page = await context.newPage();
+const browserErrors = [];
+page.on("pageerror", (error) => browserErrors.push(error.message));
+page.on("console", (message) => {
+  if (message.type() === "error") browserErrors.push(message.text());
+});
 const promptCacheOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "PROMPT_CACHE";
+const attachmentOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "ATTACHMENT";
 const multiTurnOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "MULTI_TURN";
 const s0Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S0";
 const s1Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S1";
@@ -43,7 +50,8 @@ const readFixtureStatus = async () => {
 };
 const exactText = (value) => page.getByText(value, { exact: true });
 const startNewSession = async () => {
-  const newSessionButton = page.locator("button.workspace-new-session-button").first();
+  const newSessionButton = page.locator("button.workspace-new-session-icon-button").first();
+  await page.locator(".workspace-card").first().hover();
   if ((await newSessionButton.count()) === 0) {
     const selectedWorkspace = page
       .locator('button.workspace-list-button[aria-current="page"]')
@@ -366,6 +374,7 @@ const assertSubmittedPreset = async (promptText, expectedId) => {
     throw new Error(
       "the composer submitted " + promptText + " under " + actual + " instead of " + expectedId,
     );
+  return { sessionId: session.id, reasoningLevel: run.reasoningLevel };
 };
 
 const assertReasoningSelection = async (sessionId, expectedLevel) => {
@@ -386,25 +395,25 @@ const assertReasoningSelection = async (sessionId, expectedLevel) => {
   return { sessionLevel: selectedSession.defaultReasoningLevel, runLevel: run.reasoningLevel };
 };
 
-const waitForS5SessionCompletion = async (sessionId, expectedLevel) => {
+const waitForSessionCompletion = async (sessionId, expectedLevel) => {
   let settledRun;
   await waitUntil(async () => {
     const runs = await getJson("/api/v1/sessions/" + sessionId + "/runs");
     const run = (runs.items ?? []).find((item) => item.reasoningLevel === expectedLevel);
     if (run === undefined) return false;
     if (["FAILED", "CANCELLED", "TIMEOUT", "BUDGET_EXCEEDED"].includes(run.status)) {
-      throw new Error("the S5 Run settled as " + run.status);
+      throw new Error("the Run settled as " + run.status);
     }
     if (run.status !== "COMPLETED") return false;
     settledRun = run;
     return true;
-  }, "the S5 Run to commit its completed status");
+  }, "the Run to commit its completed status");
   const presentation = await getJson(
     "/api/v1/sessions/" + sessionId + "/presentation?runId=" + encodeURIComponent(settledRun.id),
   );
   const turn = presentation.turns?.find((item) => item.runId === settledRun.id);
   if (turn?.runStatus !== "COMPLETED") {
-    throw new Error("the S5 durable presentation did not converge to COMPLETED");
+    throw new Error("the durable presentation did not converge to COMPLETED");
   }
 };
 
@@ -417,7 +426,23 @@ try {
   // Nothing is selected yet, so this is the empty landing state: the column is deliberately fixed.
   await assertViewportSplitLayout({ scrollable: false });
   await startNewSession();
+  if (attachmentOnly) {
+    await waitUntil(
+      async () =>
+        (await page.locator(".prompt-draft-loading").count()) === 0 &&
+        (await page.locator(".prompt-attachment-button").isEnabled()),
+      "the attachment draft to finish restoring",
+    );
+  }
   await assertPermissionSelector();
+  smokeStage = "attachment composer menu and upload";
+  await assertAttachmentComposerAndUpload();
+  if (attachmentOnly) {
+    await context.close();
+    await browser.close();
+    process.stdout.write("[browser-runner] attachment composer geometry and upload flow passed.\n");
+    process.exit(0);
+  }
   if (s5Only) {
     smokeStage = "S5 curated DeepSeek reasoning guidance";
     const picker = page.locator(".model-picker-trigger").first();
@@ -536,7 +561,7 @@ try {
     if (maxSession.runLevel !== "XHIGH") {
       throw new Error("the explicit Max level changed before Run creation: " + maxSession.runLevel);
     }
-    await waitForS5SessionCompletion(s5SessionId, "XHIGH");
+    await waitForSessionCompletion(s5SessionId, "XHIGH");
     const maxRequest = (await readFixtureStatus()).reasoningRequests.find((entry) =>
       entry.prompt.includes("S5 Max guidance test"),
     );
@@ -564,7 +589,7 @@ try {
         "the explicit Auto/OFF level changed before Run creation: " + autoSession.runLevel,
       );
     }
-    await waitForS5SessionCompletion(s5SessionId, "OFF");
+    await waitForSessionCompletion(s5SessionId, "OFF");
     const autoRequest = (await readFixtureStatus()).reasoningRequests.find((entry) =>
       entry.prompt.includes("S5 Auto guidance test"),
     );
@@ -684,7 +709,7 @@ try {
     const executionRow = page.locator('.turn-presentation-live-item[data-tool-category="EDIT"]');
     await waitUntil(async () => {
       const liveCount = await executionRow.count();
-      const durableCount = await page.locator(".turn-presentation-item--tool").count();
+      const durableCount = await page.locator(".turn-presentation-tool-entry").count();
       return liveCount > 0 || durableCount > 0;
     }, "the apply_patch invocation to take over preparation");
     const executionObservation = await page.evaluate(() => ({
@@ -696,7 +721,7 @@ try {
       liveEditCount: document.querySelectorAll(
         '.turn-presentation-live-item[data-tool-category="EDIT"]',
       ).length,
-      durableToolCount: document.querySelectorAll(".turn-presentation-item--tool").length,
+      durableToolCount: document.querySelectorAll(".turn-presentation-tool-entry").length,
     }));
     if (!executionObservation.sawRunningEdit && !executionObservation.runningEditVisible) {
       throw new Error("the browser never rendered the running apply_patch Tool activity");
@@ -739,7 +764,7 @@ try {
       throw new Error("refresh unexpectedly restored transient model preparation");
     }
     await assertS1DomPrivate("refresh");
-    if ((await page.locator(".turn-presentation-item--tool").count()) !== 1) {
+    if ((await page.locator(".turn-presentation-tool-entry").count()) !== 1) {
       throw new Error("durable ToolActivity did not restore exactly once after refresh");
     }
 
@@ -1178,7 +1203,7 @@ try {
         (await page.locator(".approval-card").count()) > 0 ||
         (await page.locator('.turn-presentation-live-item[data-tool-category="EDIT"]').count()) >
           0 ||
-        (await page.locator(".turn-presentation-item--tool").count()) > 0,
+        (await page.locator(".turn-presentation-tool-entry").count()) > 0,
       "S4 apply_patch admission or execution presentation",
     );
     await assertS4DomPrivate("admission and execution");
@@ -1377,6 +1402,7 @@ try {
       }));
       throw new Error(
         "Active Turn has no EDIT Tool Activity: " + JSON.stringify(evidence) + "; " + error.message,
+        { cause: error },
       );
     }
     smokeStage = "structured File effect";
@@ -1402,7 +1428,7 @@ try {
       throw new Error("the active Run's live state leaked into a historical Turn");
     }
     if (
-      !(await activeTurn.locator(".turn-presentation-item--tool").innerText()).includes(
+      !(await activeTurn.locator(".turn-presentation-tool-entry").innerText()).includes(
         "fixture.txt",
       )
     ) {
@@ -1424,7 +1450,7 @@ try {
       "cancelled Turn process to expand",
     );
     if (
-      !(await activeTurn.locator(".turn-presentation-item--tool").innerText()).includes(
+      !(await activeTurn.locator(".turn-presentation-tool-entry").innerText()).includes(
         "fixture.txt",
       )
     ) {
@@ -1440,26 +1466,24 @@ try {
   }
   await submitPrompt("read browser fixture");
   await waitVisible(exactText("Verified browser result."));
-  await assertSubmittedPreset("read browser fixture", "WORKSPACE_WRITE");
-  // The disclosure auto-collapses the instant the Run settles, so the settled report is the signal
-  // that the collapse has already happened and the expansion below will stick.
-  await waitVisible(
-    page
-      .locator("button.workspace-session-item")
-      .filter({ hasText: "read browser fixture" })
-      .locator('.session-status-icon[aria-label="已完成"]'),
+  const submittedBrowserRun = await assertSubmittedPreset(
+    "read browser fixture",
+    "WORKSPACE_WRITE",
   );
+  // The sidebar intentionally shows no icon for a completed Run. Read durable Run and presentation
+  // status instead; the settled report is the signal that the disclosure has auto-collapsed.
+  await waitForSessionCompletion(submittedBrowserRun.sessionId, submittedBrowserRun.reasoningLevel);
   await openProcessDisclosure();
   // The presentation feed replaces the legacy timeline: a finished Tool is an item, and the path it
   // touched belongs to that item's own summary text rather than to its own element.
   await waitVisible(
     page
-      .locator(".turn-presentation-item--tool .turn-presentation-item-label")
-      .filter({ hasText: "读取文件" }),
+      .locator(".turn-presentation-tool-entry .turn-presentation-tool-action")
+      .filter({ hasText: "已读取" }),
   );
   await waitVisible(
     page
-      .locator(".turn-presentation-item--tool .turn-presentation-item-text")
+      .locator(".turn-presentation-tool-entry .turn-presentation-tool-subject")
       .filter({ hasText: "fixture.txt" }),
   );
   await assertTaskTimerSummaryLayout({ mobile: false });
@@ -1478,10 +1502,17 @@ try {
   }
   if ((await page.locator(".session-list-meta").count()) !== 0)
     throw new Error("status subtitle leaked");
-  if ((await page.locator(".session-status-icon").count()) < 1)
-    throw new Error("status icon missing");
-  if ((await page.locator('.session-status-icon[aria-label="已完成"]').count()) !== 1)
-    throw new Error("completed status missing");
+  if (
+    (await page
+      .locator("button.workspace-session-item")
+      .filter({ hasText: "read browser fixture" })
+      .evaluate((element) => element.classList.contains("workspace-session-item--statusless"))) !==
+    true
+  ) {
+    throw new Error("the completed session did not use its statusless sidebar presentation");
+  }
+  if ((await page.locator(".session-status-icon").count()) !== 0)
+    throw new Error("a completed session unexpectedly displayed an active status icon");
 
   await page.reload({ waitUntil: "domcontentloaded" });
   await selectSession("read browser fixture");
@@ -1501,31 +1532,25 @@ try {
   await contextUsageButton.click();
   const cacheInspector = page.locator(".context-inspector");
   await waitVisible(cacheInspector);
-  smokeStage = "checking prompt-cache facts";
-  for (const label of [
-    "平台实际命中率",
-    "Caelush 可复用前缀效率",
-    "缓存周期",
-    "最近重置",
-    "未上报 usage",
-  ]) {
+  smokeStage = "checking Context Usage details";
+  for (const label of ["可用输入预算", "缓存命中率", "暂无缓存数据"]) {
     if (!(await cacheInspector.innerText()).includes(label)) {
-      throw new Error("prompt-cache inspector is missing " + label);
+      throw new Error("Context Usage inspector is missing " + label);
     }
   }
-  if (!(await cacheInspector.innerText()).includes("未上报 usage")) {
-    throw new Error("fixture Provider usage was incorrectly displayed as a reported rate");
+  if (!(await cacheInspector.innerText()).includes("暂无缓存数据")) {
+    throw new Error("fixture Provider usage was incorrectly displayed as a reported cache rate");
   }
-  const cacheSection = cacheInspector.locator(".context-cache-section");
-  smokeStage = "capturing desktop cache inspector";
-  await cacheSection.screenshot({ path: artifactDirectory + "/prompt-cache-desktop.png" });
+  const cacheSection = cacheInspector.locator(".context-inspector-metrics");
+  smokeStage = "capturing desktop Context Usage metrics";
+  await cacheSection.screenshot({ path: artifactDirectory + "/context-usage-desktop.png" });
   await page.setViewportSize({ width: 375, height: 812 });
   const mobileSidebarToggle = page.locator(".sidebar-toggle-button");
   if ((await mobileSidebarToggle.getAttribute("aria-expanded")) === "true") {
     await mobileSidebarToggle.click();
   }
   await page.waitForTimeout(220);
-  smokeStage = "checking mobile cache overflow";
+  smokeStage = "checking mobile Context Usage overflow";
   const cacheBounds = await cacheInspector.boundingBox();
   const viewportBounds = await page.evaluate(() => ({
     width: window.innerWidth,
@@ -1537,18 +1562,18 @@ try {
     cacheBounds.x < 0 ||
     cacheBounds.x + cacheBounds.width > viewportBounds.width + 1
   ) {
-    smokeStage = "mobile prompt-cache panel bounds outside viewport";
-    throw new Error("prompt-cache inspector overflows the 375px mobile viewport");
+    smokeStage = "mobile Context Usage panel bounds outside viewport";
+    throw new Error("Context Usage inspector overflows the 375px mobile viewport");
   }
   if (cacheBounds.y < 0 || cacheBounds.y + cacheBounds.height > viewportBounds.height + 1) {
-    smokeStage = `mobile inspector vertical bounds y=${cacheBounds.y}, height=${cacheBounds.height}, viewport=${viewportBounds.height}`;
-    throw new Error("prompt-cache inspector exceeds the 375px mobile viewport height");
+    smokeStage = `mobile Context Usage bounds y=${cacheBounds.y}, height=${cacheBounds.height}, viewport=${viewportBounds.height}`;
+    throw new Error("Context Usage inspector exceeds the 375px mobile viewport height");
   }
   if (viewportBounds.documentWidth > viewportBounds.width + 1) {
     smokeStage = "mobile document horizontal overflow";
-    throw new Error("prompt-cache inspector overflows the 375px mobile viewport");
+    throw new Error("Context Usage inspector overflows the 375px mobile viewport");
   }
-  await cacheSection.screenshot({ path: artifactDirectory + "/prompt-cache-mobile.png" });
+  await cacheSection.screenshot({ path: artifactDirectory + "/context-usage-mobile.png" });
   if (promptCacheOnly) {
     await context.close();
     await browser.close();
@@ -1631,7 +1656,7 @@ try {
   // timeline had its own 修改文件 label, which is what this assertion used to look for).
   await waitVisible(
     page
-      .locator(".turn-presentation-item--tool .turn-presentation-item-label")
+      .locator(".turn-presentation-tool-entry .turn-presentation-tool-action")
       .filter({ hasText: "编辑文件" })
       .last(),
   );
@@ -1667,7 +1692,7 @@ try {
   await openProcessDisclosure();
   await waitVisible(
     page
-      .locator(".turn-presentation-item--tool.turn-presentation-item--failed")
+      .locator(".turn-presentation-tool-entry.turn-presentation-tool-entry--failed")
       .filter({ hasText: "编辑文件" })
       .last(),
   );
@@ -1788,10 +1813,15 @@ try {
   if (tooltipStyle.backgroundColor !== "rgb(30, 79, 133)")
     throw new Error("workspace path tooltip is not solid blue");
 } catch (error) {
+  const pageText = await page
+    .locator("body")
+    .innerText()
+    .catch(() => "");
   await context.close().catch(() => undefined);
   await browser.close().catch(() => undefined);
   throw new Error(
-    `Browser fixture smoke failed during ${smokeStage}: ${error instanceof Error ? error.message : "unknown error"}; page content and screenshots were suppressed.`,
+    `Browser fixture smoke failed during ${smokeStage}: ${error instanceof Error ? error.message : "unknown error"}; page=${JSON.stringify(pageText.slice(0, 1_200))}; browserErrors=${JSON.stringify(browserErrors.slice(-10))}.`,
+    { cause: error },
   );
 }
 await context.close();
@@ -1821,10 +1851,10 @@ async function assertPermissionSelectorAppearance() {
     appearance: getComputedStyle(element).appearance,
     width: element.getBoundingClientRect().width,
   }));
-  if (appearance.appearance !== "auto")
-    throw new Error("permission selector lost its native dropdown affordance");
-  if (appearance.width < 120)
-    throw new Error("permission selector is too narrow to present its choices clearly");
+  if (appearance.appearance !== "none")
+    throw new Error("permission selector lost its compact composer appearance");
+  if (appearance.width < 72)
+    throw new Error("permission selector is too narrow to present its selected label");
 }
 
 async function assertComposerControlsDoNotOverlap() {
@@ -1835,6 +1865,100 @@ async function assertComposerControlsDoNotOverlap() {
   if (bounds[0].x + bounds[0].width > bounds[1].x) {
     throw new Error("model picker overlaps the send button at the mobile viewport");
   }
+}
+
+async function assertAttachmentComposerAndUpload() {
+  const plus = page.getByRole("button", { name: "添加附件" });
+  await waitVisible(plus);
+  await plus.click();
+  const menu = page.locator(".attachment-menu");
+  await waitVisible(menu);
+  const geometry = await page.evaluate(() => {
+    const menuElement = document.querySelector(".attachment-menu");
+    const plusElement = document.querySelector("button.prompt-attachment-button");
+    const footer = document.querySelector(".prompt-composer-footer");
+    const ring = document.querySelector(".context-usage-control");
+    if (!(menuElement instanceof HTMLElement)) throw new Error("attachment menu missing");
+    if (!(plusElement instanceof HTMLElement)) throw new Error("attachment plus button missing");
+    if (!(footer instanceof HTMLElement)) throw new Error("composer footer missing");
+    if (!(ring instanceof HTMLElement)) throw new Error("context usage ring missing");
+    const panel = menuElement.getBoundingClientRect();
+    const button = plusElement.getBoundingClientRect();
+    const footerBounds = footer.getBoundingClientRect();
+    const ringBounds = ring.getBoundingClientRect();
+    return {
+      panelWidth: panel.width,
+      panelHeight: panel.height,
+      panelLeft: panel.left,
+      panelRight: panel.right,
+      panelBottom: panel.bottom,
+      buttonTop: button.top,
+      footerCenter: footerBounds.left + footerBounds.width / 2,
+      ringCenter: ringBounds.left + ringBounds.width / 2,
+      viewportWidth: window.innerWidth,
+    };
+  });
+  if (Math.abs(geometry.panelWidth - 320) > 1 || Math.abs(geometry.panelHeight - 160) > 1) {
+    throw new Error("attachment popover is not 320 by 160 pixels: " + JSON.stringify(geometry));
+  }
+  if (geometry.panelLeft < 0 || geometry.panelRight > geometry.viewportWidth) {
+    throw new Error("attachment popover is outside the viewport: " + JSON.stringify(geometry));
+  }
+  if (geometry.panelBottom >= geometry.buttonTop) {
+    throw new Error("attachment popover is not above the plus button: " + JSON.stringify(geometry));
+  }
+  if (Math.abs(geometry.footerCenter - geometry.ringCenter) > 1) {
+    throw new Error("context usage ring is not centered in the composer footer");
+  }
+
+  await page.keyboard.press("Escape");
+  await waitUntil(
+    async () => (await plus.getAttribute("aria-expanded")) === "false",
+    "attachment menu to close",
+  );
+  if (!(await plus.evaluate((element) => document.activeElement === element))) {
+    throw new Error("closing the attachment menu did not return focus to the plus button");
+  }
+
+  await plus.click();
+  await waitVisible(menu);
+  const chooserPromise = page.waitForEvent("filechooser");
+  await menu.getByRole("menuitem", { name: "上传文件" }).click();
+  const chooser = await chooserPromise;
+  await chooser.setFiles({
+    name: "browser-upload.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("Browser upload fixture content.", "utf8"),
+  });
+  const card = page.locator('.attachment-card[aria-label^="browser-upload.txt"]');
+  await page.waitForTimeout(250);
+  if ((await card.count()) === 0) {
+    const inputState = await page.locator(".prompt-attachment-file-input").evaluate((input) => ({
+      value: input.value,
+      fileCount: input.files?.length ?? 0,
+      disabled: input.disabled,
+    }));
+    const selectionState = await page.locator("button.workspace-list-button").evaluateAll((items) =>
+      items.map((item) => ({
+        text: item.textContent,
+        current: item.getAttribute("aria-current"),
+      })),
+    );
+    throw new Error(
+      "the file chooser did not add an attachment card: " +
+        JSON.stringify({ inputState, selectionState }),
+    );
+  }
+  await waitVisible(card);
+  await waitUntil(
+    async () => (await card.getAttribute("data-attachment-status")) === "ready",
+    "browser attachment upload and preprocessing",
+  );
+  await card.getByRole("button", { name: "移除附件 browser-upload.txt" }).click();
+  await waitUntil(
+    async () => (await page.locator(".attachment-card").count()) === 0,
+    "attachment removal",
+  );
 }
 
 async function assertTaskTimerSummaryLayout({ mobile }) {

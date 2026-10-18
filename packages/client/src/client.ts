@@ -1,4 +1,12 @@
 import {
+  AttachmentDescriptorSchema,
+  AttachmentDraftResponseSchema,
+  AttachmentDraftWriteRequestSchema,
+  AttachmentIdSchema,
+  AttachmentMetadataResponseSchema,
+  AttachmentMediaTypeSchema,
+  AttachmentNameSchema,
+  AttachmentOwnerSchema,
   PublicRunEventSchema,
   ApprovalListResponseSchema,
   ApprovalResolutionRequestSchema,
@@ -43,6 +51,12 @@ import {
   WorkspaceSessionListResponseSchema,
   WorkspaceIdSchema,
   type PublicRunEvent,
+  type AttachmentDescriptor,
+  type AttachmentDraft,
+  type AttachmentOwner,
+  type AttachmentId,
+  type AttachmentDraftItem,
+  type SubmissionId,
   type ApiErrorCode,
   type ApprovalListResponse,
   type ApprovalResolutionRequest,
@@ -87,6 +101,7 @@ import {
   type SecurityPreparationResponse,
   type PermissionPresetSelection,
 } from "@caelush/protocol";
+
 import { ApprovalRequestIdSchema } from "@caelush/protocol";
 import {
   ArchiveSessionListQuerySchema,
@@ -120,6 +135,29 @@ import {
   type LegacyArchiveImportResponse,
 } from "@caelush/protocol";
 
+interface AttachmentUploadProgressEvent {
+  readonly loaded: number;
+}
+
+interface AttachmentUploadRequest {
+  readonly upload: {
+    onprogress: ((event: AttachmentUploadProgressEvent) => void) | null;
+  };
+  status: number;
+  responseText: string;
+  onload: (() => void) | null;
+  onerror: (() => void) | null;
+  onabort: (() => void) | null;
+  open(method: string, url: string): void;
+  setRequestHeader(name: string, value: string): void;
+  send(body: Blob): void;
+  abort(): void;
+}
+
+type AttachmentUploadGlobal = typeof globalThis & {
+  XMLHttpRequest?: new () => AttachmentUploadRequest;
+};
+
 const MAX_SSE_FRAME_BYTES = 1024 * 1024;
 const MAX_HTTP_ERROR_BYTES = 64 * 1024;
 
@@ -137,6 +175,25 @@ export interface WatchRunEventsOptions {
 
 export interface CaelushClientRequestOptions {
   readonly signal?: AbortSignal;
+}
+
+export interface AttachmentUploadProgress {
+  readonly loadedBytes: number;
+  readonly totalBytes: number;
+}
+
+export interface AttachmentUploadOptions extends CaelushClientRequestOptions {
+  readonly owner: AttachmentOwner;
+  readonly name: string;
+  readonly mediaType: string;
+  readonly onProgress?: (progress: AttachmentUploadProgress) => void;
+}
+
+export interface AttachmentDraftWrite {
+  readonly expectedRevision: number;
+  readonly text: string;
+  readonly artifactIds: readonly AttachmentId[];
+  readonly submissionId?: SubmissionId;
 }
 
 export class CaelushClientHttpError extends Error {
@@ -186,6 +243,44 @@ function archiveQuery(input: Record<string, string | number | boolean | undefine
   for (const [key, value] of Object.entries(input))
     if (value !== undefined) query.set(key, String(value));
   return query.toString();
+}
+
+function attachmentOwnerQuery(owner: AttachmentOwner): string {
+  const parsed = AttachmentOwnerSchema.parse(owner);
+  return parsed.kind === "SESSION"
+    ? `ownerKind=SESSION&ownerId=${encodeURIComponent(parsed.sessionId)}`
+    : `ownerKind=WORKSPACE&ownerId=${encodeURIComponent(parsed.workspaceId)}`;
+}
+
+function createAbortError(): Error {
+  if (typeof DOMException !== "undefined")
+    return new DOMException("The operation was aborted.", "AbortError");
+  const error = new Error("The operation was aborted.");
+  error.name = "AbortError";
+  return error;
+}
+
+function xhrHttpError(status: number, responseText: string): CaelushClientHttpError {
+  let body: unknown;
+  try {
+    body = JSON.parse(responseText.slice(0, MAX_HTTP_ERROR_BYTES));
+  } catch {
+    body = undefined;
+  }
+  const parsed = ApiErrorResponseSchema.safeParse(body);
+  if (parsed.success) {
+    return new CaelushClientHttpError({
+      status,
+      code: parsed.data.error.code,
+      message: parsed.data.error.message,
+      requestId: parsed.data.error.requestId,
+    });
+  }
+  return new CaelushClientHttpError({
+    status,
+    code: "INTERNAL_ERROR",
+    message: "Daemon returned an invalid error response.",
+  });
 }
 
 export class CaelushClient {
@@ -484,6 +579,163 @@ export class CaelushClient {
       [201],
       options,
     );
+  }
+
+  uploadAttachment(blob: Blob, input: AttachmentUploadOptions): Promise<AttachmentDescriptor> {
+    const owner = AttachmentOwnerSchema.parse(input.owner);
+    const artifactName = AttachmentNameSchema.parse(input.name);
+    const mediaType = AttachmentMediaTypeSchema.parse(input.mediaType);
+    if (input.signal?.aborted) return Promise.reject(createAbortError());
+    const UploadRequest = (globalThis as AttachmentUploadGlobal).XMLHttpRequest;
+    if (UploadRequest === undefined) {
+      return Promise.reject(
+        new CaelushClientProtocolError("Attachment upload requires a browser upload transport."),
+      );
+    }
+    return new Promise((resolve, reject) => {
+      const request = new UploadRequest();
+      const abort = () => request.abort();
+      const cleanup = () => input.signal?.removeEventListener("abort", abort);
+      request.open("POST", this.url("/api/v1/attachments"));
+      for (const [name, value] of this.requestHeaders().entries()) {
+        request.setRequestHeader(name, value);
+      }
+      request.setRequestHeader("content-type", "application/octet-stream");
+      request.setRequestHeader("x-caelush-owner-kind", owner.kind);
+      request.setRequestHeader(
+        "x-caelush-owner-id",
+        owner.kind === "SESSION" ? owner.sessionId : owner.workspaceId,
+      );
+      request.setRequestHeader("x-caelush-filename", encodeURIComponent(artifactName));
+      request.setRequestHeader("x-caelush-filename-encoding", "uri-component-v1");
+      request.setRequestHeader("x-caelush-media-type", mediaType);
+      request.setRequestHeader("x-caelush-byte-length", String(blob.size));
+      request.upload.onprogress = (event) => {
+        try {
+          input.onProgress?.({
+            loadedBytes: Math.min(event.loaded, blob.size),
+            totalBytes: blob.size,
+          });
+        } catch {
+          // UI progress listeners cannot change the upload lifecycle.
+        }
+      };
+      request.onload = () => {
+        cleanup();
+        if (request.status !== 201) {
+          reject(xhrHttpError(request.status, request.responseText));
+          return;
+        }
+        let response: unknown;
+        try {
+          response = JSON.parse(request.responseText);
+        } catch {
+          reject(new CaelushClientProtocolError("Daemon returned invalid attachment metadata."));
+          return;
+        }
+        const parsed = AttachmentDescriptorSchema.safeParse(response);
+        if (!parsed.success) {
+          reject(new CaelushClientProtocolError("Daemon returned invalid attachment metadata."));
+          return;
+        }
+        resolve(parsed.data);
+      };
+      request.onerror = () => {
+        cleanup();
+        reject(new CaelushClientProtocolError("Attachment upload failed."));
+      };
+      request.onabort = () => {
+        cleanup();
+        reject(createAbortError());
+      };
+      input.signal?.addEventListener("abort", abort, { once: true });
+      if (input.signal?.aborted === true) {
+        abort();
+        return;
+      }
+      request.send(blob);
+    });
+  }
+
+  async getAttachmentDraft(
+    owner: AttachmentOwner,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<AttachmentDraft | null> {
+    const parsedOwner = AttachmentOwnerSchema.parse(owner);
+    const query = attachmentOwnerQuery(parsedOwner);
+    const response = await this.request(
+      `/api/v1/attachment-drafts?${query}`,
+      { method: "GET" },
+      AttachmentDraftResponseSchema,
+      [200],
+      options,
+    );
+    return response.draft;
+  }
+
+  async saveAttachmentDraft(
+    owner: AttachmentOwner,
+    input: AttachmentDraftWrite,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<AttachmentDraft> {
+    const body = AttachmentDraftWriteRequestSchema.parse({ owner, ...input });
+    const response = await this.request(
+      "/api/v1/attachment-drafts",
+      jsonRequest("PUT", body),
+      AttachmentDraftResponseSchema,
+      [200],
+      options,
+    );
+    if (response.draft === null) {
+      throw new CaelushClientProtocolError("Daemon returned an empty saved attachment draft.");
+    }
+    return response.draft;
+  }
+
+  async downloadAttachment(
+    artifactId: AttachmentId,
+    owner: AttachmentOwner,
+    options: CaelushClientRequestOptions & { readonly inlinePreview?: boolean } = {},
+  ): Promise<Blob> {
+    const id = AttachmentIdSchema.parse(artifactId);
+    const disposition = options.inlinePreview === true ? "inline" : "attachment";
+    let response: Response;
+    try {
+      response = await this.fetcher(
+        this.url(
+          `/api/v1/attachments/${encodeURIComponent(id)}?${attachmentOwnerQuery(owner)}&disposition=${disposition}`,
+        ),
+        {
+          method: "GET",
+          headers: this.requestHeaders("*/*"),
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+        },
+      );
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      throw new CaelushClientProtocolError("Attachment download failed.");
+    }
+    if (!response.ok) throw await this.httpError(response);
+    return response.blob();
+  }
+
+  async getAttachmentMetadata(
+    artifactId: AttachmentId,
+    owner: AttachmentOwner,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<AttachmentDraftItem> {
+    const id = AttachmentIdSchema.parse(artifactId);
+    const response = await this.request(
+      `/api/v1/attachments/${encodeURIComponent(id)}/metadata?${attachmentOwnerQuery(owner)}`,
+      { method: "GET" },
+      AttachmentMetadataResponseSchema,
+      [200],
+      options,
+    );
+    if (response.attachment === null) {
+      throw new CaelushClientProtocolError("Daemon returned empty attachment metadata.");
+    }
+    return response.attachment;
   }
 
   async listSessions(

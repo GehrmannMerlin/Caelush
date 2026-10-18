@@ -9,6 +9,7 @@ import {
   createToolInvocationId,
   createVerificationPlanId,
   createWorkspaceId,
+  ATTACHMENT_ONLY_RUN_GOAL,
   type PublicRunEvent,
   type ClientAgentRun,
   type ClientAgentSession,
@@ -392,6 +393,67 @@ describe("WebSessionManager", () => {
       ]),
     });
 
+    manager.dispose();
+  });
+
+  it("submits attachment-only user content with stable idempotency and no synthetic transcript text", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const pendingRun = makeRun({ sessionId: session.id, goal: ATTACHMENT_ONLY_RUN_GOAL });
+    const client = makeClient({ createSessionResult: session, createRunResult: pendingRun });
+    const attachmentId = "att_abcdefghijklmnop" as never;
+    const submissionId = "0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b" as never;
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    manager.beginDraft();
+    await expect(
+      manager.submitPrompt({
+        text: "",
+        attachmentIds: [attachmentId],
+        submissionId,
+        attachmentMetadata: [
+          {
+            artifactId: attachmentId,
+            name: "notes.txt",
+            mediaType: "text/plain",
+            byteLength: 5,
+            downloadAvailable: true,
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+
+    expect(client.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ submissionId, title: "查看附件" }),
+    );
+    expect(client.createRun).toHaveBeenCalledWith(
+      session.id,
+      expect.objectContaining({
+        goal: ATTACHMENT_ONLY_RUN_GOAL,
+        userText: "",
+        attachmentIds: [attachmentId],
+      }),
+    );
+    const runSubmissionId = client.createRun.mock.calls[0]?.[1].submissionId;
+    expect(runSubmissionId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(runSubmissionId).not.toBe(submissionId);
+    expect(manager.getSnapshot().history).toContainEqual(
+      expect.objectContaining({
+        kind: "USER",
+        text: "",
+        attachments: [
+          {
+            artifactId: attachmentId,
+            name: "notes.txt",
+            mediaType: "text/plain",
+            byteLength: 5,
+            downloadAvailable: true,
+          },
+        ],
+      }),
+    );
+    expect(
+      manager.getSnapshot().history.some((entry) => entry.text.includes("Inspect the attached")),
+    ).toBe(false);
     manager.dispose();
   });
 

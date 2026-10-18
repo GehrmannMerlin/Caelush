@@ -16,6 +16,7 @@ import {
   createSessionId,
   createStepId,
   createToolInvocationId,
+  type TranscriptEntry,
   type SessionTurnPresentationResponse,
 } from "@caelush/protocol";
 
@@ -23,6 +24,7 @@ import {
   flattenTurnsForLegacyRenderer,
   SessionConversation,
   TurnPresentationFeed,
+  type TurnPresentationFeedProps,
 } from "../src/components/turn-presentation-feed.js";
 import { ReconnectBanner } from "../src/components/reconnect-banner.js";
 import { modelWaitMessage } from "../src/components/model-wait-presentation.js";
@@ -117,6 +119,40 @@ function presentation(): SessionTurnPresentationResponse {
 }
 
 describe("TurnPresentationFeed", () => {
+  it("shows safe attachment cards for transcript users on legacy presentation responses", () => {
+    const sessionId = createSessionId();
+    const transcriptUser = {
+      id: "user:attachment",
+      runId,
+      conversationTurnId: "turn-1",
+      createdAt: 1,
+      kind: "USER",
+      text: "检查项目",
+      attachments: [
+        {
+          artifactId: "att_0192f5b14d3a7c2e8a913f0b6c7d8e9a",
+          name: "项目摘要.pdf",
+          mediaType: "application/pdf",
+          byteLength: 2048,
+          previewAvailable: false,
+          downloadAvailable: true,
+        },
+      ],
+    } satisfies Extract<TranscriptEntry, { kind: "USER" }>;
+    const props = {
+      presentation: presentation(),
+      transcriptUsers: [transcriptUser],
+      attachmentOwner: { kind: "SESSION", sessionId },
+      onDownloadAttachment: async () => new Blob(),
+    } as unknown as TurnPresentationFeedProps;
+    const html = renderToStaticMarkup(<TurnPresentationFeed {...props} />);
+
+    expect(html).toContain("项目摘要.pdf");
+    expect(html).toContain('aria-label="下载附件 项目摘要.pdf"');
+    expect(html).not.toContain("att_0192f5b14d3a7c2e8a913f0b6c7d8e9a");
+    expect(html).not.toContain("sha256");
+  });
+
   it("renders a semantic tool row and keeps its safe invocation in collapsed details", () => {
     const html = renderToStaticMarkup(
       <TurnPresentationFeed presentation={presentation()} isActive={false} />,

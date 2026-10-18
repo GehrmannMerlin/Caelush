@@ -11,7 +11,16 @@ import {
   type FormEvent,
   type ReactElement,
 } from "react";
-import type { SessionId, WorkspaceId, WorkspaceRecord, WorkspaceRef } from "@caelush/protocol";
+import type {
+  AttachmentId,
+  AttachmentDraftItem,
+  AttachmentOwner,
+  TranscriptAttachmentRef,
+  SessionId,
+  WorkspaceId,
+  WorkspaceRecord,
+  WorkspaceRef,
+} from "@caelush/protocol";
 import type { AppearanceController } from "@caelush/ui-theme/appearance";
 import {
   canCancelRunStatus,
@@ -29,6 +38,11 @@ import {
   type WebSessionClient,
   type WebSessionSnapshot,
 } from "./application/session-manager.js";
+import { AttachmentManager, type AttachmentQueueItem } from "./application/attachment-manager.js";
+import {
+  AttachmentDraftStore,
+  AttachmentDraftConflictError,
+} from "./application/attachment-draft-store.js";
 import {
   WebWorkspaceManager,
   WorkspaceSelectionStore,
@@ -106,6 +120,16 @@ const EMPTY_WORKSPACE_STATE: WorkspaceManagerState = {
   expandedWorkspaceIds: [],
   sessionSummaries: {},
 };
+
+const EMPTY_ATTACHMENT_ITEMS: readonly AttachmentQueueItem[] = Object.freeze([]);
+
+interface ComposerDraftBinding {
+  readonly ownerKey: string;
+  readonly revision: number;
+  readonly text: string;
+  readonly loading: boolean;
+  readonly error?: string | undefined;
+}
 
 export function WebHostApp(props: {
   readonly client: WebSessionClient;
@@ -248,6 +272,28 @@ export function WebHostApp(props: {
     });
   }, [props.client, props.initialSessionId, selectedWorkspaceRef, state.bootstrap, state.info]);
 
+  const attachmentManager = useMemo(() => {
+    const upload = props.client.uploadAttachment;
+    return upload === undefined
+      ? undefined
+      : new AttachmentManager({ uploadAttachment: upload.bind(props.client) });
+  }, [props.client]);
+  const attachmentDraftStore = useMemo(() => {
+    const readDraft = props.client.getAttachmentDraft;
+    const writeDraft = props.client.saveAttachmentDraft;
+    if (readDraft === undefined || writeDraft === undefined) return undefined;
+    return new AttachmentDraftStore({
+      getAttachmentDraft: (owner) => readDraft.call(props.client, owner),
+      saveAttachmentDraft: (owner, input) => writeDraft.call(props.client, owner, input),
+    });
+  }, [props.client]);
+  const [composerDraft, setComposerDraft] = useState<ComposerDraftBinding | undefined>();
+  const draftLoadGeneration = useRef(0);
+
+  useEffect(() => {
+    return () => attachmentManager?.dispose();
+  }, [attachmentManager]);
+
   useEffect(() => {
     if (sessionManager === undefined) return;
     void sessionManager.loadSessions();
@@ -286,6 +332,138 @@ export function WebHostApp(props: {
     sessionGetSnapshot,
     sessionGetSnapshot,
   );
+
+  const attachmentOwner = useMemo<AttachmentOwner | undefined>(() => {
+    if (selectedWorkspace === undefined) return undefined;
+    return sessionSnapshot.selectedSessionId === undefined
+      ? { kind: "WORKSPACE", workspaceId: selectedWorkspace.id }
+      : { kind: "SESSION", sessionId: sessionSnapshot.selectedSessionId };
+  }, [selectedWorkspace?.id, sessionSnapshot.selectedSessionId]);
+  const attachmentOwnerKey = attachmentOwner === undefined ? undefined : ownerKey(attachmentOwner);
+  const attachmentSubscribe = useCallback(
+    (listener: () => void) => attachmentManager?.subscribe(listener) ?? (() => undefined),
+    [attachmentManager],
+  );
+  const attachmentGetSnapshot = useCallback(
+    () =>
+      attachmentManager === undefined || attachmentOwner === undefined
+        ? EMPTY_ATTACHMENT_ITEMS
+        : attachmentManager.getSnapshot(attachmentOwner),
+    [attachmentManager, attachmentOwnerKey],
+  );
+  const attachmentItems = useSyncExternalStore(
+    attachmentSubscribe,
+    attachmentGetSnapshot,
+    attachmentGetSnapshot,
+  );
+  const attachmentDraftBinding =
+    composerDraft?.ownerKey === attachmentOwnerKey ? composerDraft : undefined;
+  const attachmentFingerprint = attachmentItems
+    .filter(
+      (item) =>
+        item.status === "READY" || (item.status === "FAILED" && item.artifactId !== undefined),
+    )
+    .map((item) => `${item.id}:${item.artifactId ?? ""}`)
+    .join("|");
+
+  useEffect(() => {
+    if (
+      attachmentOwner === undefined ||
+      attachmentOwnerKey === undefined ||
+      attachmentDraftStore === undefined
+    ) {
+      setComposerDraft(undefined);
+      return;
+    }
+    const generation = ++draftLoadGeneration.current;
+    let active = true;
+    setComposerDraft({ ownerKey: attachmentOwnerKey, revision: 0, text: "", loading: true });
+    void (async () => {
+      const draft = await attachmentDraftStore.load(attachmentOwner);
+      const metadataClient = props.client.getAttachmentMetadata;
+      const metadataResults = await Promise.allSettled(
+        draft.artifactIds.map((artifactId) =>
+          metadataClient === undefined
+            ? Promise.reject(new Error("Attachment metadata is unavailable."))
+            : metadataClient.call(props.client, artifactId, attachmentOwner),
+        ),
+      );
+      const attachments: AttachmentDraftItem[] = [];
+      const unavailableIds = [] as (typeof draft.artifactIds)[number][];
+      metadataResults.forEach((result, index) => {
+        const artifactId = draft.artifactIds[index];
+        if (artifactId === undefined) return;
+        if (result.status === "fulfilled") attachments.push(result.value);
+        else unavailableIds.push(artifactId);
+      });
+      if (!active || draftLoadGeneration.current !== generation) return;
+      attachmentManager?.restore(attachmentOwner, attachments, unavailableIds);
+      setComposerDraft({
+        ownerKey: attachmentOwnerKey,
+        revision: draft.revision,
+        text: draft.text,
+        loading: false,
+        ...(unavailableIds.length === 0
+          ? {}
+          : { error: "部分草稿附件暂不可用，请移除后重新添加。" }),
+      });
+    })().catch(() => {
+      if (!active || draftLoadGeneration.current !== generation) return;
+      setComposerDraft({
+        ownerKey: attachmentOwnerKey,
+        revision: 0,
+        text: "",
+        loading: false,
+        error: "无法恢复附件草稿，请检查本地服务后重试。",
+      });
+    });
+    return () => {
+      active = false;
+    };
+  }, [attachmentDraftStore, attachmentManager, attachmentOwnerKey, props.client]);
+
+  useEffect(() => {
+    if (
+      attachmentOwner === undefined ||
+      attachmentOwnerKey === undefined ||
+      attachmentDraftStore === undefined ||
+      attachmentDraftBinding === undefined ||
+      attachmentDraftBinding.loading
+    ) {
+      return;
+    }
+    const text = attachmentDraftBinding.text;
+    const artifactIds = attachmentManager?.getReadyAttachmentIds(attachmentOwner) ?? [];
+    const timer = window.setTimeout(() => {
+      const current = attachmentDraftStore.getSnapshot(attachmentOwner);
+      if (current === undefined) return;
+      void attachmentDraftStore
+        .save(attachmentOwner, current.revision, { text, artifactIds })
+        .then((saved) => {
+          setComposerDraft((previous) =>
+            previous?.ownerKey === attachmentOwnerKey
+              ? { ...previous, revision: saved.revision }
+              : previous,
+          );
+        })
+        .catch((error: unknown) => {
+          if (!(error instanceof AttachmentDraftConflictError)) return;
+          setComposerDraft((previous) =>
+            previous?.ownerKey === attachmentOwnerKey
+              ? { ...previous, error: "草稿已在其他窗口更新，请切换会话后重新加载最新内容。" }
+              : previous,
+          );
+        });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [
+    attachmentDraftBinding?.loading,
+    attachmentDraftBinding?.text,
+    attachmentDraftStore,
+    attachmentFingerprint,
+    attachmentManager,
+    attachmentOwnerKey,
+  ]);
 
   useEffect(() => {
     const sessionId = props.initialSessionId;
@@ -366,6 +544,140 @@ export function WebHostApp(props: {
     void workspaceManager?.loadWorkspaces();
     void sessionManager?.refreshArchiveState();
   }, [workspaceManager, sessionManager]);
+
+  const loadAttachmentPreview = useCallback(
+    (artifactId: AttachmentId, owner: AttachmentOwner) => {
+      const download = props.client.downloadAttachment;
+      if (download === undefined)
+        return Promise.reject(new Error("Attachment preview unavailable."));
+      return download.call(props.client, artifactId, owner);
+    },
+    [props.client],
+  );
+  const submitComposerPrompt = useCallback(
+    async (text: string): Promise<boolean> => {
+      if (sessionManager === undefined) return false;
+      if (
+        attachmentOwner === undefined ||
+        attachmentOwnerKey === undefined ||
+        attachmentDraftStore === undefined
+      ) {
+        return sessionManager.submitPrompt(text);
+      }
+      const sourceOwner = attachmentOwner;
+      const sourceOwnerKey = attachmentOwnerKey;
+      const items = attachmentManager?.getSnapshot(sourceOwner) ?? [];
+      if (items.some((item) => item.status !== "READY" || item.artifactId === undefined)) {
+        return false;
+      }
+      const readyItems = items.filter(
+        (item) => item.status === "READY" && item.artifactId !== undefined,
+      );
+      const artifactIds = readyItems.map((item) => item.artifactId!);
+      if (text.trim().length === 0 && artifactIds.length === 0) {
+        return sessionManager.submitPrompt(text);
+      }
+      try {
+        let draft = attachmentDraftStore.getSnapshot(sourceOwner);
+        if (draft === undefined) draft = await attachmentDraftStore.load(sourceOwner);
+        if (draft.text !== text || !sameIds(draft.artifactIds, artifactIds)) {
+          draft = await attachmentDraftStore.save(sourceOwner, draft.revision, {
+            text,
+            artifactIds,
+          });
+        }
+        const prepared = await attachmentDraftStore.prepareSubmission(sourceOwner, draft.revision);
+        const attachmentMetadata: TranscriptAttachmentRef[] = readyItems.map((item) => ({
+          artifactId: item.artifactId!,
+          name: item.name,
+          mediaType: item.mediaType,
+          byteLength: item.byteLength,
+          previewAvailable:
+            item.mediaType === "image/png" ||
+            item.mediaType === "image/jpeg" ||
+            item.mediaType === "image/webp",
+          downloadAvailable: true,
+        }));
+        const accepted = await sessionManager.submitPrompt({
+          text,
+          attachmentIds: artifactIds,
+          ...(prepared.submissionId === undefined ? {} : { submissionId: prepared.submissionId }),
+          attachmentMetadata,
+        });
+        if (accepted) {
+          try {
+            await attachmentDraftStore.clear(sourceOwner, prepared.revision);
+            const cleared = attachmentDraftStore.getSnapshot(sourceOwner);
+            setComposerDraft((previous) =>
+              previous?.ownerKey === sourceOwnerKey && cleared !== undefined
+                ? { ownerKey: sourceOwnerKey, revision: cleared.revision, text: "", loading: false }
+                : previous,
+            );
+          } catch (error) {
+            if (error instanceof AttachmentDraftConflictError) {
+              setComposerDraft((previous) =>
+                previous?.ownerKey === sourceOwnerKey
+                  ? { ...previous, error: "任务已发送，但另一窗口更新的草稿已保留。" }
+                  : previous,
+              );
+            }
+          }
+          return true;
+        }
+
+        const createdSessionId = sessionManager.getSnapshot().selectedSessionId;
+        if (sourceOwner.kind === "WORKSPACE" && createdSessionId !== undefined) {
+          const targetOwner: AttachmentOwner = { kind: "SESSION", sessionId: createdSessionId };
+          try {
+            const transferred = await attachmentDraftStore.transfer(
+              sourceOwner,
+              prepared.revision,
+              targetOwner,
+            );
+            attachmentManager?.restore(
+              targetOwner,
+              readyItems.map((item) => ({
+                artifactId: item.artifactId!,
+                name: item.name,
+                mediaType: item.mediaType,
+                byteLength: item.byteLength,
+                visualRequirement: item.visualRequirement ?? "UNKNOWN",
+              })),
+            );
+            draftLoadGeneration.current += 1;
+            setComposerDraft({
+              ownerKey: ownerKey(targetOwner),
+              revision: transferred.revision,
+              text: transferred.text,
+              loading: false,
+            });
+            await attachmentDraftStore.clear(sourceOwner, prepared.revision);
+          } catch {
+            setComposerDraft((previous) =>
+              previous?.ownerKey === sourceOwnerKey
+                ? { ...previous, error: "任务未能启动，附件草稿仍保留在当前工作区。" }
+                : previous,
+            );
+          }
+        }
+        return false;
+      } catch (error) {
+        setComposerDraft((previous) =>
+          previous?.ownerKey === sourceOwnerKey
+            ? {
+                ...previous,
+                error:
+                  error instanceof AttachmentDraftConflictError
+                    ? "草稿已在其他窗口更新，请加载最新内容后重试。"
+                    : "草稿保存失败，输入和附件仍保留。",
+              }
+            : previous,
+        );
+        return false;
+      }
+    },
+    [attachmentDraftStore, attachmentManager, attachmentOwner, attachmentOwnerKey, sessionManager],
+  );
 
   if (state.bootstrap !== "READY" || workspaceManager === undefined) {
     return renderHostBootstrap(state, desktopHostLoadingUI);
@@ -544,6 +856,33 @@ export function WebHostApp(props: {
     selectedWorkspace,
     desktopPanelApi,
     sessionManager,
+    attachmentItems,
+    attachmentOwner,
+    draftText: attachmentDraftBinding?.text ?? "",
+    draftLoading:
+      attachmentOwnerKey !== undefined &&
+      (attachmentDraftBinding === undefined || attachmentDraftBinding.loading),
+    draftError: attachmentDraftBinding?.error,
+    onDraftChange: (text) => {
+      if (attachmentOwnerKey === undefined) return;
+      setComposerDraft((previous) =>
+        previous?.ownerKey === attachmentOwnerKey
+          ? { ...previous, text, error: undefined }
+          : previous,
+      );
+    },
+    onAddFiles:
+      attachmentManager === undefined
+        ? undefined
+        : (files) => {
+            if (attachmentOwner !== undefined)
+              void attachmentManager.addFiles(files, attachmentOwner);
+          },
+    onRemoveAttachment: (id) => attachmentManager?.remove(id),
+    onRetryAttachment: (id) => void attachmentManager?.retry(id),
+    onLoadAttachmentPreview: loadAttachmentPreview,
+    onDownloadAttachment: loadAttachmentPreview,
+    onSubmitPrompt: submitComposerPrompt,
     snapshot: sessionSnapshot,
     appearanceController: props.appearanceController,
     appearanceSnapshot,
@@ -609,6 +948,24 @@ function renderWorkspaceApp(input: {
   readonly selectedWorkspace?: WorkspaceRecord | undefined;
   readonly desktopPanelApi: DesktopPanelApi | null;
   readonly sessionManager?: WebSessionManager | undefined;
+  readonly attachmentItems: readonly AttachmentQueueItem[];
+  readonly attachmentOwner?: AttachmentOwner | undefined;
+  readonly draftText: string;
+  readonly draftLoading: boolean;
+  readonly draftError?: string | undefined;
+  readonly onDraftChange: (text: string) => void;
+  readonly onAddFiles?: ((files: readonly File[]) => void) | undefined;
+  readonly onRemoveAttachment: (id: string) => void;
+  readonly onRetryAttachment: (id: string) => void;
+  readonly onLoadAttachmentPreview: (
+    artifactId: AttachmentId,
+    owner: AttachmentOwner,
+  ) => Promise<Blob>;
+  readonly onDownloadAttachment: (
+    artifactId: AttachmentId,
+    owner: AttachmentOwner,
+  ) => Promise<Blob>;
+  readonly onSubmitPrompt: (text: string) => Promise<boolean>;
   readonly snapshot: WebSessionSnapshot;
   readonly appearanceController: AppearanceController;
   readonly appearanceSnapshot: ReturnType<AppearanceController["getSnapshot"]>;
@@ -673,6 +1030,18 @@ function renderWorkspaceApp(input: {
       snapshot.modelDirectory.some(
         (model) => model.provider === modelSelection.provider && model.id === modelSelection.model,
       ));
+  const selectedModel = snapshot.modelDirectory?.find(
+    (model) => model.provider === modelSelection?.provider && model.id === modelSelection.model,
+  );
+  const visualAttachmentsRequireVision = input.attachmentItems.some(
+    (item) => item.status === "READY" && item.visualRequirement === "REQUIRED",
+  );
+  const attachmentSubmitBlockedReason =
+    visualAttachmentsRequireVision && selectedModel?.vision !== "SUPPORTED"
+      ? selectedModel?.vision === "UNSUPPORTED"
+        ? "当前模型不支持图片输入，请切换到明确支持视觉能力的模型后再发送。"
+        : "当前模型的视觉能力尚未确认，请先切换到明确支持视觉能力的模型。"
+      : undefined;
   const promptComposer = createElement(PromptComposer, {
     key: `${selectedWorkspace?.id ?? "none"}:${snapshot.selectedSessionId ?? "draft"}`,
     disabled: !hasWorkspace || composerInteractionDisabled,
@@ -704,13 +1073,26 @@ function renderWorkspaceApp(input: {
         }
       : {}),
     submission: snapshot.submission,
+    draftText: input.draftText,
+    draftLoading: input.draftLoading,
+    attachments: input.attachmentItems,
+    attachmentSubmitBlockedReason,
+    onDraftChange: input.onDraftChange,
+    onAddFiles: input.onAddFiles,
+    onRemoveAttachment: input.onRemoveAttachment,
+    onRetryAttachment: input.onRetryAttachment,
+    onLoadAttachmentPreview: input.onLoadAttachmentPreview,
     onCancel: canCancelActiveRun
       ? async () => (await input.sessionManager?.cancelRun()) ?? false
       : undefined,
     cancelling: snapshot.controlMode === "CANCELLING",
-    error: hasWorkspace ? snapshot.error : undefined,
+    error: hasWorkspace
+      ? input.draftError === undefined
+        ? snapshot.error
+        : { code: "RUN_CREATE_FAILED", message: input.draftError }
+      : undefined,
     contextUsage: hasWorkspace ? (snapshot.contextUsage ?? null) : null,
-    onSubmit: async (prompt) => (await input.sessionManager?.submitPrompt(prompt)) ?? false,
+    onSubmit: input.onSubmitPrompt,
   });
 
   const workbench = createElement(
@@ -832,6 +1214,9 @@ function renderWorkspaceApp(input: {
                 liveActivity: snapshot.liveActivity,
                 continuityWarning: snapshot.continuityWarning,
                 composer: promptComposer,
+                attachmentOwner: input.attachmentOwner,
+                onLoadAttachment: input.onLoadAttachmentPreview,
+                onDownloadAttachment: input.onDownloadAttachment,
                 onContinueResource: async () =>
                   (await input.sessionManager?.continueResourceGuard()) ?? false,
                 onResolveApproval: async (approvalId, resolution) =>
@@ -1080,4 +1465,12 @@ function statusLabel(state: WebHostState): string {
     case "BOOTSTRAP_INVALID":
       return "启动上下文无效";
   }
+}
+
+function ownerKey(owner: AttachmentOwner): string {
+  return owner.kind === "SESSION" ? `session:${owner.sessionId}` : `workspace:${owner.workspaceId}`;
+}
+
+function sameIds(left: readonly AttachmentId[], right: readonly AttachmentId[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
 }

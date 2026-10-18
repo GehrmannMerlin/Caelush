@@ -1,4 +1,4 @@
-/* global Buffer, URL, fetch */
+/* global Buffer, URL, fetch, setTimeout */
 
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -131,6 +131,7 @@ const fixtureSandboxProvider = {
         return () => exitListeners.delete(listener);
       },
       onError(listener) {
+        void listener;
         return () => undefined;
       },
       async write() {},
@@ -722,6 +723,7 @@ function streamedToolCallChunks(name, argumentsText, toolCallId, deltaCount) {
 }
 
 const promptCacheOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "PROMPT_CACHE";
+const attachmentOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "ATTACHMENT";
 const multiTurnOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "MULTI_TURN";
 const s0Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S0";
 const s1Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S1";
@@ -905,7 +907,8 @@ try {
     !s2Only &&
     !s3Only &&
     !s4Only &&
-    !s5Only
+    !s5Only &&
+    !attachmentOnly
   ) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "patched browser fixture\n") {

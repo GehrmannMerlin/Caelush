@@ -15,12 +15,15 @@ import type {
   TranscriptEntry,
 } from "@caelush/client";
 import type {
+  AttachmentId,
+  AttachmentOwner,
   RunStatus,
   SessionTurnPresentationResponse,
   SessionTurnPresentationTurnV3,
   TurnPresentationItem,
   TurnPresentationItemV2,
   TurnPresentationItemV3,
+  TranscriptAttachmentRef,
 } from "@caelush/protocol";
 import {
   ChevronDown,
@@ -42,6 +45,7 @@ import {
 import { projectTurnPresentation } from "../application/turn-presentation-view-model.js";
 import { ModelWaitNotice, usePresentationNow } from "./model-wait-presentation.js";
 import { LiveOutputEntry, ToolActivityEntry } from "./tool-activity-entry.js";
+import { TranscriptAttachmentList } from "./transcript-attachment-list.js";
 
 const AssistantMarkdown = lazy(async () => {
   const module = await import("./assistant-markdown.js");
@@ -51,6 +55,12 @@ const AssistantMarkdown = lazy(async () => {
 export interface TurnPresentationFeedProps {
   readonly presentation: SessionTurnPresentationResponse;
   readonly theme?: ResolvedTheme | undefined;
+  readonly transcriptUsers?: readonly Extract<TranscriptEntry, { kind: "USER" }>[] | undefined;
+  readonly attachmentOwner?: AttachmentOwner | undefined;
+  readonly onLoadAttachment?:
+    ((artifactId: AttachmentId, owner: AttachmentOwner) => Promise<Blob>) | undefined;
+  readonly onDownloadAttachment?:
+    ((artifactId: AttachmentId, owner: AttachmentOwner) => Promise<Blob>) | undefined;
   readonly activeRun?: { readonly id: string; readonly status: RunStatus } | undefined;
   readonly liveActivity?: LiveActivityState | undefined;
   readonly timeline?: TimelineState | undefined;
@@ -61,6 +71,12 @@ export interface TurnPresentationProps {
   readonly turn: SessionTurnPresentationTurnV3;
   readonly theme?: ResolvedTheme | undefined;
   readonly optimisticUser?: Extract<TranscriptEntry, { kind: "USER" }> | undefined;
+  readonly userAttachments?: readonly TranscriptAttachmentRef[] | undefined;
+  readonly attachmentOwner?: AttachmentOwner | undefined;
+  readonly onLoadAttachment?:
+    ((artifactId: AttachmentId, owner: AttachmentOwner) => Promise<Blob>) | undefined;
+  readonly onDownloadAttachment?:
+    ((artifactId: AttachmentId, owner: AttachmentOwner) => Promise<Blob>) | undefined;
   readonly activeRun?: { readonly id: string; readonly status: RunStatus } | undefined;
   readonly liveActivity?: LiveActivityState | undefined;
   readonly timeline?: TimelineState | undefined;
@@ -70,6 +86,12 @@ export interface SessionConversationProps {
   readonly presentation: Extract<SessionTurnPresentationResponse, { capabilityVersion: 3 }>;
   readonly theme?: ResolvedTheme | undefined;
   readonly optimisticUsers?: readonly Extract<TranscriptEntry, { kind: "USER" }>[] | undefined;
+  readonly transcriptUsers?: readonly Extract<TranscriptEntry, { kind: "USER" }>[] | undefined;
+  readonly attachmentOwner?: AttachmentOwner | undefined;
+  readonly onLoadAttachment?:
+    ((artifactId: AttachmentId, owner: AttachmentOwner) => Promise<Blob>) | undefined;
+  readonly onDownloadAttachment?:
+    ((artifactId: AttachmentId, owner: AttachmentOwner) => Promise<Blob>) | undefined;
   readonly activeRun?: { readonly id: string; readonly status: RunStatus } | undefined;
   readonly liveActivity?: LiveActivityState | undefined;
   readonly timeline?: TimelineState | undefined;
@@ -83,8 +105,7 @@ export function scheduleScrollReconciliation(
   reconcile: () => void,
 ): void {
   if (pending.current !== undefined) return;
-  let handle: FrameHandle;
-  handle = scheduler.schedule(() => {
+  const handle = scheduler.schedule(() => {
     if (!isMounted() || pending.current !== handle) return;
     pending.current = undefined;
     if (shouldFollow()) reconcile();
@@ -173,11 +194,18 @@ export function SessionConversation(props: SessionConversationProps): ReactEleme
         (item) =>
           item.runId === turn.runId && !turn.items.some((turnItem) => turnItem.kind === "USER"),
       );
+      const transcriptUser = (props.transcriptUsers ?? []).find(
+        (item) => item.runId === turn.runId,
+      );
       return createElement(TurnPresentation, {
         key: turn.runId,
         turn,
         theme: props.theme,
         ...(optimisticUser === undefined ? {} : { optimisticUser }),
+        userAttachments: transcriptUser?.attachments ?? optimisticUser?.attachments,
+        attachmentOwner: props.attachmentOwner,
+        onLoadAttachment: props.onLoadAttachment,
+        onDownloadAttachment: props.onDownloadAttachment,
         ...(props.activeRun === undefined ? {} : { activeRun: props.activeRun }),
         ...(props.liveActivity === undefined ? {} : { liveActivity: props.liveActivity }),
         ...(props.timeline === undefined ? {} : { timeline: props.timeline }),
@@ -200,6 +228,12 @@ export function SessionConversation(props: SessionConversationProps): ReactEleme
             { className: "turn-presentation-item turn-presentation-item--user" },
             createElement("p", { className: "turn-presentation-user-bubble" }, item.text),
           ),
+          createElement(TranscriptAttachmentList, {
+            attachments: item.attachments ?? [],
+            owner: props.attachmentOwner,
+            onLoad: props.onLoadAttachment,
+            onDownload: props.onDownloadAttachment,
+          }),
         ),
       ),
     ),
@@ -250,6 +284,10 @@ export function TurnPresentation(props: TurnPresentationProps): ReactElement {
       turn: props.turn,
       theme: props.theme ?? "light",
       ...(props.optimisticUser === undefined ? {} : { optimisticUser: props.optimisticUser }),
+      userAttachments: props.userAttachments ?? props.optimisticUser?.attachments,
+      attachmentOwner: props.attachmentOwner,
+      onLoadAttachment: props.onLoadAttachment,
+      onDownloadAttachment: props.onDownloadAttachment,
       runId: props.turn.runId,
       conversationTurnId: props.turn.conversationTurnId,
       openedAt: Number(props.turn.openedAt),
@@ -269,6 +307,10 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
     return createElement(SessionConversation, {
       presentation: props.presentation,
       theme: props.theme ?? "light",
+      transcriptUsers: props.transcriptUsers,
+      attachmentOwner: props.attachmentOwner,
+      onLoadAttachment: props.onLoadAttachment,
+      onDownloadAttachment: props.onDownloadAttachment,
       ...(props.activeRun === undefined ? {} : { activeRun: props.activeRun }),
       ...(props.liveActivity === undefined ? {} : { liveActivity: props.liveActivity }),
       ...(props.timeline === undefined ? {} : { timeline: props.timeline }),
@@ -277,10 +319,15 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
   const items = flattenTurnsForLegacyRenderer(props.presentation);
   const latestUser = [...items].reverse().find((item) => item.kind === "USER");
   const legacyRunId = latestUser?.runId;
+  const transcriptUser = (props.transcriptUsers ?? []).find((item) => item.runId === legacyRunId);
   const openedAt = latestUser === undefined ? undefined : Number(latestUser.createdAt);
   return createElement(TurnPresentationContent, {
     items,
     theme: props.theme ?? "light",
+    userAttachments: transcriptUser?.attachments,
+    attachmentOwner: props.attachmentOwner,
+    onLoadAttachment: props.onLoadAttachment,
+    onDownloadAttachment: props.onDownloadAttachment,
     ...(legacyRunId === undefined ? {} : { runId: legacyRunId }),
     ...(openedAt === undefined ? {} : { openedAt }),
     isActive:
@@ -299,6 +346,12 @@ interface TurnPresentationContentProps {
   )[];
   readonly turn?: SessionTurnPresentationTurnV3 | undefined;
   readonly optimisticUser?: Extract<TranscriptEntry, { kind: "USER" }> | undefined;
+  readonly userAttachments?: readonly TranscriptAttachmentRef[] | undefined;
+  readonly attachmentOwner?: AttachmentOwner | undefined;
+  readonly onLoadAttachment?:
+    ((artifactId: AttachmentId, owner: AttachmentOwner) => Promise<Blob>) | undefined;
+  readonly onDownloadAttachment?:
+    ((artifactId: AttachmentId, owner: AttachmentOwner) => Promise<Blob>) | undefined;
   readonly runId?: string | undefined;
   readonly conversationTurnId?: string | undefined;
   readonly openedAt?: number | undefined;
@@ -485,6 +538,12 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
                 ),
               )
             : userItems.map((item) => renderItem(item)),
+          createElement(TranscriptAttachmentList, {
+            attachments: props.userAttachments ?? [],
+            owner: props.attachmentOwner,
+            onLoad: props.onLoadAttachment,
+            onDownload: props.onDownloadAttachment,
+          }),
         ),
     hasProcess
       ? createElement(

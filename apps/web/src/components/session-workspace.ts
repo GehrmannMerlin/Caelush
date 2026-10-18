@@ -1,5 +1,11 @@
 import { createElement, type ReactElement } from "react";
-import type { ClientAgentRun, WorkspaceId, WorkspaceRecord } from "@caelush/protocol";
+import type {
+  AttachmentId,
+  AttachmentOwner,
+  ClientAgentRun,
+  WorkspaceId,
+  WorkspaceRecord,
+} from "@caelush/protocol";
 import { type LiveActivityState, type TimelineState, type TranscriptEntry } from "@caelush/client";
 import type { ApprovalResolution, RunId } from "@caelush/protocol";
 import type { ApprovalView } from "@caelush/client";
@@ -16,6 +22,7 @@ import {
 import { ApprovalCard } from "./approval-card.js";
 import { RecoveryPanel, type RecoveryRunView } from "./recovery-panel.js";
 import { ConversationStartPanel } from "./conversation-start-panel.js";
+import { TranscriptAttachmentList } from "./transcript-attachment-list.js";
 
 export interface SessionWorkspaceProps {
   readonly title: string;
@@ -43,6 +50,11 @@ export interface SessionWorkspaceProps {
   readonly onConfirmPendingRun?: ((runId: RunId) => Promise<boolean> | void) | undefined;
   readonly continuityWarning?: boolean;
   readonly onCreateContinuitySession?: (() => Promise<boolean> | void) | undefined;
+  readonly attachmentOwner?: AttachmentOwner | undefined;
+  readonly onLoadAttachment?:
+    ((artifactId: AttachmentId, owner: AttachmentOwner) => Promise<Blob>) | undefined;
+  readonly onDownloadAttachment?:
+    ((artifactId: AttachmentId, owner: AttachmentOwner) => Promise<Blob>) | undefined;
 }
 
 export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
@@ -142,6 +154,13 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
                   entry.kind === "USER" &&
                   (entry.id.startsWith("optimistic:user:") || entry.runId === props.activeRun?.id),
               ),
+              transcriptUsers: props.history.filter(
+                (entry): entry is Extract<TranscriptEntry, { kind: "USER" }> =>
+                  entry.kind === "USER",
+              ),
+              attachmentOwner: props.attachmentOwner,
+              onLoadAttachment: props.onLoadAttachment,
+              onDownloadAttachment: props.onDownloadAttachment,
               liveActivity: props.liveActivity,
               timeline: props.timeline,
             })
@@ -149,6 +168,13 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
             ? createElement(TurnPresentationFeed, {
                 presentation: props.turnPresentation,
                 theme: props.theme,
+                transcriptUsers: props.history.filter(
+                  (entry): entry is Extract<TranscriptEntry, { kind: "USER" }> =>
+                    entry.kind === "USER",
+                ),
+                attachmentOwner: props.attachmentOwner,
+                onLoadAttachment: props.onLoadAttachment,
+                onDownloadAttachment: props.onDownloadAttachment,
                 activeRun: props.activeRun,
                 liveActivity: props.liveActivity,
                 timeline: props.timeline,
@@ -184,6 +210,14 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
                       },
                       entry.text,
                     ),
+                    entry.kind === "USER"
+                      ? createElement(TranscriptAttachmentList, {
+                          attachments: entry.attachments ?? [],
+                          owner: props.attachmentOwner,
+                          onLoad: props.onLoadAttachment,
+                          onDownload: props.onDownloadAttachment,
+                        })
+                      : null,
                   ),
                 ),
       ),

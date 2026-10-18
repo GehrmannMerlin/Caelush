@@ -1,17 +1,23 @@
 import {
   createElement,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
   type KeyboardEvent,
+  type DragEvent,
+  type ClipboardEvent,
   type ReactElement,
 } from "react";
-import { LoaderCircle, Pause, Send } from "lucide-react";
+import { LoaderCircle, Pause, Plus, Send } from "lucide-react";
 import type { WebSessionError, WebSubmissionState } from "../application/session-manager.js";
-import type { ContextUsageProjection } from "@caelush/protocol";
+import type { ContextUsageProjection, AttachmentId, AttachmentOwner } from "@caelush/protocol";
 import { ContextUsageRing } from "./context-usage-ring.js";
+import type { AttachmentQueueItem } from "../application/attachment-manager.js";
+import { AttachmentList } from "./attachment-list.js";
+import { AttachmentMenu } from "./attachment-menu.js";
 
 export interface PromptComposerProps {
   readonly disabled: boolean;
@@ -22,6 +28,16 @@ export interface PromptComposerProps {
   readonly placeholder?: string | undefined;
   readonly modelPicker?: ReactElement;
   readonly permissionSelector?: ReactElement;
+  readonly draftText?: string | undefined;
+  readonly draftLoading?: boolean | undefined;
+  readonly attachments?: readonly AttachmentQueueItem[] | undefined;
+  readonly attachmentSubmitBlockedReason?: string | undefined;
+  readonly onDraftChange?: ((text: string) => void) | undefined;
+  readonly onAddFiles?: ((files: readonly File[]) => void) | undefined;
+  readonly onRemoveAttachment?: ((id: string) => void) | undefined;
+  readonly onRetryAttachment?: ((id: string) => void) | undefined;
+  readonly onLoadAttachmentPreview?:
+    ((artifactId: AttachmentId, owner: AttachmentOwner) => Promise<Blob>) | undefined;
   readonly onCancel?: (() => Promise<boolean> | void) | undefined;
   readonly cancelling?: boolean | undefined;
   readonly onSubmit: (prompt: string) => Promise<boolean>;
@@ -100,8 +116,22 @@ export function getPromptTextareaSizing(
 }
 
 export function PromptComposer(props: PromptComposerProps): ReactElement {
-  const [value, setValue] = useState("");
+  const [localValue, setLocalValue] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [draggingFiles, setDraggingFiles] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const menuScopeRef = useRef<HTMLDivElement>(null);
+  const plusButtonRef = useRef<HTMLButtonElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const controlled = props.draftText !== undefined;
+  const value = controlled ? props.draftText! : localValue;
+  const setValue = useCallback(
+    (next: string) => {
+      if (!controlled) setLocalValue(next);
+      props.onDraftChange?.(next);
+    },
+    [controlled, props.onDraftChange],
+  );
   const resizeTextarea = useCallback(() => {
     const textarea = textareaRef.current;
     if (textarea === null) return;
@@ -134,11 +164,31 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
     window.addEventListener("resize", resizeTextarea);
     return () => window.removeEventListener("resize", resizeTextarea);
   }, [resizeTextarea]);
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      if (menuScopeRef.current?.contains(event.target as Node) === true) return;
+      setMenuOpen(false);
+      plusButtonRef.current?.focus();
+    };
+    const onDocumentKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setMenuOpen(false);
+      plusButtonRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onDocumentKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onDocumentKeyDown);
+    };
+  }, [menuOpen]);
   const submit = useCallback(async () => {
-    if (props.disabled || props.modelReady === false) return;
+    if (props.disabled || props.draftLoading === true || props.modelReady === false) return;
     const accepted = await props.onSubmit(value);
     if (accepted) setValue("");
-  }, [props.disabled, props.modelReady, props.onSubmit, value]);
+  }, [props.disabled, props.draftLoading, props.modelReady, props.onSubmit, setValue, value]);
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void submit();
@@ -148,16 +198,87 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
     event.preventDefault();
     void submit();
   };
+  const addFiles = (files: readonly File[]) => {
+    if (props.disabled !== true && props.draftLoading !== true && files.length > 0) {
+      props.onAddFiles?.(files);
+    }
+  };
+  const onDragEnter = (event: DragEvent<HTMLFormElement>) => {
+    if (!containsFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    setDraggingFiles(true);
+  };
+  const onDragOver = (event: DragEvent<HTMLFormElement>) => {
+    if (!containsFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+  const onDragLeave = (event: DragEvent<HTMLFormElement>) => {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    setDraggingFiles(false);
+  };
+  const onDrop = (event: DragEvent<HTMLFormElement>) => {
+    if (!containsFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    setDraggingFiles(false);
+    addFiles(Array.from(event.dataTransfer.files));
+  };
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const imageFiles = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    if (imageFiles.length === 0) return;
+    event.preventDefault();
+    addFiles(imageFiles);
+  };
+  const closeMenu = (restoreFocus: boolean) => {
+    setMenuOpen(false);
+    if (restoreFocus) queueMicrotask(() => plusButtonRef.current?.focus());
+  };
+  const openFilePicker = () => {
+    closeMenu(true);
+    fileInputRef.current?.click();
+  };
+  const fileInput = createElement("input", {
+    ref: fileInputRef,
+    className: "prompt-attachment-file-input",
+    type: "file",
+    multiple: true,
+    accept:
+      ".txt,.md,.markdown,.rst,.log,.csv,.tsv,.json,.jsonl,.xml,.svg,.yaml,.yml,.toml,.ini,.conf,.config,.env,.html,.htm,.css,.scss,.js,.jsx,.mjs,.cjs,.ts,.tsx,.mts,.cts,.py,.pyi,.go,.rs,.java,.kt,.kts,.c,.h,.cc,.cpp,.hpp,.cs,.fs,.fsx,.php,.rb,.rake,.swift,.sh,.bash,.zsh,.ps1,.sql,.graphql,.gql,.proto,.dockerfile,.makefile,.gradle,.properties,.bat,.cmd,.vue,.svelte,.astro,.lock,.png,.jpg,.jpeg,.gif,.webp,.pdf,.docx,.xlsx",
+    onChange: (event: { currentTarget: HTMLInputElement }) => {
+      addFiles(Array.from(event.currentTarget.files ?? []));
+      event.currentTarget.value = "";
+      closeMenu(true);
+    },
+    tabIndex: -1,
+    "aria-hidden": true,
+  });
   return createElement(
     "form",
-    { className: "prompt-composer", onSubmit },
+    {
+      className: `prompt-composer${draggingFiles ? " prompt-composer--dragging" : ""}`,
+      onSubmit,
+      onDragEnter,
+      onDragOver,
+      onDragLeave,
+      onDrop,
+    },
+    createElement(AttachmentList, {
+      items: props.attachments ?? [],
+      onRemove: (id) => props.onRemoveAttachment?.(id),
+      onRetry: props.onRetryAttachment,
+      onLoadPreview: props.onLoadAttachmentPreview,
+    }),
     createElement("textarea", {
       ref: textareaRef,
       className: "prompt-input",
       value,
       onChange: (event) => setValue((event.currentTarget as HTMLTextAreaElement).value),
       onKeyDown,
-      disabled: props.disabled,
+      onPaste,
+      disabled: props.disabled || props.draftLoading === true,
       placeholder: props.placeholder ?? "输入任务……",
       "aria-label": "任务输入",
       rows: 1,
@@ -167,24 +288,75 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
       { className: "prompt-composer-footer" },
       createElement(
         "div",
-        { className: "prompt-composer-context-controls" },
-        createElement(ContextUsageRing, { usage: props.contextUsage ?? null }),
+        { className: "prompt-composer-left-controls" },
+        createElement(
+          "div",
+          { className: "prompt-composer-attachment-trigger", ref: menuScopeRef },
+          createElement(
+            "button",
+            {
+              type: "button",
+              ref: plusButtonRef,
+              className: "prompt-attachment-button",
+              disabled:
+                props.disabled || props.draftLoading === true || props.onAddFiles === undefined,
+              onClick: () => setMenuOpen((open) => !open),
+              "aria-label": "添加附件",
+              "aria-expanded": menuOpen,
+              "aria-haspopup": "menu",
+              "aria-controls": "prompt-attachment-menu",
+              title: "添加附件",
+            },
+            createElement(Plus, { size: 18, strokeWidth: 2, "aria-hidden": true }),
+          ),
+          menuOpen
+            ? createElement(AttachmentMenu, {
+                onChooseFiles: openFilePicker,
+              })
+            : null,
+        ),
         props.permissionSelector ?? null,
       ),
-      createElement("span", { className: "prompt-hint", "aria-hidden": true }),
-      props.modelPicker ?? null,
-      createElement(PromptSubmitButton, {
-        disabled: props.disabled,
-        modelReady: props.modelReady,
-        submission: props.submission,
-        onCancel: props.onCancel,
-        cancelling: props.cancelling,
-      }),
+      createElement(ContextUsageRing, { usage: props.contextUsage ?? null }),
+      createElement(
+        "div",
+        { className: "prompt-composer-right-controls" },
+        props.modelPicker ?? null,
+        createElement(PromptSubmitButton, {
+          disabled:
+            props.disabled ||
+            props.draftLoading === true ||
+            props.attachmentSubmitBlockedReason !== undefined,
+          modelReady: props.modelReady,
+          submission: props.submission,
+          onCancel: props.onCancel,
+          cancelling: props.cancelling,
+        }),
+      ),
     ),
+    fileInput,
+    props.attachmentSubmitBlockedReason === undefined
+      ? null
+      : createElement(
+          "p",
+          { className: "attachment-submit-warning", role: "status" },
+          props.attachmentSubmitBlockedReason,
+        ),
+    props.draftLoading === true
+      ? createElement(
+          "span",
+          { className: "prompt-draft-loading", role: "status" },
+          "正在恢复草稿…",
+        )
+      : null,
     props.error === undefined
       ? null
       : createElement("p", { className: "web-error", role: "alert" }, props.error.message),
   );
+}
+
+function containsFiles(dataTransfer: DataTransfer): boolean {
+  return Array.from(dataTransfer.types).includes("Files");
 }
 
 function submissionLabel(submission: WebSubmissionState): string {

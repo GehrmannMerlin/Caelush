@@ -62,6 +62,15 @@ import type {
   SecurityPreparationResponse,
   SelectablePermissionPresetId,
   WorkspaceSecurityCapabilitiesResponse,
+  AttachmentId,
+  SubmissionId,
+  TranscriptAttachmentRef,
+} from "@caelush/protocol";
+import {
+  ATTACHMENT_ONLY_RUN_GOAL,
+  AttachmentIdsSchema,
+  SubmissionIdSchema,
+  TranscriptAttachmentRefSchema,
 } from "@caelush/protocol";
 import { derivePromptTitle, validatePrompt, type PromptError } from "./prompt.js";
 import { archiveErrorMessage } from "./archive-errors.js";
@@ -83,6 +92,11 @@ import {
 } from "./permission-presets.js";
 
 export interface WebSessionClient extends SessionCandidateClient, WebHostClient {
+  uploadAttachment?: CaelushClient["uploadAttachment"];
+  getAttachmentMetadata?: CaelushClient["getAttachmentMetadata"];
+  downloadAttachment?: CaelushClient["downloadAttachment"];
+  getAttachmentDraft?: CaelushClient["getAttachmentDraft"];
+  saveAttachmentDraft?: CaelushClient["saveAttachmentDraft"];
   getSession?: CaelushClient["getSession"];
   archiveSession?: CaelushClient["archiveSession"];
   getArchiveState?: CaelushClient["getArchiveState"];
@@ -138,6 +152,13 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
   continueResourceGuard(runId: RunId): Promise<RunActionResponse>;
   getRunContextUsage?(runId: RunId): Promise<ContextUsageProjection | null>;
   watchRunEvents(runId: RunId, options?: WatchRunEventsOptions): AsyncIterable<PublicRunEvent>;
+}
+
+export interface WebPromptSubmission {
+  readonly text: string;
+  readonly attachmentIds?: readonly AttachmentId[];
+  readonly submissionId?: SubmissionId;
+  readonly attachmentMetadata?: readonly TranscriptAttachmentRef[];
 }
 
 export type ProviderConnectionResult =
@@ -477,7 +498,7 @@ export class WebSessionManager {
     }
   }
 
-  async submitPrompt(prompt: string): Promise<boolean> {
+  async submitPrompt(input: string | WebPromptSubmission): Promise<boolean> {
     if (
       this.archiveReadOnly ||
       this.disposed ||
@@ -486,10 +507,55 @@ export class WebSessionManager {
       this.snapshot.preparingPreset !== undefined
     )
       return false;
-    const validation = validatePrompt(prompt);
-    if (!validation.ok) {
-      this.publish({ error: promptError(validation.error) });
+    const request = typeof input === "string" ? { text: input } : input;
+    const requestedAttachmentIds = request.attachmentIds ?? [];
+    const parsedAttachmentIds =
+      requestedAttachmentIds.length === 0
+        ? { success: true as const, data: [] as AttachmentId[] }
+        : AttachmentIdsSchema.safeParse(requestedAttachmentIds);
+    if (!parsedAttachmentIds.success) {
+      this.publish({
+        error: { code: "RUN_CREATE_FAILED", message: "附件数量不能超过 10 个，且不能重复。" },
+      });
       return false;
+    }
+    const attachmentIds = parsedAttachmentIds.data;
+    const trimmedText = request.text.trim();
+    let userText: string;
+    let goal: string;
+    if (trimmedText.length === 0) {
+      if (attachmentIds.length === 0) {
+        this.publish({
+          error: promptError({ code: "PROMPT_REQUIRED", message: "请输入任务内容或添加附件。" }),
+        });
+        return false;
+      }
+      userText = "";
+      goal = ATTACHMENT_ONLY_RUN_GOAL;
+    } else {
+      const validation = validatePrompt(request.text);
+      if (!validation.ok) {
+        this.publish({ error: promptError(validation.error) });
+        return false;
+      }
+      userText = validation.value;
+      goal = userText;
+    }
+    let submissionId: SubmissionId | undefined;
+    if (request.submissionId !== undefined) {
+      const parsedSubmissionId = SubmissionIdSchema.safeParse(request.submissionId);
+      if (!parsedSubmissionId.success) {
+        this.publish({ error: { code: "RUN_CREATE_FAILED", message: "提交标识无效，请重试。" } });
+        return false;
+      }
+      submissionId = parsedSubmissionId.data;
+    }
+    const attachmentMetadata: TranscriptAttachmentRef[] = [];
+    for (const attachment of request.attachmentMetadata ?? []) {
+      const parsed = TranscriptAttachmentRefSchema.safeParse(attachment);
+      if (parsed.success && attachmentIds.includes(parsed.data.artifactId as AttachmentId)) {
+        attachmentMetadata.push(parsed.data);
+      }
     }
 
     const selection = this.currentModelSelection();
@@ -510,7 +576,6 @@ export class WebSessionManager {
       return false;
     }
 
-    const goal = validation.value;
     this.publish({ submission: "SUBMITTING", error: undefined });
     let session = this.snapshot.selectedSession;
     try {
@@ -518,18 +583,20 @@ export class WebSessionManager {
         session = await this.options.client.createSession(
           this.options.client.listWorkspaceSessions === undefined
             ? {
-                title: derivePromptTitle(goal),
+                title: derivePromptTitle(userText || "查看附件"),
                 defaultWorkspace: this.options.workspace,
                 defaultModel: model,
+                ...(submissionId === undefined ? {} : { submissionId }),
                 ...(selection.reasoningLevel === undefined
                   ? {}
                   : { defaultReasoningLevel: selection.reasoningLevel }),
                 metadata: {},
               }
             : {
-                title: derivePromptTitle(goal),
+                title: derivePromptTitle(userText || "查看附件"),
                 workspaceId: this.options.workspace.id,
                 defaultModel: model,
+                ...(submissionId === undefined ? {} : { submissionId }),
                 ...(selection.reasoningLevel === undefined
                   ? {}
                   : { defaultReasoningLevel: selection.reasoningLevel }),
@@ -554,6 +621,11 @@ export class WebSessionManager {
       const defaultRunConfiguration = this.options.info.defaultRunConfiguration;
       const run = await this.options.client.createRun(session.id, {
         goal,
+        userText,
+        ...(attachmentIds.length === 0 ? {} : { attachmentIds }),
+        ...(submissionId === undefined
+          ? {}
+          : { submissionId: deriveRunSubmissionId(submissionId) }),
         workspace: this.options.workspace,
         model,
         runtime: defaultRunConfiguration.runtime,
@@ -573,9 +645,10 @@ export class WebSessionManager {
         conversationTurnId: run.id,
         createdAt: run.createdAt,
         kind: "USER",
-        text: goal,
+        text: userText,
+        ...(attachmentMetadata.length === 0 ? {} : { attachments: attachmentMetadata }),
       };
-      const optimisticPresentation = optimisticPresentationUser(run, goal);
+      const optimisticPresentation = optimisticPresentationUser(run, userText);
       this.publish({
         history: reconcileSessionTranscript(this.snapshot.history, [optimisticUser]),
       });
@@ -2476,6 +2549,13 @@ function promptError(error: PromptError): WebSessionError {
   return { code: error.code, message: error.message };
 }
 
+/** Session and Run submissions share one persisted draft id; the Run uses a stable purpose-specific id. */
+function deriveRunSubmissionId(submissionId: SubmissionId): SubmissionId {
+  const finalNibble = Number.parseInt(submissionId.at(-1) ?? "0", 16);
+  const derived = `${submissionId.slice(0, -1)}${(finalNibble ^ 1).toString(16)}`;
+  return SubmissionIdSchema.parse(derived);
+}
+
 function sessionError(code: WebSessionErrorCode): WebSessionError {
   const messages: Record<WebSessionErrorCode, string> = {
     SESSION_LOAD_FAILED: "无法加载当前工作区的会话。",
@@ -2492,7 +2572,7 @@ function sessionError(code: WebSessionErrorCode): WebSessionError {
     PERMISSION_CAPABILITIES_FAILED: "无法确认当前主机的权限能力，已阻止创建任务。",
     PERMISSION_PRESET_UNAVAILABLE: "所选权限当前不可用，已阻止创建任务。",
     PERMISSION_PREPARATION_FAILED: "工作区准备失败，已阻止创建任务。",
-    PROMPT_REQUIRED: "请输入任务内容。",
+    PROMPT_REQUIRED: "请输入任务内容或添加附件。",
     PROMPT_TOO_LARGE: "任务内容不能超过 32 KiB。",
     CONVERSATION_CONTINUITY_INCOMPATIBLE:
       "旧会话缺少当前模型安全续接所需的历史记录。请在当前工作区新建会话，再自行提交任务。",

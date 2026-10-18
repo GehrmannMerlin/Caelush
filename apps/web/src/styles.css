@@ -2993,7 +2993,7 @@ body {
 .context-inspector {
   position: absolute;
   z-index: 5;
-  left: 0;
+  left: 50%;
   bottom: 36px;
   width: min(320px, calc(100vw - 32px));
   box-sizing: border-box;
@@ -3004,6 +3004,7 @@ body {
   box-shadow: 0 12px 30px rgb(70 96 126 / 16%);
   color: #31445c;
   font-size: 0.8rem;
+  transform: translateX(-50%);
 }
 
 .context-inspector-heading {
@@ -9140,4 +9141,331 @@ select {
   .workspace-card-action-button:hover:not(:disabled),
 :root[data-caelush-theme="dark"] .workspace-sidebar .workspace-card-action-button:focus-visible {
   background: transparent;
+}
+
+/* Shared attachment composer: the usage ring sits on the footer center line. */
+.prompt-composer {
+  overflow: visible;
+}
+
+.prompt-composer-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.prompt-composer-left-controls,
+.prompt-composer-right-controls {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: clamp(0.3rem, 0.7vw, 0.65rem);
+}
+
+.prompt-composer-left-controls {
+  grid-column: 1;
+  justify-self: start;
+}
+
+.prompt-composer-right-controls {
+  grid-column: 3;
+  justify-self: end;
+}
+
+.prompt-composer-center {
+  grid-column: 2;
+  justify-self: center;
+}
+
+.prompt-composer-footer > .context-usage-control {
+  grid-column: 2;
+  justify-self: center;
+}
+
+.prompt-composer-attachment-trigger {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.prompt-attachment-button {
+  display: inline-grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 1px solid var(--web-line-strong, #d8deea);
+  border-radius: 50%;
+  background: var(--web-surface-muted, #f5f7fb);
+  color: var(--web-text, #354052);
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.prompt-attachment-button:hover:not(:disabled),
+.prompt-attachment-button[aria-expanded="true"] {
+  border-color: #98b4ed;
+  background: #eef4ff;
+  color: #2456b2;
+}
+
+.prompt-attachment-button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.prompt-attachment-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.attachment-menu {
+  position: absolute;
+  z-index: 80;
+  inset-block-end: calc(100% + 12px);
+  inset-inline-start: 0;
+  display: grid;
+  width: 320px;
+  height: 160px;
+  max-width: min(320px, calc(100cqw - 8px), calc(100vw - 24px));
+  grid-template-rows: auto auto 1fr;
+  gap: 0.55rem;
+  padding: 0.9rem;
+  border: 1px solid var(--web-line-strong, #d8deea);
+  border-radius: 14px;
+  background: var(--web-surface, #fff);
+  box-shadow: 0 16px 44px rgb(25 38 61 / 17%);
+}
+
+.attachment-menu-heading {
+  color: var(--web-muted, #667085);
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.attachment-menu-item {
+  display: flex;
+  min-height: 2.5rem;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0 0.65rem;
+  border: 0;
+  border-radius: 10px;
+  background: var(--web-surface-muted, #f5f7fb);
+  color: var(--web-text, #354052);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.86rem;
+  text-align: left;
+}
+
+.attachment-menu-item:hover,
+.attachment-menu-item:focus-visible {
+  outline: none;
+  background: #edf2fa;
+}
+
+.attachment-menu-hint {
+  align-self: end;
+  margin: 0;
+  color: var(--web-muted, #667085);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.prompt-attachment-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.attachment-list {
+  display: flex;
+  max-height: 156px;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  overflow: auto;
+  padding: 0.25rem 0.15rem;
+}
+
+.attachment-list-item {
+  min-width: 0;
+  max-width: min(100%, 280px);
+  flex: 1 1 220px;
+}
+
+.attachment-card {
+  display: grid;
+  min-width: 0;
+  min-height: 54px;
+  grid-template-columns: 38px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.42rem 0.48rem;
+  border: 1px solid var(--web-line-strong, #d8deea);
+  border-radius: 12px;
+  background: var(--web-surface-muted, #f8f9fc);
+}
+
+.attachment-card-icon,
+.attachment-card-preview {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--web-surface, #fff);
+  color: var(--web-muted, #667085);
+}
+
+.attachment-card-preview {
+  object-fit: cover;
+}
+
+.attachment-card-body {
+  display: grid;
+  min-width: 0;
+  gap: 0.1rem;
+}
+
+.attachment-card-name,
+.attachment-card-meta,
+.attachment-card-error {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-card-name {
+  color: var(--web-text, #354052);
+  font-size: 0.77rem;
+  font-weight: 600;
+}
+
+.attachment-card-meta {
+  color: var(--web-muted, #667085);
+  font-size: 0.65rem;
+}
+
+.attachment-card-error {
+  color: #b42318;
+  font-size: 0.67rem;
+}
+
+.attachment-card-progress {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: #dce3ef;
+}
+
+.attachment-card-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #4f7fdb;
+  transition: width 120ms linear;
+}
+
+.attachment-card-action {
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--web-muted, #667085);
+  cursor: pointer;
+}
+
+.attachment-card-action:hover,
+.attachment-card-action:focus-visible {
+  outline: none;
+  background: var(--web-surface, #fff);
+  color: var(--web-text, #354052);
+}
+
+.attachment-card-spinner {
+  color: #4f7fdb;
+  animation: prompt-attachment-spin 850ms linear infinite;
+}
+
+.attachment-submit-warning,
+.prompt-draft-loading {
+  margin: 0.15rem 0.5rem 0.3rem;
+  color: #9a6700;
+  font-size: 0.76rem;
+}
+
+.prompt-composer--dragging {
+  border-color: #5c86dd;
+  box-shadow: 0 0 0 3px rgb(37 99 235 / 16%);
+}
+
+@keyframes prompt-attachment-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+:root[data-caelush-theme="dark"] .attachment-menu,
+:root[data-caelush-theme="dark"] .attachment-card {
+  border-color: var(--web-line-strong, #414a58);
+  background: var(--web-surface, #232833);
+}
+
+:root[data-caelush-theme="dark"] .attachment-menu-item,
+:root[data-caelush-theme="dark"] .attachment-card-icon,
+:root[data-caelush-theme="dark"] .attachment-card-preview {
+  background: var(--web-surface-muted, #2d3440);
+  color: var(--web-text, #edf1f8);
+}
+
+:root[data-caelush-theme="dark"] .prompt-attachment-button {
+  border-color: var(--web-line-strong, #414a58);
+  background: var(--web-surface-muted, #2d3440);
+  color: var(--web-text, #edf1f8);
+}
+
+:root[data-caelush-theme="dark"] .attachment-card-name {
+  color: var(--web-text, #edf1f8);
+}
+
+@container (max-width: 38rem) {
+  .prompt-composer-footer {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "left right"
+      "ring ring";
+    row-gap: 0.35rem;
+  }
+
+  .prompt-composer-left-controls {
+    grid-area: left;
+  }
+
+  .prompt-composer-footer > .context-usage-control {
+    grid-area: ring;
+    justify-self: center;
+  }
+
+  .prompt-composer-right-controls {
+    grid-area: right;
+    max-width: 100%;
+  }
+
+  .prompt-composer-right-controls .model-picker {
+    max-width: min(11rem, 38cqw);
+  }
+
+  .prompt-composer-left-controls .permission-selector-select {
+    max-width: min(10rem, 45cqw);
+  }
 }

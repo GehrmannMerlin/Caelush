@@ -23,6 +23,9 @@ export type {
   DesktopIncompatibleResult,
 } from "./desktop-compatibility.js";
 export type {
+  AttachmentDraftWrite,
+  AttachmentUploadOptions,
+  AttachmentUploadProgress,
   CaelushClientOptions,
   CaelushClientRequestOptions,
   WatchRunEventsOptions,
