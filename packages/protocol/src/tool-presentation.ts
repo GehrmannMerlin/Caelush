@@ -53,6 +53,7 @@ export type ToolPresentationEffect = z.infer<typeof ToolPresentationEffectSchema
 export function toolPresentationCategory(toolName: string): ToolPresentationCategory {
   switch (toolName) {
     case "read_file":
+    case "read_attachment":
       return "READ";
     case "list_directory":
     case "find_files":

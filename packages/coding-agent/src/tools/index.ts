@@ -53,6 +53,7 @@ export {
 /* The narrow Operations ports and their Runtime adapters. */
 export { OPERATIONS_INTERFACE_NAMES } from "./operations/operations.js";
 export type {
+  AttachmentReadOperations,
   ExecOperations,
   FindFilesOperations,
   GitOperations,
@@ -62,6 +63,8 @@ export type {
   ReadFileOperations,
   SearchTextOperations,
 } from "./operations/operations.js";
+export { AttachmentReadOperationError } from "./operations/attachment-read-operations.js";
+export type { AttachmentReadOperationErrorCode } from "./operations/attachment-read-operations.js";
 export {
   createRuntimeGitOperations,
   createRuntimePatchOperations,
@@ -91,6 +94,7 @@ export type {
 } from "./operations/coding-read-only-operations.js";
 
 /* The ten builtins and the default set. */
+export { createReadAttachmentTool, readAttachmentInputSchema } from "./builtins/read-attachment.js";
 export { createReadFileTool, readFileInputSchema } from "./builtins/read-file.js";
 export { createListDirectoryTool, listDirectoryInputSchema } from "./builtins/list-directory.js";
 export { createFindFilesTool, findFilesInputSchema } from "./builtins/find-files.js";
@@ -154,6 +158,7 @@ export {
   projectGitStatusSecurityFacts,
   projectListDirectorySecurityFacts,
   projectReadFileSecurityFacts,
+  projectReadAttachmentSecurityFacts,
   projectSearchTextSecurityFacts,
   projectStopProcessSecurityFacts,
   projectWriteStdinSecurityFacts,
@@ -235,6 +240,7 @@ export type {
   MAX_PROMPT_SNIPPET_BYTES,
   MAX_TOOL_PROMPT_TOTAL_BYTES,
   promptSnippetFor,
+  READ_ATTACHMENT_PROMPT_SNIPPET,
   READ_FILE_PROMPT_SNIPPET,
   SEARCH_TEXT_PROMPT_SNIPPET,
   STOP_PROCESS_PROMPT_SNIPPET,

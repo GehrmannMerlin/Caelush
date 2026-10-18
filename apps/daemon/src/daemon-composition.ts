@@ -16,8 +16,11 @@ import {
   type RunMessageAuthority,
 } from "@caelush/core";
 import { createLocalProjectInspector } from "@caelush/coding-agent";
+import { AttachmentReadOperationError } from "@caelush/coding-agent";
 import { createAIError, createAISubsystem, createCacheResolver, isJsonObject } from "@caelush/ai";
 import type { ProviderStreamPolicy } from "./config.js";
+import type { AttachmentService } from "./attachments/attachment-service.js";
+import { AttachmentServiceError } from "./attachments/attachment-service.js";
 import { createInterruptedToolHistoryService } from "./services/interrupted-tool-history.js";
 import type { RunContextBudgetPolicyResolver } from "./services/run-service.js";
 import { createModelTransportRecoveryPort } from "./providers/model-transport-recovery.js";
@@ -172,6 +175,7 @@ import {
   type CodingToolCatalog,
   type CodingToolDefinition,
   type DefaultCodingToolOperations,
+  type AttachmentReadOperations,
   type GitToolAvailability,
   type BeforeToolDispatchRegistration,
   type ToolGuardPipeline,
@@ -306,6 +310,8 @@ export type DaemonTurnIdentity = AgentExecutionIdentity;
 
 export interface DaemonCompositionOptions {
   readonly storage: CaelushStorage;
+  /** Verified attachment read capability used to materialize selected user references. */
+  readonly attachmentService?: AttachmentService;
   /** Canonical daemon observation notifier. Production composition creates the RunEventHub when omitted. */
   readonly notifier?: RunEventNotifierPort;
   readonly eventQueuePolicy?: SubscriberQueuePolicy;
@@ -716,7 +722,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
    * same active set.
    */
   const defaultCodingTools = defaultCodingToolSet(
-    defaultCodingOperations(runtimeResolver, securityCapabilityService),
+    defaultCodingOperations(runtimeResolver, securityCapabilityService, options.attachmentService),
     options.toolExposure ?? "AVAILABLE",
   );
   const activeToolRegistry = buildToolRegistry(options.toolRegistrations ?? defaultCodingTools);
@@ -967,6 +973,11 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           output.push(projected);
           continue;
         }
+        const builtInFeedback = toolResultFeedbackText(projected.message.content);
+        if (builtInFeedback === undefined) {
+          output.push(projected);
+          continue;
+        }
         const contribution = await toolFeedbackContributionPipeline.contribute(
           {
             runId: input.runId,
@@ -976,7 +987,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
             toolName: projected.message.toolName,
             observationId: item.observation.id,
             isError: item.observation.isError,
-            builtInFeedback: projected.message.content,
+            builtInFeedback,
           },
           {
             identity: { runId: input.runId, sessionId: input.sessionId },
@@ -1087,6 +1098,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
         },
         models: ai.models,
         modelTurnExecutor,
+        ...(options.attachmentService === undefined
+          ? {}
+          : { attachmentContext: options.attachmentService }),
         stepIds: { create: createStepId },
         // Production Run turns use the Agent-owned V2 Context Engine.
         createContextEngine: (input) =>
@@ -1294,6 +1308,14 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       await runtime.dispose();
     },
   };
+}
+
+function toolResultFeedbackText(
+  content: import("@caelush/ai").AIToolResultContent,
+): string | undefined {
+  if (typeof content === "string") return content;
+  if (content.some((part) => part.type === "image")) return undefined;
+  return content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
 }
 
 /**
@@ -2298,6 +2320,7 @@ function isPromptCacheResetReason(
 function defaultCodingOperations(
   runtimeResolver: ReturnType<typeof createLocalRuntimeResolver>,
   securityCapabilityService: SecurityCapabilityService,
+  attachmentService?: AttachmentService,
 ): DefaultCodingToolOperations {
   const readOnly = createRuntimeReadOnlyOperations(runtimeResolver);
   const process = createRuntimeProcessOperations(runtimeResolver, {
@@ -2327,7 +2350,48 @@ function defaultCodingOperations(
     exec: process,
     process,
     git: createRuntimeGitOperations(runtimeResolver),
+    attachmentRead: {
+      async read(input) {
+        if (attachmentService === undefined) {
+          throw new AttachmentReadOperationError("UNAVAILABLE");
+        }
+        try {
+          return await attachmentService.readForRun({
+            artifactId: input.artifactId,
+            sessionId: input.sessionId,
+            range: input.range,
+            signal: input.signal,
+          });
+        } catch (error) {
+          if (!(error instanceof AttachmentServiceError)) throw error;
+          throw new AttachmentReadOperationError(mapAttachmentReadError(error.code));
+        }
+      },
+    } satisfies AttachmentReadOperations,
   };
+}
+
+function mapAttachmentReadError(
+  code: AttachmentServiceError["code"],
+): ConstructorParameters<typeof AttachmentReadOperationError>[0] {
+  switch (code) {
+    case "NOT_FOUND":
+      return "NOT_FOUND";
+    case "UNSUPPORTED_FORMAT":
+      return "UNSUPPORTED_FORMAT";
+    case "INVALID_DOCUMENT":
+      return "INVALID_DOCUMENT";
+    case "PASSWORD_REQUIRED":
+      return "PASSWORD_REQUIRED";
+    case "PROCESSOR_TIMEOUT":
+      return "PROCESSOR_TIMEOUT";
+    case "PROCESSOR_CANCELLED":
+      return "PROCESSOR_CANCELLED";
+    case "PROCESSOR_FAILED":
+      return "PROCESSOR_FAILED";
+    default:
+      return "UNAVAILABLE";
+  }
 }
 
 /**

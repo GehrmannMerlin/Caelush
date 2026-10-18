@@ -8,6 +8,7 @@ import {
 } from "@caelush/agent";
 import { requiresReasoningReplayWithTools, type ModelCatalog } from "@caelush/ai";
 import {
+  AttachmentIdSchema,
   SessionContinuityPreflightQuerySchema,
   SessionTranscriptQuerySchema,
   type AgentRun,
@@ -23,6 +24,7 @@ import type { RunRepository, SessionRepository } from "@caelush/storage";
 import { StorageNotFoundError } from "@caelush/storage";
 import { unsupportedHistoricalTranscriptEntry } from "@caelush/agent";
 import { projectPublicAssistantText } from "./assistant-text-projection.js";
+import type { AttachmentService } from "../attachments/attachment-service.js";
 
 const TERMINAL_RUN_STATUSES = new Set<RunStatus>([
   "COMPLETED",
@@ -39,6 +41,7 @@ export interface SessionTranscriptServiceOptions {
   readonly messageRecords: SessionReadableAgentMessageRecordStore;
   readonly codecs: AgentMessageCodecRegistry;
   readonly transcriptProjectors: AgentMessageTranscriptProjectorRegistry;
+  readonly attachments?: Pick<AttachmentService, "getReadyForRun">;
   readonly models?: Pick<ModelCatalog, "resolve">;
 }
 
@@ -97,7 +100,7 @@ export class SessionTranscriptService {
       this.options.runs.listBySession(sessionId),
       this.options.messageRecords.listBySession(sessionId),
     ]);
-    const items = this.projectSession(runs, records);
+    const items = await this.projectSession(runs, records);
     const start = parseCursor(query.cursor, items.length);
     const page = items.slice(start, start + query.limit);
     const end = start + page.length;
@@ -109,7 +112,10 @@ export class SessionTranscriptService {
     };
   }
 
-  private projectSession(runs: readonly AgentRun[], records: readonly AgentMessageRecord[]) {
+  private async projectSession(
+    runs: readonly AgentRun[],
+    records: readonly AgentMessageRecord[],
+  ): Promise<SessionTranscriptResponse["items"]> {
     const orderedRuns = [...runs].sort(
       (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
     );
@@ -126,7 +132,8 @@ export class SessionTranscriptService {
         (left, right) =>
           left.sequence - right.sequence || left.messageId.localeCompare(right.messageId),
       );
-      const runItems = runRecords.flatMap((record) => this.projectRecord(record));
+      const projected = await Promise.all(runRecords.map((record) => this.projectRecord(record)));
+      const runItems = projected.flat();
       items.push(...runItems);
       if (
         TERMINAL_RUN_STATUSES.has(run.status) &&
@@ -138,7 +145,7 @@ export class SessionTranscriptService {
     return items;
   }
 
-  private projectRecord(record: AgentMessageRecord) {
+  private async projectRecord(record: AgentMessageRecord): Promise<TranscriptEntry[]> {
     if (!record.audience.transcript) return [];
     try {
       const message = this.options.codecs.decode(record);
@@ -150,7 +157,10 @@ export class SessionTranscriptService {
           : { modelProjectionVersion: record.modelProjectionVersion }),
         message,
       });
-      return entries.map(projectTranscriptEntry);
+      const projected = entries.map(projectTranscriptEntry);
+      return Promise.all(
+        projected.map((entry) => this.addAttachmentSummaries(entry, record.sessionId)),
+      );
     } catch (error) {
       // Unknown historical schema/type is a user-visible gap, never a reason to expose data or
       // fail the whole Session. Keep the typed codec refusal local and return only a fixed label.
@@ -167,6 +177,45 @@ export class SessionTranscriptService {
       return [];
     }
   }
+
+  private async addAttachmentSummaries(
+    entry: TranscriptEntry,
+    sessionId: SessionId,
+  ): Promise<TranscriptEntry> {
+    if (entry.kind !== "USER" || entry.attachments === undefined) return entry;
+    const attachments = await Promise.all(
+      entry.attachments.map(async (reference) => {
+        if (this.options.attachments === undefined) {
+          return { ...reference, previewAvailable: false, downloadAvailable: false };
+        }
+        try {
+          const artifactId = AttachmentIdSchema.parse(reference.artifactId);
+          const [descriptor] = await this.options.attachments.getReadyForRun(
+            [artifactId],
+            sessionId,
+          );
+          if (descriptor === undefined) {
+            return { ...reference, previewAvailable: false, downloadAvailable: false };
+          }
+          return {
+            artifactId,
+            name: descriptor.name,
+            mediaType: descriptor.mediaType,
+            byteLength: descriptor.byteLength,
+            previewAvailable: isInlinePreviewMediaType(descriptor.mediaType),
+            downloadAvailable: true,
+          };
+        } catch {
+          return { ...reference, previewAvailable: false, downloadAvailable: false };
+        }
+      }),
+    );
+    return { ...entry, attachments };
+  }
+}
+
+function isInlinePreviewMediaType(mediaType: string): boolean {
+  return mediaType === "image/png" || mediaType === "image/jpeg" || mediaType === "image/webp";
 }
 
 function hasCompatiblePrivateReplayReference(

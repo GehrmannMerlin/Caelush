@@ -20,6 +20,7 @@ import {
   type PendingAttachment,
   type SessionId,
   type VerifiedAttachmentMetadata,
+  type WorkspaceId,
 } from "@caelush/protocol";
 import type {
   AttachmentRepository,
@@ -89,6 +90,28 @@ export interface AttachmentService {
     ids: readonly AttachmentId[],
     sessionId: SessionId,
   ): Promise<AttachmentDescriptor[]>;
+  readForRun(input: {
+    readonly artifactId: AttachmentId;
+    readonly sessionId: SessionId;
+    readonly range: AttachmentReadRange;
+    readonly signal?: AbortSignal;
+  }): Promise<AttachmentReadResult>;
+  readSnapshot(input: {
+    readonly artifactId: AttachmentId;
+    readonly owner: AttachmentOwner;
+    readonly signal: AbortSignal;
+  }): Promise<{
+    readonly descriptor: AttachmentDescriptor;
+    readonly manifest: AttachmentProcessingManifest;
+    readonly contentReference: {
+      readonly artifactId: AttachmentId;
+      readonly sha256: string;
+      read(input: {
+        readonly range: AttachmentReadRange;
+        readonly signal: AbortSignal;
+      }): Promise<AttachmentReadResult>;
+    };
+  }>;
   read(input: {
     readonly artifactId: AttachmentId;
     readonly owner: AttachmentOwner;
@@ -105,6 +128,7 @@ export interface AttachmentService {
     draft: Pick<AttachmentDraft, "text" | "artifactIds" | "submissionId">,
   ): Promise<AttachmentDraft>;
   getDraft(owner: AttachmentOwner): Promise<AttachmentDraft | null>;
+  cleanupUnreferenced(before?: number): Promise<readonly AttachmentId[]>;
   recover(): Promise<void>;
 }
 
@@ -115,19 +139,27 @@ export function createAttachmentService(options: AttachmentServiceOptions): Atta
   const now = options.now ?? Date.now;
   const createId =
     options.createId ?? (() => AttachmentIdSchema.parse(`att_${randomUUID().replaceAll("-", "")}`));
+  const activeReaders = new Map<AttachmentId, number>();
   const getAuthorizedReady = async (
     artifactId: AttachmentId,
     owner: AttachmentOwner,
   ): Promise<{ readonly descriptor: AttachmentDescriptor; readonly bytes: Buffer }> => {
-    const descriptor = await options.attachments.getAuthorized(artifactId, owner);
-    if (descriptor === null) throw new AttachmentServiceError("NOT_FOUND");
+    activeReaders.set(artifactId, (activeReaders.get(artifactId) ?? 0) + 1);
     try {
-      return { descriptor, bytes: await verifyBlob(descriptor, blobs) };
-    } catch (error) {
-      if (error instanceof AttachmentServiceError && error.code === "BLOB_UNAVAILABLE") {
-        await options.attachments.markUnavailable(artifactId).catch(() => undefined);
+      const descriptor = await options.attachments.getAuthorized(artifactId, owner);
+      if (descriptor === null) throw new AttachmentServiceError("NOT_FOUND");
+      try {
+        return { descriptor, bytes: await verifyBlob(descriptor, blobs) };
+      } catch (error) {
+        if (error instanceof AttachmentServiceError && error.code === "BLOB_UNAVAILABLE") {
+          await options.attachments.markUnavailable(artifactId).catch(() => undefined);
+        }
+        throw error;
       }
-      throw error;
+    } finally {
+      const remaining = (activeReaders.get(artifactId) ?? 1) - 1;
+      if (remaining <= 0) activeReaders.delete(artifactId);
+      else activeReaders.set(artifactId, remaining);
     }
   };
 
@@ -249,23 +281,97 @@ export function createAttachmentService(options: AttachmentServiceOptions): Atta
         options,
       );
       return Promise.all(
-        artifactIds.map(async (artifactId) => {
-          try {
-            return (
-              await getAuthorizedReady(artifactId, {
-                kind: "SESSION",
-                sessionId: parsedSessionId,
-              })
-            ).descriptor;
-          } catch (error) {
-            if (!(error instanceof AttachmentServiceError) || error.code !== "NOT_FOUND") {
-              throw error;
-            }
-            return (await getAuthorizedReady(artifactId, { kind: "WORKSPACE", workspaceId }))
-              .descriptor;
-          }
-        }),
+        artifactIds.map(
+          async (artifactId) =>
+            (await getAuthorizedReadyForRun(artifactId, parsedSessionId, workspaceId)).descriptor,
+        ),
       );
+    },
+
+    async readSnapshot({ artifactId, owner, signal }) {
+      const parsedId = parseId(artifactId);
+      const parsedOwner = parseOwner(owner);
+      const { descriptor, bytes } =
+        parsedOwner.kind === "SESSION"
+          ? await getAuthorizedReadyForRun(
+              parsedId,
+              parsedOwner.sessionId,
+              await resolveOwnerWorkspace(parsedOwner, options),
+            )
+          : await getAuthorizedReady(parsedId, parsedOwner);
+      const manifest = await inspectStored(processor, descriptor, bytes, signal);
+      assertStoredManifestMatches(descriptor, manifest);
+      return Object.freeze({
+        descriptor,
+        manifest,
+        contentReference: Object.freeze({
+          artifactId: descriptor.artifactId,
+          sha256: descriptor.sha256,
+          read: async ({
+            range,
+            signal: readSignal,
+          }: {
+            readonly range: AttachmentReadRange;
+            readonly signal: AbortSignal;
+          }) => {
+            const { descriptor: currentDescriptor, bytes: currentBytes } =
+              parsedOwner.kind === "SESSION"
+                ? await getAuthorizedReadyForRun(
+                    parsedId,
+                    parsedOwner.sessionId,
+                    await resolveOwnerWorkspace(parsedOwner, options),
+                  )
+                : await getAuthorizedReady(parsedId, parsedOwner);
+            if (
+              currentDescriptor.sha256 !== descriptor.sha256 ||
+              currentDescriptor.processorVersion !== descriptor.processorVersion
+            ) {
+              throw new AttachmentServiceError("CONTENT_HASH_MISMATCH");
+            }
+            const currentManifest = await inspectStored(
+              processor,
+              currentDescriptor,
+              currentBytes,
+              readSignal,
+            );
+            assertStoredManifestMatches(currentDescriptor, currentManifest);
+            return processor.read({
+              bytes: currentBytes,
+              manifest: currentManifest,
+              range: parseRange(range),
+              signal: readSignal,
+            });
+          },
+        }),
+      });
+    },
+
+    async readForRun({ artifactId, sessionId, range, signal }) {
+      const parsedId = parseId(artifactId);
+      let parsedSessionId: SessionId;
+      try {
+        parsedSessionId = SessionIdSchema.parse(sessionId);
+      } catch {
+        throw new AttachmentServiceError("INVALID_REQUEST");
+      }
+      const parsedRange = parseRange(range);
+      const workspaceId = await resolveOwnerWorkspace(
+        { kind: "SESSION", sessionId: parsedSessionId },
+        options,
+      );
+      const { descriptor, bytes } = await getAuthorizedReadyForRun(
+        parsedId,
+        parsedSessionId,
+        workspaceId,
+      );
+      const manifest = await inspectStored(processor, descriptor, bytes, signal);
+      assertStoredManifestMatches(descriptor, manifest);
+      return processor.read({
+        bytes,
+        manifest,
+        range: parsedRange,
+        ...(signal === undefined ? {} : { signal }),
+      });
     },
 
     async read({ artifactId, owner, range, signal }): Promise<AttachmentReadResult> {
@@ -311,6 +417,27 @@ export function createAttachmentService(options: AttachmentServiceOptions): Atta
       }
     },
 
+    async cleanupUnreferenced(before = now()): Promise<readonly AttachmentId[]> {
+      if (!Number.isSafeInteger(before) || before < 0) return [];
+      const removed: AttachmentId[] = [];
+      for (const artifactId of await options.attachments.listUnreferenced(before)) {
+        if ((activeReaders.get(artifactId) ?? 0) > 0) continue;
+        if (!(await options.attachments.deleteUnreferenced(artifactId, before))) continue;
+        await blobs.remove(artifactId).catch(() => undefined);
+        removed.push(artifactId);
+      }
+      const known = new Set(
+        (await options.attachments.listForRecovery()).map((record) => record.artifactId),
+      );
+      for (const artifactId of await blobs.listBlobIds()) {
+        if (!known.has(artifactId) && (activeReaders.get(artifactId) ?? 0) === 0) {
+          await blobs.remove(artifactId).catch(() => undefined);
+          removed.push(artifactId);
+        }
+      }
+      return Object.freeze(removed);
+    },
+
     async recover(): Promise<void> {
       await blobs.cleanupTemporaryFiles();
       const records = await options.attachments.listForRecovery();
@@ -348,6 +475,19 @@ export function createAttachmentService(options: AttachmentServiceOptions): Atta
       }
     },
   } satisfies AttachmentService);
+
+  async function getAuthorizedReadyForRun(
+    artifactId: AttachmentId,
+    sessionId: SessionId,
+    workspaceId: WorkspaceId,
+  ) {
+    try {
+      return await getAuthorizedReady(artifactId, { kind: "SESSION", sessionId });
+    } catch (error) {
+      if (!(error instanceof AttachmentServiceError) || error.code !== "NOT_FOUND") throw error;
+      return getAuthorizedReady(artifactId, { kind: "WORKSPACE", workspaceId });
+    }
+  }
 }
 
 async function resolveOwnerWorkspace(
@@ -399,6 +539,21 @@ async function inspectStored(
   });
   if (manifest.sha256 !== descriptor.sha256) throw new AttachmentServiceError("BLOB_UNAVAILABLE");
   return AttachmentProcessingManifestSchema.parse(manifest);
+}
+
+function assertStoredManifestMatches(
+  descriptor: AttachmentDescriptor,
+  manifest: AttachmentProcessingManifest,
+): void {
+  if (
+    manifest.artifactId !== descriptor.artifactId ||
+    manifest.sha256 !== descriptor.sha256 ||
+    manifest.mediaType !== descriptor.mediaType ||
+    manifest.processorVersion !== descriptor.processorVersion ||
+    manifest.visualRequirement !== descriptor.visualRequirement
+  ) {
+    throw new AttachmentServiceError("CONTENT_HASH_MISMATCH");
+  }
 }
 
 function parseId(id: AttachmentId): AttachmentId {

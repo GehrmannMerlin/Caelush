@@ -5,6 +5,8 @@ import {
   AgentRunSchema,
   AttachmentIdSchema,
   SubmissionIdSchema,
+  type SessionId,
+  type WorkspaceId,
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
@@ -28,7 +30,7 @@ afterEach(async () => {
 
 const attachmentId = AttachmentIdSchema.parse("att_01j8x2v8q7p3k6s9d4m5n0c1ab");
 const submissionId = SubmissionIdSchema.parse("6f6cfeba-0bf8-4f88-a55d-f16e87d2671d");
-const ownerSession = (sessionId: string) => ({ kind: "SESSION" as const, sessionId });
+const ownerSession = (sessionId: SessionId) => ({ kind: "SESSION" as const, sessionId });
 
 async function fixture() {
   const storage = await openCaelushStorage({ path: ":memory:" });
@@ -56,7 +58,7 @@ async function fixture() {
   };
 }
 
-function pendingInput(workspaceId: string, sessionId: string, id = attachmentId) {
+function pendingInput(workspaceId: WorkspaceId, sessionId: SessionId, id = attachmentId) {
   return {
     artifactId: AttachmentIdSchema.parse(id),
     workspaceId,
@@ -128,6 +130,58 @@ describe("SQLite conversation attachment repositories", () => {
       text: "first",
       artifactIds: [attachmentId],
     });
+  });
+
+  it("binds a workspace draft attachment to its first session user message", async () => {
+    const { storage, workspace, session, workspaceRef } = await fixture();
+    await storage.attachments.createPending({
+      ...pendingInput(workspace.id, session.id),
+      owner: { kind: "WORKSPACE", workspaceId: workspace.id },
+    });
+    await storage.attachments.markReady(attachmentId, readyMetadata());
+    const pendingRun = makeRun(session.id, {
+      workspace: workspaceRef,
+      userText: "",
+      attachmentIds: [attachmentId],
+    });
+    await storage.runs.insert(pendingRun);
+    const runningRun = AgentRunSchema.parse({
+      ...pendingRun,
+      status: "RUNNING",
+      startedAt: createTimestampMs(1_700_000_000_001),
+    });
+    const messageId = agentMessageId("amsg_0192f5b1-4d3a-7c2e-8a91-000000000098");
+    const messageDraft: AgentMessageRecordDraft = {
+      messageId,
+      sessionId: session.id,
+      conversationTurnId: conversationTurnId("cturn_0192f5b1-4d3a-7c2e-8a91-000000000098"),
+      messageType: "USER",
+      schemaVersion: 1,
+      modelProjectionVersion: 2,
+      createdAt: createTimestampMs(1_700_000_000_001),
+      source: { kind: "USER", origin: "GOAL" },
+      audience: { model: true, transcript: true, debug: true },
+      data: {
+        content: [
+          { type: "TEXT", text: "" },
+          { type: "ATTACHMENT_REF", artifactId: attachmentId },
+        ],
+      },
+    };
+
+    await storage.execution.commit({
+      run: runningRun,
+      state: makeState(runningRun, { status: "RUNNING" }),
+      expectedStateRevision: null,
+      expectedContinuationRevision: null,
+      stepWrites: [],
+      messagesToAppend: [{ draft: messageDraft, attachmentIds: [attachmentId] }],
+      events: [],
+    });
+
+    await expect(
+      storage.attachments.getAuthorized(attachmentId, ownerSession(session.id)),
+    ).resolves.toMatchObject({ artifactId: attachmentId });
   });
 
   it("sentReferencePreventsDraftCleanup", async () => {

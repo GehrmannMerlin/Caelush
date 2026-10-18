@@ -12,7 +12,6 @@ import {
   VerifiedAttachmentMetadataSchema,
   WorkspaceIdSchema,
   MAX_MESSAGE_ATTACHMENT_BYTES,
-  createTimestampMs,
   type AttachmentDescriptor,
   type AttachmentDraft,
   type AttachmentId,
@@ -77,6 +76,7 @@ export interface AttachmentRepository {
   getDraft(owner: AttachmentOwner): Promise<AttachmentDraft | null>;
   removeDraftReference(owner: AttachmentOwner, id: AttachmentId): Promise<void>;
   listUnreferenced(before: number): Promise<AttachmentId[]>;
+  deleteUnreferenced(id: AttachmentId, before: number): Promise<boolean>;
   listForRecovery(): Promise<AttachmentRecoveryRecord[]>;
 }
 
@@ -250,7 +250,7 @@ export class SqliteAttachmentRepository implements AttachmentRepository {
           row === null ||
           row.status !== "READY" ||
           row.workspace_id !== messageWorkspace ||
-          !this.canRead(row, parsedOwner)
+          !this.ownerCanReference(row, parsedOwner, messageWorkspace)
         ) {
           throw new StorageNotFoundError("Attachment", artifactId);
         }
@@ -401,6 +401,23 @@ export class SqliteAttachmentRepository implements AttachmentRepository {
       )
       .all(before) as Array<{ artifact_id: string }>;
     return rows.map((row) => AttachmentIdSchema.parse(row.artifact_id));
+  }
+
+  async deleteUnreferenced(id: AttachmentId, before: number): Promise<boolean> {
+    const artifactId = AttachmentIdSchema.parse(id);
+    if (!Number.isSafeInteger(before) || before < 0) return false;
+    return withArchiveWriteTransaction(this.database, () => {
+      const result = this.database.client
+        .prepare(
+          `DELETE FROM attachments
+           WHERE artifact_id = ? AND created_at_ms < ?
+             AND NOT EXISTS (
+               SELECT 1 FROM attachment_references AS r WHERE r.artifact_id = attachments.artifact_id
+             )`,
+        )
+        .run(artifactId, before);
+      return result.changes === 1;
+    });
   }
 
   async listForRecovery(): Promise<AttachmentRecoveryRecord[]> {

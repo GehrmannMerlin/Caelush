@@ -111,6 +111,7 @@ describe("RuntimeModelDirectoryService", () => {
     expect(result.models[0]).toMatchObject({
       displayName: "Known Model",
       availability: "AVAILABLE",
+      vision: "UNKNOWN",
       reasoning: {
         defaultLevel: "HIGH",
         options: [
@@ -125,6 +126,7 @@ describe("RuntimeModelDirectoryService", () => {
       id: "unknown-model",
       displayName: "unknown-model",
       availability: "AVAILABLE",
+      vision: "UNKNOWN",
     });
     expect(fetch).toHaveBeenCalledTimes(1);
   });

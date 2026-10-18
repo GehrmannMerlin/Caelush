@@ -15,7 +15,10 @@ export interface ArchiveServiceOptions {
   readonly archives: ArchiveStore;
   readonly reconciler: LegacyArchiveReconciler;
   readonly scopeId: string;
-  readonly onDeleted: (commit: ArchiveDeletionCommit) => void | Promise<void>;
+  readonly onDeleted: (
+    commit: ArchiveDeletionCommit,
+    cleanupBefore: number,
+  ) => void | Promise<void>;
   readonly onInvalidationError?: () => void;
   readonly now?: () => number;
   readonly signingKey?: Uint8Array;
@@ -68,9 +71,10 @@ export class ArchiveService {
   }
   async permanentlyDelete(token: string) {
     const confirmed = this.codec.verify(token);
+    const cleanupBefore = this.now();
     const commit = await this.options.archives.purge(confirmed.selection, confirmed.digest);
     try {
-      await this.options.onDeleted(commit);
+      await this.options.onDeleted(commit, cleanupBefore);
     } catch {
       try {
         this.options.onInvalidationError?.();

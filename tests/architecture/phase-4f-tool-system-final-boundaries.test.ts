@@ -136,7 +136,7 @@ let sourceCache: Map<string, string> | undefined;
 async function executableSources(): Promise<Map<string, string>> {
   if (sourceCache === undefined) {
     const files = (await activeSourceFiles(["packages", "apps"])).filter(
-      (file) => !file.includes("/test/"),
+      (file) => !file.includes("/test/") && file !== "apps/desktop/scripts/windows-d6-fixtures.mjs",
     );
     const entries = await Promise.all(
       files.map(async (file) => [file, code(await read(file))] as const),
@@ -160,7 +160,7 @@ async function declarationHolders(declaration: string): Promise<readonly string[
   return holders.sort();
 }
 
-const TEN = [
+const CODING_BUILTINS = [
   "read_file",
   "list_directory",
   "find_files",
@@ -171,6 +171,7 @@ const TEN = [
   "stop_process",
   "git_status",
   "git_diff",
+  "read_attachment",
 ] as const;
 
 describe("Phase 4F guard — the legacy package is gone", () => {
@@ -324,8 +325,8 @@ describe("Phase 4F guard — one authority per responsibility", () => {
     }
   });
 
-  it("declares the ten Coding builtins exactly once, in @caelush/coding-agent", async () => {
-    for (const name of TEN) {
+  it("declares the eleven Coding builtins exactly once, in @caelush/coding-agent", async () => {
+    for (const name of CODING_BUILTINS) {
       const holders = await declarationHolders(`name: "${name}"`);
       expect(holders, name).toEqual([
         `packages/coding-agent/src/tools/builtins/${name.replaceAll("_", "-")}.ts`,

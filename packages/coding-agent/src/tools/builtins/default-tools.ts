@@ -2,11 +2,13 @@ import type { ToolName } from "@caelush/protocol";
 
 import type { CodingToolDefinition } from "../coding-tool-definition.js";
 import type {
+  AttachmentReadOperations,
   ExecOperations,
   GitOperations,
   PatchOperations,
   ProcessOperations,
 } from "../operations/operations.js";
+import { AttachmentReadOperationError } from "../operations/attachment-read-operations.js";
 import type { CodingReadOnlyOperations } from "../operations/coding-read-only-operations.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { createExecCommandTool } from "./exec-command.js";
@@ -18,6 +20,7 @@ import { createReadFileTool } from "./read-file.js";
 import { createSearchTextTool } from "./search-text.js";
 import { createStopProcessTool } from "./stop-process.js";
 import { createWriteStdinTool } from "./write-stdin.js";
+import { createReadAttachmentTool } from "./read-attachment.js";
 
 /**
  * The default Coding Tool set.
@@ -25,6 +28,7 @@ import { createWriteStdinTool } from "./write-stdin.js";
  * ```text
  * 1  read_file        2  list_directory   3  find_files     4  search_text   5  apply_patch
  * 6  exec_command     7  write_stdin       8  stop_process   9  git_status   10  git_diff
+ * 11 read_attachment  the owner-scoped reader for conversation attachments
  * ```
  *
  * ## The order is frozen
@@ -49,7 +53,7 @@ import { createWriteStdinTool } from "./write-stdin.js";
  */
 
 /**
- * The ten default Coding Tools, in their frozen order.
+ * The eleven default Coding Tools, in their frozen order.
  *
  * `stop_process` sits inside the process family, directly after `write_stdin`. That placement is not
  * cosmetic: the three process Tools are the start / observe / end triple of one lifecycle, and a model
@@ -68,9 +72,10 @@ export const DEFAULT_CODING_TOOL_ORDER = Object.freeze([
   "stop_process",
   "git_status",
   "git_diff",
+  "read_attachment",
 ] as const satisfies readonly ToolName[]);
 
-/** The Operations the default ten need, one port per capability family. */
+/** The Operations the default eleven need, one port per capability family. */
 export interface DefaultCodingToolOperations {
   /**
    * The read-file probe port.
@@ -95,10 +100,12 @@ export interface DefaultCodingToolOperations {
   readonly exec: ExecOperations;
   readonly process: ProcessOperations;
   readonly git: GitOperations;
+  /** Daemon attachment authority; the fallback definition fails safely when no host adapter exists. */
+  readonly attachmentRead?: AttachmentReadOperations | undefined;
 }
 
 /**
- * Build the ten default Coding Tool definitions, in the frozen order.
+ * Build the eleven default Coding Tool definitions, in the frozen order.
  *
  * The returned array is frozen, and so is each definition and each `AgentTool` inside it: a caller that
  * kept a reference cannot reorder the catalog or mutate a schema out from under a built registry.
@@ -117,6 +124,13 @@ export function createDefaultCodingTools(
     createStopProcessTool(operations.process),
     createGitStatusTool(operations.git),
     createGitDiffTool(operations.git),
+    createReadAttachmentTool(
+      operations.attachmentRead ?? {
+        async read() {
+          throw new AttachmentReadOperationError("UNAVAILABLE");
+        },
+      },
+    ),
   ]);
 }
 
@@ -127,7 +141,7 @@ export const GIT_TOOL_NAMES = Object.freeze(["git_status", "git_diff"] as const)
  * What a host knows about Git for the workspace it is composing Tools for.
  *
  * ```text
- * AVAILABLE     a repository was proven to work; the ten-Tool default is offered
+ * AVAILABLE     a repository was proven to work; the eleven-Tool default is offered
  * UNAVAILABLE   no repository, or Git does not work here; the Git Tools are not offered
  * UNKNOWN       the host could not prove it; treated exactly like UNAVAILABLE
  * ```
@@ -139,7 +153,7 @@ export const GIT_TOOL_NAMES = Object.freeze(["git_status", "git_diff"] as const)
 export type GitToolAvailability = "AVAILABLE" | "UNAVAILABLE" | "UNKNOWN";
 
 /**
- * The default ten minus the Git Tools, for a host whose Git availability is not `AVAILABLE`.
+ * The default eleven minus the Git Tools, for a host whose Git availability is not `AVAILABLE`.
  *
  * Git exposure fails closed: `UNKNOWN` is treated exactly like `UNAVAILABLE`, because a host that cannot
  * prove Git works must not offer a model a Tool that will fail. Returning the reduced *definition* list

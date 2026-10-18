@@ -47,7 +47,7 @@ import { composeDaemon, type DaemonComposition } from "../src/daemon-composition
  *
  * ```text
  * Runtime Operations adapters            @caelush/coding-agent
- *   → createDefaultCodingTools(...)      the ten Coding Tool definitions
+ *   → createDefaultCodingTools(...)      the Coding Tool definitions
  *   → DefaultAgentToolRegistryBuilder    the canonical AgentToolRegistry
  *   → CodingToolCatalogBuilder           the Coding overlay, aligned to that registry
  *        ↓
@@ -79,6 +79,7 @@ const EXPECTED_DEFAULT_TOOL_ORDER = [
   "stop_process",
   "git_status",
   "git_diff",
+  "read_attachment",
 ];
 
 let directory: string | undefined;
@@ -125,7 +126,7 @@ function runningInvocation(input: {
 }
 
 describe("production Tool composition delegation", () => {
-  it("composes the ten defaults through the production root unchanged", async () => {
+  it("composes the eleven defaults through the production root unchanged", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-tool-delegation-"));
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
     daemon = await composeDaemon({ storage });
@@ -133,7 +134,7 @@ describe("production Tool composition delegation", () => {
     // The production root's registry is the canonical one, in the frozen Coding order.
     expect(daemon.toolRegistry.names()).toEqual(EXPECTED_DEFAULT_TOOL_ORDER);
     expect(daemon.toolRegistry.names()).toEqual([...DEFAULT_CODING_TOOL_ORDER]);
-    expect(daemon.toolRegistry.size).toBe(10);
+    expect(daemon.toolRegistry.size).toBe(11);
 
     // One registry, never two: the Run Layer's model catalog is that registry's own model specs.
     expect(daemon.toolTurn.modelSpecs()).toBe(daemon.toolRegistry.modelSpecs());

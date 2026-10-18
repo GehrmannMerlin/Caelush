@@ -34,6 +34,23 @@ export function purgeArchiveGraphInTransaction(
     for (const id of ids) insert.run(id);
   }
   cleanupArchiveMemoriesInTransaction(database, selection);
+  database.client.exec(
+    `DELETE FROM attachment_references
+     WHERE (reference_kind = 'MESSAGE' AND reference_id IN (
+       SELECT message_id FROM agent_messages WHERE run_id IN (SELECT id FROM archive_delete_runs)
+     ))
+     OR (reference_kind = 'DRAFT' AND owner_kind = 'SESSION' AND owner_id IN (
+       SELECT id FROM archive_delete_sessions
+     ))
+     OR (reference_kind = 'DRAFT' AND owner_kind = 'WORKSPACE' AND owner_id IN (
+       SELECT id FROM archive_delete_workspaces
+     ))`,
+  );
+  database.client.exec(
+    `DELETE FROM attachment_drafts
+     WHERE (owner_kind = 'SESSION' AND owner_id IN (SELECT id FROM archive_delete_sessions))
+        OR (owner_kind = 'WORKSPACE' AND owner_id IN (SELECT id FROM archive_delete_workspaces))`,
+  );
   // Explicit child-first deletion. FKs stay enabled and any unknown external reference aborts all work.
   const runTables = [
     "private_replays",

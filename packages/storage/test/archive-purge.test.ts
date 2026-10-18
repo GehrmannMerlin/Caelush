@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { isTerminalRunStatus } from "@caelush/core";
 import {
+  AttachmentIdSchema,
   createTimestampMs,
   createWorkspaceId,
   type ArchiveDeletionSelection,
@@ -14,6 +15,7 @@ import {
   SqliteMemoryRepository,
   SqliteMemoryExtractionCommitStore,
 } from "../src/memory-repository.js";
+import { SqliteAttachmentRepository } from "../src/attachment-repository.js";
 import { archiveGraph, graphTables } from "./fixtures/archive-graph.js";
 import { makeSession } from "./support/fixtures.js";
 
@@ -76,6 +78,38 @@ describe("permanent archive purge", () => {
     expect(
       await new SqliteSessionRepository(database).listByWorkspace(target.workspace.id),
     ).toEqual([]);
+  });
+  it("removes message and draft attachment references before marking blobs collectible", async () => {
+    const { database, store } = await fixture();
+    const target = await archiveGraph(database, "附件引用");
+    const attachments = new SqliteAttachmentRepository(database, () => 2);
+    const artifactId = AttachmentIdSchema.parse("att_0123456789ab");
+    const owner = { kind: "SESSION" as const, sessionId: target.session.id };
+    await attachments.createPending({
+      artifactId,
+      workspaceId: target.workspace.id,
+      owner,
+      name: "diagram.png",
+      declaredMediaType: "image/png",
+      createdAt: createTimestampMs(1),
+    });
+    await attachments.markPreprocessing(artifactId);
+    await attachments.markReady(artifactId, {
+      mediaType: "image/png",
+      byteLength: 8,
+      sha256: "a".repeat(64),
+      visualRequirement: "NOT_REQUIRED",
+      processorVersion: "attachments-v1",
+    });
+    await attachments.attachToMessage([artifactId], "附件引用:message", owner);
+    await attachments.saveDraft(owner, 0, { text: "", artifactIds: [artifactId] });
+    await store.archive({ type: "SESSION", sessionId: target.session.id }, createTimestampMs(10));
+
+    await remove(store, { type: "SESSION", sessionId: target.session.id });
+
+    expect(await attachments.listUnreferenced(100)).toEqual([artifactId]);
+    expect(database.client.prepare("SELECT * FROM attachment_references").all()).toEqual([]);
+    expect(database.client.prepare("SELECT * FROM attachment_drafts").all()).toEqual([]);
   });
   it("confirms the entire filter across pages and rejects changed episodes and membership", async () => {
     const { database, store } = await fixture();

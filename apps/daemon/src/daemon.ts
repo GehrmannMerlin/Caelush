@@ -520,6 +520,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   try {
     composition = await composeDaemon({
       storage,
+      attachmentService,
       eventQueuePolicy: config.runEventQueuePolicy,
       providerStreamPolicy: config.providerStreamPolicy,
       runtime,
@@ -600,7 +601,19 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       archives: storage.archives,
       reconciler: legacyArchiveReconciler,
       scopeId,
-      onDeleted: (commit) => invalidator.invalidate(commit),
+      onDeleted: async (commit, cleanupBefore) => {
+        const [invalidation, cleanup] = await Promise.allSettled([
+          invalidator.invalidate(commit),
+          attachmentService.cleanupUnreferenced(cleanupBefore),
+        ]);
+        if (cleanup.status === "rejected") {
+          app.log.warn(
+            { code: "ATTACHMENT_CLEANUP_FAILED" },
+            "Committed archive deletion attachment cleanup failed.",
+          );
+        }
+        if (invalidation.status === "rejected") throw invalidation.reason;
+      },
       onInvalidationError: () =>
         app.log.warn(
           { code: "ARCHIVE_INVALIDATION_FAILED" },
@@ -647,6 +660,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         messageRecords: storage.messageRecords,
         codecs: composition.messages.codecs,
         transcriptProjectors: composition.transcriptProjectors,
+        attachments: attachmentService,
         models: composition.ai.models,
       }),
       presentation: new SessionPresentationService({

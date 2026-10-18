@@ -4,6 +4,7 @@ import {
   AttachmentDraftResponseSchema,
   AttachmentDraftWriteRequestSchema,
   AttachmentIdSchema,
+  AttachmentMetadataResponseSchema,
   AttachmentOwnerSchema,
   MAX_ATTACHMENT_BYTES,
   type AttachmentOwner,
@@ -19,6 +20,7 @@ const OwnerQuerySchema = z
   .object({
     ownerKind: z.enum(["WORKSPACE", "SESSION"]),
     ownerId: z.string().min(1).max(128),
+    disposition: z.enum(["attachment", "inline"]).default("attachment"),
   })
   .strict();
 
@@ -35,7 +37,10 @@ export function registerAttachmentRoutes(app: FastifyInstance, service: Attachme
 
   app.post("/api/v1/attachments", async (request, reply) => {
     const owner = ownerFromHeaders(request);
-    const name = singleHeader(request, "x-caelush-filename");
+    const name = decodeUploadName(
+      singleHeader(request, "x-caelush-filename"),
+      request.headers["x-caelush-filename-encoding"],
+    );
     const declaredMediaType = singleHeader(request, "x-caelush-media-type");
     const declaredLengthValue = request.headers["x-caelush-byte-length"];
     const declaredByteLength =
@@ -71,17 +76,46 @@ export function registerAttachmentRoutes(app: FastifyInstance, service: Attachme
     const owner = ownerFromQuery(query);
     const [descriptor] = await service.getReadyForOwner([artifactId], owner);
     if (descriptor === undefined) throw new AttachmentServiceError("NOT_FOUND");
+    if (
+      query.disposition === "inline" &&
+      descriptor.mediaType !== "image/png" &&
+      descriptor.mediaType !== "image/jpeg" &&
+      descriptor.mediaType !== "image/webp"
+    ) {
+      throw new AttachmentServiceError("UNSUPPORTED_FORMAT");
+    }
     const bytes = await service.download({ artifactId, owner });
     return reply
       .header("content-type", descriptor.mediaType)
       .header("content-length", bytes.byteLength)
       .header(
         "content-disposition",
-        `attachment; filename*=UTF-8''${encodeURIComponent(descriptor.name)}`,
+        `${query.disposition}; filename*=UTF-8''${encodeURIComponent(descriptor.name)}`,
       )
       .header("x-content-type-options", "nosniff")
+      .header("cache-control", "private, no-store")
       .send(bytes);
   });
+
+  app.get(
+    "/api/v1/attachments/:artifactId/metadata",
+    { schema: { response: { 200: AttachmentMetadataResponseSchema } } },
+    async (request) => {
+      const { artifactId } = safeParse(ArtifactParamsSchema, request.params);
+      const query = safeParse(OwnerQuerySchema, request.query);
+      const [descriptor] = await service.getReadyForOwner([artifactId], ownerFromQuery(query));
+      if (descriptor === undefined) throw new AttachmentServiceError("NOT_FOUND");
+      return {
+        attachment: {
+          artifactId: descriptor.artifactId,
+          name: descriptor.name,
+          mediaType: descriptor.mediaType,
+          byteLength: descriptor.byteLength,
+          visualRequirement: descriptor.visualRequirement,
+        },
+      };
+    },
+  );
 
   app.get(
     "/api/v1/attachment-drafts",
@@ -141,6 +175,16 @@ function singleHeader(request: FastifyRequest, name: string): string {
     throw new AttachmentServiceError("INVALID_REQUEST");
   }
   return value;
+}
+
+function decodeUploadName(encodedName: string, encoding: string | string[] | undefined): string {
+  if (encoding === undefined) return encodedName;
+  if (encoding !== "uri-component-v1") throw new AttachmentServiceError("INVALID_REQUEST");
+  try {
+    return decodeURIComponent(encodedName);
+  } catch {
+    throw new AttachmentServiceError("INVALID_REQUEST");
+  }
 }
 
 function safeParse<T>(schema: z.ZodType<T>, input: unknown): T {

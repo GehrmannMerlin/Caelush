@@ -195,6 +195,7 @@ export class RuntimeModelDirectoryService {
       id: modelId,
       displayName: descriptor.displayName ?? modelId,
       availability: "AVAILABLE",
+      vision: descriptor.capabilities.vision,
       ...(reasoning === undefined ? {} : { reasoning }),
     };
   }

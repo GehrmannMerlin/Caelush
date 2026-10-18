@@ -24,6 +24,7 @@
  * ExecOperations            start a process
  * ProcessOperations         interact with a running process
  * GitOperations             read Git status and diffs
+ * AttachmentReadOperations  read one bounded, owner-scoped conversation attachment range
  * ```
  *
  * ## The boundary rules these types encode
@@ -39,9 +40,10 @@
  * concretely resolved `RuntimeWorkspaceScope` exists only inside `operations/runtime-adapters/`, which
  * is the one place allowed to import the broad Runtime types.
  *
- * ## These are the frozen shapes
+ * ## These are the narrow shapes
  *
- * One correction has been applied to this set since the Interface Freeze, recorded in
+ * The Runtime Operations retain their frozen shapes. One correction has been applied to that set since
+ * the Interface Freeze, recorded in
  * `docs/architecture/v2/PHASE_4E_OPERATIONS_INTERFACE_FREEZE_ERRATA.md`: `SearchTextOperations` gained
  * `include` and `limit`, and `GitOperations.status` gained `args`. Both were proven necessary against
  * production source; nothing else here changed.
@@ -55,6 +57,7 @@ export type { PatchOperations } from "./patch-operations.js";
 export type { ExecOperations } from "./exec-operations.js";
 export type { ProcessOperations } from "./process-operations.js";
 export type { GitOperations } from "./git-operations.js";
+export type { AttachmentReadOperations } from "./attachment-read-operations.js";
 
 /**
  * Every Operations interface name, in canonical order.
@@ -70,4 +73,5 @@ export const OPERATIONS_INTERFACE_NAMES = [
   "ExecOperations",
   "ProcessOperations",
   "GitOperations",
+  "AttachmentReadOperations",
 ] as const;

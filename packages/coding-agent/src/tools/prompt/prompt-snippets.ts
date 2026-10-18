@@ -141,6 +141,16 @@ const SNIPPET_SOURCE: Readonly<Record<string, SnippetSource>> = {
     safety: "Review truncation.",
     resultHandling: "Pair diff with exact file reads.",
   },
+  read_attachment: {
+    purpose: "Read one bounded range from a conversation attachment.",
+    whenToUse: "Inspect an attached document, page, sheet, image, or extracted text.",
+    whenNotToUse: "Workspace files; use read_file for those.",
+    argumentNotes: "Opaque attachment ID plus a bounded parser range; never a host path.",
+    sideEffects: "Read-only; resolved for the current session.",
+    safety: "Owner, integrity, parser, and output limits are enforced.",
+    resultHandling:
+      "Use exact locations and continuation ranges; image references replay next turn.",
+  },
 };
 
 /** Render one Tool's guidance into its bounded context block. */
@@ -176,6 +186,10 @@ export const STOP_PROCESS_PROMPT_SNIPPET = renderSnippet(
 );
 export const GIT_STATUS_PROMPT_SNIPPET = renderSnippet("git_status", SNIPPET_SOURCE.git_status!);
 export const GIT_DIFF_PROMPT_SNIPPET = renderSnippet("git_diff", SNIPPET_SOURCE.git_diff!);
+export const READ_ATTACHMENT_PROMPT_SNIPPET = renderSnippet(
+  "read_attachment",
+  SNIPPET_SOURCE.read_attachment!,
+);
 
 /** Every Coding snippet by Tool name, for a provider that selects by the active tool set. */
 export const CODING_TOOL_PROMPT_SNIPPETS: Readonly<Record<string, string>> = Object.freeze({
@@ -189,6 +203,7 @@ export const CODING_TOOL_PROMPT_SNIPPETS: Readonly<Record<string, string>> = Obj
   stop_process: STOP_PROCESS_PROMPT_SNIPPET,
   git_status: GIT_STATUS_PROMPT_SNIPPET,
   git_diff: GIT_DIFF_PROMPT_SNIPPET,
+  read_attachment: READ_ATTACHMENT_PROMPT_SNIPPET,
 });
 
 /**

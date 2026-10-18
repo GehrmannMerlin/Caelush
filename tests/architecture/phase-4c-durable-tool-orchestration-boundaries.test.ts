@@ -521,7 +521,7 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
     expect(pipeline).toContain("export interface PreparedToolSettlement {");
   });
 
-  it("keeps the ten builtins target-owned and the legacy batch retired", () => {
+  it("keeps the eleven builtins target-owned and the legacy batch retired", () => {
     // Phase 4C recorded that the nine builtins had not yet moved and that the legacy batch coordinator
     // still existed for its own direct API. Phase 4E moved the builtins and Phase 4F removed the legacy
     // package, so both statements are now their final form.
@@ -532,7 +532,7 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
     expect(daemon).toContain("createToolBatchCoordinator(");
     expect(daemon).not.toContain("new ToolBatchCoordinator(dispatcher)");
 
-    // The ten builtins are declared by the Coding product layer, once each, in the frozen order.
+    // The eleven builtins are declared by the Coding product layer, once each, in the frozen order.
     const builtinNames = [
       "read_file",
       "list_directory",
@@ -544,6 +544,7 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
       "stop_process",
       "git_status",
       "git_diff",
+      "read_attachment",
     ];
     const defaultTools = executable("packages/coding-agent/src/tools/builtins/default-tools.ts");
     for (const name of builtinNames) {
@@ -564,7 +565,13 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
     for (const file of filesUnder(AGENT_TOOLS)) {
       if (file.replaceAll("\\", "/").includes("/tools/observation/")) continue;
       const source = executable(file);
-      for (const name of ["read_file", "exec_command", "apply_patch", "git_status"]) {
+      for (const name of [
+        "read_file",
+        "exec_command",
+        "apply_patch",
+        "git_status",
+        "read_attachment",
+      ]) {
         expect(source, `${file} must not name ${name}`).not.toContain(name);
       }
     }

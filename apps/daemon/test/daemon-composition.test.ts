@@ -127,8 +127,9 @@ describe("daemon production composition", () => {
       "stop_process",
       "git_status",
       "git_diff",
+      "read_attachment",
     ]);
-    // Phase 4E moved usage guidance out of the provider-visible tool catalog: the ten defaults carry
+    // Phase 4E moved usage guidance out of the provider-visible tool catalog: the defaults carry
     // no guidance folded into a description, because their guidance travels as a Coding `promptSnippet`
     // through the budgeted Context path. Phase 4F removed the legacy `modelGuidance` accessor with the
     // package that declared it, so the assertion is now the structural one: every model spec is exactly
@@ -228,6 +229,7 @@ describe("daemon production composition", () => {
       "exec_command",
       "write_stdin",
       "stop_process",
+      "read_attachment",
     ]);
     expect(composition.toolTurn.modelSpecs().map((tool) => tool.name)).toEqual(
       composition.toolRegistry.names(),

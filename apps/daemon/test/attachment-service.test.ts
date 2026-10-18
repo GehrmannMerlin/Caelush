@@ -151,6 +151,70 @@ describe("daemon attachment service", () => {
     });
   });
 
+  it("deletes an attachment only after its durable draft and message references are gone", async () => {
+    const { service, ownerSession, attachmentsRoot } = await setup();
+    const descriptor = await upload(service, ownerSession.id, "draft.txt", "keep until sent");
+    const attachmentOwner = owner(ownerSession.id);
+    await storage!.attachments.saveDraft(attachmentOwner, 0, {
+      text: "draft",
+      artifactIds: [descriptor.artifactId],
+    });
+
+    await expect(service.cleanupUnreferenced(Date.now() + 1)).resolves.toEqual([]);
+    await expect(
+      service.download({ artifactId: descriptor.artifactId, owner: attachmentOwner }),
+    ).resolves.toEqual(Buffer.from("keep until sent"));
+
+    await storage!.attachments.removeDraftReference(attachmentOwner, descriptor.artifactId);
+    await expect(service.cleanupUnreferenced(Date.now() + 1)).resolves.toEqual([
+      descriptor.artifactId,
+    ]);
+    await expect(
+      readFile(join(attachmentsRoot, `${descriptor.artifactId}.blob`)),
+    ).rejects.toThrow();
+    await expect(storage!.attachments.listForRecovery()).resolves.toEqual([]);
+  });
+
+  it("provides a verified, session-scoped snapshot for attachment context reads", async () => {
+    const { service, ownerSession, foreignSession, workspace } = await setup();
+    const descriptor = await service.upload({
+      owner: { kind: "WORKSPACE", workspaceId: workspace.id },
+      name: "context.txt",
+      declaredMediaType: "text/plain",
+      stream: Readable.from([Buffer.from("first line\nsecond line")]),
+    });
+    const signal = new AbortController().signal;
+    const snapshot = await service.readSnapshot({
+      artifactId: descriptor.artifactId,
+      owner: owner(ownerSession.id),
+      signal,
+    });
+
+    expect(snapshot.descriptor).toEqual(descriptor);
+    expect(snapshot.manifest.sha256).toBe(descriptor.sha256);
+    const result = await snapshot.contentReference.read({
+      range: { kind: "TEXT_LINES", startLine: 1, lineCount: 2 },
+      signal,
+    });
+    expect(result.items).toContainEqual(
+      expect.objectContaining({ type: "TEXT", text: "first line\nsecond line" }),
+    );
+
+    const privateDescriptor = await upload(
+      service,
+      ownerSession.id,
+      "private.txt",
+      "session contents",
+    );
+    await expect(
+      service.readSnapshot({
+        artifactId: privateDescriptor.artifactId,
+        owner: owner(foreignSession.id),
+        signal,
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
   it("counts actual stream bytes even when the advisory upload length is falsified", async () => {
     const { service, ownerSession } = await setup();
     const content = Buffer.alloc(25 * 1024 * 1024 + 1, 0x61);

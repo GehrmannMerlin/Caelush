@@ -6,6 +6,9 @@ import { SqliteWorkspaceRepository } from "../../src/repositories/workspace-repo
 import { makeRun, makeSession } from "../support/fixtures.js";
 
 export const graphTables = [
+  "attachment_drafts",
+  "attachment_references",
+  "attachments",
   "private_replays",
   "agent_messages",
   "agent_events",

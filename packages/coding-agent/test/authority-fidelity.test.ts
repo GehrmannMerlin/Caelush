@@ -211,13 +211,14 @@ describe("approval identity fidelity", () => {
     });
   }
 
-  it("is deterministic for all ten Tools across every policy pair", () => {
+  it("is deterministic for all eleven Tools across every policy pair", () => {
     // ```text
     // same prepared args + same metadata + same context  →  byte-identical key
     // ```
     //
     // That is what keeps a durable approval valid across a restart. Phase 4E proved the pre-migration
-    // algorithm produced these same 81 digests; the declaration below is what keeps them stable now.
+    // algorithm produced the old 81 digests; the declaration below keeps them stable and includes the
+    // new attachment Tool's nine policy combinations.
     // A 64-hex-character SHA-256 digest is asserted for shape, and the recomputation plus the
     // sensitivity assertions below are what make the value load-bearing rather than a recorded constant.
     const definitions = createDefaultCodingTools(defaultOperations());
@@ -249,7 +250,7 @@ describe("approval identity fidelity", () => {
         }
       }
     }
-    expect(compared).toBe(90);
+    expect(compared).toBe(99);
   });
 
   it("is order-insensitive over capabilities", () => {
@@ -477,7 +478,7 @@ describe("effects fidelity", () => {
 });
 
 describe("default Tool set fidelity", () => {
-  it("produces the ten Tools in the frozen order, from the one declaration", () => {
+  it("produces the eleven Tools in the frozen order, from the one declaration", () => {
     const definitions = createDefaultCodingTools(defaultOperations());
 
     expect(definitions.map((definition) => definition.tool.name)).toEqual([
@@ -493,7 +494,7 @@ describe("default Tool set fidelity", () => {
     }
   });
 
-  it("keeps the documented risk level, capabilities and runtime requirements for all ten", () => {
+  it("keeps the documented risk level, capabilities and runtime requirements for all eleven", () => {
     // The security envelope of the default product, asserted as a table rather than derived. A change
     // to any cell is a security change and has to be an explicit one.
     const definitions = createDefaultCodingTools(defaultOperations());
@@ -523,6 +524,7 @@ describe("default Tool set fidelity", () => {
       ["stop_process", "CRITICAL", ["PROCESS_KILL"], { runtimeKinds: ["local"] }],
       ["git_status", "LOW", ["GIT_READ"], { runtimeKinds: ["local"] }],
       ["git_diff", "LOW", ["GIT_READ"], { runtimeKinds: ["local"] }],
+      ["read_attachment", "LOW", ["FS_READ"], { runtimeKinds: ["local"] }],
     ];
 
     for (const [
@@ -559,7 +561,7 @@ describe("default Tool set fidelity", () => {
     expect(byName.get("git_diff")?.effectProjector).toBeUndefined();
   });
 
-  it("carries a security-facts projector for every one of the ten", () => {
+  it("carries a security-facts projector for every one of the eleven", () => {
     // The Security gate is handed a Tool's facts; a Tool without a projector would be opaque to the
     // input-aware policy, which is the one outcome that must never happen for a default Tool.
     for (const definition of createDefaultCodingTools(defaultOperations())) {
@@ -567,7 +569,7 @@ describe("default Tool set fidelity", () => {
     }
   });
 
-  it("carries the canonical prompt snippet for every one of the ten", () => {
+  it("carries the canonical prompt snippet for every one of the eleven", () => {
     // Usage guidance is delivered through Context from `promptSnippet`, never appended to a description.
     for (const name of DEFAULT_CODING_TOOL_ORDER) {
       const snippet = promptSnippetFor(name);
@@ -576,7 +578,7 @@ describe("default Tool set fidelity", () => {
     }
   });
 
-  it("does not append guidance to the ten default descriptions", () => {
+  it("does not append guidance to the eleven default descriptions", () => {
     for (const definition of createDefaultCodingTools(defaultOperations())) {
       expect(definition.tool.description, definition.tool.name).not.toContain("Purpose:");
       expect(definition.tool.description, definition.tool.name).not.toContain("Safety:");
@@ -620,7 +622,7 @@ describe("Coding Tool execution fidelity", () => {
     });
   });
 
-  it("constructs every one of the ten Tools", () => {
+  it("constructs every one of the eleven Tools", () => {
     const readOnly = readOnlyFake({ read: async () => readFileAnswer() }).operations;
     const process = processFake({ execute: async () => ({}), interact: async () => ({}) });
     const git = gitFake({ status: async () => ({}) }).operations;
@@ -644,9 +646,9 @@ describe("Coding Tool execution fidelity", () => {
     const definitions: readonly CodingToolDefinition[] =
       createDefaultCodingTools(defaultOperations());
     const tools = new Set(definitions.map((definition) => definition.tool));
-    expect(tools.size).toBe(10);
+    expect(tools.size).toBe(11);
     const schemas = new Set(definitions.map((definition) => definition.tool.inputSchema));
-    expect(schemas.size).toBe(10);
+    expect(schemas.size).toBe(11);
   });
 
   it("reports a Runtime failure as a model-recoverable Tool error", async () => {

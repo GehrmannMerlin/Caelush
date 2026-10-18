@@ -221,7 +221,7 @@ describe("Operations exact contracts — the two errata-corrected contracts", ()
 });
 
 describe("Operations exact contracts — the shared boundary rules", () => {
-  it("declares exactly the eight frozen interface names, once each", () => {
+  it("declares the established operation interfaces plus the attachment read port once each", () => {
     expect(OPERATIONS_INTERFACE_NAMES).toEqual([
       "ReadFileOperations",
       "ListDirectoryOperations",
@@ -231,6 +231,7 @@ describe("Operations exact contracts — the shared boundary rules", () => {
       "ExecOperations",
       "ProcessOperations",
       "GitOperations",
+      "AttachmentReadOperations",
     ]);
   });
 

@@ -273,11 +273,18 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
     );
     expect(bounders).toEqual([`${RESULT}result-policy.ts`]);
     const boundBody = executable(`${RESULT}result-policy.ts`);
-    expect(boundBody).toMatch(
-      /Buffer\.byteLength\(\s*content,\s*"utf8",?\s*\)\s*<=\s*limits\.maxDurableContentBytes/,
+    expect(boundBody).toContain(
+      "if (utf8ByteLength(content) <= limits.maxDurableContentBytes) return content;",
     );
-    // Whole characters only: the prefix is grown one code point at a time.
-    expect(boundBody).toContain("for (const character of content) {");
+    expect(boundBody).toContain("utf8PrefixByBytes(content, limits.maxDurableContentBytes");
+    // The Agent result layer shares its package-local UTF-8 implementation; other packages keep
+    // equivalent helpers locally because Runtime, Client, and Coding have independent boundaries.
+    const byteLengthOwners = productionSources().filter(
+      (file) =>
+        file.startsWith("packages/agent/src/") &&
+        executable(file).includes("export function utf8ByteLength("),
+    );
+    expect(byteLengthOwners).toEqual(["packages/agent/src/utils/utf8.ts"]);
 
     // No result module creates a schema compiler.
     for (const file of filesUnder(RESULT)) {
@@ -405,11 +412,13 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
     const policy = executable(`${RESULT}result-policy.ts`);
     expect(policy).toContain("export function boundToolResultContent(");
     expect(policy).toContain("TOOL_RESULT_TRUNCATION_MARKER");
-    // The whole-character prefix is the one UTF-8 boundary decision in the repository.
-    const boundaryOwners = productionSources().filter((file) =>
-      executable(file).includes("function wholeCharacterPrefix("),
+    // The result policy delegates to the Agent package's shared character-boundary helper.
+    const boundaryOwners = productionSources().filter(
+      (file) =>
+        file.startsWith("packages/agent/src/") &&
+        executable(file).includes("export function utf8PrefixByBytes("),
     );
-    expect(boundaryOwners).toEqual([`${RESULT}result-policy.ts`]);
+    expect(boundaryOwners).toEqual(["packages/agent/src/utils/utf8.ts"]);
 
     const sanitizerPort = executable(`${RESULT}result-sanitizer-port.ts`);
     expect(sanitizerPort).toContain("export interface ToolResultSanitizerPort");

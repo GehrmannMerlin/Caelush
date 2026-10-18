@@ -172,6 +172,23 @@ export function projectReadFileSecurityFacts(args: Readonly<JsonObject>): ToolSe
   };
 }
 
+/** Project only a digest of an opaque attachment read into Guard-safe facts. */
+export function projectReadAttachmentSecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
+  const artifactId = typeof args["artifactId"] === "string" ? args["artifactId"] : "INVALID";
+  const range = args["range"];
+  const referenceDigest = digestText(
+    canonicalJsonString({
+      artifactId,
+      range: range !== null && typeof range === "object" ? range : {},
+    }),
+  );
+  return {
+    resourceAccesses: [],
+    secretScanInputs: [],
+    structuralPreview: { kind: "ATTACHMENT_READ", referenceDigest },
+  };
+}
+
 export function projectListDirectorySecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
   const path = pathOf(args.path, "path");
   return {

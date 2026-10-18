@@ -25,6 +25,7 @@ export interface CaelushToolPresentationOptions {
 
 const TOOL_LABELS: Readonly<Record<string, string>> = Object.freeze({
   read_file: "读取文件",
+  read_attachment: "读取附件",
   list_directory: "浏览目录",
   find_files: "查找文件",
   search_text: "搜索文本",

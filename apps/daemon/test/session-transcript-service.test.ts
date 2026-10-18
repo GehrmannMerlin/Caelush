@@ -5,7 +5,14 @@ import {
   projectionVersionTable,
 } from "@caelush/agent";
 import type { AgentMessageRecord } from "@caelush/agent";
-import type { AgentRun, AgentSession, RunId, SessionId } from "@caelush/protocol";
+import { AttachmentIdSchema } from "@caelush/protocol";
+import type {
+  AgentRun,
+  AgentSession,
+  AttachmentDescriptor,
+  RunId,
+  SessionId,
+} from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 
 import { SessionTranscriptService } from "../src/services/session-transcript-service.js";
@@ -71,6 +78,66 @@ function makeService(records: readonly AgentMessageRecord[]) {
 }
 
 describe("Phase 5E Session Transcript Service", () => {
+  it("projects only safe attachment metadata and capability flags", async () => {
+    const artifactId = AttachmentIdSchema.parse("att_0123456789ab");
+    const descriptor: AttachmentDescriptor = {
+      artifactId,
+      workspaceId: "wsp_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a" as never,
+      name: "screenshot.png",
+      mediaType: "image/png",
+      byteLength: 1234,
+      sha256: "a".repeat(64),
+      status: "READY",
+      visualRequirement: "NOT_REQUIRED",
+      processorVersion: "attachments-v1",
+    };
+    const service = new SessionTranscriptService({
+      sessions: { get: async () => session },
+      runs: { listBySession: async () => [run] },
+      messageRecords: {
+        listBySession: async () => [
+          record(1, "USER", "amsg_0192f5b1-4d3a-7c2e-8a91-000000000011", {
+            content: [
+              { type: "TEXT", text: "Describe this image" },
+              { type: "ATTACHMENT_REF", artifactId },
+            ],
+          }),
+        ],
+      },
+      codecs: createStandardAgentMessageCodecRegistry(
+        projectionVersionTable({ USER: 1, ASSISTANT: 1, TOOL_RESULT: 1 }),
+      ),
+      transcriptProjectors: createStandardAgentMessageTranscriptProjectorRegistry(),
+      attachments: {
+        async getReadyForRun(ids, ownerSessionId) {
+          expect(ids).toEqual([artifactId]);
+          expect(ownerSessionId).toBe(sessionId);
+          return [descriptor];
+        },
+      },
+    });
+
+    const response = await service.getTranscript(sessionId, { limit: 10 });
+
+    expect(response.items[0]).toMatchObject({
+      kind: "USER",
+      attachments: [
+        {
+          artifactId,
+          name: "screenshot.png",
+          mediaType: "image/png",
+          byteLength: 1234,
+          previewAvailable: true,
+          downloadAvailable: true,
+        },
+      ],
+    });
+    const serialized = JSON.stringify(response);
+    expect(serialized).not.toContain("sha256");
+    expect(serialized).not.toContain("attachments-v1");
+    expect(serialized).not.toContain("C:\\");
+  });
+
   it("orders records by Run then sequence, skips non-transcript Tool results, and appends a terminal", async () => {
     const service = makeService([
       record(1, "USER", "amsg_0192f5b1-4d3a-7c2e-8a91-000000000001", {

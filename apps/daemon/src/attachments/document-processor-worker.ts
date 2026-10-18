@@ -1050,7 +1050,7 @@ async function loadWorkbook(bytes: Buffer): Promise<ExcelJS.Workbook> {
     if (worksheet.rowCount > MAX_XLSX_CELLS || worksheet.columnCount > 16_384)
       fail("RESOURCE_LIMIT");
     worksheet.eachRow((row) => {
-      row.eachCell((cell) => {
+      row.eachCell(() => {
         cellCount += 1;
         if (cellCount > MAX_XLSX_CELLS) fail("RESOURCE_LIMIT");
       });
