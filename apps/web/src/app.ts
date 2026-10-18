@@ -291,6 +291,7 @@ export function WebHostApp(props: {
   const draftLoadGeneration = useRef(0);
 
   useEffect(() => {
+    attachmentManager?.activate();
     return () => attachmentManager?.dispose();
   }, [attachmentManager]);
 

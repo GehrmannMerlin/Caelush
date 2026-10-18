@@ -1,5 +1,5 @@
 import { createElement, useEffect, useState, type ReactElement } from "react";
-import { FileText, Image as ImageIcon, LoaderCircle, RefreshCw, X } from "lucide-react";
+import { FileText, Image as ImageIcon, RefreshCw, X } from "lucide-react";
 import type { AttachmentId, AttachmentOwner } from "@caelush/protocol";
 import type { AttachmentQueueItem } from "../application/attachment-manager.js";
 
@@ -16,6 +16,12 @@ export function AttachmentCard(props: AttachmentCardProps): ReactElement {
   const { item } = props;
   const [previewUrl, setPreviewUrl] = useState<string | undefined>();
   const isImage = item.mediaType.startsWith("image/");
+  const isBusy =
+    item.status === "VALIDATING" || item.status === "UPLOADING" || item.status === "PREPROCESSING";
+  const uploadProgress =
+    item.status === "UPLOADING" && item.totalBytes > 0
+      ? Math.max(0, Math.min(1, item.loadedBytes / item.totalBytes))
+      : undefined;
   const retryable =
     item.status === "FAILED" && item.file !== undefined && props.onRetry !== undefined;
 
@@ -49,10 +55,17 @@ export function AttachmentCard(props: AttachmentCardProps): ReactElement {
   }, [isImage, item.artifactId, item.file, item.owner, props.onLoadPreview]);
 
   const statusLabel = attachmentStatusLabel(item.status);
+  const progressCircumference = 2 * Math.PI * 16;
+  const className = [
+    "attachment-card",
+    `attachment-card--${isImage ? "image" : "file"}`,
+    ...(props.compact === true ? ["attachment-card--compact"] : []),
+  ].join(" ");
+
   return createElement(
     "article",
     {
-      className: `attachment-card${props.compact === true ? " attachment-card--compact" : ""}`,
+      className,
       "data-attachment-status": item.status.toLowerCase(),
       "aria-label": `${item.name}, ${statusLabel}`,
     },
@@ -72,55 +85,84 @@ export function AttachmentCard(props: AttachmentCardProps): ReactElement {
         { className: "attachment-card-meta" },
         `${item.mediaType} · ${formatBytes(item.byteLength)} · ${statusLabel}`,
       ),
-      item.status === "UPLOADING" && item.totalBytes > 0
-        ? createElement(
-            "div",
-            {
-              className: "attachment-card-progress",
-              role: "progressbar",
-              "aria-label": `上传 ${item.name}`,
-              "aria-valuemin": 0,
-              "aria-valuemax": item.totalBytes,
-              "aria-valuenow": item.loadedBytes,
-            },
-            createElement("span", {
-              style: { width: `${Math.round((item.loadedBytes / item.totalBytes) * 100)}%` },
-            }),
-          )
-        : null,
       item.status === "FAILED" && item.error !== undefined
         ? createElement("span", { className: "attachment-card-error", role: "status" }, item.error)
         : null,
     ),
-    retryable
+    isBusy
       ? createElement(
-          "button",
+          "span",
           {
-            type: "button",
-            className: "attachment-card-action",
-            onClick: () => props.onRetry?.(item.id),
-            "aria-label": `重试上传 ${item.name}`,
-            title: "重试上传",
+            className: `attachment-card-progress-overlay${uploadProgress === undefined ? " attachment-card-progress-overlay--indeterminate" : ""}`,
+            role: "progressbar",
+            "aria-label": item.status === "UPLOADING" ? `上传 ${item.name}` : `处理 ${item.name}`,
+            ...(uploadProgress === undefined
+              ? {}
+              : {
+                  "aria-valuemin": 0,
+                  "aria-valuemax": 100,
+                  "aria-valuenow": Math.round(uploadProgress * 100),
+                }),
           },
-          createElement(RefreshCw, { size: 15, "aria-hidden": true }),
+          createElement(
+            "svg",
+            {
+              className: `attachment-card-progress-ring${uploadProgress === undefined ? " attachment-card-progress-ring--indeterminate" : ""}`,
+              viewBox: "0 0 40 40",
+              "aria-hidden": true,
+            },
+            createElement("circle", {
+              className: "attachment-card-progress-track",
+              cx: 20,
+              cy: 20,
+              r: 16,
+              fill: "none",
+              strokeWidth: 3,
+            }),
+            createElement("circle", {
+              className: "attachment-card-progress-value",
+              cx: 20,
+              cy: 20,
+              r: 16,
+              fill: "none",
+              strokeWidth: 3,
+              ...(uploadProgress === undefined
+                ? {}
+                : {
+                    strokeDasharray: progressCircumference,
+                    strokeDashoffset: progressCircumference * (1 - uploadProgress),
+                  }),
+            }),
+          ),
         )
-      : item.status === "UPLOADING" || item.status === "PREPROCESSING"
-        ? createElement(LoaderCircle, {
-            className: "attachment-card-spinner",
-            size: 16,
-            "aria-label": statusLabel,
-          })
-        : null,
+      : null,
     createElement(
-      "button",
-      {
-        type: "button",
-        className: "attachment-card-action attachment-card-remove",
-        onClick: () => props.onRemove(item.id),
-        "aria-label": `移除附件 ${item.name}`,
-        title: "移除附件",
-      },
-      createElement(X, { size: 15, "aria-hidden": true }),
+      "div",
+      { className: "attachment-card-actions" },
+      retryable
+        ? createElement(
+            "button",
+            {
+              type: "button",
+              className: "attachment-card-action attachment-card-action--retry",
+              onClick: () => props.onRetry?.(item.id),
+              "aria-label": `重试上传 ${item.name}`,
+              title: "重试上传",
+            },
+            createElement(RefreshCw, { size: 15, "aria-hidden": true }),
+          )
+        : null,
+      createElement(
+        "button",
+        {
+          type: "button",
+          className: "attachment-card-action attachment-card-remove",
+          onClick: () => props.onRemove(item.id),
+          "aria-label": `移除附件 ${item.name}`,
+          title: "移除附件",
+        },
+        createElement(X, { size: 15, "aria-hidden": true }),
+      ),
     ),
   );
 }

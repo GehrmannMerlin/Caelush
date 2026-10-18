@@ -3,6 +3,7 @@ import {
   type AttachmentDescriptor,
   type AttachmentOwner,
 } from "@caelush/protocol";
+import type { AttachmentUploadOptions } from "@caelush/client";
 import { describe, expect, it, vi } from "vitest";
 import {
   AttachmentManager,
@@ -55,6 +56,42 @@ describe("AttachmentManager", () => {
       status: "READY",
       artifactId: descriptor("notes.txt", 5).artifactId,
     });
+  });
+
+  it("accepts selected files after StrictMode replays the manager effect", async () => {
+    const uploadAttachment = vi.fn((_blob: Blob, input: AttachmentUploadOptions) => {
+      return new Promise<AttachmentDescriptor>((_resolve, reject) => {
+        input.signal.addEventListener("abort", () => reject(new Error("aborted")), {
+          once: true,
+        });
+      });
+    });
+    const manager = new AttachmentManager({ uploadAttachment });
+    let changeCount = 0;
+
+    manager.activate();
+    let unsubscribe = manager.subscribe(() => {
+      changeCount += 1;
+    });
+    unsubscribe();
+    manager.dispose();
+    manager.activate();
+    unsubscribe = manager.subscribe(() => {
+      changeCount += 1;
+    });
+
+    const task = manager.addFiles([file("selected.txt")], owner);
+    expect(manager.getSnapshot(owner)).toHaveLength(1);
+    expect(manager.getSnapshot(owner)[0]).toMatchObject({
+      name: "selected.txt",
+      status: "UPLOADING",
+    });
+    expect(changeCount).toBeGreaterThan(0);
+    expect(uploadAttachment).toHaveBeenCalledOnce();
+
+    manager.dispose();
+    unsubscribe();
+    await task;
   });
 
   it("keeps failed items retryable with the original file and stable local identity", async () => {

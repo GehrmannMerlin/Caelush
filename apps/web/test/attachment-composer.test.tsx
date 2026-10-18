@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { createWorkspaceId, type AttachmentOwner } from "@caelush/protocol";
+import type { AttachmentQueueItem } from "../src/application/attachment-manager.js";
 import { AttachmentMenu } from "../src/components/attachment-menu.js";
+import { AttachmentCard } from "../src/components/attachment-card.js";
 import { PromptComposer } from "../src/components/prompt-composer.js";
 
 describe("attachment composer", () => {
@@ -64,5 +67,60 @@ describe("attachment composer", () => {
     expect(html).toContain('aria-label="添加附件"');
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain('disabled=""');
+  });
+
+  it("shows an image attachment with a centered upload ring and hover remove control", () => {
+    const owner: AttachmentOwner = { kind: "WORKSPACE", workspaceId: createWorkspaceId() };
+    const item: AttachmentQueueItem = {
+      id: "attachment-1",
+      owner,
+      name: "diagram.png",
+      mediaType: "image/png",
+      byteLength: 100,
+      status: "UPLOADING",
+      loadedBytes: 42,
+      totalBytes: 100,
+      file: Object.assign(new Blob(["image"]), { name: "diagram.png" }) as File,
+    };
+    const html = renderToStaticMarkup(<AttachmentCard item={item} onRemove={vi.fn()} />);
+    const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+
+    expect(html).toContain('class="attachment-card attachment-card--image"');
+    expect(html).toContain('class="attachment-card-progress-overlay" role="progressbar"');
+    expect(html).toContain('aria-valuenow="42"');
+    expect(html).toContain("attachment-card-progress-ring");
+    expect(html).toContain('aria-label="移除附件 diagram.png"');
+    expect(styles).toMatch(/\.attachment-card--image\s*\{[^}]*width:\s*96px;[^}]*height:\s*96px;/s);
+    expect(styles).toMatch(
+      /\.attachment-card:hover\s+\.attachment-card-remove,\s*\.attachment-card:focus-within\s+\.attachment-card-remove\s*\{[^}]*opacity:\s*1;/s,
+    );
+    expect(styles).toMatch(
+      /@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{[^}]*\.attachment-card-remove\s*\{[^}]*opacity:\s*1;/s,
+    );
+    expect(styles).toMatch(
+      /@keyframes\s+attachment-card-ring-spin\s*\{\s*from\s*\{\s*transform:\s*rotate\(-90deg\);\s*\}\s*to\s*\{\s*transform:\s*rotate\(270deg\);/s,
+    );
+  });
+
+  it("hides the progress ring after an attachment is ready", () => {
+    const owner: AttachmentOwner = { kind: "WORKSPACE", workspaceId: createWorkspaceId() };
+    const item: AttachmentQueueItem = {
+      id: "attachment-ready",
+      owner,
+      name: "notes.txt",
+      mediaType: "text/plain",
+      byteLength: 5,
+      status: "READY",
+      loadedBytes: 5,
+      totalBytes: 5,
+      artifactId: "att_notesxxxxxxxx" as AttachmentQueueItem["artifactId"],
+    };
+    const html = renderToStaticMarkup(<AttachmentCard item={item} onRemove={vi.fn()} />);
+    const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+
+    expect(html).toContain('class="attachment-card attachment-card--file"');
+    expect(html).toContain("notes.txt");
+    expect(html).not.toContain("attachment-card-progress-overlay");
+    expect(styles).toMatch(/\.attachment-card\s*\{[^}]*width:\s*176px;[^}]*min-height:\s*88px;/s);
   });
 });

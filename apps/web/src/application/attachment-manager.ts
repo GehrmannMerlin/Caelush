@@ -190,6 +190,10 @@ export class AttachmentManager {
     }
   }
 
+  activate(): void {
+    this.disposed = false;
+  }
+
   dispose(): void {
     this.disposed = true;
     for (const controller of this.uploads.values()) controller.abort();
