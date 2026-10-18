@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AIError } from "../../../src/errors/ai-error.js";
 import { translateOpenAICompatibleMessages } from "../../../src/adapters/openai-compatible/message-translator.js";
 import type { AIMessage } from "../../../src/messages/index.js";
 
@@ -10,6 +11,46 @@ describe("OpenAI-compatible message translation", () => {
       messages: [{ role: "user", content: "hello" }],
     });
     expect(translated).not.toHaveProperty("instructions");
+  });
+
+  it("translates user images to AI SDK image parts", () => {
+    const translated = translateOpenAICompatibleMessages([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Describe this." },
+          { type: "image", mediaType: "image/png", data: "iVBORw0KGgo=", detail: "HIGH" },
+        ],
+      },
+    ]);
+
+    expect(translated.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Describe this." },
+          { type: "image", image: "iVBORw0KGgo=", mediaType: "image/png" },
+        ],
+      },
+    ]);
+  });
+
+  it("fails with a typed error when a tool result contains an unsupported image", () => {
+    try {
+      translateOpenAICompatibleMessages([
+        {
+          role: "tool",
+          toolCallId: "c1",
+          toolName: "read_attachment",
+          content: [{ type: "image", mediaType: "image/png", data: "iVBORw0KGgo=" }],
+          isError: false,
+        },
+      ]);
+      expect.unreachable("tool-result images must not be converted into JSON text");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AIError);
+      expect((error as AIError).code).toBe("AI_CAPABILITY_UNSUPPORTED");
+    }
   });
 
   it("collects system messages into instructions and keeps them out of messages", () => {

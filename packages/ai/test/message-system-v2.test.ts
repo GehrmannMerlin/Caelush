@@ -18,8 +18,11 @@ import type {
   AIContent,
   AIMessage,
   AIProviderOpaqueState,
+  AIToolResultMessage,
   AITextContent,
   AIToolCallContent,
+  AIUserImagePart,
+  AIUserMessage,
 } from "@caelush/ai";
 
 /**
@@ -44,6 +47,45 @@ const STATE_BETA: AIProviderOpaqueState = {
   version: 1,
   payload: { signature: "different-blob" },
 };
+
+const IMAGE: AIUserImagePart = {
+  type: "image",
+  mediaType: "image/png",
+  data: "iVBORw0KGgo=",
+  detail: "HIGH",
+};
+
+describe("Phase 5A AI — user and tool image content", () => {
+  it("validates user image input and image-bearing tool results", () => {
+    const user: AIUserMessage = {
+      role: "user",
+      content: [{ type: "text", text: "What is this?" }, IMAGE],
+    };
+    const tool: AIToolResultMessage = {
+      role: "tool",
+      toolCallId: "call_1",
+      toolName: "read_attachment",
+      content: [{ type: "text", text: "Rendered page 1" }, IMAGE],
+      isError: false,
+    };
+
+    expect(() => {
+      assertAIMessage(user);
+      assertAIMessage(tool);
+    }).not.toThrow();
+  });
+
+  it("rejects invalid image media types, base64 and detail values", () => {
+    const invalidImages = [
+      { ...IMAGE, mediaType: "application/pdf" },
+      { ...IMAGE, data: "not base64!" },
+      { ...IMAGE, detail: "MEDIUM" },
+    ];
+    for (const image of invalidImages) {
+      expect(() => assertAIMessage({ role: "user", content: [image] })).toThrow(TypeError);
+    }
+  });
+});
 
 describe("Phase 5A AI — canonical content names", () => {
   it("keeps the frozen text and tool-call shapes", () => {

@@ -1,6 +1,12 @@
 import { createAIError } from "../../errors/ai-error.js";
-import type { AIAssistantContent } from "../../messages/content.js";
-import type { AIAssistantMessage, AIMessage, AIToolResultMessage } from "../../messages/message.js";
+import type { AIUserContent } from "../../messages/content.js";
+import type { AIImageMediaType, AIAssistantContent } from "../../messages/content.js";
+import type {
+  AIAssistantMessage,
+  AIMessage,
+  AIToolResultMessage,
+  AIUserMessage,
+} from "../../messages/message.js";
 import type { AnthropicCacheControl } from "./tool-translator.js";
 import type { JsonObject } from "../../json/json-value.js";
 import type { ModelRef } from "../../models/model-ref.js";
@@ -12,8 +18,20 @@ import type { ModelRef } from "../../models/model-ref.js";
  * gains no thinking, signature, redacted-thinking, provider-block or provider-state
  * variant because of this dialect.
  */
-export type AnthropicContentBlock =
+type AnthropicInputContentBlock =
   | { readonly type: "text"; readonly text: string; readonly cache_control?: AnthropicCacheControl }
+  | {
+      readonly type: "image";
+      readonly source: {
+        readonly type: "base64";
+        readonly media_type: AIImageMediaType;
+        readonly data: string;
+      };
+      readonly cache_control?: AnthropicCacheControl;
+    };
+
+export type AnthropicContentBlock =
+  | AnthropicInputContentBlock
   | {
       readonly type: "tool_use";
       readonly id: string;
@@ -24,7 +42,7 @@ export type AnthropicContentBlock =
   | {
       readonly type: "tool_result";
       readonly tool_use_id: string;
-      readonly content: string;
+      readonly content: string | readonly AnthropicInputContentBlock[];
       readonly is_error: boolean;
       readonly cache_control?: AnthropicCacheControl;
     };
@@ -62,7 +80,7 @@ export interface TranslatedAnthropicConversation {
  * ```text
  * leading AISystemMessage[]        -> top-level system blocks, in caller order
  * a system message after any other -> AI_INVALID_REQUEST (fail closed)
- * AIUserMessage                    -> user message with one text block
+ * AIUserMessage                    -> user message with ordered text/image blocks
  * AIAssistantMessage               -> assistant message, content order preserved
  *   AIAssistantTextContent         -> text block
  *   AIAssistantToolCallContent     -> tool_use block (id, name, input)
@@ -149,7 +167,7 @@ export function translateAnthropicMessages(
     }
 
     if (message.role === "user") {
-      translated.push({ role: "user", content: [{ type: "text", text: message.content }] });
+      translated.push(toUserMessage(message));
       continue;
     }
 
@@ -168,6 +186,26 @@ export function translateAnthropicMessages(
   return {
     ...(system.length === 0 ? {} : { system }),
     messages: translated,
+  };
+}
+
+function toUserMessage(message: AIUserMessage): AnthropicMessage {
+  const content =
+    typeof message.content === "string"
+      ? [{ type: "text" as const, text: message.content }]
+      : message.content.map(toAnthropicInputContent);
+  return { role: "user", content };
+}
+
+function toAnthropicInputContent(part: AIUserContent): AnthropicInputContentBlock {
+  if (part.type === "text") return { type: "text", text: part.text };
+  return {
+    type: "image",
+    source: {
+      type: "base64",
+      media_type: part.mediaType,
+      data: part.data,
+    },
   };
 }
 
@@ -245,7 +283,10 @@ function toToolResultBlock(
   return {
     type: "tool_result",
     tool_use_id: message.toolCallId,
-    content: message.content,
+    content:
+      typeof message.content === "string"
+        ? message.content
+        : message.content.map(toAnthropicInputContent),
     is_error: message.isError,
   };
 }

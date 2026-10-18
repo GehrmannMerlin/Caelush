@@ -59,6 +59,89 @@ describe("Anthropic Messages request golden: messages", () => {
     });
   });
 
+  it("translates user images to Anthropic base64 image blocks", async () => {
+    const turn = await captureTurn(
+      request({
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Describe this." },
+              { type: "image", mediaType: "image/png", data: "iVBORw0KGgo=", detail: "HIGH" },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(turn.body["messages"]).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Describe this." },
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("preserves images in an Anthropic tool result", async () => {
+    const turn = await captureTurn(
+      request({
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "toolu_image",
+                toolName: "read_attachment",
+                input: {},
+              },
+            ],
+          },
+          {
+            role: "tool",
+            toolCallId: "toolu_image",
+            toolName: "read_attachment",
+            content: [
+              { type: "text", text: "Rendered page 1" },
+              { type: "image", mediaType: "image/jpeg", data: "/9j/2Q==" },
+            ],
+            isError: false,
+          },
+        ],
+      }),
+    );
+
+    expect(turn.body["messages"]).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_image", name: "read_attachment", input: {} }],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_image",
+            content: [
+              { type: "text", text: "Rendered page 1" },
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/jpeg", data: "/9j/2Q==" },
+              },
+            ],
+            is_error: false,
+          },
+        ],
+      },
+    ]);
+  });
+
   it("hoists leading system messages into a top-level system field, in order", async () => {
     const turn = await captureTurn(
       request({

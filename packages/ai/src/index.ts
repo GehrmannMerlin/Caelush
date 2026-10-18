@@ -41,12 +41,15 @@ export type { JsonObject, JsonPrimitive, JsonValue } from "./json/json-value.js"
 
 /* Messages, tools and usage. */
 export {
+  assertAIUserContent,
+  assertAIUserContents,
   assertAIConversationMessage,
   assertAIContent,
   assertAIAssistantContent,
   assertAIMessage,
   assertAIMessages,
   assertAIProviderOpaqueState,
+  isAIUserContent,
   isAIContent,
   isAIAssistantContent,
   providerStateMatches,
@@ -54,6 +57,12 @@ export {
   AI_PROVIDER_OPAQUE_STATE_VERSION,
 } from "./messages/index.js";
 export type {
+  AIImageDetail,
+  AIImageMediaType,
+  AIToolResultContent,
+  AIUserContent,
+  AIUserImagePart,
+  AIUserTextPart,
   AIAssistantContent,
   AIAssistantMessage,
   AIAssistantTextContent,

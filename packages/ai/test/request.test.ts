@@ -211,6 +211,45 @@ describe("request capability validation", () => {
     );
   });
 
+  it("rejects image content when vision is explicitly UNSUPPORTED and allows UNKNOWN", () => {
+    const imageRequest = request({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "image", mediaType: "image/png", data: "iVBORw0KGgo=" }],
+        },
+      ],
+    });
+    const toolImageRequest = request({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool-call", toolCallId: "c1", toolName: "read_attachment", input: {} },
+          ],
+        },
+        {
+          role: "tool",
+          toolCallId: "c1",
+          toolName: "read_attachment",
+          content: [{ type: "image", mediaType: "image/png", data: "iVBORw0KGgo=" }],
+          isError: false,
+        },
+      ],
+    });
+    const unsupported = modelDescriptor({
+      capabilities: { ...modelDescriptor().capabilities, vision: "UNSUPPORTED" },
+    });
+    const unknown = modelDescriptor({
+      capabilities: { ...modelDescriptor().capabilities, vision: "UNKNOWN" },
+    });
+
+    expectCapabilityUnsupported(imageRequest, unsupported);
+    expectCapabilityUnsupported(toolImageRequest, unsupported);
+    expect(() => validateAIModelRequest(imageRequest, unknown)).not.toThrow();
+    expect(() => validateAIModelRequest(toolImageRequest, unknown)).not.toThrow();
+  });
+
   it("allows UNKNOWN capabilities to be attempted", () => {
     const unknown = modelDescriptor({
       capabilities: {

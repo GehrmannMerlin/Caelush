@@ -56,6 +56,7 @@ export function validateAIModelRequestAgainstModel(
   const toolNames = (request.tools ?? []).map((tool) => tool.name);
 
   validateToolCapability(model, toolNames, context);
+  validateVisionCapability(model, request, context);
   validateReasoningCapability(model, request, context);
   validateMaxOutputTokens(model, request, context);
 }
@@ -73,6 +74,24 @@ export function validateAIModelRequest(
 ): asserts request is AIModelRequest {
   validateAIModelRequestShape(request);
   validateAIModelRequestAgainstModel(request, model);
+}
+
+function validateVisionCapability(
+  model: ModelDescriptor,
+  request: AIModelRequest,
+  context: AIErrorContext,
+): void {
+  if (model.capabilities.vision !== "UNSUPPORTED") return;
+  const hasImage = request.messages.some((message) => {
+    if (message.role !== "user" && message.role !== "tool") return false;
+    return Array.isArray(message.content) && message.content.some((part) => part.type === "image");
+  });
+  if (!hasImage) return;
+  throw createAIError(
+    "AI_CAPABILITY_UNSUPPORTED",
+    `AI model "${model.ref.model}" does not support image input.`,
+    context,
+  );
 }
 
 /**

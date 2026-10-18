@@ -1,10 +1,19 @@
 export {
+  assertAIUserContent,
+  assertAIUserContents,
   assertAIContent,
   assertAIAssistantContent,
+  isAIUserContent,
   isAIContent,
   isAIAssistantContent,
 } from "./content.js";
 export type {
+  AIImageDetail,
+  AIImageMediaType,
+  AIToolResultContent,
+  AIUserContent,
+  AIUserImagePart,
+  AIUserTextPart,
   AIAssistantContent,
   AIAssistantTextContent,
   AIAssistantToolCallContent,

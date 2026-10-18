@@ -4,8 +4,8 @@ import {
   assertNonEmptyString,
   describeValue,
 } from "../internal/assertions.js";
-import { assertAIContent } from "./content.js";
-import type { AIContent } from "./content.js";
+import { assertAIContent, assertAIUserContents } from "./content.js";
+import type { AIContent, AIToolResultContent, AIUserContent } from "./content.js";
 import { assertAIProviderOpaqueState } from "./provider-state.js";
 import type { AIProviderOpaqueState } from "./provider-state.js";
 
@@ -28,7 +28,8 @@ import type { AIProviderOpaqueState } from "./provider-state.js";
  * other layer may produce one. A projector that returns the narrower union therefore
  * cannot inject a system prompt *by type*, rather than by review.
  *
- * Phase 5A deliberately ships no image, audio, file or other multimodal message.
+ * User and Tool-result messages may use provider-neutral text/image parts. Assistant
+ * content remains the separately validated text/tool-call union.
  */
 
 /** A system instruction message. */
@@ -40,7 +41,7 @@ export interface AISystemMessage {
 /** A user turn message. */
 export interface AIUserMessage {
   readonly role: "user";
-  readonly content: string;
+  readonly content: string | readonly AIUserContent[];
 }
 
 /**
@@ -63,7 +64,7 @@ export interface AIToolResultMessage {
   readonly role: "tool";
   readonly toolCallId: string;
   readonly toolName: string;
-  readonly content: string;
+  readonly content: AIToolResultContent;
   readonly isError: boolean;
 }
 
@@ -106,7 +107,7 @@ export function assertAIMessage(value: unknown): asserts value is AIMessage {
       return;
     case "user":
       assertExactKeys(candidate, USER_KEYS, "AI user message");
-      assertContentString(candidate.content, "AI user message");
+      assertAIUserContentBody(candidate.content, "AI user message");
       return;
     case "assistant": {
       assertExactKeys(
@@ -130,7 +131,7 @@ export function assertAIMessage(value: unknown): asserts value is AIMessage {
       assertExactKeys(candidate, TOOL_RESULT_KEYS, "AI tool result message");
       assertNonEmptyString(candidate.toolCallId, "AI tool result message toolCallId");
       assertNonEmptyString(candidate.toolName, "AI tool result message toolName");
-      assertContentString(candidate.content, "AI tool result message");
+      assertAIUserContentBody(candidate.content, "AI tool result message");
       assertBoolean(candidate.isError, "AI tool result message isError");
       return;
     default:
@@ -176,5 +177,15 @@ export function assertAIMessages(value: unknown): asserts value is readonly AIMe
 function assertContentString(value: unknown, label: string): void {
   if (typeof value !== "string") {
     throw new TypeError(`${label} content must be a string, received ${describeValue(value)}.`);
+  }
+}
+
+function assertAIUserContentBody(value: unknown, label: string): void {
+  if (typeof value === "string") return;
+  try {
+    assertAIUserContents(value);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new TypeError(`${label} content is invalid: ${reason}`, { cause: error });
   }
 }
