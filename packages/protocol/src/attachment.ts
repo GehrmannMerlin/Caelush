@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { SessionIdSchema, WorkspaceIdSchema } from "./primitives/ids.js";
+import { RunIdSchema, SessionIdSchema, WorkspaceIdSchema } from "./primitives/ids.js";
+import { TimestampMsSchema } from "./primitives/time.js";
 
 export const MAX_ATTACHMENT_COUNT = 10;
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -74,6 +75,29 @@ export const AttachmentDescriptorSchema = z
   .strict();
 export type AttachmentDescriptor = z.infer<typeof AttachmentDescriptorSchema>;
 
+export const PendingAttachmentSchema = z
+  .object({
+    artifactId: AttachmentIdSchema,
+    workspaceId: WorkspaceIdSchema,
+    owner: AttachmentOwnerSchema,
+    name: AttachmentNameSchema,
+    declaredMediaType: AttachmentMediaTypeSchema,
+    createdAt: TimestampMsSchema,
+  })
+  .strict();
+export type PendingAttachment = z.infer<typeof PendingAttachmentSchema>;
+
+export const VerifiedAttachmentMetadataSchema = z
+  .object({
+    mediaType: AttachmentMediaTypeSchema,
+    byteLength: z.number().int().min(0).max(MAX_ATTACHMENT_BYTES),
+    sha256: AttachmentSha256Schema,
+    visualRequirement: AttachmentVisualRequirementSchema,
+    processorVersion: z.string().min(1).max(128),
+  })
+  .strict();
+export type VerifiedAttachmentMetadata = z.infer<typeof VerifiedAttachmentMetadataSchema>;
+
 export const AttachmentDraftSchema = z
   .object({
     owner: AttachmentOwnerSchema,
@@ -87,6 +111,18 @@ export const AttachmentDraftSchema = z
   })
   .strict();
 export type AttachmentDraft = z.infer<typeof AttachmentDraftSchema>;
+
+export const SubmissionRecordSchema = z
+  .object({
+    submissionId: SubmissionIdSchema,
+    payloadHash: AttachmentSha256Schema,
+    sessionId: SessionIdSchema.optional(),
+    runId: RunIdSchema.optional(),
+    createdAt: TimestampMsSchema,
+    updatedAt: TimestampMsSchema,
+  })
+  .strict();
+export type SubmissionRecord = z.infer<typeof SubmissionRecordSchema>;
 
 /** Internal Run goal used when a user submits attachments without prompt text. */
 export const ATTACHMENT_ONLY_RUN_GOAL =

@@ -16,6 +16,7 @@ import {
   NO_TOOL_RESULT_OBSERVATION,
   agentAssistantTextPart,
   agentAssistantToolCallPart,
+  agentAttachmentRefPart,
   agentTextPart,
   modelMessageSource,
   toolMessageSource,
@@ -26,7 +27,12 @@ import {
 } from "@caelush/agent";
 import type { AIMessagePhase, AIToolResultMessage } from "@caelush/ai";
 import type { ToolObservationPolicySnapshot } from "@caelush/agent";
-import type { AgentRun, AssistantMessagePhase, StepId } from "@caelush/protocol";
+import {
+  AttachmentIdSchema,
+  type AgentRun,
+  type AssistantMessagePhase,
+  type StepId,
+} from "@caelush/protocol";
 
 import type { RunAgentMessageProjection } from "./run-agent-history.js";
 import type { RunExecutionMessageAppend } from "./run-execution-store.js";
@@ -59,7 +65,10 @@ export function createUserMessageAppend(
     sessionId: run.sessionId,
     conversationTurnId: authority.turns.forRun(run.id),
     source: userMessageSource(origin),
-    content: [agentTextPart(run.goal)],
+    content: [
+      agentTextPart(run.userText ?? run.goal),
+      ...(run.attachmentIds ?? []).map((artifactId) => agentAttachmentRefPart({ artifactId })),
+    ],
   });
   return appendFromMessage(authority, message);
 }
@@ -193,7 +202,16 @@ function appendFromMessage(
     audience: message.audience,
     data: encoded.data,
   };
-  return Object.freeze({ draft: Object.freeze(draft) });
+  const attachmentIds =
+    message.type === "USER"
+      ? message.content.flatMap((part) =>
+          part.type === "ATTACHMENT_REF" ? [AttachmentIdSchema.parse(part.artifactId)] : [],
+        )
+      : [];
+  return Object.freeze({
+    draft: Object.freeze(draft),
+    ...(attachmentIds.length === 0 ? {} : { attachmentIds: Object.freeze(attachmentIds) }),
+  });
 }
 
 function assistantContent(modelTurn: AgentModelTurn): readonly AgentAssistantContentPart[] {

@@ -55,6 +55,7 @@ export {
   AttachmentMediaTypeSchema,
   AttachmentNameSchema,
   AttachmentOwnerSchema,
+  PendingAttachmentSchema,
   AttachmentSha256Schema,
   AttachmentStatusSchema,
   AttachmentVisualRequirementSchema,
@@ -62,15 +63,20 @@ export {
   MAX_ATTACHMENT_COUNT,
   MAX_MESSAGE_ATTACHMENT_BYTES,
   SubmissionIdSchema,
+  SubmissionRecordSchema,
+  VerifiedAttachmentMetadataSchema,
 } from "./attachment.js";
 export type {
   AttachmentDescriptor,
   AttachmentDraft,
   AttachmentId,
   AttachmentOwner,
+  PendingAttachment,
   AttachmentStatus,
   AttachmentVisualRequirement,
   SubmissionId,
+  SubmissionRecord,
+  VerifiedAttachmentMetadata,
 } from "./attachment.js";
 export { TimestampMsSchema, createTimestampMs } from "./primitives/time.js";
 export type { TimestampMs } from "./primitives/time.js";

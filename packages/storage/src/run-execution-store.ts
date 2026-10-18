@@ -61,6 +61,7 @@ import { SqliteRunStateRepository } from "./repositories/run-state-repository.js
 import { SqliteStepRepository } from "./repositories/step-repository.js";
 import { writeStateSnapshot } from "./state-snapshot-writer.js";
 import { SqliteCancellationRepository } from "./cancellation-repository.js";
+import { SqliteAttachmentRepository } from "./attachment-repository.js";
 import {
   loadVerificationPlanInTransaction,
   writeVerificationPlanInTransaction,
@@ -399,6 +400,7 @@ export class SqliteRunExecutionStore
   private readonly messageRecords: SqliteAgentMessageRecordStore;
   private readonly continuations: SqliteContinuationRepository;
   private readonly cancellations: SqliteCancellationRepository;
+  private readonly attachments: SqliteAttachmentRepository;
 
   constructor(
     private readonly database: CaelushDatabase,
@@ -410,6 +412,7 @@ export class SqliteRunExecutionStore
     this.messageRecords = new SqliteAgentMessageRecordStore(database);
     this.continuations = new SqliteContinuationRepository(database);
     this.cancellations = new SqliteCancellationRepository(database);
+    this.attachments = new SqliteAttachmentRepository(database);
   }
 
   /**
@@ -903,6 +906,13 @@ export class SqliteRunExecutionStore
         command.messagesToAppend.map((entry) => entry.draft),
         PRIVATE_REPLAY_COMMIT,
       );
+      for (const entry of command.messagesToAppend) {
+        if (entry.attachmentIds === undefined || entry.attachmentIds.length === 0) continue;
+        await this.attachments.attachToMessage(entry.attachmentIds, entry.draft.messageId, {
+          kind: "SESSION",
+          sessionId: entry.draft.sessionId,
+        });
+      }
       this.privateReplay.writeInTransaction(
         command.run.id,
         privateReplayWrites,

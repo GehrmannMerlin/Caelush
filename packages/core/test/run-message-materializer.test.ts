@@ -1,6 +1,7 @@
 import type { AgentModelTurn } from "@caelush/agent";
 import {
   AgentRunSchema,
+  AttachmentIdSchema,
   createRunId,
   createSessionId,
   createStepId,
@@ -9,7 +10,10 @@ import {
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 
-import { createAssistantMessageAppend } from "../src/run-message-materializer.js";
+import {
+  createAssistantMessageAppend,
+  createUserMessageAppend,
+} from "../src/run-message-materializer.js";
 import { testRunMessageAuthority } from "./support/run-message-authority.js";
 
 const NOW = createTimestampMs(1_000);
@@ -59,5 +63,27 @@ describe("assistant message materialization phases", () => {
 
     expect(append.draft.data).toMatchObject({ phase: "FINAL_ANSWER" });
     expect(RUN.status).toBe("RUNNING");
+  });
+});
+
+describe("user message attachment materialization", () => {
+  it("persists only authored text with stable attachment references", () => {
+    const artifactId = AttachmentIdSchema.parse("att_1234567890ab");
+    const run = AgentRunSchema.parse({
+      ...RUN,
+      goal: "Inspect the attached materials and ask what the user wants to know.",
+      userText: "Compare these documents",
+      attachmentIds: [artifactId],
+    });
+
+    const append = createUserMessageAppend(testRunMessageAuthority(), run, "GOAL");
+
+    expect(append.draft.data).toEqual({
+      content: [
+        { type: "TEXT", text: "Compare these documents" },
+        { type: "ATTACHMENT_REF", artifactId },
+      ],
+    });
+    expect(append.attachmentIds).toEqual([artifactId]);
   });
 });

@@ -6,6 +6,7 @@ import type {
   RunCancellationIntent,
   RunId,
   TimestampMs,
+  AttachmentId,
 } from "@caelush/protocol";
 
 import type { RunContinuationCheckpoint } from "../continuation/continuation.js";
@@ -68,6 +69,8 @@ export interface RunExecutionSnapshot {
 
 export interface RunExecutionMessageAppend {
   readonly draft: AgentMessageRecordDraft;
+  /** Attachment truth to commit as MESSAGE references with this USER record. */
+  readonly attachmentIds?: readonly AttachmentId[];
 }
 
 export interface RunExecutionStepWrite {

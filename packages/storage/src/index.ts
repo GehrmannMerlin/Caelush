@@ -1,5 +1,9 @@
 export { openCaelushStorage } from "./storage.js";
 export type { CaelushStorage } from "./storage.js";
+export { SqliteAttachmentRepository } from "./attachment-repository.js";
+export type { AttachmentDraftInput, AttachmentRepository } from "./attachment-repository.js";
+export { SqliteSubmissionRepository } from "./submission-repository.js";
+export type { SubmissionRepository } from "./submission-repository.js";
 export type { ArchivePolicy, ArchiveStore } from "./archive/archive-store.js";
 export type { ArchiveDeletionCommit } from "./archive/archive-purge.js";
 export type {

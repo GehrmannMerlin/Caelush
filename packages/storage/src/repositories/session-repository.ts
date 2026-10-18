@@ -4,6 +4,7 @@ import {
   type SessionId,
   type WorkspaceId,
   type WorkspaceRecord,
+  type SubmissionId,
 } from "@caelush/protocol";
 import type { CaelushDatabase } from "../database.js";
 import {
@@ -11,6 +12,7 @@ import {
   withArchiveWriteTransaction,
 } from "../archive/archive-write-guard.js";
 import { decodeProtocol, encodeProtocol } from "../codec.js";
+import { bindSubmissionSessionInTransaction } from "../submission-repository.js";
 import {
   StorageConflictError,
   StorageDecodeError,
@@ -36,7 +38,10 @@ export interface SessionRepository {
   /** Production creation binds the parent observed before asynchronous preparation. */
   insert(
     session: AgentSession,
-    options?: { readonly expectedWorkspace: WorkspaceRecord },
+    options?: {
+      readonly expectedWorkspace: WorkspaceRecord;
+      readonly submissionId?: SubmissionId;
+    },
   ): Promise<void>;
   get(id: SessionId): Promise<AgentSession | null>;
   update(session: AgentSession): Promise<void>;
@@ -78,11 +83,14 @@ export class SqliteSessionRepository implements SessionRepository {
 
   async insert(
     session: AgentSession,
-    options?: { readonly expectedWorkspace: WorkspaceRecord },
+    options?: {
+      readonly expectedWorkspace: WorkspaceRecord;
+      readonly submissionId?: SubmissionId;
+    },
   ): Promise<void> {
     withArchiveWriteTransaction(this.database, () => {
-      if (options !== undefined) {
-        const expected = options.expectedWorkspace;
+      const expected = options?.expectedWorkspace;
+      if (expected !== undefined) {
         const current = this.database.client
           .prepare("SELECT canonical_path, created_at_ms FROM workspaces WHERE id = ?")
           .get(expected.id);
@@ -103,6 +111,9 @@ export class SqliteSessionRepository implements SessionRepository {
       if (workspaceId !== undefined)
         assertArchiveWritableInTransaction(this.database, { type: "WORKSPACE", workspaceId });
       this.insertInTransaction(session);
+      if (options?.submissionId !== undefined) {
+        bindSubmissionSessionInTransaction(this.database, options.submissionId, session.id);
+      }
     });
   }
 

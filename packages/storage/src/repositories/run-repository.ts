@@ -20,6 +20,7 @@ import {
 } from "../errors.js";
 import type { DurableRunEvent, DurableRunEventDraft } from "@caelush/agent";
 import { appendDurableEventsInTransaction } from "../events/sqlite-durable-event-store.js";
+import { bindSubmissionRunInTransaction } from "../submission-repository.js";
 
 interface RunRow {
   id: string;
@@ -150,6 +151,9 @@ export class SqliteRunRepository implements RunRepository {
         workspaceId: run.workspace.id,
       });
       this.insertInTransaction(run);
+      if (run.submissionId !== undefined) {
+        bindSubmissionRunInTransaction(this.database, run.submissionId, run.id);
+      }
     });
   }
 
@@ -224,6 +228,9 @@ export class SqliteRunRepository implements RunRepository {
           nullableTimestamp(currentRun.finishedAt),
           dataJson,
         );
+      if (run.submissionId !== undefined) {
+        bindSubmissionRunInTransaction(this.database, run.submissionId, run.id);
+      }
       const committed = appendDurableEventsInTransaction(client, events);
       client.exec("COMMIT");
       return committed;

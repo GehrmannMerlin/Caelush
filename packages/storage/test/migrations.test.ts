@@ -143,6 +143,9 @@ describe("committed storage migrations", () => {
         "ai_provider_credentials",
         "approval_requests",
         "archive_catalog_meta",
+        "attachment_drafts",
+        "attachment_references",
+        "attachments",
         "context_artifacts",
         "context_checkpoints",
         "context_runtime_states",
@@ -159,6 +162,7 @@ describe("committed storage migrations", () => {
         "run_cancellation_requests",
         "run_resource_states",
         "session_archives",
+        "submissions",
         "tool_invocations",
         "verification_checks",
         "verification_evidence",
@@ -166,10 +170,10 @@ describe("committed storage migrations", () => {
         "workspace_archives",
         "workspaces",
       ]);
-      // Phase 5F, the Workspace Registry, Runtime AI Management, scoped Prompt Surface anchors,
-      // Prompt Surface V3 state, and durable archives are in the published migration ledger.
+      // Message V2, Workspace Registry, Runtime AI Management, durable archives, and conversation
+      // attachment metadata are in the published migration ledger.
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 26,
+        count: 27,
       });
 
       const providerUsageColumns = sqlite
@@ -261,7 +265,8 @@ describe("committed storage migrations", () => {
         entry.name === "20261008140000_cache_usage_accounting" ||
         entry.name === "20261008160000_provider_invocation_usage" ||
         entry.name === "20261014170000_provider_invocation_step_identity" ||
-        entry.name === "20261016120000_archive_management"
+        entry.name === "20261016120000_archive_management" ||
+        entry.name === "20261018120000_conversation_attachments"
       )
         continue;
       await cp(
@@ -325,8 +330,12 @@ describe("committed storage migrations", () => {
           "agent_messages",
           "agent_runs",
           "archive_catalog_meta",
+          "attachment_drafts",
+          "attachment_references",
+          "attachments",
           "session_archives",
           "workspace_archives",
+          "submissions",
           "prompt_surface_epochs",
           "prompt_surface_records",
           "prompt_surface_section_state",
@@ -334,7 +343,7 @@ describe("committed storage migrations", () => {
         ]),
       );
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 26,
+        count: 27,
       });
       expect(
         sqlite

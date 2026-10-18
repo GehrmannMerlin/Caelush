@@ -714,6 +714,108 @@ export const verificationEvidence = sqliteTable(
   ],
 );
 
+/** Attachment metadata only; the daemon owns blob bytes and derives paths from artifact IDs. */
+export const attachments = sqliteTable(
+  "attachments",
+  {
+    artifactId: text("artifact_id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    ownerKind: text("owner_kind").notNull(),
+    ownerId: text("owner_id").notNull(),
+    name: text("name").notNull(),
+    declaredMediaType: text("declared_media_type").notNull(),
+    mediaType: text("media_type"),
+    byteLength: integer("byte_length"),
+    sha256: text("sha256"),
+    status: text("status").notNull(),
+    visualRequirement: text("visual_requirement").notNull(),
+    processorVersion: text("processor_version"),
+    createdAtMs: integer("created_at_ms").notNull(),
+    updatedAtMs: integer("updated_at_ms").notNull(),
+  },
+  (table) => [
+    check("attachments_owner_kind_check", sql`${table.ownerKind} IN ('WORKSPACE', 'SESSION')`),
+    check(
+      "attachments_status_check",
+      sql`${table.status} IN ('UPLOADING', 'PREPROCESSING', 'READY', 'FAILED', 'UNAVAILABLE')`,
+    ),
+    check(
+      "attachments_ready_metadata_check",
+      sql`${table.status} <> 'READY' OR (${table.mediaType} IS NOT NULL AND ${table.byteLength} IS NOT NULL AND ${table.sha256} IS NOT NULL AND ${table.processorVersion} IS NOT NULL)`,
+    ),
+    index("attachments_workspace_created_idx").on(table.workspaceId, table.createdAtMs),
+    index("attachments_owner_idx").on(table.ownerKind, table.ownerId),
+    index("attachments_status_created_idx").on(table.status, table.createdAtMs),
+  ],
+);
+
+/** Explicit references prevent a draft cleanup from deleting a sent attachment. */
+export const attachmentReferences = sqliteTable(
+  "attachment_references",
+  {
+    artifactId: text("artifact_id")
+      .notNull()
+      .references(() => attachments.artifactId, { onDelete: "cascade" }),
+    referenceKind: text("reference_kind").notNull(),
+    referenceId: text("reference_id").notNull(),
+    ownerKind: text("owner_kind").notNull(),
+    ownerId: text("owner_id").notNull(),
+    ordinal: integer("ordinal").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.artifactId, table.referenceKind, table.referenceId] }),
+    check("attachment_references_kind_check", sql`${table.referenceKind} IN ('DRAFT', 'MESSAGE')`),
+    check(
+      "attachment_references_owner_kind_check",
+      sql`${table.ownerKind} IN ('WORKSPACE', 'SESSION')`,
+    ),
+    index("attachment_references_target_idx").on(
+      table.referenceKind,
+      table.ownerKind,
+      table.ownerId,
+    ),
+  ],
+);
+
+export const attachmentDrafts = sqliteTable(
+  "attachment_drafts",
+  {
+    ownerKind: text("owner_kind").notNull(),
+    ownerId: text("owner_id").notNull(),
+    revision: integer("revision").notNull(),
+    text: text("text").notNull(),
+    submissionId: text("submission_id"),
+    updatedAtMs: integer("updated_at_ms").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerKind, table.ownerId] }),
+    check(
+      "attachment_drafts_owner_kind_check",
+      sql`${table.ownerKind} IN ('WORKSPACE', 'SESSION')`,
+    ),
+    check("attachment_drafts_revision_check", sql`${table.revision} >= 0`),
+  ],
+);
+
+export const submissions = sqliteTable(
+  "submissions",
+  {
+    submissionId: text("submission_id").primaryKey(),
+    payloadHash: text("payload_hash").notNull(),
+    sessionId: text("session_id").references(() => agentSessions.id, { onDelete: "set null" }),
+    runId: text("run_id").references(() => agentRuns.id, { onDelete: "set null" }),
+    createdAtMs: integer("created_at_ms").notNull(),
+    updatedAtMs: integer("updated_at_ms").notNull(),
+  },
+  (table) => [
+    index("submissions_session_id_idx").on(table.sessionId),
+    index("submissions_run_id_idx").on(table.runId),
+  ],
+);
+
 export const storageSchema = {
   workspaces,
   aiProviderCredentials,
@@ -736,5 +838,9 @@ export const storageSchema = {
   verificationPlans,
   verificationChecks,
   verificationEvidence,
+  attachments,
+  attachmentReferences,
+  attachmentDrafts,
+  submissions,
   contextRuntimeStates,
 };
