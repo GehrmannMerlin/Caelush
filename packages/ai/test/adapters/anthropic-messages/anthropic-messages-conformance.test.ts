@@ -96,9 +96,10 @@ const ANTHROPIC_CONFORMANCE: AdapterConformanceOptions = {
   // `message_start` for the input side and `message_delta` for the output side — and
   // streams a tool input as two `input_json_delta` fragments.
   eventOrder: {
-    text: ["stream.start", "usage", "text.delta", "usage", "stream.finish"],
+    text: ["stream.start", "stream.status", "usage", "text.delta", "usage", "stream.finish"],
     toolLifecycle: [
       "stream.start",
+      "stream.status",
       "usage",
       "tool_call.start",
       "tool_call.delta",

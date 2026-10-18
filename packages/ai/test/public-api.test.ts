@@ -106,6 +106,7 @@ describe("@caelush/ai subpaths", () => {
     expect(adapters.AI_ADAPTER_EVENT_TYPES).toEqual([
       "text.delta",
       "reasoning.summary.delta",
+      "provider.activity",
       "tool_call.start",
       "tool_call.delta",
       "tool_call.completed",
