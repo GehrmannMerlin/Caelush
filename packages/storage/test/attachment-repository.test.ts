@@ -177,6 +177,21 @@ describe("SQLite conversation attachment repositories", () => {
     );
   });
 
+  it("can mark a READY blob unavailable after crash recovery detects it is missing", async () => {
+    const { storage, workspace, session } = await fixture();
+    await storage.attachments.createPending(pendingInput(workspace.id, session.id));
+    await storage.attachments.markReady(attachmentId, readyMetadata());
+
+    await storage.attachments.markUnavailable(attachmentId);
+
+    expect(await storage.attachments.getAuthorized(attachmentId, ownerSession(session.id))).toBe(
+      null,
+    );
+    await expect(storage.attachments.listForRecovery()).resolves.toEqual([
+      expect.objectContaining({ artifactId: attachmentId, status: "UNAVAILABLE" }),
+    ]);
+  });
+
   it("duplicateSubmissionResolvesExistingRun", async () => {
     const { storage, workspace, workspaceRef } = await fixture();
     const payloadHash = "c".repeat(64);

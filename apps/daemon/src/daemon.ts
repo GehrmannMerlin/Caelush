@@ -27,6 +27,8 @@ import {
   type GitToolAvailability,
 } from "@caelush/coding-agent";
 import { buildDaemonApp } from "./app.js";
+import { createAttachmentService } from "./attachments/attachment-service.js";
+import { createDocumentProcessor } from "./attachments/document-processor.js";
 import {
   assertLoopbackDaemonHost,
   createDaemonConfig,
@@ -441,6 +443,19 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     await storage.close().catch(() => undefined);
     throw error;
   }
+  const attachmentService = createAttachmentService({
+    attachments: storage.attachments,
+    sessions: storage.sessions,
+    workspaces: storage.workspaces,
+    rootDirectory: join(dirname(options.databasePath), "attachments"),
+    processor: createDocumentProcessor(),
+  });
+  try {
+    await attachmentService.recover();
+  } catch (error) {
+    await storage.close().catch(() => undefined);
+    throw error;
+  }
   /**
    * The environment this daemon generation runs under.
    *
@@ -597,6 +612,8 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       archives: storage.archives,
       sessions: storage.sessions,
       runs: storage.runs,
+      submissions: storage.submissions,
+      attachmentService,
       workspaces: storage.workspaces,
       workspaceService,
       workspacePicker: options.workspacePicker ?? createNativeWorkspaceDirectoryPicker(),

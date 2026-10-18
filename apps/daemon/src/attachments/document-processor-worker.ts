@@ -608,7 +608,7 @@ async function inspectAttachment(
   const common = {
     artifactId,
     sha256: sha256(bytes),
-    mediaType: detectedMediaType.toLowerCase().split(";", 1)[0] || "application/octet-stream",
+    mediaType: canonicalMediaType(kind, bytes, detectedMediaType),
     processorVersion: ATTACHMENT_PROCESSOR_VERSION,
   };
 
@@ -639,6 +639,25 @@ async function inspectAttachment(
   if (kind === "PDF") return inspectPdf(artifactId, bytes, common);
   if (kind === "DOCX") return inspectDocx(artifactId, bytes, common);
   return inspectXlsx(artifactId, bytes, common);
+}
+
+function canonicalMediaType(kind: Kind, bytes: Buffer, detectedMediaType: string): string {
+  if (kind === "PDF") return "application/pdf";
+  if (kind === "DOCX") {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (kind === "XLSX") {
+    return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  }
+  if (kind === "IMAGE") {
+    const image = sniffImage(bytes);
+    if (image === null) fail("INVALID_DOCUMENT");
+    return image.mimeType;
+  }
+  const mediaType = detectedMediaType.toLowerCase().split(";", 1)[0] ?? "";
+  return mediaType.length > 0 && mediaType !== "application/octet-stream"
+    ? mediaType
+    : "text/plain";
 }
 
 function setCanvasGlobals(): void {

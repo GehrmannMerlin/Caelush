@@ -13,6 +13,7 @@ import {
   type ModelRef,
   type RunId,
   type RunListQuery,
+  type SubmissionId,
   type WorkspaceRef,
   type SessionId,
 } from "@caelush/protocol";
@@ -25,9 +26,11 @@ import {
 import { expandPermissionPreset } from "@caelush/security";
 import {
   StorageNotFoundError,
+  StorageError,
   type ArchiveStore,
   type RunRepository,
   type SessionRepository,
+  type SubmissionRepository,
 } from "@caelush/storage";
 import { requireUnarchivedTarget } from "./archive-access.js";
 import type {
@@ -40,6 +43,8 @@ import { WorkspaceOwnershipError } from "../workspaces/workspace-errors.js";
 import type { WorkspaceService } from "../workspaces/workspace-service.js";
 import { ModelSelectionError } from "../providers/model-directory.js";
 import type { SecurityCapabilityService } from "./security-capability-service.js";
+import { hashSubmissionPayload } from "./submission-payload.js";
+import type { AttachmentService } from "../attachments/attachment-service.js";
 
 export class SecurityPolicyRequestError extends Error {
   constructor(
@@ -65,6 +70,8 @@ export interface RunServiceOptions {
   readonly archives?: ArchiveStore;
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
+  readonly submissions?: SubmissionRepository;
+  readonly attachments?: Pick<AttachmentService, "getReadyForRun">;
   readonly now?: () => number;
   readonly createId?: typeof createRunId;
   readonly modelCanonicalizer?: DaemonModelCanonicalizer;
@@ -106,6 +113,25 @@ export class RunService {
   async createRun(sessionId: SessionId, input: CreateRunRequest): Promise<AgentRun> {
     await requireUnarchivedTarget(this.options.archives, { type: "SESSION", sessionId });
     const session = await this.requireSession(sessionId);
+    let submissionId: SubmissionId | undefined;
+    if (input.submissionId !== undefined) {
+      if (this.options.submissions === undefined) {
+        throw new StorageError("Run submission idempotency is unavailable.");
+      }
+      const { submissionId: _ignored, ...payload } = input;
+      const reserved = await this.options.submissions.reserve(
+        input.submissionId,
+        hashSubmissionPayload({ sessionId, payload }),
+      );
+      if (reserved.runId !== undefined) return this.getRun(reserved.runId);
+      submissionId = input.submissionId;
+    }
+    if (input.attachmentIds !== undefined) {
+      if (this.options.attachments === undefined) {
+        throw new StorageError("Run attachment validation is unavailable.");
+      }
+      await this.options.attachments.getReadyForRun(input.attachmentIds, sessionId);
+    }
     const resourcePolicy = normalizeCreateRunResourcePolicy(input);
     const modelSelection: ClientModelSelection | undefined =
       input.model ??
@@ -169,10 +195,16 @@ export class RunService {
         "Atomic Run security policy persistence is unavailable; the Run was not created.",
       );
     }
-    const committedEvents: readonly DurableRunEvent[] = await this.options.runs.insertWithEvents(
-      run,
-      [policyEvent],
-    );
+    let committedEvents: readonly DurableRunEvent[];
+    try {
+      committedEvents = await this.options.runs.insertWithEvents(run, [policyEvent]);
+    } catch (error) {
+      if (submissionId !== undefined) {
+        const winner = await this.options.submissions?.get(submissionId);
+        if (winner?.runId !== undefined) return this.getRun(winner.runId);
+      }
+      throw error;
+    }
     if (committedEvents.length > 0) {
       this.options.eventNotifier?.notifyCommitted(committedEvents);
     }

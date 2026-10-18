@@ -40,6 +40,22 @@ export const AttachmentStatusSchema = z.enum([
 ]);
 export type AttachmentStatus = z.infer<typeof AttachmentStatusSchema>;
 
+/** Minimal safe record used by daemon startup to reconcile attachment metadata with blob files. */
+export const AttachmentRecoveryRecordSchema = z
+  .object({
+    artifactId: AttachmentIdSchema,
+    status: AttachmentStatusSchema,
+    byteLength: z.number().int().min(0).max(MAX_ATTACHMENT_BYTES).optional(),
+    sha256: AttachmentSha256Schema.optional(),
+  })
+  .strict()
+  .refine(
+    (record) =>
+      record.status !== "READY" || (record.byteLength !== undefined && record.sha256 !== undefined),
+    "Ready attachment recovery records require verified size and hash.",
+  );
+export type AttachmentRecoveryRecord = z.infer<typeof AttachmentRecoveryRecordSchema>;
+
 export const AttachmentVisualRequirementSchema = z.enum([
   "NOT_REQUIRED",
   "POSSIBLE",

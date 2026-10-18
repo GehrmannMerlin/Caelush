@@ -6,20 +6,23 @@ import {
   type ClientModelSelectionWithReasoning,
   type ModelRef,
   type SessionId,
+  type SubmissionId,
   type WorkspaceRecord,
 } from "@caelush/protocol";
-import type { ArchiveStore, SessionRepository } from "@caelush/storage";
+import type { ArchiveStore, SessionRepository, SubmissionRepository } from "@caelush/storage";
 import { requireUnarchivedTarget } from "./archive-access.js";
-import { StorageNotFoundError } from "@caelush/storage";
+import { StorageConflictError, StorageError, StorageNotFoundError } from "@caelush/storage";
 import type { DaemonModelCanonicalizer } from "../providers/model-canonicalizer.js";
 import { canonicalizeWorkspacePath } from "../workspaces/workspace-identity.js";
 import { WorkspaceOwnershipError } from "../workspaces/workspace-errors.js";
 import type { WorkspaceService } from "../workspaces/workspace-service.js";
 import { ModelSelectionError } from "../providers/model-directory.js";
+import { hashSubmissionPayload } from "./submission-payload.js";
 
 export interface SessionServiceOptions {
   readonly archives?: ArchiveStore;
   readonly repository: SessionRepository;
+  readonly submissions?: SubmissionRepository;
   readonly now?: () => number;
   readonly createId?: typeof createSessionId;
   readonly modelCanonicalizer?: DaemonModelCanonicalizer;
@@ -41,6 +44,28 @@ export class SessionService {
   }
 
   async createSession(input: CreateSessionRequest): Promise<AgentSession> {
+    let submissionId: SubmissionId | undefined;
+    if (input.submissionId !== undefined) {
+      if (this.options.submissions === undefined) {
+        throw new StorageError("Session submission idempotency is unavailable.");
+      }
+      const { submissionId: _ignored, ...payload } = input;
+      const reserved = await this.options.submissions.reserve(
+        input.submissionId,
+        hashSubmissionPayload(payload),
+      );
+      if (reserved.sessionId !== undefined) {
+        const existing = await this.getSession(reserved.sessionId);
+        if (existing.workspaceId !== undefined) {
+          await requireUnarchivedTarget(this.options.archives, {
+            type: "WORKSPACE",
+            workspaceId: existing.workspaceId,
+          });
+        }
+        return existing;
+      }
+      submissionId = input.submissionId;
+    }
     const timestamp = this.now();
     let workspaceId = input.workspaceId;
     let defaultWorkspace = input.defaultWorkspace;
@@ -107,10 +132,28 @@ export class SessionService {
       updatedAt: timestamp,
       metadata: input.metadata ?? {},
     });
-    await this.options.repository.insert(
-      session,
-      expectedWorkspace === undefined ? undefined : { expectedWorkspace },
-    );
+    if (submissionId !== undefined && expectedWorkspace === undefined) {
+      throw new StorageConflictError(
+        "An idempotent Session submission requires an authoritative Workspace owner.",
+      );
+    }
+    try {
+      await this.options.repository.insert(
+        session,
+        expectedWorkspace === undefined
+          ? undefined
+          : {
+              expectedWorkspace,
+              ...(submissionId === undefined ? {} : { submissionId }),
+            },
+      );
+    } catch (error) {
+      if (submissionId !== undefined) {
+        const winner = await this.options.submissions?.get(submissionId);
+        if (winner?.sessionId !== undefined) return this.getSession(winner.sessionId);
+      }
+      throw error;
+    }
     return session;
   }
 

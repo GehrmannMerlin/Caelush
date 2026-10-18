@@ -28,6 +28,7 @@ import { ModelDiscoveryError, ModelSelectionError } from "../providers/model-dir
 import { SessionPresentationCursorError } from "../services/session-presentation-service.js";
 import { SecurityPolicyRequestError } from "../services/run-service.js";
 import { ArchiveConfirmationError } from "../services/archive-confirmation.js";
+import { AttachmentServiceError } from "../attachments/attachment-service.js";
 
 export class InvalidEventCursorError extends Error {
   constructor() {
@@ -91,6 +92,44 @@ function isEventCursorValidationError(error: unknown): boolean {
 }
 
 function mapError(error: unknown): MappedError {
+  if (error instanceof AttachmentServiceError) {
+    switch (error.code) {
+      case "NOT_FOUND":
+        return {
+          statusCode: 404,
+          code: "NOT_FOUND",
+          message: "Requested attachment was not found.",
+        };
+      case "CONFLICT":
+      case "CONTENT_HASH_MISMATCH":
+        return { statusCode: 409, code: "CONFLICT", message: "Attachment state has changed." };
+      case "RESOURCE_LIMIT":
+        return {
+          statusCode: 413,
+          code: "INVALID_REQUEST",
+          message: "Attachment exceeds a supported limit.",
+        };
+      case "INVALID_REQUEST":
+      case "UNSUPPORTED_FORMAT":
+      case "INVALID_DOCUMENT":
+      case "PASSWORD_REQUIRED":
+      case "UPLOAD_INTERRUPTED":
+        return {
+          statusCode: 400,
+          code: "INVALID_REQUEST",
+          message: "Attachment request could not be accepted.",
+        };
+      case "PROCESSOR_TIMEOUT":
+      case "PROCESSOR_CANCELLED":
+      case "PROCESSOR_FAILED":
+      case "BLOB_UNAVAILABLE":
+        return {
+          statusCode: 500,
+          code: "STORAGE_ERROR",
+          message: "Attachment could not be processed.",
+        };
+    }
+  }
   if (error instanceof ArchiveConfirmationError)
     return {
       statusCode: error.code === "INVALID_REQUEST" ? 400 : 409,

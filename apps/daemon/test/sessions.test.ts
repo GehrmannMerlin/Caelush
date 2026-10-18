@@ -1,9 +1,12 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createTimestampMs, createWorkspaceId } from "@caelush/protocol";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
+import { SessionService } from "../src/services/session-service.js";
+import { WorkspaceService } from "../src/workspaces/workspace-service.js";
 
 let storage: CaelushStorage | undefined;
 let directory: string | undefined;
@@ -99,5 +102,35 @@ describe("session API", () => {
     expect(response.statusCode).toBe(404);
     expect(response.json().error.code).toBe("NOT_FOUND");
     await app.close();
+  });
+
+  it("returns the same Session for an identical submission retry and rejects changed payloads", async () => {
+    const appState = await makeApp();
+    const timestamp = createTimestampMs(Date.now());
+    const workspace = {
+      id: createWorkspaceId(),
+      canonicalPath: "C:/session-submission-fixture",
+      displayName: "session-submission-fixture",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      lastOpenedAt: timestamp,
+    };
+    await storage!.workspaces.insert(workspace);
+    const service = new SessionService({
+      repository: storage!.sessions,
+      submissions: storage!.submissions,
+      workspaceService: new WorkspaceService({ repository: storage!.workspaces }),
+    });
+    const submissionId = "ce879e7f-a5dc-46bf-b0bc-9ae8bc67f091";
+    const input = { workspaceId: workspace.id, title: "First message", submissionId };
+
+    const first = await service.createSession(input);
+    const retry = await service.createSession(input);
+    expect(retry.id).toBe(first.id);
+    await expect(
+      service.createSession({ ...input, title: "Different payload" }),
+    ).rejects.toMatchObject({ name: "StorageConflictError" });
+    await expect(storage?.sessions.list()).resolves.toHaveLength(1);
+    await appState.close();
   });
 });

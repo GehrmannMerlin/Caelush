@@ -20,11 +20,12 @@ describe("bounded conversation document processing", () => {
       artifactId: artifactId("pdf"),
       bytes,
       name: "brief.pdf",
-      detectedMediaType: "application/pdf",
+      detectedMediaType: "application/octet-stream",
     });
 
     expect(manifest).toMatchObject({
       kind: "PDF",
+      mediaType: "application/pdf",
       pageCount: 1,
       pages: [{ pageNumber: 1, textAvailable: true }],
     });
@@ -83,10 +84,11 @@ describe("bounded conversation document processing", () => {
       artifactId: artifactId("image"),
       bytes,
       name: "pixel.png",
-      detectedMediaType: "image/png",
+      detectedMediaType: "application/octet-stream",
     });
     expect(manifest).toMatchObject({
       kind: "IMAGE",
+      mediaType: "image/png",
       width: 1,
       height: 1,
       visualRequirement: "REQUIRED",

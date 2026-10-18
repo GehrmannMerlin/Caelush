@@ -10,6 +10,7 @@ import type {
   ArchiveStore,
   SessionRepository,
   RunRepository,
+  SubmissionRepository,
   WorkspaceRepository,
 } from "@caelush/storage";
 import type { DaemonConfig } from "./config.js";
@@ -49,12 +50,16 @@ import {
   type ProviderUsageSummaryReader,
 } from "./routes/usage-summary.js";
 import { registerUsageActivityRoute } from "./routes/usage-activity.js";
+import { registerAttachmentRoutes } from "./routes/attachments.js";
+import type { AttachmentService } from "./attachments/attachment-service.js";
 
 export interface DaemonDependencies {
   readonly archiveService?: ArchiveService;
   readonly archives?: ArchiveStore;
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
+  readonly submissions?: SubmissionRepository;
+  readonly attachmentService?: AttachmentService;
   readonly workspaces?: WorkspaceRepository;
   readonly workspaceService?: WorkspaceService;
   readonly workspacePicker?: WorkspaceDirectoryPicker;
@@ -89,6 +94,9 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   registerErrorHandling(app);
   if (dependencies.archiveService !== undefined)
     registerArchiveRoutes(app, dependencies.archiveService);
+  if (dependencies.attachmentService !== undefined) {
+    registerAttachmentRoutes(app, dependencies.attachmentService);
+  }
   registerHealthRoute(app);
   if (dependencies.info !== undefined) registerInfoRoute(app, dependencies.info);
   if (dependencies.securityCapabilityService !== undefined) {
@@ -111,6 +119,7 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   const sessionService = new SessionService({
     ...(dependencies.archives === undefined ? {} : { archives: dependencies.archives }),
     repository: dependencies.sessions,
+    ...(dependencies.submissions === undefined ? {} : { submissions: dependencies.submissions }),
     ...(dependencies.modelCanonicalizer === undefined
       ? {}
       : { modelCanonicalizer: dependencies.modelCanonicalizer }),
@@ -136,6 +145,10 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
       ...(dependencies.archives === undefined ? {} : { archives: dependencies.archives }),
       sessions: dependencies.sessions,
       runs: dependencies.runs,
+      ...(dependencies.submissions === undefined ? {} : { submissions: dependencies.submissions }),
+      ...(dependencies.attachmentService === undefined
+        ? {}
+        : { attachments: dependencies.attachmentService }),
       ...(dependencies.modelCanonicalizer === undefined
         ? {}
         : { modelCanonicalizer: dependencies.modelCanonicalizer }),

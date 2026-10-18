@@ -4,6 +4,7 @@ import {
   AttachmentIdSchema,
   AttachmentIdsSchema,
   AttachmentOwnerSchema,
+  AttachmentRecoveryRecordSchema,
   AttachmentStatusSchema,
   PendingAttachmentSchema,
   SessionIdSchema,
@@ -16,6 +17,7 @@ import {
   type AttachmentDraft,
   type AttachmentId,
   type AttachmentOwner,
+  type AttachmentRecoveryRecord,
   type PendingAttachment,
   type SessionId,
   type SubmissionId,
@@ -54,6 +56,7 @@ export interface AttachmentDraftInput {
 
 export interface AttachmentRepository {
   createPending(input: PendingAttachment): Promise<void>;
+  markPreprocessing(id: AttachmentId): Promise<void>;
   markReady(
     id: AttachmentId,
     verifiedMetadata: VerifiedAttachmentMetadata,
@@ -74,6 +77,7 @@ export interface AttachmentRepository {
   getDraft(owner: AttachmentOwner): Promise<AttachmentDraft | null>;
   removeDraftReference(owner: AttachmentOwner, id: AttachmentId): Promise<void>;
   listUnreferenced(before: number): Promise<AttachmentId[]>;
+  listForRecovery(): Promise<AttachmentRecoveryRecord[]>;
 }
 
 export class SqliteAttachmentRepository implements AttachmentRepository {
@@ -163,6 +167,26 @@ export class SqliteAttachmentRepository implements AttachmentRepository {
 
   async markFailed(id: AttachmentId): Promise<void> {
     this.transition(id, "FAILED");
+  }
+
+  async markPreprocessing(id: AttachmentId): Promise<void> {
+    const artifactId = AttachmentIdSchema.parse(id);
+    withArchiveWriteTransaction(this.database, () => {
+      const row = this.readRow(artifactId);
+      if (row === null) throw new StorageNotFoundError("Attachment", artifactId);
+      assertArchiveWritableInTransaction(this.database, this.archiveTargetFromRow(row));
+      if (row.status === "PREPROCESSING") return;
+      if (row.status !== "UPLOADING") {
+        throw new StorageConflictError(
+          "Attachment cannot enter PREPROCESSING from its current state.",
+        );
+      }
+      this.database.client
+        .prepare(
+          "UPDATE attachments SET status = 'PREPROCESSING', updated_at_ms = ? WHERE artifact_id = ?",
+        )
+        .run(this.now(), artifactId);
+    });
   }
 
   async markUnavailable(id: AttachmentId): Promise<void> {
@@ -379,13 +403,34 @@ export class SqliteAttachmentRepository implements AttachmentRepository {
     return rows.map((row) => AttachmentIdSchema.parse(row.artifact_id));
   }
 
+  async listForRecovery(): Promise<AttachmentRecoveryRecord[]> {
+    const rows = this.database.client
+      .prepare(
+        "SELECT artifact_id, status, byte_length, sha256 FROM attachments ORDER BY artifact_id",
+      )
+      .all() as Array<{
+      artifact_id: string;
+      status: string;
+      byte_length: number | null;
+      sha256: string | null;
+    }>;
+    return rows.map((row) =>
+      AttachmentRecoveryRecordSchema.parse({
+        artifactId: row.artifact_id,
+        status: row.status,
+        ...(row.byte_length === null ? {} : { byteLength: row.byte_length }),
+        ...(row.sha256 === null ? {} : { sha256: row.sha256 }),
+      }),
+    );
+  }
+
   private transition(id: AttachmentId, status: "FAILED" | "UNAVAILABLE"): void {
     const artifactId = AttachmentIdSchema.parse(id);
     withArchiveWriteTransaction(this.database, () => {
       const row = this.readRow(artifactId);
       if (row === null) throw new StorageNotFoundError("Attachment", artifactId);
       assertArchiveWritableInTransaction(this.database, this.archiveTargetFromRow(row));
-      if (row.status === "READY")
+      if (row.status === "READY" && status === "FAILED")
         throw new StorageConflictError("A READY attachment cannot be downgraded.");
       if (row.status === status) return;
       this.database.client
