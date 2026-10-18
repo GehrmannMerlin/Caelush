@@ -1013,8 +1013,11 @@ function renderWorkspaceApp(input: {
   const canCancelActiveRun =
     snapshot.activeRun !== undefined && canCancelRunStatus(snapshot.activeRun.status);
   const hasWorkspace = selectedWorkspace !== undefined && input.sessionManager !== undefined;
+  // Native file selection can restore focus before dispatching change. Keep the
+  // mounted composer and its file input while existing workspace data refreshes.
   const workspaceLoading =
-    input.workspaceState.status === "IDLE" || input.workspaceState.status === "LOADING";
+    input.workspaceState.workspaces.length === 0 &&
+    (input.workspaceState.status === "IDLE" || input.workspaceState.status === "LOADING");
   const sessionLoading =
     selectedWorkspace !== undefined &&
     (input.sessionManager === undefined ||

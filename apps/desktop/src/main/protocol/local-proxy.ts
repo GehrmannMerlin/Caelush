@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { MAX_ATTACHMENT_BYTES } from "@caelush/protocol";
 import type { AccountProfile } from "../profiles/profile-manager.js";
 import {
   isOwnedLoopbackTarget,
@@ -16,6 +17,14 @@ const FORWARDED_REQUEST_HEADERS = [
   "if-none-match",
   "last-event-id",
   "prefer",
+] as const;
+const ATTACHMENT_UPLOAD_HEADERS = [
+  "x-caelush-owner-kind",
+  "x-caelush-owner-id",
+  "x-caelush-filename",
+  "x-caelush-filename-encoding",
+  "x-caelush-media-type",
+  "x-caelush-byte-length",
 ] as const;
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -54,11 +63,11 @@ export interface DesktopLocalProxyOptions {
 
 export class DesktopLocalProxy {
   private readonly fetcher: typeof fetch;
-  private readonly maxRequestBodyBytes: number;
+  private readonly maxRequestBodyBytes: number | undefined;
 
   constructor(private readonly options: DesktopLocalProxyOptions) {
     this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
-    this.maxRequestBodyBytes = options.maxRequestBodyBytes ?? MAX_REQUEST_BODY_BYTES;
+    this.maxRequestBodyBytes = options.maxRequestBodyBytes;
   }
 
   async handle(request: Request): Promise<Response> {
@@ -75,12 +84,18 @@ export class DesktopLocalProxy {
       return proxyError(400, "INVALID_LOCAL_API_REQUEST", "The local API request is invalid.");
     }
 
+    const attachmentUpload =
+      request.method.toUpperCase() === "POST" && parsedUrl.pathname === "/api/v1/attachments";
+    const maxRequestBodyBytes =
+      this.maxRequestBodyBytes ??
+      (attachmentUpload ? MAX_ATTACHMENT_BYTES : MAX_REQUEST_BODY_BYTES);
+
     const rawContentLength = request.headers.get("content-length");
     if (rawContentLength !== null) {
       if (!/^\d+$/u.test(rawContentLength)) {
         return proxyError(400, "INVALID_LOCAL_API_REQUEST", "The local API request is invalid.");
       }
-      if (Number(rawContentLength) > this.maxRequestBodyBytes) {
+      if (Number(rawContentLength) > maxRequestBodyBytes) {
         return proxyError(413, "REQUEST_TOO_LARGE", "The local API request is too large.");
       }
     }
@@ -101,11 +116,11 @@ export class DesktopLocalProxy {
     }
 
     const target = new URL(parsedUrl.pathname + parsedUrl.search, lease.baseUrl);
-    const headers = createUpstreamHeaders(request.headers, lease);
+    const headers = createUpstreamHeaders(request.headers, lease, attachmentUpload);
     let body: Uint8Array<ArrayBuffer> | undefined;
     if (request.body !== null && request.method !== "GET" && request.method !== "HEAD") {
       try {
-        body = await readLimitedBody(request.body, this.maxRequestBodyBytes, [
+        body = await readLimitedBody(request.body, maxRequestBodyBytes, [
           request.signal,
           lease.signal,
         ]);
@@ -230,9 +245,16 @@ function parseTrustedApiUrl(value: string): URL | null {
   return url;
 }
 
-function createUpstreamHeaders(source: Headers, lease: DesktopDaemonProxyLease): Headers {
+function createUpstreamHeaders(
+  source: Headers,
+  lease: DesktopDaemonProxyLease,
+  attachmentUpload: boolean,
+): Headers {
   const headers = new Headers();
-  for (const name of FORWARDED_REQUEST_HEADERS) {
+  const forwardedHeaders = attachmentUpload
+    ? [...FORWARDED_REQUEST_HEADERS, ...ATTACHMENT_UPLOAD_HEADERS]
+    : FORWARDED_REQUEST_HEADERS;
+  for (const name of forwardedHeaders) {
     const value = source.get(name);
     if (value !== null) headers.set(name, value);
   }

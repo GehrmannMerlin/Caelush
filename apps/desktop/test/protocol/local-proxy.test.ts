@@ -202,6 +202,71 @@ describe("Main-owned Desktop Daemon proxy", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("preserves attachment metadata only on the upload route", async () => {
+    const observed: { path: string; headers: Headers }[] = [];
+    const setup = createProxy(async (input, init) => {
+      observed.push({ path: new URL(String(input)).pathname, headers: new Headers(init?.headers) });
+      return new Response("ok");
+    });
+    const metadata = {
+      "x-caelush-owner-kind": "WORKSPACE",
+      "x-caelush-owner-id": "wsp_27ed4df5-cb05-49e2-bd1c-1866ea00e51b",
+      "x-caelush-filename": encodeURIComponent("设计说明.txt"),
+      "x-caelush-filename-encoding": "uri-component-v1",
+      "x-caelush-media-type": "text/plain",
+      "x-caelush-byte-length": "5",
+    };
+    for (const uploadPath of ["/api/v1/attachments", "/api/v1/runs"]) {
+      const response = await setup.proxy.handle(
+        rendererRequest({
+          path: uploadPath,
+          method: "POST",
+          body: "hello",
+          headers: { "content-type": "application/octet-stream", ...metadata },
+        }),
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+    for (const [name, value] of Object.entries(metadata)) {
+      expect(observed[0]?.headers.get(name)).toBe(value);
+      expect(observed[1]?.headers.has(name)).toBe(false);
+    }
+    expect(observed[0]?.headers.get("x-caelush-host-token")).toBe(HOST_TOKEN);
+  });
+
+  it("accepts attachment bodies above the JSON budget while retaining the JSON limit", async () => {
+    const observedBodies: number[] = [];
+    const setup = createProxy(async (_input, init) => {
+      observedBodies.push((init?.body as Uint8Array).byteLength);
+      return new Response("ok", { status: 201 });
+    });
+    const body = "a".repeat(1_048_577);
+    const attachment = await setup.proxy.handle(
+      rendererRequest({ path: "/api/v1/attachments", method: "POST", body }),
+    );
+    expect(attachment.status).toBe(201);
+    await attachment.text();
+    expect(observedBodies).toEqual([1_048_577]);
+
+    const ordinary = await setup.proxy.handle(
+      rendererRequest({ path: "/api/v1/runs", method: "POST", body }),
+    );
+    expect(ordinary.status).toBe(413);
+    expect(observedBodies).toEqual([1_048_577]);
+
+    const oversized = await setup.proxy.handle(
+      rendererRequest({
+        path: "/api/v1/attachments",
+        method: "POST",
+        body: "small",
+        headers: { "content-length": "26214401" },
+      }),
+    );
+    expect(oversized.status).toBe(413);
+    expect(observedBodies).toEqual([1_048_577]);
+  });
+
   it("streams SSE chunks, forwards both cursors unchanged, and aborts on subscriber close", async () => {
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
     const encoder = new TextEncoder();

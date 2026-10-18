@@ -1,4 +1,4 @@
-/* global URL, fetch, process, document, window, HTMLElement, getComputedStyle, MutationObserver, Event, TextEncoder */
+/* global URL, fetch, process, document, window, HTMLElement, getComputedStyle, MutationObserver, Event, TextEncoder, requestAnimationFrame */
 
 import { chromium } from "@playwright/test";
 import { Buffer } from "node:buffer";
@@ -25,6 +25,11 @@ page.on("console", (message) => {
 });
 const promptCacheOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "PROMPT_CACHE";
 const attachmentOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "ATTACHMENT";
+if (attachmentOnly && process.env.CAELUSH_BROWSER_SMOKE_HOST === "DESKTOP") {
+  await context.addInitScript(() => {
+    window.caelushDesktop = { protocolVersion: 1 };
+  });
+}
 const multiTurnOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "MULTI_TURN";
 const s0Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S0";
 const s1Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S1";
@@ -1925,11 +1930,51 @@ async function assertAttachmentComposerAndUpload() {
   const chooserPromise = page.waitForEvent("filechooser");
   await menu.getByRole("menuitem", { name: "上传文件" }).click();
   const chooser = await chooserPromise;
-  await chooser.setFiles({
-    name: "browser-upload.txt",
-    mimeType: "text/plain",
-    buffer: Buffer.from("Browser upload fixture content.", "utf8"),
+  let releaseRefresh;
+  const refreshGate = new Promise((resolve) => {
+    releaseRefresh = resolve;
   });
+  let finishRefresh;
+  const refreshFinished = new Promise((resolve) => {
+    finishRefresh = resolve;
+  });
+  let refreshStarted = false;
+  const workspaceRoute = "**/api/v1/workspaces";
+  await page.route(
+    workspaceRoute,
+    async (route) => {
+      refreshStarted = true;
+      try {
+        await refreshGate;
+        await route.continue();
+      } finally {
+        finishRefresh();
+      }
+    },
+    { times: 1 },
+  );
+  try {
+    const refreshing = page.waitForRequest(
+      (request) => new URL(request.url()).pathname === "/api/v1/workspaces",
+    );
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await refreshing;
+    await page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+    );
+    if (!(await chooser.element().evaluate((input) => input.isConnected))) {
+      throw new Error("focus refresh unmounted the file input before the chooser returned");
+    }
+    await chooser.setFiles({
+      name: "browser-upload.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("Browser upload fixture content.", "utf8"),
+    });
+  } finally {
+    releaseRefresh();
+    if (refreshStarted) await refreshFinished;
+    else await page.unroute(workspaceRoute);
+  }
   const card = page.locator('.attachment-card[aria-label^="browser-upload.txt"]');
   await page.waitForTimeout(250);
   if ((await card.count()) === 0) {
@@ -1954,11 +1999,38 @@ async function assertAttachmentComposerAndUpload() {
     async () => (await card.getAttribute("data-attachment-status")) === "ready",
     "browser attachment upload and preprocessing",
   );
+  await card.hover();
   await card.getByRole("button", { name: "移除附件 browser-upload.txt" }).click();
   await waitUntil(
     async () => (await page.locator(".attachment-card").count()) === 0,
     "attachment removal",
   );
+  const imageBytes = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 16;
+    canvas.height = 16;
+    canvas.getContext("2d").fillRect(0, 0, 16, 16);
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  await page.locator("input[type=file]").setInputFiles({
+    name: "browser-preview.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(imageBytes, "base64"),
+  });
+  const imageCard = page.locator('.attachment-card[aria-label^="browser-preview.png"]');
+  await waitUntil(
+    async () =>
+      (await imageCard.getAttribute("data-attachment-status")) === "ready" &&
+      (await imageCard
+        .locator("img")
+        .evaluate((image) => image.complete && image.naturalWidth === 16)),
+    "the uploaded image thumbnail to decode",
+  );
+  if ((await imageCard.locator('[role="progressbar"]').count()) !== 0) {
+    throw new Error("the ready image still shows its upload progress ring");
+  }
+  await imageCard.hover();
+  await imageCard.getByRole("button", { name: "移除附件 browser-preview.png" }).click();
 }
 
 async function assertTaskTimerSummaryLayout({ mobile }) {

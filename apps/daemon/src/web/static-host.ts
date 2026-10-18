@@ -5,7 +5,7 @@ import { WorkspaceRefSchema, type WorkspaceId, type WorkspaceRef } from "@caelus
 
 const BOOTSTRAP_MARKER = "__CAELUSH_BOOTSTRAP__";
 const CSP =
-  "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+  "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
 export interface WebStaticHostOptions {
   readonly buildRoot: string;
