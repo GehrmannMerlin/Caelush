@@ -306,6 +306,15 @@ importers:
         specifier: workspace:*
         version: link:../runtime
 
+  packages/context:
+    dependencies:
+      '@caelush/ai':
+        specifier: workspace:*
+        version: link:../ai
+      '@caelush/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
   packages/core:
     dependencies:
       '@caelush/agent':
@@ -314,6 +323,9 @@ importers:
       '@caelush/ai':
         specifier: workspace:*
         version: link:../ai
+      '@caelush/context':
+        specifier: workspace:*
+        version: link:../context
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol
