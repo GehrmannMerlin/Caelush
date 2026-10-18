@@ -239,7 +239,7 @@ describe("ModelTurnExecutor frozen result contract", () => {
     expect(JSON.stringify(result).includes("C3_PRIVATE_REASONING_SENTINEL")).toBe(false);
     if (result.kind !== "COMPLETED") throw new Error("expected completed result");
     expect(Object.hasOwn(result.result, "privateCompletion")).toBe(false);
-    received?.payload.fill(0);
+    if (received?.completeness === "COMPLETE") received.payload.fill(0);
   });
 
   it.each(["Tool", "final"])(
@@ -278,7 +278,6 @@ describe("ModelTurnExecutor frozen result contract", () => {
                   id: "call-next",
                   name: "read_file",
                   input: { path: "README.md" },
-                  assistantItemId: "item",
                 },
               },
               { type: "stream.finish", payload: { finishReason: "TOOL_CALLS" } },
@@ -865,6 +864,7 @@ describe("ModelTurnExecutor cancellation", () => {
             controller.abort();
             throw Object.assign(new Error("aborted"), { code: "AI_ABORTED", retryable: false });
           })(),
+          takePrivateCompletion: () => undefined,
         }),
       complete: () => Promise.reject(new Error("unused")),
     };

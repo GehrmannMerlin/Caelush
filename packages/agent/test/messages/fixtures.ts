@@ -1,5 +1,5 @@
 import type { AIFinishReason, ModelRef } from "@caelush/ai";
-import type { TimestampMs } from "@caelush/protocol";
+import type { AttachmentModelContentReference, TimestampMs } from "@caelush/protocol";
 
 import {
   STRUCTURAL_TOKEN_ESTIMATOR,
@@ -249,6 +249,7 @@ export function toolResultMessage(
      * feedback but has no execution to point at.
      */
     readonly observationBacked?: boolean;
+    readonly attachmentReferences?: readonly AttachmentModelContentReference[];
     /** The projection receipt. Defaults to a known policy; a migration supplies the unknown arm. */
     readonly projection?: ToolFeedbackProjectionReceipt;
   } = {},
@@ -271,6 +272,9 @@ export function toolResultMessage(
         : toolResultObservation(OBSERVATION_ID as never),
     isError: options.isError ?? false,
     projectedContent: options.projectedContent ?? "tool output",
+    ...(options.attachmentReferences === undefined
+      ? {}
+      : { attachmentReferences: options.attachmentReferences }),
     projection: options.projection ?? RECEIPT,
   });
   return stored(message, options.sequence ?? 3, options.modelVisible);

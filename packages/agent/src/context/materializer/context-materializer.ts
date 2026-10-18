@@ -1,4 +1,9 @@
-import type { AIMessage, AIToolResultMessage, ModelDescriptor } from "@caelush/ai";
+import type {
+  AIMessage,
+  AIToolResultContent,
+  AIToolResultMessage,
+  ModelDescriptor,
+} from "@caelush/ai";
 
 import type { AgentMessageProjectorRegistry } from "../../messages/projection/registry.js";
 import type { StoredAgentMessage } from "../../messages/persistence/record.js";
@@ -122,7 +127,10 @@ async function appendProjection(
       signal,
     });
     if (reprojected !== undefined) {
-      assertEstimate(options.tokenEstimator.estimateText(reprojected.content, model), "message");
+      assertEstimate(
+        estimateToolResultContent(reprojected.content, model, options.tokenEstimator),
+        "message",
+      );
       messages.push(Object.freeze({ ...reprojected }));
       return;
     }
@@ -234,6 +242,19 @@ function sameAnchor(left: PromptSurfaceAnchor, right: PromptSurfaceAnchor): bool
 
 function messageTurnScope(runId: string, conversationTurnId: string): string {
   return JSON.stringify([runId, conversationTurnId]);
+}
+
+function estimateToolResultContent(
+  content: AIToolResultContent,
+  model: ModelDescriptor,
+  estimator: ContextTokenEstimatorPort,
+): number {
+  if (typeof content === "string") return estimator.estimateText(content, model);
+  return content.reduce(
+    (total, part) =>
+      total + (part.type === "text" ? estimator.estimateText(part.text, model) : 1_024),
+    0,
+  );
 }
 
 function assertEstimate(value: number, label: string): void {

@@ -26,7 +26,7 @@ import type { AIModelRequest, ApiAdapter, ModelDescriptorSourcePort } from "@cae
  * AIGateway.complete() → createOpenAICompatibleApiAdapter() → fetch
  * ```
  *
- * The Tool catalog it sends is the production one: the ten Coding Tools, built through the four
+ * The Tool catalog it sends is the production one: the Coding Tools, built through the four
  * Runtime Operations adapters, the canonical `DefaultAgentToolRegistryBuilder`, and read back in the
  * registry's own model-facing form. Phase 4F retired Protocol's `ToolDefinition` and Core's
  * `toAIToolSpec` projection — `AgentToolRegistry.modelSpecs()` *is* `readonly AIToolSpec[]` — so there
@@ -146,18 +146,18 @@ describe("OpenAI-compatible wire tool contract", () => {
     const trace = normalizeWireRequest(body);
     expect(trace.model).toBe("fixture-model");
     expect(trace.toolNames).toEqual([...DEFAULT_CODING_TOOL_ORDER]);
-    expect(trace.toolCount).toBe(10);
+    expect(trace.toolCount).toBe(11);
     expect(trace.roleSequence).toEqual(["system", "user"]);
     expect(trace.roleCounts).toEqual({ system: 1, user: 1 });
-    expect(trace.metadata).toEqual({ messageCount: 2, toolCount: 10, hasTools: true });
+    expect(trace.metadata).toEqual({ messageCount: 2, toolCount: 11, hasTools: true });
     expect(Object.keys(trace.metadata)).toEqual(["messageCount", "toolCount", "hasTools"]);
     expect(trace.metadata.messageCount).toBeGreaterThanOrEqual(1);
     expect(trace.metadata.messageCount).toBeLessThanOrEqual(128);
-    expect(trace.metadata.toolCount).toBe(10);
+    expect(trace.metadata.toolCount).toBe(11);
     expect(trace.metadata.hasTools).toBe(true);
     expect(trace.toolChoice).toBe("auto");
-    expect(new Set(trace.inputSchemaHashes).size).toBe(10);
-    expect(new Set(trace.schemaHashes).size).toBe(10);
+    expect(new Set(trace.inputSchemaHashes).size).toBe(11);
+    expect(new Set(trace.schemaHashes).size).toBe(11);
     expect(trace.schemaMatrix).toMatchInlineSnapshot(`
       [
         {
@@ -209,6 +209,11 @@ describe("OpenAI-compatible wire tool contract", () => {
           "inputSchemaHash": "b40395c21919afb294b7789b18d9218128f686a6aa39c4308c27019d65a57e99",
           "name": "git_diff",
           "schemaHash": "a3b921c3d1ca57d803c5eaf9ce175d01cc2cbf1b710f59111f5ce128e64e623e",
+        },
+        {
+          "inputSchemaHash": "360415584f8dee6b5d802c8c3e76441d6128c416de7d7524d73ae0b9b46c4c6a",
+          "name": "read_attachment",
+          "schemaHash": "cfda3437ef10bf592ea94d47d12d756974aff3e9a994efbfdde0e3a8423b2c9d",
         },
       ]
     `);

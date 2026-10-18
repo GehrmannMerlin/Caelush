@@ -125,6 +125,7 @@ export function toolObservation(input: {
   readonly isError?: boolean;
   readonly index?: number;
   readonly rawArtifactRef?: string;
+  readonly details?: ToolObservation["details"];
 }): ToolObservation {
   return {
     id: fixtureId("obs", input.index ?? 0) as ObservationId,
@@ -134,6 +135,7 @@ export function toolObservation(input: {
     toolInvocationId: input.toolInvocationId as ToolInvocationId,
     ...(input.rawArtifactRef === undefined ? {} : { rawArtifactRef: input.rawArtifactRef }),
     content: input.content,
+    ...(input.details === undefined ? {} : { details: input.details }),
     isError: input.isError ?? false,
     createdAt: createTimestampMs(1),
   };
@@ -153,6 +155,7 @@ export function toolResultItem(input: {
   readonly invocationId?: string;
   readonly observationId?: string;
   readonly rawArtifactRef?: string;
+  readonly details?: ToolObservation["details"];
   readonly index?: number;
 }): ToolBatchItemOutcome {
   const invocationId = input.invocationId ?? fixtureId("tiv", input.index ?? 0);
@@ -168,6 +171,7 @@ export function toolResultItem(input: {
         isError: input.isError ?? false,
         ...(input.index === undefined ? {} : { index: input.index }),
         ...(input.rawArtifactRef === undefined ? {} : { rawArtifactRef: input.rawArtifactRef }),
+        ...(input.details === undefined ? {} : { details: input.details }),
       }),
       ...(input.observationId === undefined ? {} : { id: input.observationId as never }),
     },

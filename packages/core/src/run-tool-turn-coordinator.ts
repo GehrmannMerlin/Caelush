@@ -18,6 +18,11 @@ import type {
   WaitingApprovalBoundary,
 } from "@caelush/agent";
 import { fingerprintProjection } from "@caelush/agent";
+import {
+  AttachmentModelContentReferenceSchema,
+  MAX_ATTACHMENT_MODEL_CONTENT_REFERENCES,
+} from "@caelush/protocol";
+import type { AttachmentModelContentReference } from "@caelush/protocol";
 import type { AgentRun, AgentState, TimestampMs } from "@caelush/protocol";
 
 import type { AgentToolCallsDecision } from "./agent-decision.js";
@@ -30,7 +35,9 @@ import type {
   ResourceGovernanceState,
 } from "./resource-governance-port.js";
 import type { RunExecutionSnapshotView as RunExecutionSnapshot } from "./run-execution-store.js";
+import type { RunToolFeedbackProjection } from "./run-message-materializer.js";
 import { RunControllerInvariantError } from "./run-controller-errors.js";
+import { toTextOnlyAIToolResultContent } from "./ai-message-content.js";
 import type { ToolFeedbackContributionApplier } from "./run-controller-ports.js";
 import {
   createRunToolTurnObservation,
@@ -389,7 +396,7 @@ async function replanResults(
   return projected.map(({ message }) => ({
     externalCallId: message.toolCallId,
     toolName: message.toolName,
-    content: message.content,
+    content: toTextOnlyAIToolResultContent(message.content),
     isError: message.isError,
   }));
 }
@@ -662,7 +669,7 @@ async function completedToolTurnResult(
     results: projected.map(({ message }) => ({
       externalCallId: message.toolCallId,
       toolName: message.toolName,
-      content: message.content,
+      content: toTextOnlyAIToolResultContent(message.content),
       isError: message.isError,
     })),
   };
@@ -679,7 +686,7 @@ async function projectAndNormalize(
   observation: RunToolTurnObservation,
   calls: readonly ToolCallRequest[],
   items: readonly ToolBatchItemOutcome[],
-): Promise<readonly ProjectedToolFeedback[]> {
+): Promise<readonly RunToolFeedbackProjection[]> {
   const projected = context.feedback.project({
     calls,
     items,
@@ -702,6 +709,7 @@ async function projectAndNormalize(
     requests: calls,
     results: contributed.map(({ message }) => message),
   });
+  const attachmentReferences = attachmentReferencesByCall(items);
   const byCallId = new Map(projected.map((item) => [item.message.toolCallId, item] as const));
   const ordered = normalized.map((message) => {
     const item = byCallId.get(message.toolCallId);
@@ -711,15 +719,54 @@ async function projectAndNormalize(
       );
     }
     const fingerprint = fingerprintProjection([message]);
-    if (fingerprint === item.receipt.fingerprint && item.message === message) return item;
+    const withMessage =
+      fingerprint === item.receipt.fingerprint && item.message === message
+        ? item
+        : {
+            ...item,
+            message,
+            receipt: Object.freeze({ ...item.receipt, fingerprint }),
+          };
+    const references = message.isError ? undefined : attachmentReferences.get(message.toolCallId);
     return Object.freeze({
-      ...item,
-      message,
-      receipt: Object.freeze({ ...item.receipt, fingerprint }),
-    });
+      ...withMessage,
+      ...(references === undefined || references.length === 0
+        ? {}
+        : { attachmentReferences: references }),
+    }) satisfies RunToolFeedbackProjection;
   });
   observation.projectedFeedback = Object.freeze(ordered);
   return observation.projectedFeedback;
+}
+
+/** Keep only bounded, schema-checked image pointers from successful real observations. */
+function attachmentReferencesByCall(
+  items: readonly ToolBatchItemOutcome[],
+): ReadonlyMap<string, readonly AttachmentModelContentReference[]> {
+  const referencesByCall = new Map<string, readonly AttachmentModelContentReference[]>();
+  for (const item of items) {
+    if (item.kind !== "OBSERVATION" || item.observation.isError) continue;
+    const value = item.observation.details?.["imageReferences"];
+    if (value === undefined) continue;
+    if (!Array.isArray(value) || value.length > MAX_ATTACHMENT_MODEL_CONTENT_REFERENCES) {
+      throw new RunControllerInvariantError(
+        "A successful Tool observation carried invalid attachment image references.",
+      );
+    }
+    try {
+      const references = Object.freeze(
+        value.map((reference) => AttachmentModelContentReferenceSchema.parse(reference)),
+      );
+      if (references.length > 0) {
+        referencesByCall.set(item.call.externalCallId, references);
+      }
+    } catch {
+      throw new RunControllerInvariantError(
+        "A successful Tool observation carried invalid attachment image references.",
+      );
+    }
+  }
+  return referencesByCall;
 }
 
 function assertFeedbackContributionInvariants(

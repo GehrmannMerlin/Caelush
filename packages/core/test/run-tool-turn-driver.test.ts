@@ -173,6 +173,46 @@ describe("Phase 3D Tool turn driver", () => {
     expect(h.store.snapshot.run.status).toBe("COMPLETED");
   });
 
+  it("persists successful Tool image pointers on the durable Tool result", async () => {
+    const reference = {
+      artifactId: "att_0123456789ab",
+      sha256: "a".repeat(64),
+      range: { kind: "PDF_PAGE" as const, pageNumber: 2 },
+      location: { kind: "PDF_PAGE" as const, pageNumber: 2 },
+      mediaType: "image/png" as const,
+    };
+    const batches = scriptedBatches((requested) => ({
+      kind: "COMPLETED",
+      items: requested.map((call, index) =>
+        toolResultItem({
+          externalCallId: call.externalCallId,
+          toolName: call.toolName,
+          content: "Page 2 contains a diagram.",
+          details: { imageReferences: [reference] },
+          index,
+        }),
+      ),
+    }));
+    const harness = harness3e({
+      script: (call) =>
+        call === 0
+          ? toolTurn([{ id: "call_page_image", name: "read_attachment" }])
+          : answerTurn("finished"),
+      extra: { toolTurn: stubToolTurnPipeline(batches) },
+    });
+
+    await harness.controller.start(harness.store.snapshot.run.id);
+
+    const durable = harness.store.snapshot.conversationRecords.find(
+      (record) => record.messageType === "TOOL_RESULT",
+    );
+    expect(durable).toMatchObject({
+      schemaVersion: 2,
+      data: { attachmentReferences: [reference] },
+    });
+    expect(JSON.stringify(durable?.data)).not.toContain("aGVsbG8=");
+  });
+
   it("continues the provider turn after a complete success/error/success Tool batch", async () => {
     const calls = [
       { id: "call_success_before", name: "read_file" },
@@ -440,7 +480,17 @@ describe("Phase 3D Tool turn driver", () => {
             apply: async (input: {
               readonly projected: readonly ProjectedToolFeedback[];
             }): Promise<readonly ProjectedToolFeedback[]> => {
-              applied.push(input.projected[0]?.message.content ?? "");
+              const content = input.projected[0]?.message.content;
+              applied.push(
+                content === undefined
+                  ? ""
+                  : typeof content === "string"
+                    ? content
+                    : content
+                        .filter((part) => part.type === "text")
+                        .map((part) => part.text)
+                        .join(""),
+              );
               return input.projected.map((item) => ({
                 ...item,
                 message: {

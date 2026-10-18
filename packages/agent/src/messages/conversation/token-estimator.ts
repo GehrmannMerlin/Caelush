@@ -1,4 +1,6 @@
-import type { AIConversationMessage } from "@caelush/ai";
+import type { AIConversationMessage, AIUserContent } from "@caelush/ai";
+
+const IMAGE_TOKEN_ESTIMATE = 1_024;
 
 /**
  * How much of the model's context budget a set of projected messages costs.
@@ -55,7 +57,7 @@ export const STRUCTURAL_TOKEN_ESTIMATOR: TokenEstimator = Object.freeze({
     for (const message of messages) {
       switch (message.role) {
         case "user":
-          bytes += utf8(message.content);
+          bytes += estimateUserContent(message.content);
           break;
         case "assistant":
           for (const part of message.content) {
@@ -63,7 +65,7 @@ export const STRUCTURAL_TOKEN_ESTIMATOR: TokenEstimator = Object.freeze({
           }
           break;
         case "tool":
-          bytes += utf8(message.content);
+          bytes += estimateUserContent(message.content);
           break;
       }
     }
@@ -73,4 +75,12 @@ export const STRUCTURAL_TOKEN_ESTIMATOR: TokenEstimator = Object.freeze({
 
 function utf8(text: string): number {
   return Buffer.byteLength(text, "utf8");
+}
+
+function estimateUserContent(content: string | readonly AIUserContent[]): number {
+  if (typeof content === "string") return utf8(content);
+  return content.reduce(
+    (bytes, part) => bytes + (part.type === "text" ? utf8(part.text) : IMAGE_TOKEN_ESTIMATE * 3),
+    0,
+  );
 }

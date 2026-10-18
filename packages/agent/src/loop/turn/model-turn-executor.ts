@@ -173,10 +173,13 @@ export function createModelTurnExecutor(
           (input.request.tools?.length ?? 0) > 0 &&
           privateCompletion?.completeness !== "COMPLETE"
         ) {
-          throw new AIError(
-            "AI_CAPABILITY_UNSUPPORTED",
-            "Required native replay is unavailable for this model turn.",
-          );
+          return {
+            kind: "FAILED",
+            error: failure(
+              "UNSUPPORTED_CAPABILITY",
+              "Required native replay is unavailable for this model turn.",
+            ),
+          };
         }
         if (privateCompletion !== undefined) {
           if (
@@ -187,10 +190,10 @@ export function createModelTurnExecutor(
             privateCompletion.model.baseUrl !== input.request.model.baseUrl
           ) {
             if (privateCompletion.completeness === "COMPLETE") privateCompletion.payload.fill(0);
-            throw new AIError(
-              "AI_INVALID_RESPONSE",
-              "Private model completion identity is invalid.",
-            );
+            return {
+              kind: "FAILED",
+              error: failure("INVALID_RESPONSE", "Private model completion identity is invalid."),
+            };
           }
           if (input.privateCompletionSink === undefined) {
             if (privateCompletion.completeness === "COMPLETE") privateCompletion.payload.fill(0);
@@ -348,7 +351,7 @@ function continuityFailure(
     error: {
       code: "CONVERSATION_CONTINUITY_INCOMPATIBLE",
       message:
-        "This conversation cannot safely continue with the selected model. Start a new session in the same workspace.",
+        "This conversation cannot safely continue with the selected model. Start a new session to continue.",
       retryable: false,
       continuityReason: reason,
     },

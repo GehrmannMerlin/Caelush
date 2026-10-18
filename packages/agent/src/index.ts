@@ -970,6 +970,7 @@ export {
   assertToolResultObservationRef,
   assistantToolCalls,
   attachmentMarker,
+  attachmentMarkerV2,
   buildConversationExecutionUnits,
   buildExecutionUnits,
   canonicalJsonText,
@@ -1038,6 +1039,7 @@ export {
   AGENT_ASSISTANT_MESSAGE_CODEC_V1,
   AGENT_ASSISTANT_MESSAGE_PROJECTOR_V1,
   AGENT_ATTACHMENT_MARKER_VERSION,
+  AGENT_ATTACHMENT_MARKER_VERSION_V2,
   AGENT_CONVERSATION_VIOLATION_REASONS,
   AGENT_CONTENT_PART_TYPES,
   AGENT_LEGACY_ROLES,
@@ -1049,11 +1051,13 @@ export {
   AGENT_MESSAGE_TYPES,
   AGENT_TOOL_RESULT_MESSAGE_AUDIENCE,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,
+  AGENT_TOOL_RESULT_MESSAGE_CODEC_V2,
   AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_V1,
   AGENT_USER_MESSAGE_AUDIENCE,
   AGENT_USER_MESSAGE_CODEC_V1,
   AGENT_USER_MESSAGE_ORIGINS,
   AGENT_USER_MESSAGE_PROJECTOR_V1,
+  AGENT_USER_MESSAGE_PROJECTOR_V2,
   CONVERSATION_TURN_ID_PREFIX,
   LEGACY_UNKNOWN_TOOL_FEEDBACK_POLICY,
   NO_TOOL_RESULT_OBSERVATION,
@@ -1156,4 +1160,17 @@ export {
   createStandardAgentMessageTranscriptProjectorRegistry,
 } from "./messages/transcript/registry.js";
 export type { AgentMessageTranscriptProjectorRegistry } from "./messages/transcript/registry.js";
-export * from "./messages/private-replay.js";
+export {
+  PRIVATE_REPLAY_REFERENCE_KIND,
+  PrivateReplayError,
+  assertPrivateReplayIdentity,
+  createPrivateReplayReference,
+} from "./messages/private-replay.js";
+export type {
+  EncryptedPrivateReplay,
+  PrivateReplayIdentity,
+  PrivateReplayReadScope,
+  PrivateReplayWrite,
+  PrivateReplayStorePort,
+  ReplayProtectionPort,
+} from "./messages/private-replay.js";

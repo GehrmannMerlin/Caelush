@@ -8,6 +8,7 @@ import { AgentMessageCodecRegistryError, createAgentMessageCodecRegistry } from 
 import {
   AGENT_ASSISTANT_MESSAGE_CODEC_V1,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,
+  AGENT_TOOL_RESULT_MESSAGE_CODEC_V2,
   AGENT_USER_MESSAGE_CODEC_V1,
 } from "./standard-codecs.js";
 
@@ -103,5 +104,6 @@ export function createStandardAgentMessageCodecRegistry(
     .register(AGENT_USER_MESSAGE_CODEC_V1)
     .register(AGENT_ASSISTANT_MESSAGE_CODEC_V1)
     .register(AGENT_TOOL_RESULT_MESSAGE_CODEC_V1)
+    .register(AGENT_TOOL_RESULT_MESSAGE_CODEC_V2)
     .build();
 }

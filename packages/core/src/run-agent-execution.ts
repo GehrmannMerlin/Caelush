@@ -28,6 +28,8 @@ import type {
   AgentStepIdFactory,
   AgentVerificationRepairContext,
 } from "./run-agent-types.js";
+import type { AttachmentContextPort } from "./attachment-context-port.js";
+import { createAttachmentAwareContextEngine } from "./run-attachment-context.js";
 
 /**
  * The Run Layer's direct Agent execution dependencies.
@@ -145,6 +147,8 @@ export interface RunAgentExecutionContextFactoryDependencies {
   readonly models: ModelCatalog;
   readonly modelTurnExecutor: ModelTurnExecutor;
   readonly stepIds: AgentStepIdFactory;
+  /** Read-only daemon adapter used to resolve durable attachment references for this Run. */
+  readonly attachmentContext?: AttachmentContextPort | undefined;
   createContextEngine(input: RunAgentContextEngineInput): ContextEnginePort;
 }
 
@@ -175,8 +179,8 @@ export function createRunAgentExecutionContext(
     tools: [...config.tools],
     ...(modelSettings === undefined ? {} : { modelSettings }),
     ...(config.historyPrefix === undefined ? {} : { historyPrefix: config.historyPrefix }),
-    createContextEngine: (run, verificationRepairContext, runMode) =>
-      dependencies.createContextEngine({
+    createContextEngine: (run, verificationRepairContext, runMode) => {
+      const contextEngine = dependencies.createContextEngine({
         run,
         identity: { runId: run.id, sessionId: run.sessionId, goal: run.goal },
         ...(modelSettings === undefined ? {} : { modelSettings }),
@@ -185,7 +189,9 @@ export function createRunAgentExecutionContext(
         ...(config.explicitPaths === undefined ? {} : { explicitPaths: config.explicitPaths }),
         ...(verificationRepairContext === undefined ? {} : { verificationRepairContext }),
         ...(runMode === undefined ? {} : { runMode }),
-      }),
+      });
+      return createAttachmentAwareContextEngine(contextEngine, dependencies.attachmentContext);
+    },
   };
 }
 

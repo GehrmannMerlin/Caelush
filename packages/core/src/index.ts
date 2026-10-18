@@ -224,6 +224,12 @@ export {
   createRunAgentLoop,
   monotonicStepStart,
 } from "./run-agent-execution.js";
+export { AttachmentContextMaterializationError } from "./run-attachment-context.js";
+export type {
+  AttachmentContextPort,
+  AttachmentContextSnapshot,
+  AttachmentContentReference,
+} from "./attachment-context-port.js";
 export type {
   RunAgentContextEngineInput,
   RunAgentExecutionContext,

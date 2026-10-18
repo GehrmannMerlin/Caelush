@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AttachmentIdSchema } from "@caelush/protocol";
 
 import {
   AgentMessageCodecError,
@@ -9,6 +10,7 @@ import {
   createStandardAgentMessageProjectorRegistry,
   AGENT_ASSISTANT_MESSAGE_CODEC_V1,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,
+  AGENT_TOOL_RESULT_MESSAGE_CODEC_V2,
   AGENT_USER_MESSAGE_CODEC_V1,
   STANDARD_AGENT_MESSAGE_CODECS,
 } from "@caelush/agent";
@@ -69,16 +71,21 @@ function recordFor(
   };
 }
 
-describe("Phase 5A codec — three standard codecs exist and declare their identity", () => {
+describe("standard message codecs declare their type and schema versions", () => {
   it("registers one codec per canonical type and exposes assistant v2 with v1 decoding", () => {
-    expect(STANDARD_AGENT_MESSAGE_CODECS).toHaveLength(3);
+    expect(STANDARD_AGENT_MESSAGE_CODECS).toHaveLength(4);
     expect(AGENT_USER_MESSAGE_CODEC_V1.type).toBe("USER");
     expect(AGENT_ASSISTANT_MESSAGE_CODEC_V1.type).toBe("ASSISTANT");
     expect(AGENT_TOOL_RESULT_MESSAGE_CODEC_V1.type).toBe("TOOL_RESULT");
+    expect(AGENT_TOOL_RESULT_MESSAGE_CODEC_V2.type).toBe("TOOL_RESULT");
     for (const codec of STANDARD_AGENT_MESSAGE_CODECS) {
-      expect(codec.currentVersion).toBe(codec.type === "ASSISTANT" ? 3 : 1);
-      expect(codec.canDecode(1)).toBe(true);
-      expect(codec.canDecode(2)).toBe(codec.type === "ASSISTANT");
+      expect(codec.currentVersion).toBe(
+        codec.type === "ASSISTANT" ? 3 : codec === AGENT_TOOL_RESULT_MESSAGE_CODEC_V2 ? 2 : 1,
+      );
+      expect(codec.canDecode(1)).toBe(codec !== AGENT_TOOL_RESULT_MESSAGE_CODEC_V2);
+      expect(codec.canDecode(2)).toBe(
+        codec.type === "ASSISTANT" || codec === AGENT_TOOL_RESULT_MESSAGE_CODEC_V2,
+      );
       expect(codec.canDecode(3)).toBe(codec.type === "ASSISTANT");
       expect(codec.canDecode(0)).toBe(false);
     }
@@ -296,6 +303,30 @@ describe("Phase 5A codec — TOOL_RESULT round trip", () => {
       "toolCallId",
       "toolName",
     ]);
+  });
+
+  it("persists bounded image references in v2 and keeps v1 decoding compatible", () => {
+    const reference = {
+      artifactId: AttachmentIdSchema.parse("att_0123456789ab"),
+      sha256: "a".repeat(64),
+      range: { kind: "PDF_PAGE" as const, pageNumber: 2 },
+      location: { kind: "PDF_PAGE" as const, pageNumber: 2 },
+      mediaType: "image/png" as const,
+    };
+    const original = toolResultMessage({ attachmentReferences: [reference] }).message;
+    const draft = AGENT_TOOL_RESULT_MESSAGE_CODEC_V2.encode(original);
+    const decoded = AGENT_TOOL_RESULT_MESSAGE_CODEC_V2.decode(
+      recordFor(original, draft, { schemaVersion: 2 }),
+    );
+    expect(decoded.attachmentReferences).toEqual([reference]);
+    expect(decoded).toEqual(original);
+
+    const legacyData = AGENT_TOOL_RESULT_MESSAGE_CODEC_V1.encode(toolResultMessage().message);
+    const legacyMessage = toolResultMessage().message;
+    const decodedLegacy = AGENT_TOOL_RESULT_MESSAGE_CODEC_V1.decode(
+      recordFor(legacyMessage, legacyData, { schemaVersion: 1 }),
+    );
+    expect(decodedLegacy.attachmentReferences).toEqual([]);
   });
 });
 
@@ -557,7 +588,7 @@ describe("Phase 5A codec registry — projection version authority (freeze §78�
       );
     }
     // An unknown type has no projector, so an encode of one cannot be versioned either.
-    expect(projectors.currentVersion("USER")).toBe(1);
+    expect(projectors.currentVersion("USER")).toBe(2);
     expect(projectors.currentVersion("CUSTOM_THING")).toBeUndefined();
   });
 

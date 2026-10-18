@@ -534,7 +534,7 @@ describe("Phase 5B repository — loadSnapshot", () => {
     expect(message?.type).toBe("USER");
     expect(message && "role" in message).toBe(false);
     // The projector registry is a separate authority and is untouched by a load.
-    expect(projectors.currentVersion("USER")).toBe(1);
+    expect(projectors.currentVersion("USER")).toBe(2);
     expect(
       createStandardAgentMessageCodecRegistry(projectionVersionTable({ USER: 1 })).has("USER", 1),
     ).toBe(true);

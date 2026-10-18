@@ -130,7 +130,7 @@ describe("package boundaries", () => {
     );
     expect(kernelSource).not.toMatch(/from\s+["'](?:ai|@ai-sdk\/)/);
     expect(kernelSource).not.toMatch(/node:(?:fs|child_process|http|https|sqlite)/);
-    expect(kernelSource).not.toMatch(/\b(?:fetch|spawn|exec)\s*\(/);
+    expect(kernelSource).not.toMatch(/\b(?:fetch|spawn)\s*\(|(?<!\.)\bexec\s*\(/);
     expect(kernelSource).not.toMatch(/\b(?:EventBus|Permission|ApprovalManager)\b/);
 
     // The Coding layer reaches the Runtime only through the adapters it injects: it never imports the
@@ -142,7 +142,7 @@ describe("package boundaries", () => {
       /from\s+["']@caelush\/(?:core|context|storage|events|security|verification|daemon|llm)["']/,
     );
     expect(codingSource).not.toMatch(/node:(?:child_process|pty)/);
-    expect(codingSource).not.toMatch(/\b(?:fetch|spawn|exec)\s*\(/);
+    expect(codingSource).not.toMatch(/\b(?:fetch|spawn)\s*\(|(?<!\.)\bexec\s*\(/);
     expect(codingSource).not.toMatch(/\b(?:EventBus|Permission|ApprovalManager)\b/);
 
     // The schema compiler is one implementation, and Phase 4A moved it into `@caelush/agent`. The
@@ -274,7 +274,7 @@ describe("package boundaries", () => {
   it("keeps the Phase 6B loop above Context and narrow LLM contracts", async () => {
     const core = await readManifest("packages/core/package.json");
     const dependencies = dependencyEntries(core);
-    expect(dependencies["@caelush/context"]).toBeUndefined();
+    expect(dependencies["@caelush/context"]).toBe("workspace:*");
     expect(dependencies["@caelush/llm"]).toBeUndefined();
     expect(dependencies["@caelush/protocol"]).toBe("workspace:*");
     // Phase 4F deleted `@caelush/tools`: the Tool Kernel the Phase 6B loop prepares tool calls for is

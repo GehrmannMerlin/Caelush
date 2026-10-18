@@ -3,7 +3,6 @@ import type { AgentRun, StepId } from "@caelush/protocol";
 import {
   agentAssistantTextPart,
   agentAssistantToolCallPart,
-  agentTextPart,
   createAgentMessageFactory,
   createAgentMessageIdFactory,
   createAgentConversationSnapshot,
@@ -21,6 +20,7 @@ import {
   type AgentToolCallsDecision,
   type StoredAgentMessage,
 } from "@caelush/agent";
+import { toTextOnlyAIToolResultContent, toTextOnlyAgentUserContent } from "./ai-message-content.js";
 
 /**
  * Compatibility-only input accepted by the retired Core facade.
@@ -136,7 +136,7 @@ function createStoredMessage(
         sessionId: run.sessionId,
         conversationTurnId: turn,
         source: userMessageSource("GOAL"),
-        content: [agentTextPart(message.content)],
+        content: toTextOnlyAgentUserContent(message.content),
       });
     case "assistant":
       return factory.createAssistant({
@@ -181,7 +181,7 @@ function createStoredMessage(
         toolName: message.toolName,
         observation: NO_TOOL_RESULT_OBSERVATION,
         isError: message.isError,
-        projectedContent: message.content,
+        projectedContent: toTextOnlyAIToolResultContent(message.content),
         projection,
       });
     }

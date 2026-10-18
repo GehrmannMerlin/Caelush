@@ -8,6 +8,7 @@ import { createToolObservationBatchProjector } from "@caelush/agent";
 import type { AIToolResultMessage } from "@caelush/ai";
 import type { AgentToolRequest } from "./agent-decision.js";
 import { ToolBatchResultConversionError } from "./agent-errors.js";
+import { toTextOnlyAIToolResultContent } from "./ai-message-content.js";
 
 export interface AgentToolObservationPolicy {
   readonly maxSingleObservationTokens: number;
@@ -77,7 +78,7 @@ export function toAgentToolResults(
   return toAIToolResultMessages(requests, snapshots, policy).map((message) => ({
     externalCallId: message.toolCallId,
     toolName: message.toolName,
-    content: message.content,
+    content: toTextOnlyAIToolResultContent(message.content),
     isError: message.isError,
   }));
 }

@@ -1,5 +1,6 @@
 import type { AIFinishReason, AIProviderOpaqueState, ModelRef, ModelUsage } from "@caelush/ai";
 import type {
+  AttachmentModelContentReference,
   AssistantMessagePhase,
   RunId,
   SessionId,
@@ -132,6 +133,9 @@ export interface CreateAgentToolResultMessageInput extends AgentMessageScope {
   /** The exact text the model was shown. Copied verbatim; never re-derived. */
   readonly projectedContent: string;
 
+  /** Stable images the Core materializer may attach to the next provider turn. */
+  readonly attachmentReferences?: readonly AttachmentModelContentReference[] | undefined;
+
   /**
    * The projection receipt.
    *
@@ -247,6 +251,9 @@ export function createAgentMessageFactory(
         observation: input.observation,
         isError: input.isError,
         projectedContent: input.projectedContent,
+        ...(input.attachmentReferences === undefined
+          ? {}
+          : { attachmentReferences: input.attachmentReferences }),
         projection: input.projection,
       });
     },

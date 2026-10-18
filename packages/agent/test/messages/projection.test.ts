@@ -19,6 +19,7 @@ import {
   AGENT_MESSAGE_PROJECTION_ERROR_CODES,
   AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_V1,
   AGENT_USER_MESSAGE_PROJECTOR_V1,
+  AGENT_USER_MESSAGE_PROJECTOR_V2,
   STANDARD_AGENT_MESSAGE_PROJECTORS,
 } from "@caelush/agent";
 import type {
@@ -198,6 +199,25 @@ describe("Phase 5A projection — ASSISTANT v1", () => {
     expect(AGENT_ASSISTANT_MESSAGE_PROJECTOR_V1.project(message).fingerprint).toBe(
       AGENT_ASSISTANT_MESSAGE_PROJECTOR_V1.project(message).fingerprint,
     );
+  });
+
+  it("keeps v1 byte-stable while v2 retains the durable attachment identity", () => {
+    const message = userMessage({ withAttachment: true }).message;
+    const v1 = AGENT_USER_MESSAGE_PROJECTOR_V1.project(message);
+    const v2 = AGENT_USER_MESSAGE_PROJECTOR_V2.project(message);
+
+    expect(v1.messages).toEqual([
+      {
+        role: "user",
+        content: 'hello\n[attachment v1 artifactId="art_1" label="diagram" mediaType="image/png"]',
+      },
+    ]);
+    expect(v2.messages).toEqual([
+      {
+        role: "user",
+        content: 'hello\n[attachment v2 artifactId="art_1" label="diagram" mediaType="image/png"]',
+      },
+    ]);
   });
 });
 
@@ -384,21 +404,22 @@ describe("Phase 5A projection — registry immutability and construction", () =>
   it("answers has/get for an exact type and version", () => {
     expect(projectors.has("USER", 1)).toBe(true);
     expect(projectors.get("USER", 1)).toBe(AGENT_USER_MESSAGE_PROJECTOR_V1);
-    expect(projectors.has("USER", 2)).toBe(false);
-    expect(projectors.get("USER", 2)).toBeUndefined();
+    expect(projectors.has("USER", 2)).toBe(true);
+    expect(projectors.get("USER", 2)).toBe(AGENT_USER_MESSAGE_PROJECTOR_V2);
     expect(projectors.has("NOPE", 1)).toBe(false);
   });
 
   it("reports the current version per type, which is the codec registry's authority", () => {
-    expect(projectors.currentVersion("USER")).toBe(1);
+    expect(projectors.currentVersion("USER")).toBe(2);
     expect(projectors.currentVersion("ASSISTANT")).toBe(1);
     expect(projectors.currentVersion("TOOL_RESULT")).toBe(1);
     expect(projectors.currentVersion("CUSTOM_THING")).toBeUndefined();
   });
 
-  it("registers exactly the three standard projectors", () => {
-    expect(STANDARD_AGENT_MESSAGE_PROJECTORS).toHaveLength(3);
+  it("registers all standard projector versions", () => {
+    expect(STANDARD_AGENT_MESSAGE_PROJECTORS).toHaveLength(4);
     expect(AGENT_USER_MESSAGE_PROJECTOR_V1.type).toBe("USER");
+    expect(AGENT_USER_MESSAGE_PROJECTOR_V2.type).toBe("USER");
     expect(AGENT_ASSISTANT_MESSAGE_PROJECTOR_V1.type).toBe("ASSISTANT");
     expect(AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_V1.type).toBe("TOOL_RESULT");
   });

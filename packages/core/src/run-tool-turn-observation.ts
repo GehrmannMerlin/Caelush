@@ -1,5 +1,7 @@
-import type { ProjectedToolFeedback, ToolTurnResult } from "@caelush/agent";
+import type { ToolTurnResult } from "@caelush/agent";
 import type { ToolBatchItemOutcome } from "@caelush/agent";
+
+import type { RunToolFeedbackProjection } from "./run-message-materializer.js";
 
 /**
  * The Core-private record of what one Tool turn actually did.
@@ -97,7 +99,7 @@ export interface RunToolTurnObservation {
    * The exact model feedback projection accepted by the normalizer, retained only for Core's
    * atomic TOOL_RESULT materialization. The frozen ToolTurnResult intentionally remains narrow.
    */
-  projectedFeedback?: readonly ProjectedToolFeedback[] | undefined;
+  projectedFeedback?: readonly RunToolFeedbackProjection[] | undefined;
 }
 
 /** The observation of a Tool turn that has not reached the Tool Layer yet. */

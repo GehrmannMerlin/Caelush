@@ -48,8 +48,23 @@ function modelMessages(
     readonly items: readonly ToolBatchItemOutcome[];
     readonly policy: ToolObservationPolicySnapshot;
   },
-): readonly import("@caelush/ai").AIToolResultMessage[] {
-  return projector.project(input).map((projected) => projected.message);
+): readonly TextOnlyToolResultMessage[] {
+  return projector.project(input).map(({ message }) => ({
+    ...message,
+    content: modelTextContent(message.content),
+  }));
+}
+
+type TextOnlyToolResultMessage = Omit<import("@caelush/ai").AIToolResultMessage, "content"> & {
+  readonly content: string;
+};
+
+function modelTextContent(content: import("@caelush/ai").AIToolResultMessage["content"]): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
 }
 
 function call(externalCallId: string, toolName = "read_file"): ToolCallRequest {

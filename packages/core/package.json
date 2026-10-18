@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@caelush/context": "workspace:*",
     "@caelush/protocol": "workspace:*",
     "@caelush/verification": "workspace:*",
     "zod": "4.4.3",

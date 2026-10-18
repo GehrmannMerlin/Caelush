@@ -27,6 +27,7 @@ async function sourceContents(): Promise<string> {
 const ALLOWED_CORE_EDGES = [
   "@caelush/agent",
   "@caelush/ai",
+  "@caelush/context",
   "@caelush/protocol",
   "@caelush/verification",
 ];

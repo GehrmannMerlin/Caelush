@@ -547,8 +547,8 @@ describe("Phase 3C Run Layer ownership", () => {
       "this.transitionPlanner.plan({ snapshot, directive, effect, now })",
     );
     expect(controller).toContain("this.eventMaterializer.materialize(");
-    expect(controller).toContain(
-      "classifyAgentEffectSettlement({ result, directive, observation })",
+    expect(controller).toMatch(
+      /classifyAgentEffectSettlement\(\{\s*result,\s*directive,\s*observation,/,
     );
     expect(controller).toContain("this.coordinator.next(");
 
@@ -643,7 +643,9 @@ describe("Phase 3C Run Layer ownership", () => {
     // and the observed effect is settled only after `execute` resolved.
     const driverComposition = controller.indexOf("createRunExecutionDriver(");
     const boundaryPort = controller.indexOf("modelTurnBoundary: boundary,");
-    const settlement = controller.indexOf("return this.settle(snapshot, directive, effect.result");
+    const settlement = controller.indexOf(
+      "return await this.settle(snapshot, directive, effect.result, observation);",
+    );
     expect(driverComposition).toBeGreaterThan(-1);
     expect(boundaryPort).toBeGreaterThan(-1);
     expect(settlement).toBeGreaterThan(driverComposition);

@@ -10,7 +10,7 @@ import type { AgentMessageProjector } from "./projector.js";
  * The three standard projectors.
  *
  * ```text
- * USER v1          content parts → one user message
+ * USER v1/v2       content parts → one user message; the attachment marker is versioned
  * ASSISTANT v1     content parts → text and tool-call content, in order, plus provider state
  * TOOL_RESULT v1   projectedContent → one tool message, verbatim
  * ```
@@ -59,6 +59,7 @@ export const AGENT_USER_MESSAGE_PROJECTOR_VERSION = 1;
  * empty strings that a model would have to interpret.
  */
 export const AGENT_ATTACHMENT_MARKER_VERSION = "v1";
+export const AGENT_ATTACHMENT_MARKER_VERSION_V2 = "v2";
 
 /** Render the canonical attachment marker for one reference. */
 export function attachmentMarker(part: {
@@ -86,6 +87,30 @@ export const AGENT_USER_MESSAGE_PROJECTOR_V1: AgentMessageProjector<AgentUserMes
   project(message: AgentUserMessage) {
     const content = message.content
       .map((part) => (part.type === "TEXT" ? part.text : attachmentMarker(part)))
+      .join("\n");
+    return createAgentMessageAIProjection([{ role: "user", content }]);
+  },
+};
+
+/** Render the attachment marker introduced with the budgeted Context materializer. */
+export function attachmentMarkerV2(part: {
+  readonly artifactId: string;
+  readonly label?: string | undefined;
+  readonly mediaType?: string | undefined;
+}): string {
+  const parts = [`artifactId=${JSON.stringify(part.artifactId)}`];
+  if (part.label !== undefined) parts.push(`label=${JSON.stringify(part.label)}`);
+  if (part.mediaType !== undefined) parts.push(`mediaType=${JSON.stringify(part.mediaType)}`);
+  return `[attachment ${AGENT_ATTACHMENT_MARKER_VERSION_V2} ${parts.join(" ")}]`;
+}
+
+/** The attachment-aware projection written for new durable user messages. */
+export const AGENT_USER_MESSAGE_PROJECTOR_V2: AgentMessageProjector<AgentUserMessage> = {
+  type: "USER",
+  version: 2,
+  project(message: AgentUserMessage) {
+    const content = message.content
+      .map((part) => (part.type === "TEXT" ? part.text : attachmentMarkerV2(part)))
       .join("\n");
     return createAgentMessageAIProjection([{ role: "user", content }]);
   },
@@ -213,6 +238,7 @@ export const AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_V1: AgentMessageProjector<Agent
 /** The three standard projectors, in canonical order. */
 export const STANDARD_AGENT_MESSAGE_PROJECTORS = [
   AGENT_USER_MESSAGE_PROJECTOR_V1,
+  AGENT_USER_MESSAGE_PROJECTOR_V2,
   AGENT_ASSISTANT_MESSAGE_PROJECTOR_V1,
   AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_V1,
 ] as const;
@@ -220,7 +246,7 @@ export const STANDARD_AGENT_MESSAGE_PROJECTORS = [
 /** The projection version each standard message type is currently written under. */
 export const STANDARD_AGENT_MESSAGE_PROJECTION_VERSIONS: Readonly<Record<string, number>> =
   Object.freeze({
-    USER: AGENT_USER_MESSAGE_PROJECTOR_VERSION,
+    USER: 2,
     ASSISTANT: AGENT_ASSISTANT_MESSAGE_PROJECTOR_VERSION,
     TOOL_RESULT: AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_VERSION,
   });

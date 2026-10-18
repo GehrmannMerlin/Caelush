@@ -33,9 +33,11 @@ import {
   type AssistantMessagePhase,
   type StepId,
 } from "@caelush/protocol";
+import type { AttachmentModelContentReference } from "@caelush/protocol";
 
 import type { RunAgentMessageProjection } from "./run-agent-history.js";
 import type { RunExecutionMessageAppend } from "./run-execution-store.js";
+import { toTextOnlyAIToolResultContent } from "./ai-message-content.js";
 
 /** One canonical message authority composed by the daemon and injected into Core. */
 export interface RunMessageAuthority extends RunAgentMessageProjection {
@@ -53,6 +55,7 @@ export interface RunToolFeedbackProjection {
   readonly message: AIToolResultMessage;
   readonly receipt: ToolFeedbackProjectionReceipt;
   readonly observation: ToolResultObservationRef;
+  readonly attachmentReferences?: readonly AttachmentModelContentReference[] | undefined;
 }
 
 export function createUserMessageAppend(
@@ -157,7 +160,10 @@ export function createToolResultMessageAppend(
     toolName: projected.message.toolName,
     observation: projected.observation,
     isError: projected.message.isError,
-    projectedContent: projected.message.content,
+    projectedContent: toTextOnlyAIToolResultContent(projected.message.content),
+    ...(projected.attachmentReferences === undefined
+      ? {}
+      : { attachmentReferences: projected.attachmentReferences }),
     projection: projected.receipt,
   });
   return appendFromMessage(authority, message);

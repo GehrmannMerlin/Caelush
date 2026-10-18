@@ -246,7 +246,7 @@ function planNaturalCompletion(
 ): RunExecutionCommit {
   if (snapshot.run.completionContract !== "NATURAL_V1") {
     throw new RunExecutionInvariantError(
-      "a legacy Run final candidate must use its persisted VerificationPlan boundary",
+      "a legacy Run final candidate must use its persisted verification boundary",
     );
   }
   const state = requireState(snapshot, "AGENT FINAL_CANDIDATE");

@@ -15,6 +15,10 @@ import type {
   StepId,
   TimestampMs,
 } from "@caelush/protocol";
+import {
+  AttachmentModelContentReferenceSchema,
+  MAX_ATTACHMENT_MODEL_CONTENT_REFERENCES,
+} from "@caelush/protocol";
 
 import type { AgentUserContentPart } from "../types/content.js";
 import type { AgentAssistantContentPart } from "../types/content.js";
@@ -46,7 +50,7 @@ import type { AgentMessageCodec } from "./codec.js";
 import { AgentMessageCodecError } from "./codec.js";
 
 /**
- * The three standard codecs, one per canonical message type.
+ * The standard message codecs, including explicit schema versions for Tool results.
  *
  * ```text
  * USER v1          data = { content }
@@ -186,6 +190,9 @@ export const AGENT_TOOL_RESULT_MESSAGE_CODEC_V1: AgentMessageCodec<AgentToolResu
     return version === 1;
   },
   encode(message: AgentToolResultMessage): JsonObject {
+    if (message.attachmentReferences.length > 0) {
+      throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT", 1);
+    }
     return {
       toolCallId: message.toolCallId,
       toolName: message.toolName,
@@ -215,11 +222,43 @@ export const AGENT_TOOL_RESULT_MESSAGE_CODEC_V1: AgentMessageCodec<AgentToolResu
   },
 };
 
+/** Tool-result codec v2 adds bounded model-image references while preserving v1 decoding. */
+export const AGENT_TOOL_RESULT_MESSAGE_CODEC_V2: AgentMessageCodec<AgentToolResultMessage> = {
+  type: "TOOL_RESULT",
+  currentVersion: 2,
+  canDecode(version: AgentMessageSchemaVersion): boolean {
+    return version === 2;
+  },
+  encode(message: AgentToolResultMessage): JsonObject {
+    const base = AGENT_TOOL_RESULT_MESSAGE_CODEC_V1.encode({
+      ...message,
+      attachmentReferences: [],
+    });
+    return {
+      ...base,
+      attachmentReferences: message.attachmentReferences as unknown as JsonValue,
+    };
+  },
+  decode(record: AgentMessageRecord): AgentToolResultMessage {
+    const base = decodeEnvelope(record, "TOOL_RESULT", 2);
+    return createAgentToolResultMessage(base, {
+      toolCallId: requireString(record.data, "toolCallId", "TOOL_RESULT"),
+      toolName: requireString(record.data, "toolName", "TOOL_RESULT"),
+      observation: decodeObservationRef(record.data["observation"]),
+      isError: requireBoolean(record.data, "isError", "TOOL_RESULT"),
+      projectedContent: requireString(record.data, "projectedContent", "TOOL_RESULT"),
+      attachmentReferences: decodeAttachmentModelReferences(record.data["attachmentReferences"]),
+      projection: decodeProjectionReceipt(record.data["projection"]),
+    });
+  },
+};
+
 /** The three standard codecs, in canonical order. */
 export const STANDARD_AGENT_MESSAGE_CODECS = [
   AGENT_USER_MESSAGE_CODEC_V1,
   AGENT_ASSISTANT_MESSAGE_CODEC_V3,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,
+  AGENT_TOOL_RESULT_MESSAGE_CODEC_V2,
 ] as const;
 
 /* ------------------------------------------------------------------------------ envelope */
@@ -661,6 +700,17 @@ function decodeObservationRef(value: unknown): ToolResultObservationRef {
     return { kind: "OBSERVATION", observationId: observationId as ObservationId };
   }
   throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
+}
+
+function decodeAttachmentModelReferences(value: unknown) {
+  if (!Array.isArray(value) || value.length > MAX_ATTACHMENT_MODEL_CONTENT_REFERENCES) {
+    throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT", 2);
+  }
+  try {
+    return value.map((reference) => AttachmentModelContentReferenceSchema.parse(reference));
+  } catch {
+    throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT", 2);
+  }
 }
 
 /**

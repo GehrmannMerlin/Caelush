@@ -78,7 +78,13 @@ function toToolResultMessage(
       // Provenance comes from the real Tool System projector; never infer or fabricate it here.
       observation: projectedFeedback.observation,
       isError: message.isError,
-      projectedContent: message.content,
+      projectedContent:
+        typeof message.content === "string"
+          ? message.content
+          : message.content
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join(""),
       projection: RECEIPT,
     },
   );

@@ -1,4 +1,8 @@
-import type { AIModelTurnAssistantItem, AIToolResultMessage } from "@caelush/ai";
+import type {
+  AIModelTurnAssistantItem,
+  AIToolResultContent,
+  AIToolResultMessage,
+} from "@caelush/ai";
 import type {
   AgentModelTurn,
   RunContinuationCheckpoint as AgentContinuation,
@@ -6,6 +10,7 @@ import type {
 import type { z } from "zod";
 import type { RunContinuationCheckpoint as DurableContinuation } from "./agent-continuation.js";
 import { RunContinuationCheckpointSchema } from "./agent-continuation-schema.js";
+import { toTextOnlyAIToolResultContent } from "./ai-message-content.js";
 
 /**
  * The Run continuation compatibility codec.
@@ -272,7 +277,7 @@ function asTool(message: {
   readonly role: string;
   readonly toolCallId: string;
   readonly toolName: string;
-  readonly content: string;
+  readonly content: AIToolResultContent;
   readonly isError: boolean;
 }): AIToolResultMessage {
   if (message.role !== "tool") {
@@ -282,7 +287,7 @@ function asTool(message: {
     role: "tool",
     toolCallId: message.toolCallId,
     toolName: message.toolName,
-    content: message.content,
+    content: toTextOnlyAIToolResultContent(message.content),
     isError: message.isError,
   };
 }

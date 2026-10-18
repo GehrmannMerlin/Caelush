@@ -1,5 +1,10 @@
 import type { JsonObject, JsonValue } from "@caelush/ai";
+import {
+  AttachmentModelContentReferenceSchema,
+  MAX_ATTACHMENT_MODEL_CONTENT_REFERENCES,
+} from "@caelush/protocol";
 import type { ObservationId } from "@caelush/protocol";
+import type { AttachmentModelContentReference } from "@caelush/protocol";
 
 import type { ToolObservationPolicySnapshot } from "../../loop/types.js";
 import type { AgentMessageBase } from "./message-base.js";
@@ -289,6 +294,9 @@ export interface AgentToolResultMessage extends AgentMessageBase {
 
   readonly projectedContent: string;
 
+  /** Stable references to images the model may receive when Core prepares this Tool result. */
+  readonly attachmentReferences: readonly AttachmentModelContentReference[];
+
   readonly projection: ToolFeedbackProjectionReceipt;
 }
 
@@ -301,6 +309,7 @@ export function createAgentToolResultMessage(
     readonly observation: ToolResultObservationRef;
     readonly isError: boolean;
     readonly projectedContent: string;
+    readonly attachmentReferences?: readonly AttachmentModelContentReference[] | undefined;
     readonly projection: ToolFeedbackProjectionReceipt;
   },
 ): AgentToolResultMessage {
@@ -317,6 +326,13 @@ export function createAgentToolResultMessage(
   if (typeof input.projectedContent !== "string") {
     throw new TypeError("Agent tool result message projectedContent must be a string.");
   }
+  const attachmentReferences = input.attachmentReferences ?? [];
+  if (
+    !Array.isArray(attachmentReferences) ||
+    attachmentReferences.length > MAX_ATTACHMENT_MODEL_CONTENT_REFERENCES
+  ) {
+    throw new TypeError("Agent tool result attachment references exceed the bounded limit.");
+  }
   if (input.projection.version !== TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION) {
     throw new TypeError(
       `Agent tool result projection version must be ${String(TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION)}.`,
@@ -331,6 +347,11 @@ export function createAgentToolResultMessage(
     observation: Object.freeze({ ...input.observation }) as ToolResultObservationRef,
     isError: input.isError,
     projectedContent: input.projectedContent,
+    attachmentReferences: Object.freeze(
+      attachmentReferences.map((reference) =>
+        Object.freeze(AttachmentModelContentReferenceSchema.parse(reference)),
+      ),
+    ),
     projection: Object.freeze({
       policy: input.projection.policy,
       fingerprint: input.projection.fingerprint,

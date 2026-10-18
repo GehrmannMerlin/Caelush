@@ -333,7 +333,7 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
     }
   });
 
-  it("keeps the Message Domain out of every consumer that must not need it yet", async () => {
+  it("keeps Message Domain consumers on the approved durable boundaries", async () => {
     // Phase 5D activates the semantic conversation cutover. The allowlist remains closed: only the
     // explicit production composition, Agent execution snapshot path, Context compatibility adapter,
     // and raw V2 store paths may consume Message Domain records.
@@ -357,6 +357,13 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
       "packages/core/src/run-message-materializer.ts",
       "packages/core/src/legacy-agent-conversation.ts",
       "packages/storage/src/run-execution-store.ts",
+      // Phase 5F owns durable AgentMessageRecord history at the Run boundary and through Storage;
+      // transcript, recovery, and schema adapters name those records directly.
+      "apps/daemon/src/services/interrupted-tool-history.ts",
+      "packages/agent/src/context/surface/prompt-surface.ts",
+      "packages/core/src/run-controller.ts",
+      "packages/storage/src/private-replay-store.ts",
+      "packages/storage/src/schema.ts",
       "packages/agent/src/loop/context/context-engine-port.ts",
       "packages/agent/src/loop/types.ts",
       // Phase 7A freezes ContextSourceInput with the durable conversation snapshot as semantic input.
