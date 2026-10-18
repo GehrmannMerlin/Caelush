@@ -7,10 +7,19 @@ import { ClientAgentRunSchema } from "./public-entities.js";
 import { ClientModelSelectionSchema, ReasoningLevelSchema } from "./model-selection.js";
 import { RunResourcePolicySchema } from "../resource-policy.js";
 import { PermissionPresetSelectionSchema } from "../security-policy.js";
+import {
+  AttachmentIdsSchema,
+  ATTACHMENT_ONLY_RUN_GOAL,
+  SubmissionIdSchema,
+} from "../attachment.js";
 
 export const CreateRunRequestSchema = z
   .object({
     goal: z.string().min(1),
+    /** Actual user-authored text; omitted by legacy clients, including text-only requests. */
+    userText: z.string().max(200_000).optional(),
+    attachmentIds: AttachmentIdsSchema.optional(),
+    submissionId: SubmissionIdSchema.optional(),
     workspace: WorkspaceRefSchema,
     model: ClientModelSelectionSchema.optional(),
     reasoningLevel: ReasoningLevelSchema.optional(),
@@ -23,7 +32,13 @@ export const CreateRunRequestSchema = z
   .refine(
     (value) => (value.limits === undefined) !== (value.resourcePolicy === undefined),
     "exactly one of limits or resourcePolicy is required",
-  );
+  )
+  .refine((value) => {
+    if (value.userText === "") {
+      return value.goal === ATTACHMENT_ONLY_RUN_GOAL && (value.attachmentIds?.length ?? 0) > 0;
+    }
+    return value.goal !== ATTACHMENT_ONLY_RUN_GOAL;
+  }, "attachment-only Runs require their internal goal, empty user text and attachments");
 export type CreateRunRequest = z.infer<typeof CreateRunRequestSchema>;
 
 export const RunListQuerySchema = z

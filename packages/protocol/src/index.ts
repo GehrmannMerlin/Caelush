@@ -46,10 +46,56 @@ export type {
 } from "./primitives/ids.js";
 export { JsonObjectSchema, JsonValueSchema } from "./primitives/json.js";
 export type { JsonObject, JsonPrimitive, JsonValue } from "./primitives/json.js";
+export {
+  ATTACHMENT_ONLY_RUN_GOAL,
+  AttachmentDescriptorSchema,
+  AttachmentDraftSchema,
+  AttachmentIdSchema,
+  AttachmentIdsSchema,
+  AttachmentMediaTypeSchema,
+  AttachmentNameSchema,
+  AttachmentOwnerSchema,
+  AttachmentSha256Schema,
+  AttachmentStatusSchema,
+  AttachmentVisualRequirementSchema,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_COUNT,
+  MAX_MESSAGE_ATTACHMENT_BYTES,
+  SubmissionIdSchema,
+} from "./attachment.js";
+export type {
+  AttachmentDescriptor,
+  AttachmentDraft,
+  AttachmentId,
+  AttachmentOwner,
+  AttachmentStatus,
+  AttachmentVisualRequirement,
+  SubmissionId,
+} from "./attachment.js";
 export { TimestampMsSchema, createTimestampMs } from "./primitives/time.js";
 export type { TimestampMs } from "./primitives/time.js";
 export { AgentErrorCodeSchema, AgentErrorPhaseSchema, AgentErrorSchema } from "./error.js";
 export type { AgentError, AgentErrorCode, AgentErrorPhase } from "./error.js";
+export {
+  AttachmentDraftReadRequestSchema,
+  AttachmentDraftResponseSchema,
+  AttachmentDraftWriteRequestSchema,
+  AttachmentDownloadQuerySchema,
+  AttachmentSubmissionSchema,
+  AttachmentUploadBeginRequestSchema,
+  AttachmentUploadFinishRequestSchema,
+  AttachmentUploadFinishResponseSchema,
+} from "./api/index.js";
+export type {
+  AttachmentDraftReadRequest,
+  AttachmentDraftResponse,
+  AttachmentDraftWriteRequest,
+  AttachmentDownloadQuery,
+  AttachmentSubmission,
+  AttachmentUploadBeginRequest,
+  AttachmentUploadFinishRequest,
+  AttachmentUploadFinishResponse,
+} from "./api/index.js";
 export {
   ApprovalPolicySchema,
   CapabilitySchema,

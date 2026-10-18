@@ -10,6 +10,7 @@ import { RuntimeRefSchema } from "./runtime.js";
 import { WorkspaceRefSchema } from "./workspace.js";
 import { ReasoningLevelSchema } from "./api/model-selection.js";
 import { RunSecurityPolicySnapshotV1Schema } from "./security-policy.js";
+import { AttachmentIdsSchema, SubmissionIdSchema } from "./attachment.js";
 
 export const RunStatusSchema = z.enum([
   "PENDING",
@@ -66,6 +67,10 @@ export const AgentRunSchema = z
     id: RunIdSchema,
     sessionId: SessionIdSchema,
     goal: z.string().min(1),
+    /** Actual user-authored text, distinct from the internal goal for attachment-only Runs. */
+    userText: z.string().max(200_000).optional(),
+    attachmentIds: AttachmentIdsSchema.optional(),
+    submissionId: SubmissionIdSchema.optional(),
     status: RunStatusSchema,
     workspace: WorkspaceRefSchema,
     model: ModelRefSchema,

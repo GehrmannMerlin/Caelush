@@ -4,6 +4,7 @@ import { WorkspaceRefSchema } from "../workspace.js";
 import { WorkspaceIdSchema } from "../primitives/ids.js";
 import { ClientModelSelectionSchema, ReasoningLevelSchema } from "./model-selection.js";
 import { ClientAgentSessionSchema } from "./public-entities.js";
+import { SubmissionIdSchema } from "../attachment.js";
 
 export const CreateSessionRequestSchema = z
   .object({
@@ -13,6 +14,7 @@ export const CreateSessionRequestSchema = z
     defaultModel: ClientModelSelectionSchema.optional(),
     defaultReasoningLevel: ReasoningLevelSchema.optional(),
     metadata: JsonObjectSchema.optional(),
+    submissionId: SubmissionIdSchema.optional(),
   })
   .strict();
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;

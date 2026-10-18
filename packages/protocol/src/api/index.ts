@@ -1,6 +1,26 @@
 export { ApiErrorCodeSchema, ApiErrorResponseSchema, ApiErrorSchema } from "./common.js";
 export type { ApiError, ApiErrorCode, ApiErrorResponse } from "./common.js";
 export {
+  AttachmentDraftReadRequestSchema,
+  AttachmentDraftResponseSchema,
+  AttachmentDraftWriteRequestSchema,
+  AttachmentDownloadQuerySchema,
+  AttachmentSubmissionSchema,
+  AttachmentUploadBeginRequestSchema,
+  AttachmentUploadFinishRequestSchema,
+  AttachmentUploadFinishResponseSchema,
+} from "./attachment.js";
+export type {
+  AttachmentDraftReadRequest,
+  AttachmentDraftResponse,
+  AttachmentDraftWriteRequest,
+  AttachmentDownloadQuery,
+  AttachmentSubmission,
+  AttachmentUploadBeginRequest,
+  AttachmentUploadFinishRequest,
+  AttachmentUploadFinishResponse,
+} from "./attachment.js";
+export {
   UsageSummaryBucketSchema,
   UsageSummaryQuerySchema,
   UsageSummaryResponseSchema,

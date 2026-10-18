@@ -3,6 +3,7 @@ import { z } from "zod";
 import { JsonObjectSchema } from "../primitives/json.js";
 import { RunIdSchema } from "../primitives/ids.js";
 import { TimestampMsSchema } from "../primitives/time.js";
+import { AttachmentNameSchema, MAX_ATTACHMENT_BYTES } from "../attachment.js";
 
 const transcriptTextSchema = z.string();
 
@@ -15,6 +16,10 @@ export const TranscriptAttachmentRefSchema = z
     artifactId: z.string().min(1),
     label: z.string().min(1).optional(),
     mediaType: z.string().min(1).optional(),
+    name: AttachmentNameSchema.optional(),
+    byteLength: z.number().int().min(0).max(MAX_ATTACHMENT_BYTES).optional(),
+    previewAvailable: z.boolean().optional(),
+    downloadAvailable: z.boolean().optional(),
   })
   .strict();
 export type TranscriptAttachmentRef = z.infer<typeof TranscriptAttachmentRefSchema>;
