@@ -15,6 +15,8 @@ import type {
   RunExecutionSupervisorResult,
 } from "../execution/run-execution-supervisor.js";
 import { toClientAgentRun } from "../services/public-projection.js";
+import { registerRunInputRoutes } from "./run-inputs.js";
+import type { RunInputService } from "../services/run-input-intake.js";
 
 export interface DaemonExecutionSurface {
   readonly runs: Pick<RunRepository, "get">;
@@ -28,6 +30,11 @@ export interface DaemonExecutionSurface {
   readonly contextUsage?: {
     getContextUsage(runId: RunId): Promise<ContextUsageProjection | undefined>;
   };
+  /**
+   * Present only when the durable intake → canonical USER → next model step path is composed.
+   * A daemon without it must not advertise `runInputV1`.
+   */
+  readonly runInputs?: Pick<RunInputService, "submit" | "list"> | undefined;
 }
 
 function toActionResponse(result: RunExecutionSupervisorResult) {
@@ -43,6 +50,10 @@ export function registerExecutionRoutes(
   app: FastifyInstance,
   surface: DaemonExecutionSurface,
 ): void {
+  if (surface.runInputs !== undefined) {
+    registerRunInputRoutes(app, { runInputs: surface.runInputs });
+  }
+
   app.post(
     "/api/v1/runs/:runId/start",
     { schema: { response: { 200: RunActionResponseSchema, 202: RunActionResponseSchema } } },

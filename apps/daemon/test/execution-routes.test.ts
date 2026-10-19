@@ -14,6 +14,7 @@ import {
   type RunExecutionSupervisorResult,
 } from "../src/execution/run-execution-supervisor.js";
 import { StorageNotFoundError } from "@caelush/storage";
+import { RunInputRejectionError } from "../src/services/run-input-intake.js";
 
 const currentRun: AgentRun = {
   id: createRunId(),
@@ -84,6 +85,16 @@ function makeSurface(): DaemonExecutionSurface {
     },
     approvals: {
       listPendingByRun: vi.fn(async (runId: RunId) => (runId === currentRun.id ? [approval] : [])),
+    },
+    runInputs: {
+      submit: vi.fn(async (runId: RunId, input: { inputId: string }) => ({
+        inputId: input.inputId,
+        runId,
+        acceptedSequence: 1,
+        stage: "PENDING" as const,
+        acceptedAt: 5,
+      })),
+      list: vi.fn(async () => ({ items: [] })),
     },
   };
 }
@@ -247,5 +258,79 @@ describe("daemon execution routes", () => {
     expect(infrastructure.statusCode).toBe(500);
     expect(infrastructure.body).not.toContain("private provider failure");
     expect(infrastructure.json().error.code).toBe("INTERNAL_ERROR");
+  });
+});
+
+describe("daemon run input routes", () => {
+  let app: ReturnType<typeof makeApp> | undefined;
+  afterEach(async () => {
+    await app?.close();
+    app = undefined;
+  });
+
+  it("accepts one text input with the identity the client chose", async () => {
+    const surface = makeSurface();
+    app = makeApp(surface);
+    const inputId = "00000000-0000-4000-8000-000000000001";
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/runs/${currentRun.id}/inputs`,
+      headers: { host: "127.0.0.1" },
+      payload: { inputId, text: "keep the API stable" },
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ inputId, stage: "PENDING", acceptedSequence: 1 });
+    expect(surface.runInputs?.submit).toHaveBeenCalledWith(currentRun.id, {
+      inputId,
+      text: "keep the API stable",
+    });
+  });
+
+  it("rejects a body that carries anything but text", async () => {
+    const surface = makeSurface();
+    app = makeApp(surface);
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/runs/${currentRun.id}/inputs`,
+      headers: { host: "127.0.0.1" },
+      payload: {
+        inputId: "00000000-0000-4000-8000-000000000002",
+        text: "x",
+        attachmentIds: ["att_1"],
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(surface.runInputs?.submit).not.toHaveBeenCalled();
+  });
+
+  it("returns the structured refusal reason in the existing ApiError envelope", async () => {
+    const surface = makeSurface();
+    surface.runInputs!.submit = vi.fn(async () => {
+      throw new RunInputRejectionError("RUN_TERMINAL", "The Run has ended.");
+    });
+    app = makeApp(surface);
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/runs/${currentRun.id}/inputs`,
+      headers: { host: "127.0.0.1" },
+      payload: { inputId: "00000000-0000-4000-8000-000000000003", text: "late" },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: { code: "CONFLICT", details: { reason: "RUN_TERMINAL" } },
+    });
+  });
+
+  it("pages the Run's inputs", async () => {
+    const surface = makeSurface();
+    app = makeApp(surface);
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/runs/${currentRun.id}/inputs?limit=10&after=1`,
+      headers: { host: "127.0.0.1" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ items: [] });
+    expect(surface.runInputs?.list).toHaveBeenCalledWith(currentRun.id, { limit: 10, after: 1 });
   });
 });

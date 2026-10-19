@@ -29,6 +29,7 @@ import { SessionPresentationCursorError } from "../services/session-presentation
 import { SecurityPolicyRequestError } from "../services/run-service.js";
 import { ArchiveConfirmationError } from "../services/archive-confirmation.js";
 import { AttachmentServiceError } from "../attachments/attachment-service.js";
+import { RunInputRejectionError } from "../services/run-input-intake.js";
 
 export class InvalidEventCursorError extends Error {
   constructor() {
@@ -41,6 +42,8 @@ interface MappedError {
   readonly statusCode: number;
   readonly code: ApiErrorCode;
   readonly message: string;
+  /** Structured, content-free detail a client may switch on. Never quotes request content. */
+  readonly details?: Readonly<Record<string, string>>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -92,6 +95,44 @@ function isEventCursorValidationError(error: unknown): boolean {
 }
 
 function mapError(error: unknown): MappedError {
+  if (error instanceof RunInputRejectionError) {
+    // The refusal is a *state* answer, not a malformed request: the client keeps its draft and
+    // shows the reason. The structured reason is what it switches on; the message is for humans.
+    switch (error.reason) {
+      case "TARGET_MISMATCH":
+        return {
+          statusCode: 404,
+          code: "NOT_FOUND",
+          message: error.message,
+          details: { reason: error.reason },
+        };
+      case "TEXT_TOO_LARGE":
+        return {
+          statusCode: 413,
+          code: "INVALID_REQUEST",
+          message: error.message,
+          details: { reason: error.reason },
+        };
+      case "QUEUE_FULL":
+        return {
+          statusCode: 429,
+          code: "CONFLICT",
+          message: error.message,
+          details: { reason: error.reason },
+        };
+      case "NOT_SUPPORTED":
+      case "RUN_NOT_READY":
+      case "RUN_TERMINAL":
+      case "IDEMPOTENCY_CONFLICT":
+      case "STORE_UNAVAILABLE":
+        return {
+          statusCode: 409,
+          code: "CONFLICT",
+          message: error.message,
+          details: { reason: error.reason },
+        };
+    }
+  }
   if (error instanceof AttachmentServiceError) {
     switch (error.code) {
       case "NOT_FOUND":
@@ -294,7 +335,12 @@ export function toApiErrorResponse(
   return {
     statusCode: mapped.statusCode,
     body: {
-      error: { code: mapped.code, message: mapped.message, requestId },
+      error: {
+        code: mapped.code,
+        message: mapped.message,
+        requestId,
+        ...(mapped.details === undefined ? {} : { details: { ...mapped.details } }),
+      },
     },
   };
 }

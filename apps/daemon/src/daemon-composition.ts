@@ -61,6 +61,7 @@ import {
   createContextRequestOverheadEstimator,
   resolveAdaptiveContextBudget,
   createModelTurnExecutor,
+  createRunEventFactory,
   STANDARD_AGENT_MESSAGE_CODECS,
   STANDARD_AGENT_MESSAGE_PROJECTORS,
   STANDARD_AGENT_MESSAGE_TRANSCRIPT_PROJECTORS,
@@ -203,6 +204,7 @@ import {
   type WorkspacePreparationPort,
 } from "./services/security-capability-service.js";
 import { RunSecurityPromptProjector } from "./services/run-security-prompt-projector.js";
+import { RunInputService } from "./services/run-input-intake.js";
 import {
   resolveSecurityFeatureGates,
   type SecurityFeatureGates,
@@ -417,6 +419,13 @@ export interface DaemonComposition {
   };
   readonly controller: RunController;
   readonly supervisor: RunExecutionSupervisor;
+  /**
+   * The durable Run input intake surface.
+   *
+   * It is part of the composition, not of the controller: accepting input must not take the Run's
+   * execution lock, and a Run that is parked stays parked until its own driver moves.
+   */
+  readonly runInputs: Pick<RunInputService, "submit" | "list">;
   /**
    * Publish the Run identity a host-driven model turn executes for.
    *
@@ -1208,6 +1217,14 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     approvals: options.storage.approvals,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
+  const runInputService = new RunInputService({
+    runs: options.storage.runs,
+    archives: options.storage.archives,
+    store: options.storage.runInputs,
+    events: createRunEventFactory(),
+    eventIds: { create: createEventId },
+    clock,
+  });
   const modelCanonicalizer = new CatalogModelCanonicalizer(ai.models, ai.providers);
   const info = DaemonInfoSchema.parse({
     apiVersion: "v1",
@@ -1222,6 +1239,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       sessionTranscript: true,
       sessionContinuityPreflight: true,
       sessionTurnPresentation: true,
+      // Advertised only because the store, the route and the driver boundary are all composed
+      // below; there is no in-memory stand-in behind this flag.
+      runInputV1: true,
     },
     runtimeKinds: ["local"],
     // Compatibility snapshot only. Dynamic provider connection state belongs to
@@ -1289,6 +1309,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     },
     controller,
     supervisor,
+    runInputs: runInputService,
     resolveTurnIdentity,
     approvals: options.storage.approvals,
     modelCanonicalizer,

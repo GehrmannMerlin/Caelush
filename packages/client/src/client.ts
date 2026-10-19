@@ -25,6 +25,10 @@ import {
   DaemonInfoSchema,
   HealthResponseSchema,
   RunActionResponseSchema,
+  RunInputListQuerySchema,
+  RunInputListResponseSchema,
+  RunInputReceiptSchema,
+  SubmitRunInputRequestSchema,
   SecurityCapabilitiesResponseSchema,
   SecurityPreparationRequestSchema,
   SecurityPreparationResponseSchema,
@@ -74,6 +78,10 @@ import {
   type DaemonInfo,
   type HealthResponse,
   type RunActionResponse,
+  type RunInputListQuery,
+  type RunInputListResponse,
+  type RunInputReceipt,
+  type SubmitRunInputRequest,
   type RunId,
   type RunListQuery,
   type SessionId,
@@ -201,12 +209,15 @@ export class CaelushClientHttpError extends Error {
   readonly code: ApiErrorCode;
   readonly statusCode: number;
   readonly requestId?: string;
+  /** The structured, content-free detail the daemon attached, when it attached one. */
+  readonly details?: Readonly<Record<string, unknown>>;
 
   constructor(input: {
     readonly status: number;
     readonly code: ApiErrorCode;
     readonly message: string;
     readonly requestId?: string;
+    readonly details?: Readonly<Record<string, unknown>> | undefined;
   }) {
     super(input.message);
     this.name = "CaelushClientHttpError";
@@ -214,6 +225,7 @@ export class CaelushClientHttpError extends Error {
     this.statusCode = input.status;
     this.code = input.code;
     if (input.requestId !== undefined) this.requestId = input.requestId;
+    if (input.details !== undefined) this.details = input.details;
   }
 }
 
@@ -274,6 +286,7 @@ function xhrHttpError(status: number, responseText: string): CaelushClientHttpEr
       code: parsed.data.error.code,
       message: parsed.data.error.message,
       requestId: parsed.data.error.requestId,
+      ...(parsed.data.error.details === undefined ? {} : { details: parsed.data.error.details }),
     });
   }
   return new CaelushClientHttpError({
@@ -1028,6 +1041,44 @@ export class CaelushClient {
     );
   }
 
+  /**
+   * Accept one mid-Run text correction.
+   *
+   * The identity is the caller's, not the daemon's: a retry after a lost response re-sends the same
+   * `inputId` and receives the same acceptance instead of creating a second input.
+   */
+  async submitRunInput(
+    runId: RunId,
+    input: SubmitRunInputRequest,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<RunInputReceipt> {
+    const body = SubmitRunInputRequestSchema.parse(input);
+    return this.request(
+      `/api/v1/runs/${encodeURIComponent(runId)}/inputs`,
+      jsonRequest("POST", body),
+      RunInputReceiptSchema,
+      [200, 202],
+      options,
+    );
+  }
+
+  async listRunInputs(
+    runId: RunId,
+    query: Partial<RunInputListQuery> = {},
+    options: CaelushClientRequestOptions = {},
+  ): Promise<RunInputListResponse> {
+    const parsed = RunInputListQuerySchema.parse(query);
+    const after =
+      parsed.after === undefined ? "" : `&after=${encodeURIComponent(String(parsed.after))}`;
+    return this.request(
+      `/api/v1/runs/${encodeURIComponent(runId)}/inputs?limit=${encodeURIComponent(String(parsed.limit))}${after}`,
+      { method: "GET" },
+      RunInputListResponseSchema,
+      [200],
+      options,
+    );
+  }
+
   async listPendingApprovals(
     runId: RunId,
     options: CaelushClientRequestOptions = {},
@@ -1165,6 +1216,7 @@ export class CaelushClient {
         code: parsed.data.error.code,
         message: parsed.data.error.message,
         requestId: parsed.data.error.requestId,
+        ...(parsed.data.error.details === undefined ? {} : { details: parsed.data.error.details }),
       });
     }
     return new CaelushClientHttpError({

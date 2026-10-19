@@ -95,6 +95,13 @@ interface PositionedItem {
   readonly item: TurnPresentationItemV3;
   readonly createdAt: number;
   readonly stableId: string;
+  /**
+   * The display region, resolved once.
+   *
+   * It is a property of *this* placement rather than of the item kind: the opening USER opens the
+   * Turn, while a mid-Run correction is part of the process stream at its own timestamp.
+   */
+  readonly region: number;
 }
 
 /**
@@ -163,6 +170,7 @@ export class SessionPresentationService {
           item,
           createdAt: Number(record.createdAt),
           stableId: `${record.messageId}:${String(item.ordinal).padStart(6, "0")}`,
+          region: itemRegion(item, record),
         });
       }
     }
@@ -187,6 +195,7 @@ export class SessionPresentationService {
         item,
         createdAt: Number(invocation.createdAt),
         stableId: item.id,
+        region: presentationRegion(item),
       });
     }
 
@@ -212,6 +221,7 @@ export class SessionPresentationService {
         item: stableItem,
         createdAt,
         stableId: stableItem.id,
+        region: presentationRegion(stableItem),
       });
     }
     for (const entry of verificationItems.values()) {
@@ -243,6 +253,7 @@ export class SessionPresentationService {
         item: summary,
         createdAt: Number(summary.createdAt),
         stableId: summary.id,
+        region: presentationRegion(summary),
       });
     }
 
@@ -655,8 +666,8 @@ function compareRuns(left: AgentRun, right: AgentRun): number {
 }
 
 function comparePositionedItems(left: PositionedItem, right: PositionedItem): number {
-  const leftRegion = presentationRegion(left.item);
-  const rightRegion = presentationRegion(right.item);
+  const leftRegion = left.region;
+  const rightRegion = right.region;
   return (
     leftRegion - rightRegion ||
     left.createdAt - right.createdAt ||
@@ -670,6 +681,25 @@ function presentationRegion(item: TurnPresentationItemV3): number {
   if (item.kind === "RUN_SUMMARY") return 3;
   if (item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER") return 2;
   return 1;
+}
+
+/**
+ * The region one message occupies in the Run's presentation.
+ *
+ * A correction the user sent while the Run was working is placed with the work it corrects, not at
+ * the top of the task: it is a mid-conversation statement, and the timestamp inside the process
+ * region puts it after the Tool results and before the answer that follows it.
+ */
+function itemRegion(item: TurnPresentationItemV3, record: AgentMessageRecord): number {
+  if (
+    item.kind === "USER" &&
+    record.messageType === "USER" &&
+    record.source.kind === "USER" &&
+    record.source.origin === "STEERING"
+  ) {
+    return 1;
+  }
+  return presentationRegion(item);
 }
 
 async function readDurableEvents(
