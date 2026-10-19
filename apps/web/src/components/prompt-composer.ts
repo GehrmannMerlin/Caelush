@@ -363,7 +363,6 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
     },
     createElement(RunInputPendingList, {
       items: props.runInputs ?? [],
-      steering: steer,
     }),
     createElement(AttachmentList, {
       items: props.attachments ?? [],
@@ -491,52 +490,30 @@ function submissionLabel(submission: WebSubmissionState): string {
 }
 
 /**
- * The corrections a Run has accepted but not yet applied.
+ * Keep only corrections still in flight or queued for a boundary above the composer.
  *
- * Only stages that still need the user's attention appear here: once a correction is part of the
- * conversation it belongs to the transcript, and showing it twice would make one input look like
- * two. The wording never claims the model has read or acted on the text.
+ * Rejected text remains in the editable draft/error path; recorded or assigned text belongs to the
+ * canonical Transcript and is removed here to avoid presenting it twice.
  */
 function RunInputPendingList(props: {
   readonly items: readonly WebRunInputItem[];
-  readonly steering: boolean;
 }): ReactElement | null {
   const visible = props.items.filter(
-    (item) => item.stage === "SENDING" || item.stage === "PENDING" || item.stage === "REJECTED",
+    (item) => item.stage === "SENDING" || item.stage === "PENDING",
   );
   if (visible.length === 0) return null;
   return createElement(
-    "ul",
-    { className: "run-input-pending", "aria-label": "待应用的补充" },
+    "section",
+    { className: "run-input-pending", role: "region", "aria-label": "待应用的补充" },
     visible.map((item) =>
       createElement(
-        "li",
+        "p",
         {
           key: item.inputId,
           className: `run-input-pending-item run-input-pending-item--${item.stage.toLowerCase()}`,
         },
-        createElement("span", { className: "run-input-pending-text" }, item.text),
-        createElement(
-          "span",
-          { className: "run-input-pending-stage", role: "status" },
-          runInputPendingLabel(item),
-        ),
+        item.text,
       ),
     ),
   );
-}
-
-function runInputPendingLabel(item: WebRunInputItem): string {
-  switch (item.stage) {
-    case "SENDING":
-      return "正在发送…";
-    case "PENDING":
-      return "已接收，等待当前响应和工具批次结束。";
-    case "REJECTED":
-      return item.errorReason === "RUN_TERMINAL"
-        ? "本轮已结束，此条未纳入模型步骤。"
-        : "本轮未受理此条，文字仍在输入框。";
-    default:
-      return "";
-  }
 }
