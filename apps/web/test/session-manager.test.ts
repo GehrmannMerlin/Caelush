@@ -346,6 +346,229 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
+  it("retires a correction when assignment arrives before its delayed intake receipt", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const runningRun = makeRun({ sessionId: session.id });
+    const client = makeClient({ createSessionResult: session, createRunResult: runningRun });
+    const stream = new TestRunEventStream();
+    client.watchRunEvents.mockImplementation((_runId, options) => {
+      options?.onOpen?.();
+      return stream;
+    });
+    let resolveSubmission:
+      | ((receipt: {
+          inputId: string;
+          runId: typeof runningRun.id;
+          acceptedSequence: number;
+          stage: "PENDING";
+          acceptedAt: number;
+        }) => void)
+      | undefined;
+    client.submitRunInput = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveSubmission = resolve;
+        }),
+    );
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: { ...makeInfo().capabilities, runInputV1: true },
+      }),
+    });
+    manager.beginDraft();
+    await expect(manager.submitPrompt("inspect the parser")).resolves.toBe(true);
+
+    const submission = manager.submitRunInput("use the existing parser");
+    await waitFor(() => manager.getSnapshot().runInputs[0]?.stage === "SENDING");
+    const sending = manager.getSnapshot().runInputs[0]!;
+    stream.push(runInputAssignedEvent(runningRun, sending.inputId, 1));
+    await waitFor(() => manager.getSnapshot().runInputs[0]?.stage === "ASSIGNED");
+
+    resolveSubmission?.({
+      inputId: sending.inputId,
+      runId: runningRun.id,
+      acceptedSequence: 1,
+      stage: "PENDING",
+      acceptedAt: 3,
+    });
+    await expect(submission).resolves.toBe(true);
+
+    expect(manager.getSnapshot().runInputs[0]).toMatchObject({
+      inputId: sending.inputId,
+      stage: "ASSIGNED",
+      acceptedSequence: 1,
+      messageId: "message_steer_1",
+      firstStepId: expect.any(String),
+    });
+    manager.dispose();
+  });
+
+  it("retires an accepted correction when the assigned event follows its intake receipt", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const runningRun = makeRun({ sessionId: session.id });
+    const client = makeClient({ createSessionResult: session, createRunResult: runningRun });
+    const stream = new TestRunEventStream();
+    client.watchRunEvents.mockImplementation((_runId, options) => {
+      options?.onOpen?.();
+      return stream;
+    });
+    client.submitRunInput = vi.fn(async (_runId, input) => ({
+      inputId: input.inputId,
+      runId: runningRun.id,
+      acceptedSequence: 1,
+      stage: "PENDING" as const,
+      acceptedAt: 3,
+    }));
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: { ...makeInfo().capabilities, runInputV1: true },
+      }),
+    });
+    manager.beginDraft();
+    await expect(manager.submitPrompt("inspect the parser")).resolves.toBe(true);
+    await expect(manager.submitRunInput("use the existing parser")).resolves.toBe(true);
+    const accepted = manager.getSnapshot().runInputs[0]!;
+    expect(accepted.stage).toBe("PENDING");
+
+    stream.push(runInputAssignedEvent(runningRun, accepted.inputId, 1));
+    await waitFor(() => manager.getSnapshot().runInputs[0]?.stage === "ASSIGNED");
+
+    expect(manager.getSnapshot().runInputs[0]).toMatchObject({
+      inputId: accepted.inputId,
+      stage: "ASSIGNED",
+      messageId: "message_steer_1",
+      firstStepId: expect.any(String),
+    });
+    manager.dispose();
+  });
+
+  it("reconciles a recorded correction on its canonical user-message commit", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const runningRun = makeRun({ sessionId: session.id });
+    const client = makeClient({ createSessionResult: session, createRunResult: runningRun });
+    const stream = new TestRunEventStream();
+    client.watchRunEvents.mockImplementation((_runId, options) => {
+      options?.onOpen?.();
+      return stream;
+    });
+    client.submitRunInput = vi.fn(async (_runId, input) => ({
+      inputId: input.inputId,
+      runId: runningRun.id,
+      acceptedSequence: 1,
+      stage: "PENDING" as const,
+      acceptedAt: 3,
+    }));
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: { ...makeInfo().capabilities, runInputV1: true },
+      }),
+    });
+    manager.beginDraft();
+    await expect(manager.submitPrompt("inspect the parser")).resolves.toBe(true);
+    await expect(manager.submitRunInput("use the existing parser")).resolves.toBe(true);
+    const accepted = manager.getSnapshot().runInputs[0]!;
+    client.listRunInputs = vi.fn(async () => ({
+      items: [
+        {
+          inputId: accepted.inputId,
+          runId: runningRun.id,
+          acceptedSequence: 1,
+          stage: "RECORDED" as const,
+          acceptedAt: 3,
+          messageId: "message_steer_1",
+        },
+      ],
+    }));
+
+    stream.push(conversationMessageCommittedEvent(runningRun, "message_steer_1"));
+    await waitFor(() => manager.getSnapshot().runInputs[0]?.stage === "RECORDED");
+
+    expect(client.listRunInputs).toHaveBeenCalledWith(runningRun.id, { limit: 100 });
+    expect(manager.getSnapshot().runInputs[0]).toMatchObject({
+      inputId: accepted.inputId,
+      text: "use the existing parser",
+      stage: "RECORDED",
+      messageId: "message_steer_1",
+    });
+    manager.dispose();
+  });
+
+  it("keeps a recorded receipt reconciliation alive through terminal settlement", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const runningRun = makeRun({ sessionId: session.id });
+    const completedRun = makeCompletedRun(runningRun);
+    const client = makeClient({ createSessionResult: session, createRunResult: runningRun });
+    const stream = new TestRunEventStream();
+    client.watchRunEvents.mockImplementation((_runId, options) => {
+      options?.onOpen?.();
+      return stream;
+    });
+    client.getRun.mockResolvedValue(completedRun);
+    client.listRuns.mockResolvedValue({ items: [completedRun] });
+    client.submitRunInput = vi.fn(async (_runId, input) => ({
+      inputId: input.inputId,
+      runId: runningRun.id,
+      acceptedSequence: 1,
+      stage: "PENDING" as const,
+      acceptedAt: 3,
+    }));
+    const receipts = deferred<{
+      readonly items: readonly {
+        readonly inputId: string;
+        readonly runId: typeof runningRun.id;
+        readonly acceptedSequence: number;
+        readonly stage: "RECORDED";
+        readonly acceptedAt: number;
+        readonly messageId: string;
+      }[];
+    }>();
+    client.listRunInputs = vi.fn(() => receipts.promise);
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: { ...makeInfo().capabilities, runInputV1: true },
+      }),
+    });
+    manager.beginDraft();
+    await expect(manager.submitPrompt("inspect the parser")).resolves.toBe(true);
+    await expect(manager.submitRunInput("use the existing parser")).resolves.toBe(true);
+    const accepted = manager.getSnapshot().runInputs[0]!;
+
+    stream.push(conversationMessageCommittedEvent(runningRun, "message_steer_1"));
+    await waitFor(() => client.listRunInputs.mock.calls.length === 1);
+    stream.push(lifecycleEvent("run.completed", runningRun));
+    await waitFor(() => manager.getSnapshot().activeRun === undefined);
+
+    receipts.resolve({
+      items: [
+        {
+          inputId: accepted.inputId,
+          runId: runningRun.id,
+          acceptedSequence: 1,
+          stage: "RECORDED",
+          acceptedAt: 3,
+          messageId: "message_steer_1",
+        },
+      ],
+    });
+    await waitFor(() => manager.getSnapshot().runInputs[0]?.stage === "RECORDED");
+
+    expect(manager.getSnapshot().runInputs[0]).toMatchObject({
+      inputId: accepted.inputId,
+      runId: runningRun.id,
+      stage: "RECORDED",
+      messageId: "message_steer_1",
+    });
+    manager.dispose();
+  });
+
   it("does not offer mid-Run input when the daemon does not advertise it", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     // The manager's intake path does not require a particular Run status; the daemon decides that.
@@ -2797,6 +3020,49 @@ function lifecycleEvent(type: string, run: ClientAgentRun): PublicRunEvent {
     visibility: "USER_VISIBLE",
     durability: { kind: "EPHEMERAL" },
     payload: {},
+  } as PublicRunEvent;
+}
+
+function runInputAssignedEvent(
+  run: ClientAgentRun,
+  inputId: string,
+  sequence: number,
+): PublicRunEvent {
+  const stepId = createStepId();
+  return {
+    type: "run.input.assigned",
+    eventId: `evt_00000000-0000-7000-8000-${String(sequence).padStart(12, "0")}`,
+    schemaVersion: 1,
+    runId: run.id,
+    sessionId: run.sessionId,
+    stepId,
+    timestamp: sequence,
+    visibility: "USER_VISIBLE",
+    durability: { kind: "DURABLE", version: 1, sequence },
+    payload: {
+      inputId,
+      acceptedSequence: 1,
+      messageId: "message_steer_1",
+      stepId,
+    },
+  } as PublicRunEvent;
+}
+
+function conversationMessageCommittedEvent(run: ClientAgentRun, messageId: string): PublicRunEvent {
+  return {
+    type: "conversation.message.committed",
+    eventId: "evt_00000000-0000-7000-8000-000000000099",
+    schemaVersion: 1,
+    runId: run.id,
+    sessionId: run.sessionId,
+    timestamp: 10,
+    visibility: "USER_VISIBLE",
+    durability: { kind: "DURABLE", version: 1, sequence: 10 },
+    payload: {
+      messageId,
+      conversationTurnId: run.id,
+      messageType: "USER",
+    },
   } as PublicRunEvent;
 }
 

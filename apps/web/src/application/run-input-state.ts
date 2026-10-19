@@ -36,9 +36,44 @@ export function upsertRunInput(
   const index = items.findIndex((candidate) => candidate.inputId === item.inputId);
   if (index < 0) return [...items, item];
   const next = [...items];
-  next[index] = item;
+  const current = items[index]!;
+  const stage = mergeRunInputStage(current.stage, item.stage);
+  const errorReason = stage === "REJECTED" ? (item.errorReason ?? current.errorReason) : undefined;
+  next[index] = {
+    ...current,
+    ...item,
+    stage,
+    ...(current.acceptedSequence === undefined && item.acceptedSequence === undefined
+      ? {}
+      : { acceptedSequence: item.acceptedSequence ?? current.acceptedSequence }),
+    ...(current.messageId === undefined && item.messageId === undefined
+      ? {}
+      : { messageId: item.messageId ?? current.messageId }),
+    ...(current.firstStepId === undefined && item.firstStepId === undefined
+      ? {}
+      : { firstStepId: item.firstStepId ?? current.firstStepId }),
+    ...(errorReason === undefined ? {} : { errorReason }),
+  };
   return next;
 }
+
+function mergeRunInputStage(
+  current: WebRunInputStage,
+  incoming: WebRunInputStage,
+): WebRunInputStage {
+  if (incoming === "REJECTED") {
+    return current === "SENDING" || current === "REJECTED" ? incoming : current;
+  }
+  if (current === "REJECTED") return incoming;
+  return runInputStageOrder[incoming] >= runInputStageOrder[current] ? incoming : current;
+}
+
+const runInputStageOrder: Record<Exclude<WebRunInputStage, "REJECTED">, number> = {
+  SENDING: 0,
+  PENDING: 1,
+  RECORDED: 2,
+  ASSIGNED: 3,
+};
 
 /** Keep only the items belonging to one Run, in acceptance order, bounded. */
 export function runInputsForRun(

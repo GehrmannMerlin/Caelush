@@ -41,6 +41,7 @@ import type {
   DaemonInfo,
   RunActionResponse,
   RunId,
+  RunInputReceipt,
   RunStatus,
   SessionId,
   SessionTranscriptResponse,
@@ -1757,6 +1758,13 @@ export class WebSessionManager {
           { timeline, liveActivity },
           shouldPublishEventOnFrame(event) ? "FRAME" : "IMMEDIATE",
         );
+        this.reconcileRunInputEvent(event);
+        if (
+          event.type === "conversation.message.committed" &&
+          event.payload.messageType === "USER"
+        ) {
+          this.requestRunInputReceiptRefresh(active, generation);
+        }
         if (event.durability.kind === "DURABLE") {
           this.requestTurnPresentationRefresh(active, generation);
         }
@@ -1821,9 +1829,109 @@ export class WebSessionManager {
     active.scheduler.succeeded();
     active.streamOpenGeneration = generation;
     this.publish({ transportState: "CONNECTED", transportAttempt: undefined, error: undefined });
+    this.requestRunInputReceiptRefresh(active, generation);
     if (!recoverOnOpen || active.recoveryAdmitted || active.recoveryRevoked) return;
     active.recoveryAdmitted = true;
     void this.admitRecovery(active, generation);
+  }
+
+  /** Keep the floating correction preview aligned with the authoritative intake lifecycle. */
+  private reconcileRunInputEvent(event: PublicRunEvent): void {
+    if (event.type === "run.input.accepted") {
+      this.updateRunInput(event.runId, event.payload.inputId, (current) => ({
+        ...current,
+        stage: "PENDING",
+        acceptedSequence: event.payload.acceptedSequence,
+      }));
+      return;
+    }
+    if (event.type === "run.input.assigned") {
+      this.updateRunInput(event.runId, event.payload.inputId, (current) => ({
+        ...current,
+        stage: "ASSIGNED",
+        acceptedSequence: event.payload.acceptedSequence,
+        messageId: event.payload.messageId,
+        firstStepId: event.payload.stepId,
+      }));
+    }
+  }
+
+  private updateRunInput(
+    runId: RunId,
+    inputId: string,
+    update: (current: WebRunInputItem) => WebRunInputItem,
+  ): void {
+    const current = this.snapshot.runInputs.find(
+      (item) => item.runId === runId && item.inputId === inputId,
+    );
+    if (current === undefined) return;
+    this.publish({ runInputs: upsertRunInput(this.snapshot.runInputs, update(current)) });
+  }
+
+  /**
+   * A committed canonical USER message may advance an intake from PENDING to RECORDED before the
+   * subsequent assignment event. Reconcile only already-known inputs, using their bounded sequence
+   * range; the receipts carry lifecycle metadata while the local draft remains the text authority.
+   */
+  private requestRunInputReceiptRefresh(active: ActiveLifecycle, generation: number): void {
+    const listRunInputs = this.options.client.listRunInputs;
+    if (listRunInputs === undefined || !this.isCurrentStream(active, generation)) return;
+    const targets = this.snapshot.runInputs.filter(
+      (item) =>
+        item.runId === active.run.id &&
+        (item.stage === "SENDING" || item.stage === "PENDING") &&
+        item.acceptedSequence !== undefined,
+    );
+    if (targets.length === 0) return;
+    void this.refreshRunInputReceipts(active, targets, listRunInputs);
+  }
+
+  private async refreshRunInputReceipts(
+    active: ActiveLifecycle,
+    targets: readonly WebRunInputItem[],
+    listRunInputs: NonNullable<WebSessionClient["listRunInputs"]>,
+  ): Promise<void> {
+    const firstSequence = Math.min(...targets.map((item) => item.acceptedSequence!));
+    const lastSequence = Math.max(...targets.map((item) => item.acceptedSequence!));
+    const targetIds = new Set(targets.map((item) => item.inputId));
+    let after = firstSequence > 1 ? firstSequence - 1 : undefined;
+    try {
+      while (!this.disposed && this.snapshot.selectedSessionId === active.run.sessionId) {
+        const response = await listRunInputs.call(this.options.client, active.run.id, {
+          ...(after === undefined ? {} : { after }),
+          limit: 100,
+        });
+        // The stream may settle while this read is in flight. Receipts are still authoritative for
+        // these Run/input IDs, but must never update a different selected Session.
+        if (this.disposed || this.snapshot.selectedSessionId !== active.run.sessionId) {
+          return;
+        }
+        for (const receipt of response.items) {
+          if (targetIds.delete(receipt.inputId)) this.applyRunInputReceipt(receipt);
+        }
+        if (targetIds.size === 0 || response.nextCursor === undefined) return;
+        after = response.nextCursor;
+        if (after >= lastSequence) return;
+      }
+    } catch {
+      // This read-only reconciliation must never interfere with Run control or event consumption.
+    }
+  }
+
+  private applyRunInputReceipt(receipt: RunInputReceipt): void {
+    const current = this.snapshot.runInputs.find(
+      (item) => item.runId === receipt.runId && item.inputId === receipt.inputId,
+    );
+    if (current === undefined) return;
+    this.publish({
+      runInputs: upsertRunInput(this.snapshot.runInputs, {
+        ...current,
+        stage: receipt.stage,
+        acceptedSequence: receipt.acceptedSequence,
+        ...(receipt.messageId === undefined ? {} : { messageId: receipt.messageId }),
+        ...(receipt.firstStepId === undefined ? {} : { firstStepId: receipt.firstStepId }),
+      }),
+    });
   }
 
   private async refreshTurnPresentation(
