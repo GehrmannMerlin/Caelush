@@ -85,6 +85,29 @@ describe("WorkspaceSidebar", () => {
     expect(html).toContain("添加工作区");
   });
 
+  it("keeps the account and settings footer outside the scrollable sidebar content", () => {
+    const html = renderToStaticMarkup(
+      <WorkspaceSidebar
+        workspaces={[]}
+        expandedWorkspaceIds={[]}
+        sessionSummaries={{}}
+        isDraft={false}
+        canNavigate
+        onToggleWorkspace={vi.fn()}
+        onSelectWorkspace={vi.fn()}
+        onNewSession={vi.fn()}
+        onSelectSession={vi.fn()}
+        onAddWorkspace={vi.fn()}
+        onArchiveWorkspace={vi.fn()}
+        onArchiveSession={vi.fn()}
+      />,
+    );
+
+    expect(html).toMatch(
+      /<div class="workspace-sidebar-content">[\s\S]*<ol class="workspace-list">[\s\S]*<\/ol><\/div><div class="workspace-sidebar-footer/,
+    );
+  });
+
   it("keeps the sidebar Settings button as a menu trigger", () => {
     const html = renderToStaticMarkup(
       <WorkspaceSidebar

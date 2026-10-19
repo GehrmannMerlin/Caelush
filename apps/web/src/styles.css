@@ -1518,10 +1518,7 @@ body {
   height: 100dvh;
   min-height: 0;
   flex-direction: column;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  overflow: hidden;
   padding: 18px 14px 24px;
   border-right: 1px solid var(--web-sidebar-line);
   background: var(--web-sidebar-bg);
@@ -5584,14 +5581,25 @@ body {
   height: 100dvh;
   min-height: 0;
   flex-direction: column;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  overflow: hidden;
   padding: 18px 14px 24px;
   border-right: 1px solid var(--web-sidebar-line);
   background: var(--web-sidebar-bg);
   color: var(--web-sidebar-ink);
+}
+
+.workspace-sidebar-content {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.workspace-sidebar-footer {
+  flex: 0 0 auto;
+  margin-top: auto;
 }
 
 .workspace-card::after {
@@ -5830,7 +5838,7 @@ body {
     z-index: 30;
     inset: 0 auto 0 0;
     width: min(88vw, 310px);
-    overflow-y: auto;
+    overflow: hidden;
     padding-top: 18px;
     transition: transform 180ms ease-out;
   }
@@ -5903,7 +5911,7 @@ body {
 /* Keep sidebar copy readable against the light-blue surface. */
 .workspace-sidebar {
   position: fixed;
-  overflow-y: auto;
+  overflow: hidden;
   color: #111827;
 }
 
