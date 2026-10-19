@@ -53,6 +53,7 @@ import { derivePromptTitle } from "./application/prompt.js";
 import { importLegacySessionArchives } from "./application/legacy-archive-import.js";
 import { sessionArchiveStore } from "./application/session-archive-store.js";
 import { archiveErrorMessage } from "./application/archive-errors.js";
+import { resolveComposerCapabilities } from "./application/composer-state.js";
 import { PromptComposer } from "./components/prompt-composer.js";
 import { SessionWorkspace } from "./components/session-workspace.js";
 import { WorkbenchAppearanceRoute } from "./components/appearance-page.js";
@@ -107,6 +108,8 @@ const EMPTY_SESSION_SNAPSHOT: WebSessionSnapshot = {
   timeline: createInitialTimelineState(),
   liveActivity: createInitialLiveActivityState(),
   availablePresets: [],
+  runInputs: [],
+  runInputSupported: false,
   isDraft: false,
   composerEnabled: false,
   submission: "IDLE",
@@ -555,6 +558,20 @@ export function WebHostApp(props: {
     },
     [props.client],
   );
+  /**
+   * Send the composer's text into the Run in progress.
+   *
+   * Deliberately not routed through `submitComposerPrompt`: that path owns attachment preparation,
+   * the idle-run creation flow and its cleanup, and reusing it here would either send files into a
+   * Run that accepts text only or clear a draft this submission never owned.
+   */
+  const submitRunInputPrompt = useCallback(
+    async (text: string): Promise<boolean> => {
+      if (sessionManager === undefined) return false;
+      return sessionManager.submitRunInput(text);
+    },
+    [sessionManager],
+  );
   const submitComposerPrompt = useCallback(
     async (text: string): Promise<boolean> => {
       if (sessionManager === undefined) return false;
@@ -886,6 +903,7 @@ export function WebHostApp(props: {
     onLoadAttachmentPreview: loadAttachmentPreview,
     onDownloadAttachment: loadAttachmentPreview,
     onSubmitPrompt: submitComposerPrompt,
+    onSteerPrompt: submitRunInputPrompt,
     snapshot: sessionSnapshot,
     appearanceController: props.appearanceController,
     appearanceSnapshot,
@@ -969,6 +987,8 @@ function renderWorkspaceApp(input: {
     owner: AttachmentOwner,
   ) => Promise<Blob>;
   readonly onSubmitPrompt: (text: string) => Promise<boolean>;
+  /** Send the current text into the Run already in progress. */
+  readonly onSteerPrompt?: ((text: string) => Promise<boolean>) | undefined;
   readonly snapshot: WebSessionSnapshot;
   readonly appearanceController: AppearanceController;
   readonly appearanceSnapshot: ReturnType<AppearanceController["getSnapshot"]>;
@@ -1011,10 +1031,23 @@ function renderWorkspaceApp(input: {
       : snapshot.selectedSession?.title !== undefined
         ? derivePromptTitle(snapshot.selectedSession.title)
         : "选择一个会话";
-  const composerInteractionDisabled = shouldDisableComposerInteraction(snapshot);
   const canCancelActiveRun =
     snapshot.activeRun !== undefined && canCancelRunStatus(snapshot.activeRun.status);
   const hasWorkspace = selectedWorkspace !== undefined && input.sessionManager !== undefined;
+
+  const composerCapabilities = resolveComposerCapabilities({
+    status: snapshot.status,
+    submission: snapshot.submission,
+    activeRun: snapshot.activeRun,
+    controlMode: snapshot.controlMode,
+    preparingPreset: snapshot.preparingPreset,
+    archiveReadOnly: snapshot.archiveReadOnly,
+    runInputSupported: snapshot.runInputSupported,
+  });
+  // `disabled` is now only "this session cannot be used at all". An active Run no longer reaches
+  // it: editing, stopping and the correction action are decided independently below.
+  const composerInteractionDisabled =
+    !hasWorkspace || snapshot.archiveReadOnly === true || snapshot.status !== "READY";
   // Native file selection can restore focus before dispatching change. Keep the
   // mounted composer and its file input while existing workspace data refreshes.
   const workspaceLoading =
@@ -1051,6 +1084,11 @@ function renderWorkspaceApp(input: {
   const promptComposer = createElement(PromptComposer, {
     key: `${selectedWorkspace?.id ?? "none"}:${snapshot.selectedSessionId ?? "draft"}`,
     disabled: !hasWorkspace || composerInteractionDisabled,
+    editable: composerCapabilities.editable,
+    submitDisabled: !composerCapabilities.canSubmitNewTask,
+    steeringAvailable: composerCapabilities.canSubmitRunInput,
+    ...(input.onSteerPrompt === undefined ? {} : { onSteer: input.onSteerPrompt }),
+    runInputs: snapshot.runInputs,
     modelReady: hasWorkspace ? modelReady : false,
     placeholder: hasWorkspace ? undefined : "先添加工作区，再开始对话",
     ...(hasWorkspace
@@ -1303,6 +1341,8 @@ export function shouldDisableComposerInteraction(
     "status" | "submission" | "activeRun" | "controlMode" | "preparingPreset"
   > & { readonly archiveReadOnly?: boolean },
 ): boolean {
+  // The pre-Run-input question, kept for callers that still ask "may a *new task* be submitted".
+  // Editing is a different question: see `resolveComposerCapabilities`.
   return (
     snapshot.archiveReadOnly === true ||
     snapshot.status !== "READY" ||

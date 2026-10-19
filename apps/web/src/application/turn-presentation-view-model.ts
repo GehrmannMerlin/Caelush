@@ -46,7 +46,17 @@ export function projectTurnPresentation(
       ? turn.runStatus
       : activeRun.status;
   const isTerminal = isTerminalRunStatus(runStatus);
-  const userItems = turn.items.filter((item) => item.kind === "USER");
+  const everyUserItem = turn.items.filter((item) => item.kind === "USER");
+  /**
+   * Only the Run's opening statement belongs above the process disclosure.
+   *
+   * A correction sent while the Run was working happened *after* the tool work it corrects. The
+   * server already places it in the process region at its own timestamp, so this projection keeps
+   * that order rather than re-sorting it: presentation order is the server's statement.
+   */
+  const goalUserItems = everyUserItem.slice(0, 1);
+  const userItems = goalUserItems;
+  const goalUser = goalUserItems[0];
   const finalAnswerItems = turn.items.filter(
     (item): item is Extract<TurnPresentationItemV3, { kind: "ASSISTANT" }> =>
       item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER",
@@ -54,7 +64,7 @@ export function projectTurnPresentation(
   const runSummaries = turn.items.filter((item) => item.kind === "RUN_SUMMARY");
   const processItems = turn.items.filter(
     (item) =>
-      item.kind !== "USER" &&
+      item !== goalUser &&
       item.kind !== "RUN_SUMMARY" &&
       !(item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER"),
   );

@@ -282,6 +282,92 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
+  it("accepts a mid-Run correction under a stable identity and keeps the refused text", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    // The manager's intake path does not require a particular Run status; the daemon decides that.
+    const runningRun = makeRun({ sessionId: session.id });
+    const client = makeClient({
+      sessions: [session],
+      createSessionResult: session,
+      createRunResult: runningRun,
+    });
+    const submitted: { inputId: string; text: string }[] = [];
+    client.submitRunInput = vi.fn(async (_runId, input) => {
+      submitted.push({ inputId: input.inputId, text: input.text });
+      return {
+        inputId: input.inputId,
+        runId: runningRun.id,
+        acceptedSequence: 1,
+        stage: "PENDING" as const,
+        acceptedAt: 3,
+      };
+    });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({ capabilities: { ...makeInfo().capabilities, runInputV1: true } }),
+    });
+    manager.beginDraft();
+    await expect(manager.submitPrompt("inspect the parser")).resolves.toBe(true);
+    expect(manager.getSnapshot().activeRun?.id).toBe(runningRun.id);
+    expect(manager.getSnapshot().runInputSupported).toBe(true);
+
+    await expect(manager.submitRunInput("  keep the SDK  ")).resolves.toBe(true);
+
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]?.text).toBe("keep the SDK");
+    const item = manager.getSnapshot().runInputs[0];
+    expect(item).toMatchObject({
+      inputId: submitted[0]!.inputId,
+      runId: runningRun.id,
+      text: "keep the SDK",
+      stage: "PENDING",
+      acceptedSequence: 1,
+    });
+
+    // A second, deliberate submission is a *new* identity: identical text is not deduplicated.
+    await expect(manager.submitRunInput("keep the SDK")).resolves.toBe(true);
+    expect(submitted).toHaveLength(2);
+    expect(submitted[1]?.inputId).not.toBe(submitted[0]?.inputId);
+    expect(manager.getSnapshot().runInputs).toHaveLength(2);
+
+    // A refusal keeps a truthful stage and a safe reason; the caller keeps the draft.
+    client.submitRunInput = vi.fn(async () => {
+      throw new CaelushClientHttpError({
+        status: 409,
+        code: "CONFLICT",
+        message: "The Run has ended and cannot accept new input.",
+        details: { reason: "RUN_TERMINAL" },
+      });
+    });
+    await expect(manager.submitRunInput("too late")).resolves.toBe(false);
+    const rejected = manager.getSnapshot().runInputs.at(-1);
+    expect(rejected).toMatchObject({ stage: "REJECTED", errorReason: "RUN_TERMINAL" });
+    manager.dispose();
+  });
+
+  it("does not offer mid-Run input when the daemon does not advertise it", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    // The manager's intake path does not require a particular Run status; the daemon decides that.
+    const runningRun = makeRun({ sessionId: session.id });
+    const client = makeClient({
+      sessions: [session],
+      createSessionResult: session,
+      createRunResult: runningRun,
+    });
+    client.submitRunInput = vi.fn(async () => {
+      throw new Error("must not be called");
+    });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    manager.beginDraft();
+    await expect(manager.submitPrompt("inspect the parser")).resolves.toBe(true);
+
+    expect(manager.getSnapshot().runInputSupported).toBe(false);
+    await expect(manager.submitRunInput("a correction")).resolves.toBe(false);
+    expect(client.submitRunInput).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
   it("persists a newly created Session selection so it is restored after reload", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const pendingRun = makeRun({ sessionId: session.id, goal: "remember this session" });

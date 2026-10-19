@@ -73,6 +73,7 @@ import {
   TranscriptAttachmentRefSchema,
 } from "@caelush/protocol";
 import { derivePromptTitle, validatePrompt, type PromptError } from "./prompt.js";
+import { upsertRunInput, type WebRunInputItem } from "./run-input-state.js";
 import { archiveErrorMessage } from "./archive-errors.js";
 import type { WebHostClient } from "../host/bootstrap.js";
 import { mergeActiveTurnPresentation } from "./session-presentation-merge.js";
@@ -105,6 +106,9 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
   }>;
   createSession(input: CreateSessionRequest): Promise<ClientAgentSession>;
   createRun(sessionId: SessionId, input: CreateRunRequest): Promise<ClientAgentRun>;
+  /** Present only when the daemon advertises `runInputV1`. */
+  submitRunInput?: CaelushClient["submitRunInput"];
+  listRunInputs?: CaelushClient["listRunInputs"];
   getSecurityCapabilities?(): Promise<SecurityCapabilitiesResponse>;
   getWorkspaceSecurityCapabilities?(
     workspaceId: WorkspaceRef["id"],
@@ -239,6 +243,10 @@ export interface WebSessionSnapshot {
   readonly transportAttempt?: number;
   readonly controlMode: WebControlMode;
   readonly approvalState?: WebApprovalState;
+  /** The Run's accepted mid-Run corrections, newest last. */
+  readonly runInputs: readonly WebRunInputItem[];
+  /** Whether this daemon composes the durable Run input path. */
+  readonly runInputSupported: boolean;
   readonly error?: WebSessionError;
 }
 
@@ -337,6 +345,12 @@ export class WebSessionManager {
     },
   ) {
     this.frameScheduler = options.frameScheduler ?? browserFrameScheduler;
+    this.snapshot = {
+      ...this.snapshot,
+      runInputSupported:
+        options.info.capabilities.runInputV1 === true &&
+        options.client.submitRunInput !== undefined,
+    };
   }
 
   getSnapshot(): WebSessionSnapshot {
@@ -493,6 +507,81 @@ export class WebSessionManager {
         isDraft: false,
         composerEnabled: false,
         error: sessionError("SESSION_SELECTION_FAILED"),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Send one mid-Run text correction to the Run already in progress.
+   *
+   * ```text
+   * inputId        minted once per deliberate submission, reused by every retry
+   * stage          SENDING while the request is in flight; never "applied"
+   * draft          cleared by the caller only when this returns true
+   * ```
+   *
+   * Attachments play no part here: an active Run accepts text only, and the caller's attachment
+   * draft is left exactly as it was.
+   */
+  async submitRunInput(text: string): Promise<boolean> {
+    const run = this.snapshot.activeRun;
+    if (this.archiveReadOnly || this.disposed || run === undefined) return false;
+    if (!this.snapshot.runInputSupported || this.options.client.submitRunInput === undefined) {
+      this.publish({
+        error: {
+          code: "RUN_CREATE_FAILED",
+          message: "当前守护进程不支持运行中的文字补充。",
+        },
+      });
+      return false;
+    }
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return false;
+    const validation = validatePrompt(text);
+    if (!validation.ok) {
+      this.publish({ error: promptError(validation.error) });
+      return false;
+    }
+    const inputId = createRunInputId();
+    const item: WebRunInputItem = {
+      inputId,
+      runId: run.id,
+      text: validation.value,
+      stage: "SENDING",
+    };
+    this.publish({ runInputs: upsertRunInput(this.snapshot.runInputs, item), error: undefined });
+    try {
+      const receipt = await this.options.client.submitRunInput(run.id, {
+        inputId,
+        text: validation.value,
+      });
+      this.publish({
+        runInputs: upsertRunInput(this.snapshot.runInputs, {
+          inputId,
+          runId: run.id,
+          text: validation.value,
+          stage: receipt.stage,
+          acceptedSequence: receipt.acceptedSequence,
+          ...(receipt.messageId === undefined ? {} : { messageId: receipt.messageId }),
+          ...(receipt.firstStepId === undefined ? {} : { firstStepId: receipt.firstStepId }),
+        }),
+      });
+      return true;
+    } catch (error) {
+      const reason = runInputErrorReason(error);
+      this.publish({
+        runInputs: upsertRunInput(this.snapshot.runInputs, {
+          inputId,
+          runId: run.id,
+          text: validation.value,
+          stage: "REJECTED",
+          ...(reason === undefined ? {} : { errorReason: reason }),
+        }),
+        error: {
+          code: "RUN_CREATE_FAILED",
+          message: runInputErrorMessage(reason),
+        },
       });
       return false;
     }
@@ -2355,6 +2444,38 @@ function shouldPublishEventOnFrame(event: PublicRunEvent): boolean {
   }
 }
 
+/** A browser-safe stable identity for one deliberate Run input submission. */
+function createRunInputId(): string {
+  return globalThis.crypto.randomUUID();
+}
+
+function runInputErrorReason(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const details = (error as { readonly details?: unknown }).details;
+  if (typeof details !== "object" || details === null) return undefined;
+  const reason = (details as Record<string, unknown>)["reason"];
+  return typeof reason === "string" ? reason : undefined;
+}
+
+function runInputErrorMessage(reason: string | undefined): string {
+  switch (reason) {
+    case "RUN_TERMINAL":
+      return "本轮任务已结束，补充未生效；文字仍保留在输入框。";
+    case "RUN_NOT_READY":
+      return "本轮任务当前还不能接收补充。";
+    case "NOT_SUPPORTED":
+      return "本轮任务不支持文字补充。";
+    case "QUEUE_FULL":
+      return "本轮积压的补充已达上限，请稍后再试。";
+    case "TEXT_TOO_LARGE":
+      return "补充文字为空或超过长度上限。";
+    case "IDEMPOTENCY_CONFLICT":
+      return "该补充标识已被用于不同内容，请重新发送。";
+    default:
+      return "补充未能发送，文字仍保留在输入框。";
+  }
+}
+
 function initialSnapshot(): WebSessionSnapshot {
   return {
     status: "IDLE",
@@ -2368,6 +2489,8 @@ function initialSnapshot(): WebSessionSnapshot {
     contextUsage: null,
     continuityWarning: false,
     availablePresets: [],
+    runInputs: [],
+    runInputSupported: false,
     isDraft: false,
     composerEnabled: false,
     submission: "IDLE",
