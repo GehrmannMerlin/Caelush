@@ -9315,7 +9315,7 @@ select {
   padding: 0.65rem 0.7rem;
   border: 1px solid var(--web-line-strong, #d8deea);
   border-radius: 13px;
-  background: var(--web-surface-muted, #f8f9fc);
+  background: var(--web-surface, #fff);
   box-shadow: 0 2px 8px rgb(28 46 76 / 5%);
 }
 

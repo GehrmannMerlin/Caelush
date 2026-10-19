@@ -169,4 +169,12 @@ describe("attachment composer", () => {
       /\.attachment-card-icon\[data-format\],\s*\.transcript-attachment-icon\[data-format\]\s*\{[^}]*color:\s*var\(--attachment-format\);/s,
     );
   });
+
+  it("uses an opaque white surface for attachment cards instead of a muted glass-like fill", () => {
+    const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+    const cardRule = styles.match(/\.attachment-card\s*\{[^}]*\}/s)?.[0];
+
+    expect(cardRule).toContain("background: var(--web-surface, #fff);");
+    expect(cardRule).not.toContain("backdrop-filter");
+  });
 });
