@@ -42,9 +42,13 @@ describe("attachment composer", () => {
 
     expect(html).toContain('role="menu" aria-label="添加"');
     expect(html).toContain('role="menuitem"');
+    expect(html).toContain('class="attachment-menu-items"');
     expect(html).toContain("上传文件");
     expect(styles).toMatch(
-      /\.attachment-menu\s*\{[^}]*position:\s*absolute;[^}]*inset-block-end:\s*calc\(100% \+ 12px\);[^}]*width:\s*320px;[^}]*height:\s*160px;/s,
+      /\.attachment-menu\s*\{[^}]*position:\s*absolute;[^}]*inset-block-end:\s*calc\(100% \+ 12px\);[^}]*inset-inline:\s*0;[^}]*width:\s*100%;[^}]*height:\s*320px;[^}]*max-width:\s*none;[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto;/s,
+    );
+    expect(styles).toMatch(
+      /\.attachment-menu-items\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s,
     );
     expect(styles).toMatch(
       /\.prompt-composer-footer\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto minmax\(0, 1fr\);/s,

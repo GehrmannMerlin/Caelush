@@ -121,6 +121,7 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
   const [draggingFiles, setDraggingFiles] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const menuScopeRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const plusButtonRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const controlled = props.draftText !== undefined;
@@ -167,7 +168,13 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
   useEffect(() => {
     if (!menuOpen) return undefined;
     const onPointerDown = (event: PointerEvent) => {
-      if (menuScopeRef.current?.contains(event.target as Node) === true) return;
+      const target = event.target as Node;
+      if (
+        menuScopeRef.current?.contains(target) === true ||
+        menuRef.current?.contains(target) === true
+      ) {
+        return;
+      }
       setMenuOpen(false);
       plusButtonRef.current?.focus();
     };
@@ -309,11 +316,6 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
             },
             createElement(Plus, { size: 18, strokeWidth: 2, "aria-hidden": true }),
           ),
-          menuOpen
-            ? createElement(AttachmentMenu, {
-                onChooseFiles: openFilePicker,
-              })
-            : null,
         ),
         props.permissionSelector ?? null,
       ),
@@ -334,6 +336,12 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
         }),
       ),
     ),
+    menuOpen
+      ? createElement(AttachmentMenu, {
+          onChooseFiles: openFilePicker,
+          containerRef: menuRef,
+        })
+      : null,
     fileInput,
     props.attachmentSubmitBlockedReason === undefined
       ? null

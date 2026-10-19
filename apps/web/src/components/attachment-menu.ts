@@ -1,8 +1,9 @@
-import { createElement, useEffect, useRef, type ReactElement } from "react";
+import { createElement, useEffect, useRef, type ReactElement, type Ref } from "react";
 import { FilePlus2 } from "lucide-react";
 
 export interface AttachmentMenuProps {
   readonly onChooseFiles: () => void;
+  readonly containerRef?: Ref<HTMLDivElement> | undefined;
 }
 
 export function AttachmentMenu(props: AttachmentMenuProps): ReactElement {
@@ -13,21 +14,26 @@ export function AttachmentMenu(props: AttachmentMenuProps): ReactElement {
     {
       className: "attachment-menu",
       id: "prompt-attachment-menu",
+      ref: props.containerRef,
       role: "menu",
       "aria-label": "添加",
     },
     createElement("span", { className: "attachment-menu-heading" }, "添加"),
     createElement(
-      "button",
-      {
-        type: "button",
-        className: "attachment-menu-item",
-        ref: uploadButtonRef,
-        role: "menuitem",
-        onClick: props.onChooseFiles,
-      },
-      createElement(FilePlus2, { size: 17, "aria-hidden": true }),
-      createElement("span", null, "上传文件"),
+      "div",
+      { className: "attachment-menu-items" },
+      createElement(
+        "button",
+        {
+          type: "button",
+          className: "attachment-menu-item",
+          ref: uploadButtonRef,
+          role: "menuitem",
+          onClick: props.onChooseFiles,
+        },
+        createElement(FilePlus2, { size: 17, "aria-hidden": true }),
+        createElement("span", null, "上传文件"),
+      ),
     ),
     createElement(
       "p",
