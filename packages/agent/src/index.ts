@@ -562,6 +562,7 @@ export type {
 export {
   RunExecutionConflictError,
   RunExecutionInvariantError,
+  RunInputPendingError,
 } from "./run/ports/run-execution-store.js";
 export type {
   DurableAgentEvent,
@@ -574,6 +575,23 @@ export type {
   RunExecutionStepWrite,
   RunExecutionStorePort,
 } from "./run/ports/run-execution-store.js";
+
+/* Durable mid-Run user input facts and the handoff/assignment writes they carry. */
+export type {
+  PendingRunInput,
+  RecordedRunInput,
+  RunInputAssignment,
+  RunInputCommit,
+  RunInputHandoff,
+  RunInputHandoffEntry,
+  RunInputSnapshot,
+} from "./run/ports/run-input.js";
+export { evaluateRunInputAdmission } from "./run/run-input-policy.js";
+export type {
+  RunInputAdmissionDecision,
+  RunInputAdmissionFacts,
+  RunInputRejectionReason,
+} from "./run/run-input-policy.js";
 
 /* The general durable Run execution invariant. */
 export {
@@ -632,6 +650,7 @@ export type {
   RunContinuationCheckpoint,
   WaitingResourceContinuation,
   WaitingRetryContinuation,
+  WaitingSteeringContinuation,
   WaitingToolResultsContinuation,
   WaitingVerificationRepairContinuation,
 } from "./run/continuation/continuation.js";

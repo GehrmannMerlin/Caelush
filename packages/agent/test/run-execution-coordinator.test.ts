@@ -262,6 +262,54 @@ const MATRIX: readonly (readonly [string, RunExecutionSnapshot, RunExecutionDire
     },
   ],
   [
+    "a deferred answer advances the same Run's next turn over the recorded corrections",
+    snapshot({
+      continuation: {
+        type: "WAITING_STEERING",
+        runId: RUN_ID,
+        sourceStepId: TOOL_STEP,
+        messageIds: ["msg_steering_1", "msg_steering_2"],
+      },
+    }),
+    {
+      kind: "ADVANCE_AGENT",
+      mode: "RECOVER",
+      reason: "STEERING",
+      input: {
+        kind: "CONTINUATION",
+        reason: "STEERING",
+        messageIds: [agentMessageId("msg_steering_1"), agentMessageId("msg_steering_2")],
+      },
+    },
+  ],
+  [
+    "a failed steering turn retries the same corrections instead of the original goal",
+    snapshot({
+      continuation: {
+        type: "WAITING_RETRY",
+        runId: RUN_ID,
+        failedStepId: createStepId(),
+        attempt: 2,
+        maxAttempts: 3,
+        nextAttemptAt: createTimestampMs(1_050),
+        errorCode: "LLM_NETWORK",
+        mode: "STEERING",
+        sourceStepId: TOOL_STEP,
+        messageIds: ["msg_steering_1"],
+      },
+    }),
+    {
+      kind: "ADVANCE_AGENT",
+      mode: "RECOVER",
+      reason: "RETRY",
+      input: {
+        kind: "CONTINUATION",
+        reason: "STEERING",
+        messageIds: [agentMessageId("msg_steering_1")],
+      },
+    },
+  ],
+  [
     "a waiting approval Run suspends",
     snapshot({ run: makeRun({ status: "WAITING_APPROVAL" }) }),
     { kind: "SUSPEND", boundary: "APPROVAL" },

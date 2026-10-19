@@ -16,6 +16,7 @@ import type {
   AgentMessageRecord,
   AgentMessageRecordDraft,
 } from "../../messages/persistence/record.js";
+import type { RunInputCommit, RunInputSnapshot } from "./run-input.js";
 
 /**
  * The canonical Run execution store port.
@@ -65,6 +66,13 @@ export interface RunExecutionSnapshot {
   readonly continuation?: RunContinuationCheckpoint;
   readonly continuationRevision?: number;
   readonly cancellationIntent?: RunCancellationIntent;
+  /**
+   * Durably accepted mid-Run user text this Run has not applied yet.
+   *
+   * Absent means "no intake store is composed for this Run" — not "the queue is empty"; an
+   * installed store always reports the facts, with zero counts when there are none.
+   */
+  readonly runInputs?: RunInputSnapshot;
 }
 
 export interface RunExecutionMessageAppend {
@@ -105,6 +113,13 @@ export interface RunExecutionCommit {
   readonly stepWrites: readonly RunExecutionStepWrite[];
   readonly messagesToAppend: readonly RunExecutionMessageAppend[];
   readonly continuation?: RunExecutionContinuationWrite;
+  /**
+   * Input handoff (T2) and first-assignment (T3) facts, committed with the transition above.
+   *
+   * They are fields of this commit rather than separate calls so a USER message can never exist
+   * without its input mapping, and an input mapping can never claim a step that was not opened.
+   */
+  readonly runInputs?: RunInputCommit;
   readonly events: readonly DurableEventDraft[];
 }
 
@@ -125,6 +140,21 @@ export class RunExecutionConflictError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
     this.name = "RunExecutionConflictError";
+  }
+}
+
+/**
+ * The completion transaction found an input the Run never applied.
+ *
+ * It is a *conflict*, not a failure: the caller still holds the frozen model effect and must
+ * settle it into a deferred boundary with the same provider turn, Tool results and usage. Mapping
+ * it onto `FAILED` would durably claim the model produced nothing when it produced an answer the
+ * Run still owes an apply to.
+ */
+export class RunInputPendingError extends RunExecutionConflictError {
+  constructor(message = "the Run has accepted inputs that were never applied") {
+    super(message);
+    this.name = "RunInputPendingError";
   }
 }
 

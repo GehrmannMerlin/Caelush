@@ -30,6 +30,7 @@ import type { ToolObservationPolicySnapshot } from "../../loop/types.js";
  * AWAITING_VERIFICATION         a final candidate is waiting for a completion decision
  * WAITING_VERIFICATION_REPAIR   the completion decision asked this Run to try again
  * WAITING_RESOURCE              execution paused on a resource decision
+ * WAITING_STEERING             a complete answer deferred for accepted user corrections
  * WAITING_RETRY                 a retryable provider failure is waiting for its next attempt
  * ```
  *
@@ -93,6 +94,26 @@ export interface WaitingVerificationRepairContinuation {
   readonly repairCycle: number;
 }
 
+/**
+ * A Run whose model answer was complete, but which owes the user's accepted corrections first.
+ *
+ * The answer that would have ended the Run was settled as commentary and the corrections were
+ * recorded as canonical USER messages in the *same* transaction. This checkpoint is the durable
+ * fact that those messages are the next turn's input: consuming it is what opens the next Step,
+ * and a restart re-reads it instead of guessing that the Run simply finished.
+ *
+ * Every message here is already durable. The checkpoint carries IDs, never text and never a
+ * provider message array, so it cannot become a second conversation authority.
+ */
+export interface WaitingSteeringContinuation {
+  readonly type: "WAITING_STEERING";
+  readonly runId: RunId;
+  /** The Step whose answer was deferred by this boundary. */
+  readonly sourceStepId: StepId;
+  /** The canonical STEERING USER messages the next model turn must carry, in order. */
+  readonly messageIds: readonly string[];
+}
+
 /** Execution paused on a resource decision. */
 export interface WaitingResourceContinuation {
   readonly type: "WAITING_RESOURCE";
@@ -150,6 +171,21 @@ export type WaitingRetryContinuation =
        */
       readonly sourceStepId?: StepId | undefined;
       readonly observationPolicy?: ToolObservationPolicySnapshot | undefined;
+    })
+  | (WaitingRetryContinuationBase & {
+      /**
+       * A steering turn that failed and will be resent.
+       *
+       * The messages are already durable, so the retry re-uses the same IDs instead of appending a
+       * second correction. Without this arm a failed steering turn would have to resume from
+       * `START`, which re-derives the original goal and loses the reason the turn ran at all.
+       */
+      readonly mode: "STEERING";
+      readonly messageIds: readonly string[];
+      /** The Step whose deferred answer created the steering boundary. */
+      readonly sourceStepId: StepId;
+      readonly pendingDecision?: never;
+      readonly receivedResults?: never;
     });
 
 /** Every durable continuation a Run may hold. */
@@ -158,6 +194,7 @@ export type RunContinuationCheckpoint =
   | AwaitingVerificationContinuation
   | WaitingVerificationRepairContinuation
   | WaitingResourceContinuation
+  | WaitingSteeringContinuation
   | WaitingRetryContinuation;
 
 /** Every durable continuation discriminant, in canonical order. */
@@ -166,6 +203,7 @@ export const RUN_CONTINUATION_TYPES = [
   "AWAITING_VERIFICATION",
   "WAITING_VERIFICATION_REPAIR",
   "WAITING_RESOURCE",
+  "WAITING_STEERING",
   "WAITING_RETRY",
 ] as const satisfies readonly RunContinuationCheckpoint["type"][];
 
@@ -174,6 +212,7 @@ export const RUNNING_CONTINUATION_TYPES = [
   "WAITING_TOOL_RESULTS",
   "WAITING_VERIFICATION_REPAIR",
   "WAITING_RESOURCE",
+  "WAITING_STEERING",
   "WAITING_RETRY",
 ] as const satisfies readonly RunContinuationCheckpoint["type"][];
 

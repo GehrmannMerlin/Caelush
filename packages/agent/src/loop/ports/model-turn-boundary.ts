@@ -48,4 +48,14 @@ export interface ModelTurnBoundaryInput {
   readonly turn: AgentTurnRef;
 
   readonly model: ModelDescriptor["ref"];
+
+  /**
+   * The durable message IDs this prepared request actually carries, when the Context plan
+   * reports them.
+   *
+   * A boundary that opens a turn may need to record which accepted user inputs the request
+   * included. `undefined` means the plan did not report a selection; an empty array means the plan
+   * selected nothing, which is a different and equally truthful fact.
+   */
+  readonly selectedMessageIds?: readonly string[];
 }

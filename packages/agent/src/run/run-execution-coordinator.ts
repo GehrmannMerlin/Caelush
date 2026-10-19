@@ -144,6 +144,17 @@ function routeRunning(snapshot: RunExecutionSnapshot, now: TimestampMs): RunExec
       });
     case "WAITING_RESOURCE":
       return suspend("RESOURCE");
+    case "WAITING_STEERING":
+      /**
+       * A complete answer was deferred because the user's corrections were accepted first. The
+       * next turn is the same Run's next Reason over canonical, already-durable messages — not a
+       * new Run and not a re-decision of the goal.
+       */
+      return advance("RECOVER", "STEERING", {
+        kind: "CONTINUATION",
+        reason: "STEERING",
+        messageIds: continuation.messageIds as readonly AgentMessageId[],
+      });
     case "WAITING_RETRY":
       if (now < continuation.nextAttemptAt) return suspend("RETRY", continuation.nextAttemptAt);
       if (continuation.mode === "TOOL_RESULTS") {
@@ -161,6 +172,15 @@ function routeRunning(snapshot: RunExecutionSnapshot, now: TimestampMs): RunExec
           sourceStepId,
           pendingDecision: continuation.pendingDecision,
           toolResultMessageIds: toolResultMessageIds(snapshot, sourceStepId),
+        });
+      }
+      if (continuation.mode === "STEERING") {
+        // The correction is already in the conversation; the retry resends the same turn input so
+        // it is never routed back to the original goal.
+        return advance("RECOVER", "RETRY", {
+          kind: "CONTINUATION",
+          reason: "STEERING",
+          messageIds: continuation.messageIds as readonly AgentMessageId[],
         });
       }
       return advance("RECOVER", "RETRY", initialTurn(snapshot));

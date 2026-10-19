@@ -108,6 +108,7 @@ export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): voi
       continuation !== undefined &&
       continuation.type !== "WAITING_TOOL_RESULTS" &&
       continuation.type !== "WAITING_RESOURCE" &&
+      continuation.type !== "WAITING_STEERING" &&
       continuation.type !== "WAITING_RETRY" &&
       continuation.type !== "WAITING_VERIFICATION_REPAIR"
     ) {
@@ -115,6 +116,16 @@ export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): voi
     }
     if (continuation?.type === "WAITING_RETRY" && activeStep !== undefined) {
       throw new RunExecutionInvariantError("WAITING_RETRY Run cannot retain an active Step");
+    }
+    if (continuation?.type === "WAITING_STEERING") {
+      if (activeStep !== undefined) {
+        throw new RunExecutionInvariantError("WAITING_STEERING Run cannot retain an active Step");
+      }
+      if (continuation.runId !== run.id || continuation.messageIds.length === 0) {
+        throw new RunExecutionInvariantError(
+          "WAITING_STEERING must name this Run and at least one durable message",
+        );
+      }
     }
     if (continuation?.type === "WAITING_VERIFICATION_REPAIR" && activeStep !== undefined) {
       throw new RunExecutionInvariantError(

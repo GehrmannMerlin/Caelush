@@ -7,6 +7,7 @@ import type {
   JsonValue,
   RunSecurityPolicySnapshotV1,
   RetryExhaustedEvent,
+  StepId,
   TransportFallbackSelectedEvent,
   TimestampMs,
   VerificationCheckId,
@@ -189,6 +190,25 @@ export interface RunEventFactory {
       readonly messageId: string;
       readonly conversationTurnId: string;
       readonly messageType: string;
+    }>,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
+  /** One input became durably accepted for this Run. Metadata only: never its text. */
+  runInputAccepted(
+    run: AgentRun,
+    input: Readonly<{ readonly inputId: string; readonly acceptedSequence: number }>,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
+  /** One input's message was part of a prepared model step this Run opened. */
+  runInputAssigned(
+    run: AgentRun,
+    input: Readonly<{
+      readonly inputId: string;
+      readonly acceptedSequence: number;
+      readonly messageId: string;
+      readonly stepId: StepId;
     }>,
     eventId: EventId,
     timestamp: TimestampMs,
@@ -408,6 +428,21 @@ export function createRunEventFactory(): RunEventFactory {
         messageId: message.messageId,
         conversationTurnId: message.conversationTurnId,
         messageType: message.messageType,
+      },
+    }),
+    runInputAccepted: (run, input, eventId, timestamp) => ({
+      ...base(run, eventId, timestamp),
+      type: "run.input.accepted",
+      payload: { inputId: input.inputId, acceptedSequence: input.acceptedSequence },
+    }),
+    runInputAssigned: (run, input, eventId, timestamp) => ({
+      ...base(run, eventId, timestamp, input.stepId),
+      type: "run.input.assigned",
+      payload: {
+        inputId: input.inputId,
+        acceptedSequence: input.acceptedSequence,
+        messageId: input.messageId,
+        stepId: input.stepId,
       },
     }),
   };

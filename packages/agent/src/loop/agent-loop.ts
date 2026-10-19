@@ -174,6 +174,9 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
             identity: input.identity,
             turn: input.turn,
             model: input.model.ref,
+            ...(context.selectedMessageIds === undefined
+              ? {}
+              : { selectedMessageIds: context.selectedMessageIds }),
           });
         } catch {
           return failed(input.turn, toInternalFailure(), appended, receipt(context, recovery));
