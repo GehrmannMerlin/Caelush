@@ -240,12 +240,7 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
     canCancel: props.onCancel !== undefined,
   });
   const submitNewTask = useCallback(async () => {
-    if (
-      props.disabled ||
-      props.draftLoading === true ||
-      steer ||
-      submitBlocked
-    ) {
+    if (props.disabled || props.draftLoading === true || steer || submitBlocked) {
       return;
     }
     const submitted = value;
@@ -253,15 +248,7 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
     // Only the version that was actually accepted is cleared. Text typed during the request — and
     // an attachment draft stays exactly as it is.
     if (accepted && latestValue.current === submitted) setValue("");
-  }, [
-    props.disabled,
-    props.draftLoading,
-    props.onSubmit,
-    setValue,
-    steer,
-    submitBlocked,
-    value,
-  ]);
+  }, [props.disabled, props.draftLoading, props.onSubmit, setValue, steer, submitBlocked, value]);
   const submitRunInput = useCallback(async () => {
     if (
       props.disabled ||
