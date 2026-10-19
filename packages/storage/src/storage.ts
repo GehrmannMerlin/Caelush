@@ -24,6 +24,7 @@ import {
   type ContinuationRepository,
 } from "./repositories/continuation-repository.js";
 import { SqliteRunExecutionStore } from "./run-execution-store.js";
+import { SqliteRunInputStore } from "./run-input-store.js";
 import { SqliteToolExecutionStore } from "./tool-execution-store.js";
 import type { ToolSettlementExtensionDecoder } from "./tool-settlement-extension-adapter.js";
 import type { ToolExecutionStorePort } from "@caelush/agent";
@@ -112,6 +113,8 @@ export interface CaelushStorage {
   readonly messageRecords: SqliteAgentMessageRecordStore;
   readonly continuations: ContinuationRepository;
   readonly execution: SqliteRunExecutionStore;
+  /** The durable mid-Run user input staging and handoff ledger. */
+  readonly runInputs: SqliteRunInputStore;
   readonly toolExecution: ToolExecutionStorePort;
   readonly toolInvocations: ToolInvocationRepository;
   readonly observations: ObservationRepository;
@@ -175,6 +178,7 @@ export async function openCaelushStorage(options: {
       messageRecords: new SqliteAgentMessageRecordStore(database),
       continuations: new SqliteContinuationRepository(database),
       execution: new SqliteRunExecutionStore(database, privateReplay),
+      runInputs: new SqliteRunInputStore(database),
       toolExecution: new SqliteToolExecutionStore(
         database,
         options.toolSettlementExtension === undefined

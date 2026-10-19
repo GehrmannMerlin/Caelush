@@ -2,6 +2,7 @@ import { assertArchiveWritableInTransaction } from "./archive/archive-write-guar
 import {
   RunExecutionConflictError,
   RunExecutionInvariantError,
+  RunInputPendingError,
   type RunExecutionCommitResult,
   type RunExecutionStorePort,
   deriveInterruptedToolResultMessageId,
@@ -62,6 +63,13 @@ import { SqliteStepRepository } from "./repositories/step-repository.js";
 import { writeStateSnapshot } from "./state-snapshot-writer.js";
 import { SqliteCancellationRepository } from "./cancellation-repository.js";
 import { SqliteAttachmentRepository } from "./attachment-repository.js";
+import {
+  SqliteRunInputStore,
+  applyRunInputAssignmentInTransaction,
+  applyRunInputHandoffInTransaction,
+  hasUnassignedRunInputsInTransaction,
+} from "./run-input-store.js";
+import { withAuthoritativeTransaction } from "./transaction-guard.js";
 import {
   loadVerificationPlanInTransaction,
   writeVerificationPlanInTransaction,
@@ -306,6 +314,56 @@ function assertNormalCompletionCommit(command: RunExecutionCommitView) {
   return result;
 }
 
+/**
+ * Refuse an input handoff or assignment that does not describe this commit.
+ *
+ * The two input writes are only meaningful *with* the transition they belong to: a handoff needs
+ * the USER records this commit appends, and an assignment needs the Step this commit opens. Checked
+ * before the transaction so a structurally impossible command never takes the write lock.
+ */
+function assertRunInputCommitShape(command: RunExecutionCommitView): void {
+  const runInputs = command.runInputs;
+  if (runInputs === undefined) return;
+  if (!Number.isSafeInteger(runInputs.now) || runInputs.now < 0) {
+    throw new RunExecutionInvariantError("Run input commit has no valid timestamp");
+  }
+  if (runInputs.handoff !== undefined) {
+    const entries = runInputs.handoff.entries;
+    if (entries.length === 0) {
+      throw new RunExecutionInvariantError("Run input handoff must carry at least one input");
+    }
+    if (new Set(entries.map((entry) => entry.inputId)).size !== entries.length) {
+      throw new RunExecutionInvariantError("Run input handoff repeats an input identity");
+    }
+    const appended = new Set<string>(
+      command.messagesToAppend.map((entry) => entry.draft.messageId as string),
+    );
+    let previousSequence = 0;
+    for (const entry of entries) {
+      if (!appended.has(entry.messageId)) {
+        throw new RunExecutionInvariantError(
+          "Run input handoff names a message this transaction does not append",
+        );
+      }
+      if (entry.acceptedSequence <= previousSequence) {
+        throw new RunExecutionInvariantError("Run input handoff is not in acceptance order");
+      }
+      previousSequence = entry.acceptedSequence;
+    }
+  }
+  if (runInputs.assignment !== undefined) {
+    const step = command.stepWrites.find((write) => write.step.id === runInputs.assignment!.stepId);
+    if (step === undefined || step.step.status !== "RUNNING") {
+      throw new RunExecutionInvariantError(
+        "Run input assignment must name the Step this transaction opens",
+      );
+    }
+    if (runInputs.assignment.messageIds.length === 0) {
+      throw new RunExecutionInvariantError("Run input assignment must name at least one message");
+    }
+  }
+}
+
 function writeRun(client: CaelushDatabase["client"], run: RunExecutionCommitView["run"]): void {
   assertArchiveWritableInTransaction({ client }, { type: "SESSION", sessionId: run.sessionId });
   assertArchiveWritableInTransaction(
@@ -401,6 +459,7 @@ export class SqliteRunExecutionStore
   private readonly continuations: SqliteContinuationRepository;
   private readonly cancellations: SqliteCancellationRepository;
   private readonly attachments: SqliteAttachmentRepository;
+  private readonly runInputs: SqliteRunInputStore;
 
   constructor(
     private readonly database: CaelushDatabase,
@@ -413,6 +472,7 @@ export class SqliteRunExecutionStore
     this.continuations = new SqliteContinuationRepository(database);
     this.cancellations = new SqliteCancellationRepository(database);
     this.attachments = new SqliteAttachmentRepository(database);
+    this.runInputs = new SqliteRunInputStore(database);
   }
 
   /**
@@ -423,6 +483,14 @@ export class SqliteRunExecutionStore
    * Continuation, or Private Replay data.
    */
   async commitInterruptedHistoryClosure(
+    command: InterruptedHistoryClosureCommit,
+  ): Promise<InterruptedHistoryClosureCommitResult> {
+    return withAuthoritativeTransaction(this.database.client, () =>
+      this.commitInterruptedHistoryClosureLocked(command),
+    );
+  }
+
+  private async commitInterruptedHistoryClosureLocked(
     command: InterruptedHistoryClosureCommit,
   ): Promise<InterruptedHistoryClosureCommitResult> {
     const client = this.database.client;
@@ -773,6 +841,9 @@ export class SqliteRunExecutionStore
         ? {}
         : { continuation: continuation.checkpoint, continuationRevision: continuation.revision }),
       ...(cancellationIntent === null ? {} : { cancellationIntent }),
+      // Bounded: the pending text prefix is capped at one boundary's batch, and the counts are
+      // what tell the coordinator whether more inputs remain beyond it.
+      runInputs: this.runInputs.snapshotFacts(runId),
     };
     assertRunExecutionInvariant(snapshot);
     return snapshot;
@@ -800,6 +871,9 @@ export class SqliteRunExecutionStore
     const before = await this.load(command.run.id);
     if (before === null) throw new StorageError(`AgentRun ${command.run.id} was not found`);
     const replayIds = new Set(privateReplayWrites.map((write) => write.identity.messageId));
+    // A handoff without a USER record would leave an input RECORDED with no canonical message,
+    // and an assignment without an open Step would claim an association nobody opened.
+    assertRunInputCommitShape(command);
     // Only exact retries of replay-backed messages may reuse a durable message identity.
     const messagesToAppend = command.messagesToAppend.filter(({ draft }) => {
       const existing = before.conversationRecords.find(
@@ -856,102 +930,138 @@ export class SqliteRunExecutionStore
       ...candidateContinuation,
     });
     const client = this.database.client;
-    client.exec("BEGIN IMMEDIATE");
-    try {
-      if (normalFinalResult !== undefined) {
-        // Re-read after acquiring SQLite's write lock. Cancellation committed first wins; otherwise
-        // this is the one terminal writer for the persisted natural-completion boundary.
-        const current = await this.load(command.run.id);
-        if (
-          current === null ||
-          current.run.status !== "RUNNING" ||
-          current.run.completionContract !== "NATURAL_V1" ||
-          current.run.sessionId !== command.run.sessionId ||
-          current.run.workspace.id !== command.run.workspace.id ||
-          current.run.workspace.path !== command.run.workspace.path ||
-          current.cancellationIntent !== undefined ||
-          current.activeStep?.id !== normalFinalResult.sourceStepId ||
-          (current.continuation !== undefined &&
-            (command.continuation?.operation !== "CLEAR" ||
-              current.continuation.type !== "WAITING_TOOL_RESULTS" ||
-              current.continuation.waitingApproval !== undefined ||
-              current.continuation.receivedResults === undefined)) ||
-          current.conversationRecords.some(
-            (record) => record.messageType === "ASSISTANT" && record.data.phase === "FINAL_ANSWER",
-          )
-        ) {
-          throw new RunExecutionConflictError("natural completion boundary is stale");
-        }
-      }
-      writeRun(client, command.run);
-      if (command.state !== undefined)
-        writeStateSnapshot(
-          client,
-          command.state,
-          command.expectedStateRevision,
-          (actual, expected) => expectedRevision(actual, expected, "AgentState"),
-        );
-      for (const stepWrite of command.stepWrites) {
-        if (stepWrite.step.runId !== command.run.id) {
-          throw new RunExecutionInvariantError("execution Step does not belong to the Run");
-        }
-        writeStep(client, stepWrite.step, stepWrite.operation);
-      }
-      if (command.events.some((event) => event.runId !== command.run.id)) {
-        throw new RunExecutionInvariantError("execution Event does not belong to the Run");
-      }
-      appendAgentMessageRecordsInTransaction(
-        client,
-        command.run.id,
-        command.messagesToAppend.map((entry) => entry.draft),
-        PRIVATE_REPLAY_COMMIT,
-      );
-      for (const entry of command.messagesToAppend) {
-        if (entry.attachmentIds === undefined || entry.attachmentIds.length === 0) continue;
-        await this.attachments.attachToMessage(entry.attachmentIds, entry.draft.messageId, {
-          kind: "SESSION",
-          sessionId: entry.draft.sessionId,
-        });
-      }
-      this.privateReplay.writeInTransaction(
-        command.run.id,
-        privateReplayWrites,
-        command.messagesToAppend.map((entry) => entry.draft),
-      );
-      if (command.continuation?.operation === "SET") {
-        setContinuationInTransaction(
-          client,
-          command.run.id,
-          command.continuation.checkpoint,
-          command.continuation.updatedAt,
-          command.expectedContinuationRevision,
-        );
-      } else if (command.continuation?.operation === "CLEAR") {
-        clearContinuationInTransaction(
-          client,
-          command.run.id,
-          command.expectedContinuationRevision,
-        );
-      }
-      const events = appendDurableEventsInTransaction(client, command.events);
-      client.exec("COMMIT");
-      const snapshot = await this.load(command.run.id);
-      if (snapshot === null)
-        throw new StorageError(`Run ${command.run.id} disappeared after commit`);
-      return { snapshot, events };
-    } catch (error) {
+    return withAuthoritativeTransaction(client, async () => {
+      client.exec("BEGIN IMMEDIATE");
       try {
-        client.exec("ROLLBACK");
-      } catch {
-        throw new StorageError("Run execution commit failed after the transaction ended", {
-          cause: error,
-        });
+        if (normalFinalResult !== undefined) {
+          // Re-read after acquiring SQLite's write lock. Cancellation committed first wins;
+          // otherwise this is the one terminal writer for the persisted natural-completion
+          // boundary.
+          const current = await this.load(command.run.id);
+          if (
+            current === null ||
+            current.run.status !== "RUNNING" ||
+            current.run.completionContract !== "NATURAL_V1" ||
+            current.run.sessionId !== command.run.sessionId ||
+            current.run.workspace.id !== command.run.workspace.id ||
+            current.run.workspace.path !== command.run.workspace.path ||
+            current.cancellationIntent !== undefined ||
+            current.activeStep?.id !== normalFinalResult.sourceStepId ||
+            (current.continuation !== undefined &&
+              (command.continuation?.operation !== "CLEAR" ||
+                current.continuation.type !== "WAITING_TOOL_RESULTS" ||
+                current.continuation.waitingApproval !== undefined ||
+                current.continuation.receivedResults === undefined)) ||
+            current.conversationRecords.some(
+              (record) =>
+                record.messageType === "ASSISTANT" && record.data.phase === "FINAL_ANSWER",
+            )
+          ) {
+            throw new RunExecutionConflictError("natural completion boundary is stale");
+          }
+          // The last window. A correction accepted after the completion was planned — but before
+          // this transaction took the write lock — must not be silently skipped: the caller keeps
+          // its frozen model effect and settles it again as a deferred answer.
+          if (hasUnassignedRunInputsInTransaction(client, command.run.id)) {
+            throw new RunInputPendingError();
+          }
+        }
+        writeRun(client, command.run);
+        if (command.state !== undefined)
+          writeStateSnapshot(
+            client,
+            command.state,
+            command.expectedStateRevision,
+            (actual, expected) => expectedRevision(actual, expected, "AgentState"),
+          );
+        for (const stepWrite of command.stepWrites) {
+          if (stepWrite.step.runId !== command.run.id) {
+            throw new RunExecutionInvariantError("execution Step does not belong to the Run");
+          }
+          writeStep(client, stepWrite.step, stepWrite.operation);
+        }
+        if (command.events.some((event) => event.runId !== command.run.id)) {
+          throw new RunExecutionInvariantError("execution Event does not belong to the Run");
+        }
+        appendAgentMessageRecordsInTransaction(
+          client,
+          command.run.id,
+          command.messagesToAppend.map((entry) => entry.draft),
+          PRIVATE_REPLAY_COMMIT,
+        );
+        for (const entry of command.messagesToAppend) {
+          if (entry.attachmentIds === undefined || entry.attachmentIds.length === 0) continue;
+          await this.attachments.attachToMessage(entry.attachmentIds, entry.draft.messageId, {
+            kind: "SESSION",
+            sessionId: entry.draft.sessionId,
+          });
+        }
+        this.privateReplay.writeInTransaction(
+          command.run.id,
+          privateReplayWrites,
+          command.messagesToAppend.map((entry) => entry.draft),
+        );
+        // T2: after the USER records are durable in this same transaction.
+        if (command.runInputs?.handoff !== undefined) {
+          applyRunInputHandoffInTransaction(
+            client,
+            command.run.id,
+            command.runInputs.handoff,
+            command.runInputs.now,
+          );
+        }
+        // T3: after the Step row exists, so the association cannot name a Step nobody wrote.
+        if (command.runInputs?.assignment !== undefined) {
+          applyRunInputAssignmentInTransaction(
+            client,
+            command.run.id,
+            command.runInputs.assignment,
+            command.runInputs.now,
+          );
+        }
+        if (command.continuation?.operation === "SET") {
+          setContinuationInTransaction(
+            client,
+            command.run.id,
+            command.continuation.checkpoint,
+            command.continuation.updatedAt,
+            command.expectedContinuationRevision,
+          );
+        } else if (command.continuation?.operation === "CLEAR") {
+          clearContinuationInTransaction(
+            client,
+            command.run.id,
+            command.expectedContinuationRevision,
+          );
+        }
+        const events = appendDurableEventsInTransaction(client, command.events);
+        client.exec("COMMIT");
+        const snapshot = await this.load(command.run.id);
+        if (snapshot === null)
+          throw new StorageError(`Run ${command.run.id} disappeared after commit`);
+        return { snapshot, events };
+      } catch (error) {
+        try {
+          client.exec("ROLLBACK");
+        } catch {
+          throw new StorageError("Run execution commit failed after the transaction ended", {
+            cause: error,
+          });
+        }
+        mapExecutionError(error);
       }
-      mapExecutionError(error);
-    }
+    });
   }
 
   async commitVerifiedCompletion(
+    command: RunVerifiedCompletionCommit,
+  ): Promise<RunExecutionCommitResult> {
+    return withAuthoritativeTransaction(this.database.client, () =>
+      this.commitVerifiedCompletionLocked(command),
+    );
+  }
+
+  private async commitVerifiedCompletionLocked(
     command: RunVerifiedCompletionCommit,
   ): Promise<RunExecutionCommitResult> {
     const parsedResult = VerifiedRunFinalResultSchema.parse(command.finalResult);
@@ -1039,6 +1149,14 @@ export class SqliteRunExecutionStore
    * plan bound to different text than the boundary records cannot become durable.
    */
   async commitCandidateBoundary(
+    command: RunCandidateBoundaryCommit,
+  ): Promise<RunExecutionCommitResult> {
+    return withAuthoritativeTransaction(this.database.client, () =>
+      this.commitCandidateBoundaryLocked(command),
+    );
+  }
+
+  private async commitCandidateBoundaryLocked(
     command: RunCandidateBoundaryCommit,
   ): Promise<RunExecutionCommitResult> {
     const privateReplayWrites = await this.privateReplay.validateWrites(

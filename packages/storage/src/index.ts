@@ -104,6 +104,13 @@ export type {
   StoredContinuation,
 } from "./repositories/continuation-repository.js";
 export { SqliteRunExecutionStore } from "./run-execution-store.js";
+export { SqliteRunInputStore, runInputPayloadHash } from "./run-input-store.js";
+export type {
+  AcceptRunInputCommand,
+  AcceptRunInputResult,
+  RunInputRecord,
+} from "./run-input-store.js";
+export { withAuthoritativeTransaction } from "./transaction-guard.js";
 export type { RunExecutionStorePort } from "@caelush/core";
 export {
   SqliteToolInvocationRepository,

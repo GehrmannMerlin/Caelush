@@ -57,6 +57,8 @@ export function purgeArchiveGraphInTransaction(
     "agent_messages",
     "agent_events",
     "event_sequences",
+    "run_inputs",
+    "run_input_heads",
     "agent_run_continuations",
     "agent_state_snapshots",
     "approval_requests",

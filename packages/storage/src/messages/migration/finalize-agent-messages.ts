@@ -6,7 +6,12 @@ import { backfillLegacyAgentMessages } from "../legacy/backfill.js";
 import { parseHistoricalLegacyMessage } from "./legacy-parser.js";
 
 const FINAL_MIGRATION_NAME = "20260924120000_message_system_v2_final";
-const POST_MESSAGE_V2_MIGRATION_NAMES = new Set(["20261008120000_private_replay"]);
+const POST_MESSAGE_V2_MIGRATION_NAMES = new Set([
+  "20261008120000_private_replay",
+  // The Run input ledger references `agent_messages(message_id)`, so it must be created after the
+  // final physical rebuild rather than before the table it points at is replaced.
+  "20261019150000_run_inputs",
+]);
 
 /** Apply all published migrations before the final physical Message V2 rebuild. */
 export function migratePublishedStorage(database: CaelushDatabase, migrationsFolder: string): void {

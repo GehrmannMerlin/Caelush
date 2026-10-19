@@ -5,6 +5,7 @@ import {
 } from "@caelush/protocol";
 import type { CaelushDatabase } from "./database.js";
 import { StorageConflictError, StorageDecodeError, StorageError } from "./errors.js";
+import { withAuthoritativeTransaction } from "./transaction-guard.js";
 
 export interface CancellationRepository {
   get(runId: RunId): Promise<RunCancellationIntent | null>;
@@ -46,6 +47,10 @@ export class SqliteCancellationRepository implements CancellationRepository {
   }
 
   async request(intent: RunCancellationIntent): Promise<RunCancellationIntent> {
+    return withAuthoritativeTransaction(this.database.client, () => this.requestLocked(intent));
+  }
+
+  private async requestLocked(intent: RunCancellationIntent): Promise<RunCancellationIntent> {
     const parsed = RunCancellationIntentSchema.parse(intent);
     const client = this.database.client;
     client.exec("BEGIN IMMEDIATE");
