@@ -30,6 +30,11 @@ const DaemonCapabilitiesSchema = z
     approvals: z.literal(true),
     sseReplay: z.literal(true),
     sessionTranscript: z.literal(true).optional(),
+    /**
+     * Advertised only when the durable intake → canonical USER → next model step path is composed.
+     * An in-memory stand-in must never advertise it.
+     */
+    runInputV1: z.literal(true).optional(),
     archiveManagementV1: z.literal(true).optional(),
     sessionContinuityPreflight: z.literal(true).optional(),
     sessionTurnPresentation: z.literal(true).optional(),

@@ -5,6 +5,7 @@ import { ApprovalRequestedEventSchema, ApprovalResolvedEventSchema } from "./app
 import { BudgetExceededEventSchema } from "./budget.js";
 import { ConversationMessageCommittedEventSchema } from "./conversation.js";
 import { ContextCompactionCompletedEventSchema } from "./context.js";
+import { RunInputAcceptedEventSchema, RunInputAssignedEventSchema } from "./run-input.js";
 import { RunSecurityPolicyBoundEventSchema } from "./security-policy.js";
 import { ErrorEventSchema } from "./error.js";
 import {
@@ -143,6 +144,8 @@ const registeredSchemas: ReadonlyMap<string, RegisteredSchema> = new Map<string,
   ["budget.exceeded\u00001", BudgetExceededEventSchema],
   ["resource.guard\u00001", ResourceGuardEventSchema],
   ["conversation.message.committed\u00001", ConversationMessageCommittedEventSchema],
+  ["run.input.accepted\u00001", RunInputAcceptedEventSchema],
+  ["run.input.assigned\u00001", RunInputAssignedEventSchema],
   ["context.compaction.completed\u00001", ContextCompactionCompletedEventSchema],
   ["model.text.delta\u00001", ModelTextDeltaEventSchema],
   ["model.text.delta\u00002", ModelTextDeltaEventV2Schema],
