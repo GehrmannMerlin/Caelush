@@ -257,6 +257,22 @@ export const WaitingResourceContinuationSchema = z
   })
   .strict();
 
+export const WaitingSteeringContinuationSchema = z
+  .object({
+    type: z.literal("WAITING_STEERING"),
+    runId: RunIdSchema,
+    sourceStepId: StepIdSchema,
+    // One safe boundary materializes at most a bounded batch; the message list is the exact set
+    // the next turn must carry, so an empty list is not a legal boundary.
+    messageIds: z.array(z.string().min(1)).min(1).max(64),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (new Set(value.messageIds).size !== value.messageIds.length) {
+      context.addIssue({ code: "custom", message: "steering message ids must be unique" });
+    }
+  });
+
 const RetryErrorCodeSchema = z.enum(["LLM_RATE_LIMIT", "LLM_NETWORK", "LLM_TIMEOUT"]);
 const RetryAttemptSchema = z.number().int().positive().safe().max(10);
 const TransportIdSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/);
@@ -315,6 +331,22 @@ export const WaitingRetryContinuationSchema = z.discriminatedUnion("mode", [
         context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
       }
     }),
+  z
+    .object({
+      ...WaitingRetryBase,
+      mode: z.literal("STEERING"),
+      messageIds: z.array(z.string().min(1)).min(1).max(64),
+      sourceStepId: StepIdSchema,
+    })
+    .strict()
+    .superRefine((value, context) => {
+      if (value.attempt > value.maxAttempts) {
+        context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
+      }
+      if (new Set(value.messageIds).size !== value.messageIds.length) {
+        context.addIssue({ code: "custom", message: "steering message ids must be unique" });
+      }
+    }),
 ]);
 
 export const RunContinuationCheckpointSchema = z.discriminatedUnion("type", [
@@ -322,5 +354,6 @@ export const RunContinuationCheckpointSchema = z.discriminatedUnion("type", [
   AwaitingVerificationContinuationSchema,
   WaitingVerificationRepairContinuationSchema,
   WaitingResourceContinuationSchema,
+  WaitingSteeringContinuationSchema,
   WaitingRetryContinuationSchema,
 ]);

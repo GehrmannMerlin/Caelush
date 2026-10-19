@@ -27,7 +27,11 @@ import type { RunId } from "@caelush/protocol";
  * transaction as the boundary that names it, and nothing here mentions verification at all.
  */
 
-export { RunExecutionConflictError, RunExecutionInvariantError } from "@caelush/agent";
+export {
+  RunExecutionConflictError,
+  RunExecutionInvariantError,
+  RunInputPendingError,
+} from "@caelush/agent";
 export type {
   DurableAgentEvent,
   DurableEventDraft,

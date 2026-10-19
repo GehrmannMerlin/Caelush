@@ -63,6 +63,20 @@ export interface WaitingResourceContinuation {
   readonly replanCount: number;
 }
 
+/**
+ * A complete answer deferred because the Run owed the user's accepted corrections a turn.
+ *
+ * The assistant answer was settled as commentary and the corrections were recorded as canonical
+ * USER messages in the same transaction. This checkpoint names those already-durable messages, so
+ * resuming opens the next turn over them instead of re-deriving the goal.
+ */
+export interface WaitingSteeringContinuation {
+  readonly type: "WAITING_STEERING";
+  readonly runId: RunId;
+  readonly sourceStepId: StepId;
+  readonly messageIds: readonly string[];
+}
+
 export type RetryErrorCode = "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT";
 
 interface WaitingRetryContinuationBase {
@@ -104,6 +118,21 @@ export type WaitingRetryContinuation =
       readonly sourceStepId?: StepId | undefined;
       /** The Tool observation policy the retry resumes its Tool projection under. */
       readonly observationPolicy?: ToolObservationPolicySnapshot | undefined;
+    })
+  | (WaitingRetryContinuationBase & {
+      /**
+       * A steering turn that failed and will be resent.
+       *
+       * The corrections are already durable, so the retry re-Uses the same message IDs rather than
+       * appending a second USER. Without this arm a failed steering turn could only resume from
+       * `START`, which re-derives the original goal and loses why the turn ran.
+       */
+      readonly mode: "STEERING";
+      readonly messageIds: readonly string[];
+      /** The Step whose deferred answer created the steering boundary. */
+      readonly sourceStepId: StepId;
+      readonly pendingDecision?: never;
+      readonly receivedResults?: never;
     });
 
 export type RunContinuationCheckpoint =
@@ -111,4 +140,5 @@ export type RunContinuationCheckpoint =
   | AwaitingVerificationContinuation
   | WaitingVerificationRepairContinuation
   | WaitingResourceContinuation
+  | WaitingSteeringContinuation
   | WaitingRetryContinuation;

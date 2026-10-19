@@ -76,6 +76,33 @@ export function createUserMessageAppend(
   return appendFromMessage(authority, message);
 }
 
+/**
+ * Materialize one accepted Run input as the canonical USER message it becomes.
+ *
+ * ```text
+ * text            the input's own durable text, never `run.goal` or `run.userText`
+ * origin          STEERING — this is the user correcting the Run already in progress
+ * turn            the Run's existing conversation turn, because it is the same task
+ * ```
+ *
+ * The message identity is minted here and returned to the caller, which writes it into the input
+ * ledger in the *same* transaction. That is what keeps one input and one message provably paired.
+ */
+export function createSteeringMessageAppend(
+  authority: RunMessageAuthority,
+  run: AgentRun,
+  text: string,
+): { readonly append: RunExecutionMessageAppend; readonly messageId: string } {
+  const message = authority.factory.createUser({
+    runId: run.id,
+    sessionId: run.sessionId,
+    conversationTurnId: authority.turns.forRun(run.id),
+    source: userMessageSource("STEERING"),
+    content: [agentTextPart(text)],
+  });
+  return { append: appendFromMessage(authority, message), messageId: message.id };
+}
+
 export function createAssistantMessageAppend(
   authority: RunMessageAuthority,
   run: AgentRun,
@@ -89,6 +116,31 @@ export function createAssistantMessageAppend(
   );
 }
 
+/**
+ * Materialize an answer that would have been final, but is being deferred for a correction.
+ *
+ * ```text
+ * envelope phase             COMMENTARY
+ * every explicit part phase  COMMENTARY
+ * ```
+ *
+ * Both are required. The assistant projector prefers an explicit content-segment phase over the
+ * envelope, so rewriting only `data.phase` would leave the deferred text presented as the Run's
+ * final answer — a lie the completion transaction did not commit. The model's text, identity,
+ * usage and private replay provenance are untouched.
+ */
+export function createDeferredAssistantMessageAppend(
+  authority: RunMessageAuthority,
+  run: AgentRun,
+  sourceStepId: StepId,
+  modelTurn: AgentModelTurn,
+): RunExecutionMessageAppend {
+  return appendFromMessage(
+    authority,
+    createAssistantMessage(authority, run, sourceStepId, modelTurn, "COMMENTARY", true),
+  );
+}
+
 /** Create the same Assistant record with an opaque private replay reference bound to its real ID. */
 export function createAssistantMessageAppendWithPrivateReplay(
   authority: RunMessageAuthority,
@@ -97,8 +149,16 @@ export function createAssistantMessageAppendWithPrivateReplay(
   modelTurn: AgentModelTurn,
   phase: AssistantMessagePhase,
   replay: Pick<PrivateReplayIdentity, "providerId" | "model" | "api">,
+  options: { readonly forceCommentarySegments?: boolean } = {},
 ): { readonly append: RunExecutionMessageAppend; readonly identity: PrivateReplayIdentity } {
-  const message = createAssistantMessage(authority, run, sourceStepId, modelTurn, phase);
+  const message = createAssistantMessage(
+    authority,
+    run,
+    sourceStepId,
+    modelTurn,
+    phase,
+    options.forceCommentarySegments === true,
+  );
   const identity: PrivateReplayIdentity = Object.freeze({
     sessionId: String(run.sessionId),
     runId: String(run.id),
@@ -122,6 +182,7 @@ function createAssistantMessage(
   sourceStepId: StepId,
   modelTurn: AgentModelTurn,
   phase: AssistantMessagePhase,
+  forceCommentarySegments = false,
 ) {
   return authority.factory.createAssistant({
     runId: run.id,
@@ -130,7 +191,7 @@ function createAssistantMessage(
     sourceStepId,
     source: modelMessageSource(modelTurn.callId),
     phase,
-    content: assistantContent(modelTurn),
+    content: assistantContent(modelTurn, forceCommentarySegments),
     model: {
       kind: "MODEL_TURN",
       callId: modelTurn.callId,
@@ -220,13 +281,18 @@ function appendFromMessage(
   });
 }
 
-function assistantContent(modelTurn: AgentModelTurn): readonly AgentAssistantContentPart[] {
+function assistantContent(
+  modelTurn: AgentModelTurn,
+  forceCommentarySegments = false,
+): readonly AgentAssistantContentPart[] {
   const content: AgentAssistantContentPart[] = [];
   if (modelTurn.assistantItems !== undefined) {
     for (const item of modelTurn.assistantItems) {
       const metadata = {
         assistantItemId: item.assistantItemId,
-        phase: toProtocolAssistantPhase(item.phase),
+        phase: forceCommentarySegments
+          ? ("COMMENTARY" as const)
+          : toProtocolAssistantPhase(item.phase),
       };
       for (const part of item.content) {
         if (part.type === "text") {

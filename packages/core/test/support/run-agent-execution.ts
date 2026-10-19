@@ -162,6 +162,9 @@ export function fakeContextEngine(
       preparations.push({ mode: input.mode, messages });
       return {
         messages,
+        // The production engine reports what its plan selected; the fixture reports the whole
+        // durable conversation, which is what it projects.
+        selectedMessageIds: Object.freeze(stored.map((entry) => entry.message.id)),
         requestBudget: {
           version: "LEGACY_FULL_OUTPUT_V1",
           outputReserveTokens: 0,

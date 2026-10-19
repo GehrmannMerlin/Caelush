@@ -395,6 +395,33 @@ export class MemoryRunStore implements RunExecutionStore, RunCompletionPersisten
    */
   private readonly plans = new Map<string, import("@caelush/protocol").VerificationPlan>();
   private readonly messages = testRunMessageAuthority();
+  /**
+   * The Run input ledger this store keeps, applied the way the SQLite store applies it.
+   *
+   * A test that accepts a correction while the Run is working needs the store to record the
+   * handoff and the first-Step association, because the controller reads both back from the
+   * snapshot it loads at the next boundary.
+   */
+  private inputs: {
+    pending: { inputId: string; acceptedSequence: number; text: string }[];
+    recorded: { inputId: string; acceptedSequence: number; messageId: string }[];
+  } = { pending: [], recorded: [] };
+
+  acceptPendingRunInput(text: string): void {
+    const acceptedSequence = this.inputs.pending.length + this.inputs.recorded.length + 1;
+    this.inputs.pending.push({ inputId: `input-${acceptedSequence}`, acceptedSequence, text });
+    this.snapshot = { ...this.snapshot, runInputs: this.inputSnapshot() };
+  }
+
+  private inputSnapshot() {
+    return {
+      pending: [...this.inputs.pending],
+      recorded: [...this.inputs.recorded],
+      pendingCount: this.inputs.pending.length,
+      recordedCount: this.inputs.recorded.length,
+      unassignedCount: this.inputs.pending.length + this.inputs.recorded.length,
+    };
+  }
 
   constructor(snapshot: import("@caelush/core").RunExecutionSnapshot) {
     this.stateRevision = snapshot.stateRevision;
@@ -473,6 +500,18 @@ export class MemoryRunStore implements RunExecutionStore, RunCompletionPersisten
     }
     if (command.continuation?.operation === "CLEAR") this.continuationRevision = undefined;
 
+    for (const entry of command.runInputs?.handoff?.entries ?? []) {
+      this.inputs.pending = this.inputs.pending.filter((item) => item.inputId !== entry.inputId);
+      this.inputs.recorded.push({
+        inputId: entry.inputId,
+        acceptedSequence: entry.acceptedSequence,
+        messageId: entry.messageId,
+      });
+    }
+    for (const messageId of command.runInputs?.assignment?.messageIds ?? []) {
+      this.inputs.recorded = this.inputs.recorded.filter((item) => item.messageId !== messageId);
+    }
+
     const conversationRecords = [
       ...this.snapshot.conversationRecords,
       ...command.messagesToAppend.map((entry, index) => ({
@@ -496,6 +535,7 @@ export class MemoryRunStore implements RunExecutionStore, RunCompletionPersisten
       ...(nextContinuation === undefined || this.continuationRevision === undefined
         ? {}
         : { continuationRevision: this.continuationRevision }),
+      runInputs: this.inputSnapshot(),
     };
     const events: DurableAgentEvent[] = command.events.map((draft) => ({
       ...draft,

@@ -124,14 +124,17 @@ import { allocateRunAgentStep, createRunAgentLoop } from "./run-agent-execution.
 import {
   createAssistantMessageAppend,
   createAssistantMessageAppendWithPrivateReplay,
+  createDeferredAssistantMessageAppend,
   createExternalToolResultMessageAppend,
   createToolResultMessageAppend,
   createUserMessageAppend,
 } from "./run-message-materializer.js";
+import { hasUnassignedRunInputs, planRunInputHandoff } from "./run-input-handoff.js";
 import { summarizeAgentDecision } from "./agent-summary.js";
 import {
   RunExecutionConflictError,
   RunExecutionInvariantError,
+  RunInputPendingError,
   type RunExecutionCommitView as RunExecutionCommit,
   type RunExecutionSnapshotView as RunExecutionSnapshot,
 } from "./run-execution-store.js";
@@ -1049,6 +1052,15 @@ export class RunController {
         return this.resultFromSnapshot(snapshot);
       if (isTerminal(snapshot.run.status)) return this.resultFromSnapshot(snapshot);
 
+      // The one place a user's accepted correction becomes a canonical message. It runs after the
+      // governance checks above and before the coordinator routes, so the turn that follows is
+      // decided from a snapshot that already contains the correction.
+      const handedOff = await this.applyRunInputsAtBoundary(snapshot);
+      if (handedOff !== undefined) {
+        snapshot = handedOff;
+        continue;
+      }
+
       const directive = this.coordinator.next(
         toAgentExecutionSnapshot(snapshot),
         this.dependencies.clock.now(),
@@ -1100,7 +1112,20 @@ export class RunController {
 
       if (directive.kind === "ADVANCE_AGENT") {
         const execution = await this.executeAgentDirective(snapshot, directive);
-        if (execution.status !== "WAITING_TOOL_RESULTS") return execution;
+        if (execution.status !== "WAITING_TOOL_RESULTS") {
+          // An answer deferred for accepted corrections leaves the Run RUNNING on a steering
+          // boundary. Only a RUNNING result can hold one, and only that case pays for the extra
+          // read — a retry or a terminal settlement must not re-enter the load path at all.
+          if (execution.status === "RUNNING") {
+            const steering = await this.continueSteeringBoundary(snapshot.run.id);
+            if (steering !== undefined) {
+              snapshot = steering;
+              mode = "EXECUTE";
+              continue;
+            }
+          }
+          return execution;
+        }
         snapshot = await this.load(snapshot.run.id);
         // The turn produced a *new* Tool request, so the next batch is a fresh execution of it.
         mode = "EXECUTE";
@@ -1633,7 +1658,7 @@ export class RunController {
     const boundary = createAgentModelTurnBoundary({
       observation,
       pendingTurn: () => pendingTurn,
-      openTurn: (turn) => this.openAgentTurn(turn),
+      openTurn: (turn, selection) => this.openAgentTurn(turn, selection),
     });
 
     const contextEngine = execution.createContextEngine(
@@ -1781,6 +1806,9 @@ export class RunController {
       // of the frozen turn input: it is a fact of the Run's ledger, and the boundary refuses a turn
       // whose continuation does not record the same Step.
       ...(toolRequestStepId === undefined ? {} : { sourceStepId: toolRequestStepId }),
+      ...(directive.input.kind === "CONTINUATION" && directive.input.messageIds !== undefined
+        ? { runInputMessageIds: directive.input.messageIds.map(String) }
+        : {}),
     };
   }
 
@@ -1921,6 +1949,197 @@ export class RunController {
   }
 
   /**
+   * Apply the accepted inputs this boundary may apply, and nothing more.
+   *
+   * ```text
+   * a complete Tool batch has settled   the corrections belong after its results
+   * a retry backoff is due              the corrections belong before the next attempt
+   * anything else                       the inputs wait, durably, at PENDING
+   * ```
+   *
+   * This is the *only* place a Run input becomes a canonical message outside a deferred
+   * completion, and it is entered from the driver's own loop — never from the intake request, which
+   * has no execution authority at all.
+   */
+  private async applyRunInputsAtBoundary(
+    snapshot: RunExecutionSnapshot,
+  ): Promise<RunExecutionSnapshot | undefined> {
+    if (snapshot.run.status !== "RUNNING" || snapshot.activeStep !== undefined) return undefined;
+    const inputs = snapshot.runInputs;
+    if (inputs === undefined || inputs.pending.length === 0) return undefined;
+    const continuation = snapshot.continuation;
+    const now = this.dependencies.clock.now();
+    const atCompleteToolBatch =
+      continuation?.type === "WAITING_TOOL_RESULTS" &&
+      continuation.receivedResults !== undefined &&
+      continuation.waitingApproval === undefined;
+    const atDueRetry = continuation?.type === "WAITING_RETRY" && now >= continuation.nextAttemptAt;
+    if (!atCompleteToolBatch && !atDueRetry) return undefined;
+    return this.commitRunInputHandoff(snapshot);
+  }
+
+  /**
+   * T2 — record the frozen FIFO prefix as canonical USER messages.
+   *
+   * The continuation is deliberately *not* rewritten here: after a Tool batch the Run must keep
+   * resuming from the Step that requested those Tools, and the new message only travels with the
+   * turn. The steering checkpoint is installed by the deferred-completion path, which is the one
+   * boundary that has no other resume provenance to preserve.
+   */
+  private async commitRunInputHandoff(
+    snapshot: RunExecutionSnapshot,
+  ): Promise<RunExecutionSnapshot | undefined> {
+    const now = this.dependencies.clock.now();
+    const plan = planRunInputHandoff(this.dependencies.messages, snapshot.run, snapshot);
+    if (plan === undefined || plan.materialized.length === 0) return undefined;
+    const commit = await this.commit({
+      run: snapshot.run,
+      // No state is written: recording an input changes no Run state, so it must not bump the
+      // AgentState revision an in-flight decision may still be comparing against.
+      expectedStateRevision: snapshot.stateRevision ?? null,
+      expectedContinuationRevision: snapshot.continuationRevision ?? null,
+      stepWrites: [],
+      messagesToAppend: plan.appends,
+      runInputs: { now, handoff: { entries: plan.materialized } },
+      events: plan.appends.map((entry) =>
+        this.eventFactory.messageCommitted(snapshot.run, entry.draft, this.nextEventId(), now),
+      ),
+    });
+    this.notify(commit.events);
+    return commit.snapshot;
+  }
+
+  /**
+   * Whether this Run is parked on a steering boundary the same driver must advance.
+   *
+   * Read back from the durable snapshot rather than inferred from the result status: a deferred
+   * answer leaves an ordinary `RUNNING` Run, and only the continuation says there is a turn to run.
+   */
+  private async continueSteeringBoundary(runId: RunId): Promise<RunExecutionSnapshot | undefined> {
+    const current = await this.load(runId);
+    if (current.run.status !== "RUNNING") return undefined;
+    return current.continuation?.type === "WAITING_STEERING" ? current : undefined;
+  }
+
+  /**
+   * Settle an answer the Run cannot finish with, because the user corrected it first.
+   *
+   * ```text
+   * same frozen model turn     no second provider request, no second usage, no Tool rerun
+   * answer becomes COMMENTARY  it is real output, not the Run's final answer
+   * batch becomes USER         recorded in this same transaction, with its input mappings
+   * WAITING_STEERING           the durable next step, which this driver continues into
+   * ```
+   *
+   * The caller reaches this either because the inputs were already visible before planning, or
+   * because the completion transaction found them after planning and refused with a typed conflict.
+   * Both carry the same frozen effect, which is why nothing is recomputed.
+   */
+  private async settleDeferredFinalCandidate(
+    current: RunExecutionSnapshot,
+    result: Extract<AgentLoopAdvanceResult, { kind: "FINAL_CANDIDATE" }>,
+    observation: AgentTurnObservation,
+  ): Promise<RunControllerResult> {
+    if (current.run.completionContract !== "NATURAL_V1") {
+      throw new RunControllerInvariantError(
+        "A deferred final answer requires the persisted NATURAL_V1 contract.",
+      );
+    }
+    if (!hasUnassignedRunInputs(current)) {
+      throw new RunControllerInvariantError(
+        "A deferred final answer requires at least one unapplied Run input.",
+      );
+    }
+    const state = current.state;
+    const step = current.activeStep;
+    if (
+      state === undefined ||
+      step === undefined ||
+      step.runId !== current.run.id ||
+      step.status !== "RUNNING" ||
+      step.id !== result.turn.stepId ||
+      result.turn.sequence !== step.sequence
+    ) {
+      throw new RunControllerInvariantError(
+        "A deferred final answer requires the active Step that produced it.",
+      );
+    }
+    if (
+      result.modelTurn.model.provider !== current.run.model.provider ||
+      result.modelTurn.model.model !== current.run.model.model ||
+      result.modelTurn.finishReason !== "STOP"
+    ) {
+      throw new RunControllerInvariantError(
+        "A deferred final answer does not belong to this Run's model turn.",
+      );
+    }
+    if (
+      current.conversationRecords.some(
+        (record) => record.messageType === "ASSISTANT" && record.data.phase === "FINAL_ANSWER",
+      )
+    ) {
+      throw new RunControllerInvariantError(
+        "A deferred final answer cannot follow a committed final answer.",
+      );
+    }
+
+    const plan = planRunInputHandoff(this.dependencies.messages, current.run, current);
+    if (plan === undefined) {
+      throw new RunControllerInvariantError("A deferred final answer has no inputs to apply.");
+    }
+
+    const now = this.dependencies.clock.now();
+    const settledAt = Math.max(state.updatedAt, now) as import("@caelush/protocol").TimestampMs;
+    const settledState = settleAgentStepState(state, {
+      stepId: step.id,
+      ...(result.modelTurn.usage === undefined ? {} : { usage: result.modelTurn.usage }),
+      now: settledAt,
+    });
+    const assistant = await this.prepareAssistantMessageCommit(
+      current.run,
+      step.id,
+      result.modelTurn,
+      "COMMENTARY",
+      observation,
+      true,
+    );
+    const appends = [...assistant.messagesToAppend, ...plan.appends];
+    const run = AgentRunSchema.parse({ ...current.run, currentStepId: undefined });
+    const commit = await this.commit({
+      run,
+      state: settledState,
+      expectedStateRevision: current.stateRevision ?? null,
+      expectedContinuationRevision: current.continuationRevision ?? null,
+      stepWrites: [{ operation: "UPDATE", step: completeAgentStep(step, { finishedAt: now }) }],
+      messagesToAppend: appends,
+      ...(assistant.privateReplayWrites === undefined
+        ? {}
+        : { privateReplayWrites: assistant.privateReplayWrites }),
+      ...(plan.materialized.length === 0
+        ? {}
+        : { runInputs: { now, handoff: { entries: plan.materialized } } }),
+      continuation: {
+        operation: "SET",
+        checkpoint: {
+          type: "WAITING_STEERING",
+          runId: run.id,
+          sourceStepId: step.id,
+          messageIds: plan.turnMessageIds,
+        },
+        updatedAt: now,
+      },
+      events: [
+        this.eventFactory.llmCompleted(current.run, settledState, step, this.nextEventId(), now),
+        ...appends.map((entry) =>
+          this.eventFactory.messageCommitted(run, entry.draft, this.nextEventId(), now),
+        ),
+      ],
+    });
+    this.notify(commit.events);
+    return this.resultFromSnapshot(commit.snapshot);
+  }
+
+  /**
    * The RunController-owned durable open-Step commit.
    *
    * ```text
@@ -1937,7 +2156,10 @@ export class RunController {
    * exception is an exact durable replay of the same turn, which resolves without committing: a
    * second commit would insert a second Step and publish a second `llm.started`.
    */
-  private async openAgentTurn(pending: PendingAgentTurn): Promise<void> {
+  private async openAgentTurn(
+    pending: PendingAgentTurn,
+    selection: import("./run-model-turn-boundary.js").TurnBoundarySelection,
+  ): Promise<void> {
     const current = await this.load(pending.identity.runId);
     if (current.state === undefined) {
       throw new RunControllerInfrastructureError("Run state disappeared before provider turn");
@@ -1972,6 +2194,10 @@ export class RunController {
     const activeRun = AgentRunSchema.parse({ ...current.run, currentStepId: pending.step.id });
     const activeState = beginAgentStepState(current.state, pending.step.id, pending.step.startedAt);
     const consumption = this.continuationConsumption(current, pending);
+    const now = this.dependencies.clock.now();
+    // T3: only messages the prepared request actually carried are associated. A Context plan that
+    // dropped one leaves it RECORDED — a truthful state, and one completion still protects.
+    const assigned = assignedRunInputs(current, selection, pending.runInputMessageIds);
 
     const commit = await this.commit({
       run: activeRun,
@@ -1980,6 +2206,17 @@ export class RunController {
       expectedContinuationRevision: pending.expectedContinuationRevision,
       stepWrites: [{ operation: "INSERT", step: pending.step }],
       messagesToAppend: [],
+      ...(assigned.length === 0
+        ? {}
+        : {
+            runInputs: {
+              now,
+              assignment: {
+                stepId: pending.step.id,
+                messageIds: assigned.map((entry) => entry.messageId),
+              },
+            },
+          }),
       ...(consumption === "CONSUME" ? { continuation: { operation: "CLEAR" as const } } : {}),
       events: [
         ...(consumption === "CONSUME" && current.continuation?.type === "WAITING_RETRY"
@@ -1990,16 +2227,24 @@ export class RunController {
                 current.continuation.attempt,
                 current.continuation.maxAttempts,
                 this.nextEventId(),
-                this.dependencies.clock.now(),
+                now,
               ),
             ]
           : []),
-        this.eventFactory.llmStarted(
-          activeRun,
-          pending.step,
-          this.nextEventId(),
-          this.dependencies.clock.now(),
+        ...assigned.map((entry) =>
+          this.eventFactory.runInputAssigned(
+            activeRun,
+            {
+              inputId: entry.inputId,
+              acceptedSequence: entry.acceptedSequence,
+              messageId: entry.messageId,
+              stepId: pending.step.id,
+            },
+            this.nextEventId(),
+            now,
+          ),
         ),
+        this.eventFactory.llmStarted(activeRun, pending.step, this.nextEventId(), now),
       ],
     });
     this.notify(commit.events);
@@ -2047,8 +2292,14 @@ export class RunController {
           );
         }
         return "PRESERVE";
-      case "INITIAL":
       case "STEERING":
+        if (continuation?.type !== "WAITING_STEERING") {
+          throw new RunExecutionInvariantError(
+            "A steering turn requires a WAITING_STEERING continuation to consume.",
+          );
+        }
+        return "CONSUME";
+      case "INITIAL":
         if (continuation !== undefined) {
           throw new RunExecutionInvariantError(
             `An ${pending.advanceReason} turn must not hold a durable continuation.`,
@@ -2162,6 +2413,13 @@ export class RunController {
     modelTurn: AgentModelTurn,
     phase: "COMMENTARY" | "FINAL_ANSWER",
     observation: AgentTurnObservation,
+    /**
+     * Treat every explicit content segment as commentary too.
+     *
+     * The assistant projector prefers a segment phase over the envelope, so a deferred answer must
+     * normalize both or it would still be presented as the Run's final answer.
+     */
+    forceCommentarySegments = false,
   ): Promise<{
     readonly messagesToAppend: RunExecutionCommit["messagesToAppend"];
     readonly privateReplayWrites?: NonNullable<RunExecutionCommit["privateReplayWrites"]>;
@@ -2170,13 +2428,20 @@ export class RunController {
     if (completion === undefined || completion.completeness === "INCOMPLETE") {
       return {
         messagesToAppend: [
-          createAssistantMessageAppend(
-            this.dependencies.messages,
-            run,
-            sourceStepId,
-            modelTurn,
-            phase,
-          ),
+          forceCommentarySegments
+            ? createDeferredAssistantMessageAppend(
+                this.dependencies.messages,
+                run,
+                sourceStepId,
+                modelTurn,
+              )
+            : createAssistantMessageAppend(
+                this.dependencies.messages,
+                run,
+                sourceStepId,
+                modelTurn,
+                phase,
+              ),
         ],
       };
     }
@@ -2206,6 +2471,7 @@ export class RunController {
         model: completion.model.model,
         api: completion.api,
       },
+      { forceCommentarySegments },
     );
     try {
       const write = await replayStore.prepare(prepared.identity, completion.payload);
@@ -2262,6 +2528,16 @@ export class RunController {
       return this.finalizeBudgetExceeded(current, budgetSettlement);
     }
 
+    // The user corrected the Run while this answer was being produced. The answer is real, so it
+    // is kept — as commentary — and the corrections get the next turn instead of the Run ending.
+    if (
+      result.kind === "FINAL_CANDIDATE" &&
+      current.run.completionContract === "NATURAL_V1" &&
+      hasUnassignedRunInputs(current)
+    ) {
+      return this.settleDeferredFinalCandidate(current, result, observation);
+    }
+
     const now = this.dependencies.clock.now();
     const snapshot = toAgentExecutionSnapshot(current);
     const effect: RunExecutionEffectResult = { kind: "AGENT", result };
@@ -2304,7 +2580,19 @@ export class RunController {
       ownership: { eventIds: this.dependencies.eventIdFactory },
     });
 
-    const committed = await this.commit(materialized);
+    let committed: RunExecutionCommitResult;
+    try {
+      committed = await this.commit(materialized);
+    } catch (error) {
+      // The last window: the inputs were accepted after this settlement was planned but before the
+      // completion transaction took the write lock. The frozen effect is still in hand, so the
+      // answer is settled again as commentary — never as a second provider request or a failure.
+      if (!(error instanceof RunInputPendingError) || result.kind !== "FINAL_CANDIDATE") {
+        throw error;
+      }
+      const raced = await this.load(before.run.id);
+      return this.settleDeferredFinalCandidate(raced, result, observation);
+    }
     this.notify(committed.events);
     return this.resultFromSnapshot(committed.snapshot);
   }
@@ -2784,6 +3072,22 @@ export class RunController {
         pendingDecision: previous.pendingDecision,
         receivedResults: previous.receivedResults,
         ...(previous.sourceStepId === undefined ? {} : { sourceStepId: previous.sourceStepId }),
+      };
+    }
+    // A steering turn that failed resends the same durable corrections. Falling back to `START`
+    // here would re-derive the original goal and drop the reason the turn ran at all.
+    if (previous?.type === "WAITING_STEERING") {
+      return {
+        mode: "STEERING",
+        messageIds: previous.messageIds,
+        sourceStepId: previous.sourceStepId,
+      };
+    }
+    if (previous?.type === "WAITING_RETRY" && previous.mode === "STEERING") {
+      return {
+        mode: "STEERING",
+        messageIds: previous.messageIds,
+        sourceStepId: previous.sourceStepId,
       };
     }
     return { mode: "START" };
@@ -4278,9 +4582,38 @@ export class RunController {
 }
 
 /** The retry provenance a new checkpoint carries forward. */
+/**
+ * The accepted inputs a prepared turn may honestly claim.
+ *
+ * ```text
+ * recorded        the input's canonical message exists but no step has included it
+ * selection       the durable message IDs the Context plan actually put in the request
+ * intersection    what may be marked ASSIGNED
+ * ```
+ *
+ * Without a reported selection nothing is claimed. A turn that *probably* included the message is
+ * not evidence that it did, and a false ASSIGNED would tell the user the model had seen a
+ * correction it never received.
+ */
+function assignedRunInputs(
+  snapshot: RunExecutionSnapshot,
+  selection: import("./run-model-turn-boundary.js").TurnBoundarySelection,
+  turnMessageIds: readonly string[] | undefined,
+): readonly import("@caelush/agent").RecordedRunInput[] {
+  const selected = selection.selectedMessageIds;
+  const included = new Set(selected ?? turnMessageIds ?? []);
+  if (included.size === 0) return [];
+  return (snapshot.runInputs?.recorded ?? []).filter((entry) => included.has(entry.messageId));
+}
+
 type WaitingRetryResumeContext =
   | {
       readonly mode: "START";
+    }
+  | {
+      readonly mode: "STEERING";
+      readonly messageIds: readonly string[];
+      readonly sourceStepId: StepId;
     }
   | {
       readonly mode: "TOOL_RESULTS";

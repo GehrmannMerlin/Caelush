@@ -75,6 +75,14 @@ export interface PendingAgentTurn {
   readonly expectedContinuationRevision: number | null;
   /** The durable Step that requested the Tools a `TOOL_RESULTS` turn answers, when there is one. */
   readonly sourceStepId?: StepId | undefined;
+  /**
+   * The durable user messages this turn's own input names, when the input names any.
+   *
+   * A steering continuation is the caller's explicit statement that these messages are what the
+   * turn is about, so they are the one association that may be recorded even when the Context plan
+   * does not report a selection.
+   */
+  readonly runInputMessageIds?: readonly string[] | undefined;
 }
 
 /** What actually happened around one durable boundary and one provider turn. */
@@ -129,7 +137,12 @@ export interface AgentModelTurnBoundaryOptions {
    * It is a callback rather than a store so the boundary holds no commit authority of its own: the
    * RunController remains the only object that commits a lifecycle transition.
    */
-  readonly openTurn: (turn: PendingAgentTurn) => Promise<void>;
+  readonly openTurn: (turn: PendingAgentTurn, selection: TurnBoundarySelection) => Promise<void>;
+}
+
+/** What the prepared request reports about the durable messages it carries. */
+export interface TurnBoundarySelection {
+  readonly selectedMessageIds?: readonly string[] | undefined;
 }
 
 /**
@@ -151,7 +164,11 @@ export function createAgentModelTurnBoundary(
         // is a replay, and replaying it would open a second Step and emit a second `llm.started`.
         if (observation.boundaryCommitted) return;
         assertBoundaryMatchesPendingTurn(input, options.pendingTurn());
-        await options.openTurn(options.pendingTurn());
+        await options.openTurn(options.pendingTurn(), {
+          ...(input.selectedMessageIds === undefined
+            ? {}
+            : { selectedMessageIds: input.selectedMessageIds }),
+        });
         observation.boundaryCommitted = true;
       } catch (error) {
         observation.boundaryError = error;

@@ -264,7 +264,11 @@ export {
   createProjectProfileProvider,
   toVerificationProjectProfile,
 } from "./verification-profile-provider.js";
-export { RunExecutionConflictError, RunExecutionInvariantError } from "./run-execution-store.js";
+export {
+  RunExecutionConflictError,
+  RunExecutionInvariantError,
+  RunInputPendingError,
+} from "./run-execution-store.js";
 export {
   deriveRunDeadline,
   isRunDeadlineExceeded,
@@ -352,10 +356,18 @@ export type {
 } from "./run-completion-store.js";
 export {
   createAssistantMessageAppend,
+  createDeferredAssistantMessageAppend,
   createExternalToolResultMessageAppend,
+  createSteeringMessageAppend,
   createToolResultMessageAppend,
   createUserMessageAppend,
 } from "./run-message-materializer.js";
+export {
+  frozenRunInputBatch,
+  hasUnassignedRunInputs,
+  planRunInputHandoff,
+} from "./run-input-handoff.js";
+export type { MaterializedRunInput, RunInputHandoffPlan } from "./run-input-handoff.js";
 export type { RunMessageAuthority, RunToolFeedbackProjection } from "./run-message-materializer.js";
 export {
   createRunCandidateBoundaryPlanner,

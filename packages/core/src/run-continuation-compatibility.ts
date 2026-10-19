@@ -94,29 +94,38 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
         reason: checkpoint.reason,
         replanCount: checkpoint.replanCount,
       };
-    case "WAITING_RETRY":
-      return checkpoint.mode === "START"
-        ? {
-            type: "WAITING_RETRY",
-            mode: "START",
-            runId: checkpoint.runId,
-            failedStepId: checkpoint.failedStepId,
-            attempt: checkpoint.attempt,
-            maxAttempts: checkpoint.maxAttempts,
-            nextAttemptAt: checkpoint.nextAttemptAt,
-            errorCode: checkpoint.errorCode,
-            ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
-          }
-        : {
-            type: "WAITING_RETRY",
+    case "WAITING_STEERING":
+      return {
+        type: "WAITING_STEERING",
+        runId: checkpoint.runId,
+        sourceStepId: checkpoint.sourceStepId,
+        messageIds: [...checkpoint.messageIds],
+      };
+    case "WAITING_RETRY": {
+      const base = {
+        type: "WAITING_RETRY" as const,
+        runId: checkpoint.runId,
+        failedStepId: checkpoint.failedStepId,
+        attempt: checkpoint.attempt,
+        maxAttempts: checkpoint.maxAttempts,
+        nextAttemptAt: checkpoint.nextAttemptAt,
+        errorCode: checkpoint.errorCode,
+        ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
+      };
+      switch (checkpoint.mode) {
+        case "START":
+          return { ...base, mode: "START" };
+        case "STEERING":
+          return {
+            ...base,
+            mode: "STEERING",
+            messageIds: [...checkpoint.messageIds],
+            sourceStepId: checkpoint.sourceStepId,
+          };
+        case "TOOL_RESULTS":
+          return {
+            ...base,
             mode: "TOOL_RESULTS",
-            runId: checkpoint.runId,
-            failedStepId: checkpoint.failedStepId,
-            attempt: checkpoint.attempt,
-            maxAttempts: checkpoint.maxAttempts,
-            nextAttemptAt: checkpoint.nextAttemptAt,
-            errorCode: checkpoint.errorCode,
-            ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
             pendingDecision: {
               ...checkpoint.pendingDecision,
               modelTurn: ensureAssistantItems(checkpoint.pendingDecision.modelTurn),
@@ -129,6 +138,10 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
               ? {}
               : { observationPolicy: checkpoint.observationPolicy }),
           };
+        default:
+          return assertNever(checkpoint, "canonical retry mode");
+      }
+    }
     default:
       return assertNever(checkpoint, "canonical continuation");
   }
@@ -227,29 +240,38 @@ export function toAgentContinuation(
         reason: checkpoint.reason,
         replanCount: checkpoint.replanCount,
       };
-    case "WAITING_RETRY":
-      return checkpoint.mode === "START"
-        ? {
-            type: "WAITING_RETRY",
-            mode: "START",
-            runId: checkpoint.runId,
-            failedStepId: checkpoint.failedStepId,
-            attempt: checkpoint.attempt,
-            maxAttempts: checkpoint.maxAttempts,
-            nextAttemptAt: checkpoint.nextAttemptAt,
-            errorCode: checkpoint.errorCode,
-            ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
-          }
-        : {
-            type: "WAITING_RETRY",
+    case "WAITING_STEERING":
+      return {
+        type: "WAITING_STEERING",
+        runId: checkpoint.runId,
+        sourceStepId: checkpoint.sourceStepId,
+        messageIds: [...checkpoint.messageIds],
+      };
+    case "WAITING_RETRY": {
+      const base = {
+        type: "WAITING_RETRY" as const,
+        runId: checkpoint.runId,
+        failedStepId: checkpoint.failedStepId,
+        attempt: checkpoint.attempt,
+        maxAttempts: checkpoint.maxAttempts,
+        nextAttemptAt: checkpoint.nextAttemptAt,
+        errorCode: checkpoint.errorCode,
+        ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
+      };
+      switch (checkpoint.mode) {
+        case "START":
+          return { ...base, mode: "START" };
+        case "STEERING":
+          return {
+            ...base,
+            mode: "STEERING",
+            messageIds: [...checkpoint.messageIds],
+            sourceStepId: checkpoint.sourceStepId,
+          };
+        case "TOOL_RESULTS":
+          return {
+            ...base,
             mode: "TOOL_RESULTS",
-            runId: checkpoint.runId,
-            failedStepId: checkpoint.failedStepId,
-            attempt: checkpoint.attempt,
-            maxAttempts: checkpoint.maxAttempts,
-            nextAttemptAt: checkpoint.nextAttemptAt,
-            errorCode: checkpoint.errorCode,
-            ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
             pendingDecision: {
               ...checkpoint.pendingDecision,
               modelTurn: ensureAssistantItems(checkpoint.pendingDecision.modelTurn),
@@ -262,6 +284,10 @@ export function toAgentContinuation(
               ? {}
               : { observationPolicy: checkpoint.observationPolicy }),
           };
+        default:
+          return assertNever(checkpoint, "persisted retry mode");
+      }
+    }
     default:
       return assertNever(checkpoint, "persisted continuation");
   }
