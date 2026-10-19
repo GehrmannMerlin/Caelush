@@ -13,6 +13,10 @@ import {
 } from "react";
 import { CornerDownLeft, LoaderCircle, Pause, Plus, Send } from "lucide-react";
 import type { WebSessionError, WebSubmissionState } from "../application/session-manager.js";
+import {
+  resolvePromptPrimaryAction,
+  type PromptPrimaryAction,
+} from "../application/composer-state.js";
 import type { ContextUsageProjection, AttachmentId, AttachmentOwner } from "@caelush/protocol";
 import { ContextUsageRing } from "./context-usage-ring.js";
 import type { AttachmentQueueItem } from "../application/attachment-manager.js";
@@ -59,43 +63,61 @@ export interface PromptComposerProps {
 }
 
 export interface PromptSubmitButtonProps {
+  readonly action?: PromptPrimaryAction | undefined;
   readonly disabled: boolean;
   readonly submission: WebSubmissionState;
   readonly modelReady?: boolean | undefined;
+  readonly onSteer?: (() => Promise<boolean> | void) | undefined;
   readonly onCancel?: (() => Promise<boolean> | void) | undefined;
   readonly cancelling?: boolean | undefined;
 }
 
 export function PromptSubmitButton(props: PromptSubmitButtonProps): ReactElement {
-  const canCancel = props.onCancel !== undefined;
-  const actionLabel = canCancel
-    ? props.cancelling === true
-      ? "正在取消任务"
-      : "停止任务"
-    : submissionLabel(props.submission);
+  const action = props.action ?? (props.onCancel === undefined ? "SEND" : "PAUSE");
+  const actionLabel =
+    action === "STEER"
+      ? "发送补充"
+      : action === "PAUSE"
+        ? props.cancelling === true
+          ? "正在取消任务"
+          : "停止任务"
+        : submissionLabel(props.submission);
 
   return createElement(
     "button",
     {
-      type: canCancel ? "button" : "submit",
+      type: action === "SEND" ? "submit" : "button",
       className: "prompt-submit-button prompt-submit-button--icon",
-      onClick: canCancel && props.cancelling !== true ? props.onCancel : undefined,
-      disabled: canCancel
-        ? props.cancelling === true
-        : props.disabled || props.modelReady === false,
+      onClick:
+        action === "STEER"
+          ? props.onSteer
+          : action === "PAUSE" && props.cancelling !== true
+            ? props.onCancel
+            : undefined,
+      disabled:
+        action === "PAUSE"
+          ? props.onCancel === undefined || props.cancelling === true
+          : props.disabled ||
+            (action === "STEER" ? props.onSteer === undefined : props.modelReady === false),
       "aria-label": actionLabel,
-      title: actionLabel,
+      title: action === "STEER" ? "发送补充（Enter）" : actionLabel,
     },
-    canCancel && props.cancelling !== true
-      ? createElement(Pause, { size: 17, strokeWidth: 2.2, "aria-hidden": true })
-      : props.submission === "IDLE" && props.cancelling !== true
-        ? createElement(Send, { size: 17, strokeWidth: 2.2, "aria-hidden": true })
-        : createElement(LoaderCircle, {
-            className: "prompt-submit-spinner",
-            size: 17,
-            strokeWidth: 2.2,
-            "aria-hidden": true,
-          }),
+    action === "STEER"
+      ? createElement(CornerDownLeft, {
+          size: 17,
+          strokeWidth: 2.2,
+          "aria-hidden": true,
+        })
+      : action === "PAUSE" && props.cancelling !== true
+        ? createElement(Pause, { size: 17, strokeWidth: 2.2, "aria-hidden": true })
+        : action === "SEND" && props.submission === "IDLE"
+          ? createElement(Send, { size: 17, strokeWidth: 2.2, "aria-hidden": true })
+          : createElement(LoaderCircle, {
+              className: "prompt-submit-spinner",
+              size: 17,
+              strokeWidth: 2.2,
+              "aria-hidden": true,
+            }),
   );
 }
 
@@ -212,34 +234,58 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
   }, [menuOpen]);
   const steer = props.steeringAvailable === true && props.onSteer !== undefined;
   const submitBlocked = props.submitDisabled === true;
-  const submit = useCallback(async () => {
-    if (props.disabled || props.draftLoading === true) return;
-    if (!steer && submitBlocked) return;
+  const primaryAction = resolvePromptPrimaryAction({
+    steeringAvailable: steer && props.cancelling !== true,
+    hasText: value.trim().length > 0,
+    canCancel: props.onCancel !== undefined,
+  });
+  const submitNewTask = useCallback(async () => {
+    if (
+      props.disabled ||
+      props.draftLoading === true ||
+      steer ||
+      submitBlocked
+    ) {
+      return;
+    }
     const submitted = value;
-    // A Run in progress routes Enter to the correction path; a new task while one is active would
-    // be a second Run the user did not ask for.
-    const accepted = steer ? await props.onSteer!(submitted) : await props.onSubmit(submitted);
+    const accepted = await props.onSubmit(submitted);
     // Only the version that was actually accepted is cleared. Text typed during the request — and
-    // an attachment draft, which this path never touched — stays exactly as it is.
+    // an attachment draft stays exactly as it is.
     if (accepted && latestValue.current === submitted) setValue("");
   }, [
     props.disabled,
     props.draftLoading,
     props.onSubmit,
-    props.onSteer,
     setValue,
     steer,
     submitBlocked,
     value,
   ]);
+  const submitRunInput = useCallback(async () => {
+    if (
+      props.disabled ||
+      props.draftLoading === true ||
+      props.cancelling === true ||
+      !steer ||
+      value.trim().length === 0
+    ) {
+      return;
+    }
+    const submitted = value;
+    const accepted = await props.onSteer!(submitted);
+    // A newer draft typed while the request was in flight must remain available for the next steer.
+    if (accepted && latestValue.current === submitted) setValue("");
+  }, [props.disabled, props.draftLoading, props.cancelling, props.onSteer, setValue, steer, value]);
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    void submit();
+    void submitNewTask();
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (!shouldSubmitPrompt(event)) return;
     event.preventDefault();
-    void submit();
+    if (primaryAction === "STEER") void submitRunInput();
+    else if (primaryAction === "SEND") void submitNewTask();
   };
   const addFiles = (files: readonly File[]) => {
     if (
@@ -376,36 +422,19 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
         "div",
         { className: "prompt-composer-right-controls" },
         props.modelPicker ?? null,
-        steer
-          ? createElement(
-              "button",
-              {
-                type: "button",
-                className: "prompt-submit-button prompt-submit-button--icon prompt-steer-button",
-                onClick: () => void submit(),
-                disabled:
-                  props.disabled || props.draftLoading === true || value.trim().length === 0,
-                "aria-label": "发送补充",
-                title: "发送补充（Enter）",
-              },
-              createElement(CornerDownLeft, { size: 17, strokeWidth: 2.2, "aria-hidden": true }),
-            )
-          : null,
-        // While a Run is in progress the primary button is the existing stop action: sending a
-        // correction and stopping the Run are separate, independently available decisions.
-        steer && props.onCancel === undefined
-          ? null
-          : createElement(PromptSubmitButton, {
-              disabled:
-                props.disabled ||
-                props.draftLoading === true ||
-                submitBlocked ||
-                props.attachmentSubmitBlockedReason !== undefined,
-              modelReady: props.modelReady,
-              submission: props.submission,
-              onCancel: props.onCancel,
-              cancelling: props.cancelling,
-            }),
+        createElement(PromptSubmitButton, {
+          action: primaryAction,
+          disabled:
+            props.disabled ||
+            props.draftLoading === true ||
+            (primaryAction === "SEND" &&
+              (submitBlocked || props.attachmentSubmitBlockedReason !== undefined)),
+          modelReady: props.modelReady,
+          submission: props.submission,
+          onSteer: primaryAction === "STEER" ? () => void submitRunInput() : undefined,
+          onCancel: primaryAction === "PAUSE" ? props.onCancel : undefined,
+          cancelling: props.cancelling,
+        }),
       ),
     ),
     menuOpen

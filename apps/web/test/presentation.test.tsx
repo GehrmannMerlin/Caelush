@@ -227,6 +227,48 @@ describe("Web presentation", () => {
     expect(html).toContain("lucide-pause");
   });
 
+  it("renders one steer action for nonempty active Run input", () => {
+    const html = renderToStaticMarkup(
+      <PromptComposer
+        disabled={false}
+        submission="ACTIVE"
+        draftText="先检查一下这一处实现。"
+        editable
+        steeringAvailable
+        onSteer={vi.fn(async () => true)}
+        onCancel={vi.fn(async () => true)}
+        onSubmit={vi.fn(async () => true)}
+      />,
+    );
+
+    expect((html.match(/class="prompt-submit-button/g) ?? []).length).toBe(1);
+    expect(html).toContain('aria-label="发送补充"');
+    expect(html).toContain("lucide-corner-down-left");
+    expect(html).not.toContain('aria-label="停止任务"');
+    expect(html).not.toContain("lucide-pause");
+  });
+
+  it("returns the active composer to pause when its guidance draft is cleared", () => {
+    const html = renderToStaticMarkup(
+      <PromptComposer
+        disabled={false}
+        submission="ACTIVE"
+        draftText=""
+        editable
+        steeringAvailable
+        onSteer={vi.fn(async () => true)}
+        onCancel={vi.fn(async () => true)}
+        onSubmit={vi.fn(async () => true)}
+      />,
+    );
+
+    expect((html.match(/class="prompt-submit-button/g) ?? []).length).toBe(1);
+    expect(html).toContain('aria-label="停止任务"');
+    expect(html).toContain("lucide-pause");
+    expect(html).not.toContain('aria-label="发送补充"');
+    expect(html).not.toContain("lucide-corner-down-left");
+  });
+
   it("routes the pause button click through the existing cancellation callback", () => {
     const onCancel = vi.fn(async () => true);
     const button = PromptSubmitButton({
@@ -238,6 +280,23 @@ describe("Web presentation", () => {
     void button.props.onClick?.();
 
     expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("routes the steer action only through the Run input callback", async () => {
+    const onSteer = vi.fn(async () => true);
+    const onCancel = vi.fn(async () => true);
+    const button = PromptSubmitButton({
+      action: "STEER",
+      disabled: false,
+      submission: "ACTIVE",
+      onSteer,
+      onCancel,
+    }) as unknown as { props: { onClick?: () => Promise<boolean> | void } };
+
+    await button.props.onClick?.();
+
+    expect(onSteer).toHaveBeenCalledOnce();
+    expect(onCancel).not.toHaveBeenCalled();
   });
 
   it("animates only the in-progress Run status icons", () => {

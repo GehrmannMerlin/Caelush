@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { shouldDisableComposerInteraction } from "../src/app.js";
-import { resolveComposerCapabilities } from "../src/application/composer-state.js";
+import {
+  resolveComposerCapabilities,
+  resolvePromptPrimaryAction,
+} from "../src/application/composer-state.js";
 
 /**
  * Composer capabilities.
@@ -122,5 +125,29 @@ describe("web composer interaction state", () => {
         controlMode: "NONE",
       }),
     ).toBe(true);
+  });
+
+  it("selects steer only for nonempty supported Run input", () => {
+    expect(
+      resolvePromptPrimaryAction({ steeringAvailable: true, hasText: true, canCancel: true }),
+    ).toBe("STEER");
+  });
+
+  it("returns to pause when Run input becomes empty", () => {
+    expect(
+      resolvePromptPrimaryAction({ steeringAvailable: true, hasText: false, canCancel: true }),
+    ).toBe("PAUSE");
+  });
+
+  it("keeps pause when Run input is unsupported", () => {
+    expect(
+      resolvePromptPrimaryAction({ steeringAvailable: false, hasText: true, canCancel: true }),
+    ).toBe("PAUSE");
+  });
+
+  it("selects normal send while idle", () => {
+    expect(
+      resolvePromptPrimaryAction({ steeringAvailable: false, hasText: false, canCancel: false }),
+    ).toBe("SEND");
   });
 });

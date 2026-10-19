@@ -34,6 +34,25 @@ export interface ComposerStateInput {
   readonly textEmpty?: boolean | undefined;
 }
 
+export type PromptPrimaryAction = "SEND" | "STEER" | "PAUSE";
+
+export interface PromptPrimaryActionInput {
+  readonly steeringAvailable: boolean;
+  readonly hasText: boolean;
+  readonly canCancel: boolean;
+}
+
+/** Keep the one composer action derived from input and Run capabilities, not from event handlers. */
+export function resolvePromptPrimaryAction({
+  steeringAvailable,
+  hasText,
+  canCancel,
+}: PromptPrimaryActionInput): PromptPrimaryAction {
+  if (steeringAvailable && hasText) return "STEER";
+  if (canCancel) return "PAUSE";
+  return "SEND";
+}
+
 /** A Run status the workbench may still send corrections to. */
 const STEERABLE_RUN_STATUSES = new Set(["RUNNING", "WAITING_APPROVAL", "WAITING_RESOURCE"]);
 
