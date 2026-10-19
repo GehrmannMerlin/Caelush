@@ -7493,6 +7493,17 @@ body {
   padding: 12px 0 4px;
 }
 
+.turn-presentation-process .turn-presentation-item--user {
+  width: fit-content;
+  max-width: min(88%, 680px);
+  align-self: flex-end;
+}
+
+.turn-presentation-process .turn-presentation-item--user .turn-presentation-user-bubble {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
 .turn-presentation-process .turn-presentation-item--commentary {
   margin: 0;
   padding: 0;
