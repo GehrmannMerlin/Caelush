@@ -13,6 +13,7 @@ import {
   answerTurn,
   eventTypes,
   makeRunD,
+  rejectedItem,
   stubToolBatches,
   stubToolTurnPipeline,
   toolResultItem,
@@ -239,6 +240,141 @@ describe("Phase 3D resource admission", () => {
     const types = eventTypes(h.notifications);
     expect(types).toContain("status.changed");
     expect(types.filter((type) => type === "status.changed")).toHaveLength(2);
+  });
+
+  it("advances a legacy NO_PROGRESS wait into a real model turn on one continue", async () => {
+    // Park the Run: the ledger already carries enough no-progress evidence and enough re-plans for the
+    // V1 discipline to ask for a human decision.
+    const ledger = resourceLedger({ consecutiveNoProgressTurns: 3, replanCount: 2 });
+    const batches = stubToolBatches([completeAnswer()]);
+    const h = harness3e({
+      run: makePolicyRun(
+        policy({
+          progress: {
+            windowTurns: 8,
+            noProgressTurnsBeforeReplan: 2,
+            replansBeforePause: 2,
+            identicalCallNudgeThreshold: 1,
+          },
+        }),
+      ),
+      script: (call) =>
+        call === 0 ? toolTurn([{ id: "call_a", name: "read_file" }]) : answerTurn("reconsidered"),
+      extra: { resourceGovernance: ledger.port, toolTurn: stubToolTurnPipeline(batches) },
+    });
+
+    const parked = await h.controller.start(h.store.snapshot.run.id);
+    expect(parked.status).toBe("WAITING_RESOURCE");
+    expect(h.turns).toHaveLength(1);
+    expect(batches.physicalExecutions).toBe(0);
+    const stepsBefore = h.allocatedSteps.length;
+
+    const continued = await h.controller.continueResourceGuard(h.store.snapshot.run.id);
+
+    // The point of the whole change: continuing produced a *new* model turn, not another visit to the
+    // same admission decision.
+    expect(h.turns.length).toBe(2);
+    expect(h.allocatedSteps.length).toBeGreaterThan(stepsBefore);
+    expect(continued.run.status).not.toBe("WAITING_RESOURCE");
+    // And nothing was dispatched on the way out: the pending calls were closed as not executed.
+    expect(batches.physicalExecutions).toBe(0);
+    expect(batches.calls).toHaveLength(0);
+
+    const closed = h.store.commits
+      .map((commit) =>
+        commit.continuation?.operation === "SET" ? commit.continuation.checkpoint : undefined,
+      )
+      .filter((checkpoint) => checkpoint?.type === "WAITING_TOOL_RESULTS")
+      .map((checkpoint) =>
+        checkpoint?.type === "WAITING_TOOL_RESULTS" ? checkpoint.receivedResults : undefined,
+      )
+      .filter((results) => results !== undefined);
+    const synthesized = closed.find((results) =>
+      results.some((message) => message.toolCallId === "call_a"),
+    );
+    expect(synthesized).toBeDefined();
+    expect(synthesized?.map((message) => message.toolCallId)).toEqual(["call_a"]);
+    expect(synthesized?.every((message) => message.isError)).toBe(true);
+    expect(JSON.stringify(synthesized)).toContain("Not executed");
+  });
+
+  it("treats a repeated continue as the same boundary", async () => {
+    const ledger = resourceLedger({ consecutiveNoProgressTurns: 3, replanCount: 2 });
+    const batches = stubToolBatches([completeAnswer()]);
+    const h = harness3e({
+      run: makePolicyRun(
+        policy({
+          progress: {
+            windowTurns: 8,
+            noProgressTurnsBeforeReplan: 2,
+            replansBeforePause: 2,
+            identicalCallNudgeThreshold: 1,
+          },
+        }),
+      ),
+      script: (call) =>
+        call === 0 ? toolTurn([{ id: "call_a", name: "read_file" }]) : answerTurn("reconsidered"),
+      extra: { resourceGovernance: ledger.port, toolTurn: stubToolTurnPipeline(batches) },
+    });
+
+    await h.controller.start(h.store.snapshot.run.id);
+    await h.controller.continueResourceGuard(h.store.snapshot.run.id);
+    const turnsAfterFirst = h.turns.length;
+    // A double click, a retried request or a reconnected client must not append a second set of
+    // results or start a second turn for the same boundary.
+    await h.controller.continueResourceGuard(h.store.snapshot.run.id);
+    expect(h.turns.length).toBe(turnsAfterFirst);
+    expect(batches.physicalExecutions).toBe(0);
+  });
+
+  it("records an autonomous correction as prepared, then delivered, never at detection", async () => {
+    // The V2 discipline: four identical schema rejections produce advice, and the fourth batch still
+    // runs. The advice is persisted as *prepared* at admission and becomes *delivered* only when a
+    // model request that carried it settles.
+    const ledger = resourceLedger();
+    const rejected = {
+      kind: "COMPLETED" as const,
+      items: [
+        rejectedItem({
+          externalCallId: "call_a",
+          toolName: "apply_patch",
+          content: "Arguments do not match the input schema: missing required patch.",
+        }),
+      ],
+    };
+    const batches = stubToolBatches([rejected, rejected, rejected, rejected, rejected]);
+    const h = harness3e({
+      run: makePolicyRun(
+        policy({
+          correctionVersion: "AUTONOMOUS_CORRECTION_V2",
+          progress: {
+            windowTurns: 8,
+            identicalCallNudgeThreshold: 2,
+            noProgressTurnsBeforeReplan: 3,
+            replansBeforePause: 2,
+          },
+        }),
+      ),
+      script: (call) => (call < 4 ? toolTurn([{ id: "call_a", name: "apply_patch" }]) : answerTurn()),
+      extra: { resourceGovernance: ledger.port, toolTurn: stubToolTurnPipeline(batches) },
+    });
+
+    const result = await h.controller.start(h.store.snapshot.run.id);
+
+    // Every one of the four batches reached the Tool Layer: V2 never refuses a batch on history.
+    expect(batches.physicalExecutions).toBe(4);
+    expect(result.status).toBe("TERMINAL");
+    // No human decision was requested at any point.
+    expect(h.store.commits.some((commit) => commit.run.status === "WAITING_RESOURCE")).toBe(false);
+    // Exactly one correction was delivered, and it was delivered by a *settled model request* — the
+    // ladder advanced from INPUT_CORRECTION to REVIEW_APPROACH, which only a delivery can do.
+    const semantic = ledger.current().semanticProgress;
+    expect(semantic?.active?.deliveredInterventions).toBe(1);
+    // Advice prepared by the last batch has no following request to carry it, so it is still pending —
+    // and it is the *next* rung, not a repeat of the one already delivered.
+    if (semantic?.correction !== undefined) {
+      expect(semantic.correction.stage).toBe("REVIEW_APPROACH");
+    }
   });
 
   it("hard-stops the batch as a budget refusal with the exact accounting", async () => {

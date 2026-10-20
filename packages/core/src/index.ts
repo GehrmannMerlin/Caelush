@@ -138,12 +138,16 @@ export type {
   ResourceProgressTurn,
 } from "./resource-progress-classifier.js";
 export {
-  acknowledgeResourceNudge,
   acknowledgeResourceReplan,
+  acknowledgeV1ResourceNudge,
   applyResourceProgressTurn,
   decideResourceSemanticIntervention,
+  deliveredInterventionsOf,
   emptyResourceSemanticProgress,
   findResourceProgressPattern,
+  LEGACY_RESOURCE_PROGRESS_POLICY,
+  recordResourceNudgeDelivery,
+  resourceProgressPolicyFrom,
   resourceSemanticSummary,
   RESOURCE_PROGRESS_MAX_REPLANS,
   RESOURCE_PROGRESS_NUDGE_AFTER,
@@ -152,6 +156,8 @@ export {
 } from "./resource-progress-projection.js";
 export type {
   ResourceActivePattern,
+  ResourceCorrectionStage,
+  ResourceProgressPolicy,
   ResourceSemanticDecision,
   ResourceSemanticProgress,
 } from "./resource-progress-projection.js";

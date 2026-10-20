@@ -89,6 +89,26 @@ export interface RunToolTurnObservation {
    * and nothing else, and re-deriving the number later would be a second accounting authority.
    */
   resourceReplanCount?: number | undefined;
+  /**
+   * The corrective intervention this admission prepared for the model.
+   *
+   * It is a *detection*, not a delivery: the status field says the Run decided to say something, and
+   * only the settlement of a model request that carried it can record that anything arrived. The
+   * distinction is the difference between "we meant to help" and "the model was helped", and the
+   * incident this replaces conflated them.
+   */
+  resourceCorrection?:
+    | {
+        readonly interventionId: string;
+        readonly stage: string;
+        readonly patternKey: string;
+        readonly toolName: string;
+        readonly code: string;
+        readonly occurrences: number;
+        readonly guidance: string;
+        readonly sourceStepId: string;
+      }
+    | undefined;
   /** Whether this turn reached the Tool Layer at all. */
   executionAttempted: boolean;
   /** The discriminant the Tool Layer produced, when it produced one. */

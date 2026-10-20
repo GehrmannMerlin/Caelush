@@ -43,12 +43,16 @@ import {
   resourceProgressTurn,
 } from "./resource-progress-classifier.js";
 import {
-  acknowledgeResourceNudge,
   acknowledgeResourceReplan,
+  acknowledgeV1ResourceNudge,
   applyResourceProgressTurn,
   decideResourceSemanticIntervention,
   emptyResourceSemanticProgress,
   findResourceProgressPattern,
+  recordResourceNudgeDelivery,
+  resourceProgressPolicyFrom,
+  type ResourceCorrectionStage,
+  type ResourceProgressPolicy,
   type ResourceSemanticProgress,
 } from "./resource-progress-projection.js";
 import { RunControllerInvariantError } from "./run-controller-errors.js";
@@ -333,6 +337,9 @@ async function executeRunToolTurn(
   } else {
     observation.resourceDecision = admission.kind;
     observation.resourceReplanCount = admission.replanCount;
+    if (admission.kind !== "HARD_STOP" && admission.correction !== undefined) {
+      observation.resourceCorrection = admission.correction;
+    }
   }
 
   if (admission.kind === "REPLAN") {
@@ -489,7 +496,12 @@ function callsOf(context: RunToolTurnContext): readonly ToolCallRequest[] {
  */
 type ResourceAdmission =
   | { readonly kind: undefined }
-  | { readonly kind: Exclude<RunToolResourceDecision, "HARD_STOP">; readonly replanCount: number }
+  | {
+      readonly kind: Exclude<RunToolResourceDecision, "HARD_STOP">;
+      readonly replanCount: number;
+      /** The corrective advice this admission produced, when it produced one. */
+      readonly correction?: RunToolCorrection | undefined;
+    }
   | {
       readonly kind: "HARD_STOP";
       readonly replanCount: number;
@@ -498,13 +510,26 @@ type ResourceAdmission =
       readonly limit: number;
     };
 
+/** A corrective intervention this admission decided to tell the model about. */
+export interface RunToolCorrection {
+  readonly interventionId: string;
+  readonly stage: ResourceCorrectionStage;
+  readonly patternKey: string;
+  readonly toolName: string;
+  readonly code: string;
+  readonly occurrences: number;
+  readonly guidance: string;
+  readonly sourceStepId: string;
+}
+
 /**
  * The strongest progress signal the Run has, without inventing a new lifecycle state.
  *
  * A semantic decision is evidence about *this* Tool, gathered from accepted results; the counter
  * based level is evidence about the Run as a whole. The stronger of the two wins, and the existing
  * governor still owns what each level means. `WAITING_RESOURCE` is only ever raised from semantic
- * evidence after the configured number of re-plans, so a long but productive Run cannot reach it.
+ * evidence under the V1 discipline, so a long but productive Run cannot reach it — and under V2 the
+ * semantic projection never produces it at all.
  */
 function semanticProgressLevel(
   decision: ReturnType<typeof decideResourceSemanticIntervention>,
@@ -526,7 +551,9 @@ function semanticProgressLevel(
  * A reminder that names the mistake instead of asking the model to reflect.
  *
  * It quotes only what the schema declared - the Tool, the stable rejection code, how many times it
- * happened and which fields were wrong - and states the part that matters most: nothing ran.
+ * happened and which fields were wrong - and states the part that matters most: nothing ran. The
+ * later rungs say what to change about the *approach*, because by then the fields have been named
+ * once and repeating that sentence would be noise.
  */
 function semanticGuidanceFor(
   decision: Extract<ReturnType<typeof decideResourceSemanticIntervention>, { kind: "NUDGE" }>,
@@ -535,12 +562,26 @@ function semanticGuidanceFor(
   const pattern =
     progress === undefined ? undefined : findResourceProgressPattern(progress, decision.patternKey);
   const fields = describeSemanticFields(pattern?.fields ?? []);
-  return (
-    `The last ${String(decision.occurrences)} calls to ${decision.toolName} were rejected before execution ` +
-    `with ${decision.code}: ${fields}. Nothing was executed. ` +
-    `Use the declared argument shape from the Tool guidance and change exactly these fields; ` +
-    `if the call still cannot be formed, choose a different approach.`
-  );
+  const counts = `The last ${String(decision.occurrences)} calls to ${decision.toolName} were rejected before execution with ${decision.code}: ${fields}. Nothing was executed.`;
+  switch (decision.stage) {
+    case "INPUT_CORRECTION":
+      return (
+        `${counts} Use the declared argument shape from the Tool guidance and change exactly these fields; ` +
+        `if the call still cannot be formed, choose a different approach.`
+      );
+    case "REVIEW_APPROACH":
+      return (
+        `${counts} The corrected argument shape has already been described and the same rejection continues. ` +
+        `Re-read the current goal and the step you are on, restate what you are trying to observe, and ` +
+        `choose a different call or a different Tool rather than resending this one.`
+      );
+    case "REBUILD_WORK_STATE":
+      return (
+        `${counts} This has now survived two specific corrections. Before the next call, update the plan ` +
+        `with what you currently understand, which requirement is still unmet, and the single next action — ` +
+        `then send one call that can actually be formed. Do not resend the rejected call.`
+      );
+  }
 }
 
 /** The newest accepted batch identity in a window, used as an episode boundary. */
@@ -573,6 +614,7 @@ async function admitResource(
   const repository = dependencies.resourceGovernance;
   if (policy === undefined || repository === undefined) return { kind: undefined };
 
+  const progressPolicy = resourceProgressPolicyFrom(policy);
   const state = await repository.createOrGet(context.run.id, {
     policyVersion: "adaptive-resource-governance.v1",
     mode: policy.mode,
@@ -581,6 +623,7 @@ async function admitResource(
   const noProgress = state.consecutiveNoProgressTurns;
   const semantic = state.semanticProgress;
   const semanticDecision = decideResourceSemanticIntervention(
+    progressPolicy,
     semantic ?? emptyResourceSemanticProgress(),
   );
   const progressLevel = semanticProgressLevel(
@@ -594,13 +637,27 @@ async function admitResource(
   const semanticGuidance =
     semanticDecision.kind === "NUDGE" ? semanticGuidanceFor(semanticDecision, semantic) : undefined;
   const decision = new ResourceGovernor(policy).evaluateToolBatch({
-    agentTurnsConsumed: context.state.usage.steps,
-    toolOperationsConsumed: state.toolOperationsConsumed,
+    cumulativeAgentTurns: context.state.usage.steps,
+    cumulativeToolOperations: state.toolOperationsConsumed,
+    turnsInLease: leaseDelta(context.state.usage.steps, state.leaseStartAgentTurns),
+    toolsInLease: leaseDelta(state.toolOperationsConsumed, state.leaseStartToolCalls),
     requestedToolCalls,
     progressLevel,
     replanCount: state.replanCount,
     currentLeaseEpoch: state.leaseEpoch,
     ...(semanticGuidance === undefined ? {} : { guidance: semanticGuidance }),
+    ...(semanticDecision.kind === "NUDGE"
+      ? { correctionStage: semanticDecision.stage }
+      : {}),
+  });
+  const correction = await recordCorrectionAtAdmission({
+    dependencies,
+    state,
+    semantic,
+    semanticDecision,
+    decision,
+    guidance: semanticGuidance,
+    sourceStepId: String(context.continuation.sourceStepId),
   });
   if (decision.kind === "REPLAN" && semanticDecision.kind === "REPLAN" && semantic !== undefined) {
     // The re-plan is being produced now, so this is the moment the episode advances. Counting it at
@@ -643,8 +700,91 @@ async function admitResource(
     case "RENEW_AND_ALLOW":
     case "REPLAN":
     case "WAIT_FOR_RESOURCE_DECISION":
-      return { kind: decision.kind, replanCount };
+      return {
+        kind: decision.kind,
+        replanCount,
+        ...(correction === undefined ? {} : { correction }),
+      };
   }
+}
+
+/**
+ * `cumulative - leaseStart`, floored at zero.
+ *
+ * A lease start that is somehow ahead of the cumulative count is a corrupt ledger, and refusing to go
+ * negative keeps the *lease* from wrapping into an immediate renewal. It cannot happen through the
+ * writers in this file; it is floored so that a corrupted row degrades into "this lease has not
+ * started spending yet" rather than into a renewal storm.
+ */
+function leaseDelta(cumulative: number, leaseStart: number): number {
+  return Math.max(0, cumulative - leaseStart);
+}
+
+/**
+ * Persist the corrective intervention this admission produced, once.
+ *
+ * ```text
+ * detected at admission   the guidance exists and is about to be offered
+ * delivered at settlement  a model request built from a Context carrying it settled
+ * ```
+ *
+ * Writing it here is what makes it *reachable*: the Run's Context authority reads this ledger on every
+ * turn, so the advice is in the next request instead of being a value a function returned and a caller
+ * dropped. Writing it only once — keyed by the intervention identity — keeps a recovered or retried
+ * admission from appending a second copy of the same advice.
+ */
+async function recordCorrectionAtAdmission(input: {
+  readonly dependencies: RunToolTurnDriverDependencies;
+  readonly state: ResourceGovernanceState;
+  readonly semantic: ResourceSemanticProgress | undefined;
+  readonly semanticDecision: ReturnType<typeof decideResourceSemanticIntervention>;
+  readonly decision: ReturnType<ResourceGovernor["evaluateToolBatch"]>;
+  readonly guidance: string | undefined;
+  readonly sourceStepId: string;
+}): Promise<RunToolCorrection | undefined> {
+  if (input.semanticDecision.kind !== "NUDGE" || input.guidance === undefined) return undefined;
+  // Only an admission that actually offers the advice records it. A hard stop, a wait or a re-plan
+  // dispatched nothing, and recording advice for a batch that never ran would describe work nobody did.
+  if (input.decision.kind !== "ALLOW_WITH_NUDGE") return undefined;
+  const decision = input.semanticDecision;
+  const interventionId = [
+    decision.patternKey,
+    decision.stage,
+    String(decision.deliveredInterventions),
+    input.sourceStepId,
+  ].join(":");
+  const correction: RunToolCorrection = Object.freeze({
+    interventionId,
+    stage: decision.stage,
+    patternKey: decision.patternKey,
+    toolName: decision.toolName,
+    code: decision.code,
+    occurrences: decision.occurrences,
+    guidance: input.guidance,
+    sourceStepId: input.sourceStepId,
+  });
+  const semantic = input.semantic;
+  if (semantic === undefined) return correction;
+  if (semantic.correction?.interventionId === interventionId) return correction;
+  await updateResourceState(input.dependencies, input.state, {
+    ...input.state,
+    semanticProgress: Object.freeze({
+      ...semantic,
+      correction: {
+        interventionId,
+        stage: decision.stage,
+        patternKey: decision.patternKey,
+        toolName: decision.toolName,
+        code: decision.code,
+        occurrences: decision.occurrences,
+        guidance: input.guidance,
+        sourceStepId: input.sourceStepId,
+      },
+    }),
+    revision: input.state.revision + 1,
+    updatedAt: input.dependencies.clock.now(),
+  });
+  return correction;
 }
 
 /* --------------------------------------------------------------- outcomes */
@@ -998,6 +1138,7 @@ export async function recordRunToolTurnProgress(input: {
   const repository = input.dependencies.resourceGovernance;
   const policy = input.facts.run.resourcePolicy;
   if (repository === undefined || policy === undefined) return;
+  const progressPolicy = resourceProgressPolicyFrom(policy);
   const current = await repository.createOrGet(input.facts.run.id, {
     policyVersion: "adaptive-resource-governance.v1",
     mode: policy.mode,
@@ -1022,16 +1163,21 @@ export async function recordRunToolTurnProgress(input: {
     turn === undefined
       ? current.semanticProgress
       : applyResourceProgressTurn(
+          progressPolicy,
           current.semanticProgress ?? emptyResourceSemanticProgress(),
           turn,
         );
-  const decision = decideResourceSemanticIntervention(semantic ?? emptyResourceSemanticProgress());
-  // A reminder is acknowledged when it is recorded, so the next batch is not told the same thing
-  // again. A re-plan is acknowledged where it is actually produced - at admission - because until
-  // then no re-plan has happened.
+  const decision = decideResourceSemanticIntervention(
+    progressPolicy,
+    semantic ?? emptyResourceSemanticProgress(),
+  );
+  // Under V1 a reminder is acknowledged when it is recorded, because the counter *is* the reminder
+  // state and V1 has no delivery channel of its own. Under V2 the ladder advances only when a model
+  // request that carried the advice settles — so recording a result here must leave it alone, or the
+  // same detection would be recorded as a delivery before it was ever delivered.
   const withAcknowledgement =
-    decision.kind === "NUDGE" && semantic !== undefined
-      ? acknowledgeResourceNudge(semantic)
+    decision.kind === "NUDGE" && semantic !== undefined && progressPolicy.correctionVersion === "V1"
+      ? acknowledgeV1ResourceNudge(semantic)
       : semantic;
 
   const now = input.dependencies.clock.now();
@@ -1091,6 +1237,47 @@ export async function recordRunToolTurnReplan(input: {
     ...current,
     replanCount: current.replanCount + 1,
     resourceGuardState: "REPLAN_REQUIRED",
+    revision: current.revision + 1,
+    updatedAt: input.dependencies.clock.now(),
+  });
+}
+
+/**
+ * Record that one model turn settled with a corrective intervention in its Context.
+ *
+ * ```text
+ * prepared at admission   the advice is in the ledger, and the next Context carries it
+ * delivered here          a model result bound to a Context that carried it committed
+ * ```
+ *
+ * It runs **after** the assistant message is durable, and the ordering is deliberate: a request that
+ * failed, was cancelled or never started did not deliver anything, and advancing the ladder for it
+ * would spend an escalation step on a message the model never saw. The write is idempotent by
+ * intervention identity and fails in the safe direction — if it is lost, the same advice is offered
+ * again rather than silently retired.
+ *
+ * The Step check is what makes "this request" precise: the correction was prepared from the evidence of
+ * Step S, so only a *later* Step's settlement can be the request that carried it. A settlement of S
+ * itself (which cannot happen after admission, but is cheap to exclude) is not a delivery.
+ */
+export async function recordRunResourceCorrectionDelivery(input: {
+  readonly dependencies: RunToolTurnDriverDependencies;
+  readonly run: AgentRun;
+  readonly settledStepId: string;
+}): Promise<void> {
+  const repository = input.dependencies.resourceGovernance;
+  const policy = input.run.resourcePolicy;
+  if (repository === undefined || policy === undefined) return;
+  const current = await repository.get(input.run.id);
+  if (current === null) return;
+  const semantic = current.semanticProgress;
+  const correction = semantic?.correction;
+  if (semantic === undefined || correction === undefined) return;
+  if (correction.sourceStepId === input.settledStepId) return;
+  if (correction.guidance.length === 0) return;
+  await updateResourceState(input.dependencies, current, {
+    ...current,
+    semanticProgress: recordResourceNudgeDelivery(semantic, correction.interventionId),
     revision: current.revision + 1,
     updatedAt: input.dependencies.clock.now(),
   });
