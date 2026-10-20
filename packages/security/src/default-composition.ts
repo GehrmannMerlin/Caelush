@@ -258,15 +258,18 @@ function isValidCodingToolMetadata(
   resolved: ResolvedAgentTool,
 ): boolean {
   const runtimeKinds = security.runtimeRequirements.runtimeKinds;
-  return (
-    resolved.tool.name.length > 0 &&
-    resolved.tool.description.length > 0 &&
-    security.requiredCapabilities.length > 0 &&
-    Array.isArray(runtimeKinds) &&
-    runtimeKinds.length > 0 &&
-    runtimeKinds.every((kind): kind is string => typeof kind === "string") &&
-    runtimeKinds.includes("local")
-  );
+  if (resolved.tool.name.length === 0 || resolved.tool.description.length === 0) return false;
+  if (!Array.isArray(runtimeKinds)) return false;
+  if (!runtimeKinds.every((kind): kind is string => typeof kind === "string")) return false;
+  // A Tool that touches the host must declare what it needs, and how it reaches it.
+  if (security.requiredCapabilities.length > 0) {
+    return runtimeKinds.length > 0 && runtimeKinds.includes("local");
+  }
+  // A Tool that declares no capability is inert by construction: it cannot read, write, execute or
+  // signal anything, so it needs no runtime either. Declaring "nothing" explicitly is the opposite
+  // of an omission - an empty capability list with a runtime requirement, or the reverse, is refused
+  // above and below.
+  return runtimeKinds.length === 0;
 }
 
 export type SecureDispatcherDependencySummary = {

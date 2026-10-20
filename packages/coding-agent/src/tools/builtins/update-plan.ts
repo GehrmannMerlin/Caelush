@@ -1,5 +1,6 @@
 import type { CodingToolDefinition } from "../coding-tool-definition.js";
 import { UPDATE_PLAN_PROMPT_SNIPPET } from "../prompt/prompt-snippets.js";
+import { asOverlaySecurityFactsProjector } from "./result.js";
 import { defineCodingTool } from "./define-coding-tool.js";
 import { errorResult, successResult, type AgentToolResult } from "./result.js";
 
@@ -153,6 +154,14 @@ export function createUpdatePlanTool(): CodingToolDefinition {
       requiredCapabilities: [],
       runtimeRequirements: { runtimeKinds: [] },
     },
+    // The projector is present because every Tool that reaches admission must describe its own
+    // effects; this one has none. Declaring "nothing is accessed" is a fact, not an omission, and it
+    // keeps the host's coverage self-check meaningful for the Tools that really do touch the host.
+    securityFactsProjector: asOverlaySecurityFactsProjector(() => ({
+      resourceAccesses: [],
+      secretScanInputs: [],
+      structuralPreview: { kind: "GENERIC", purpose: "PLAN" },
+    })),
     promptSnippet: UPDATE_PLAN_PROMPT_SNIPPET,
   };
 }

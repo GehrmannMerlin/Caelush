@@ -492,9 +492,11 @@ describe("default Tool set fidelity", () => {
       expect(typeof definition.tool.execute).toBe("function");
       expect(definition.tool.executionMode).toBe("SEQUENTIAL");
       expect(definition.security.riskLevel).toMatch(/^(?:LOW|MEDIUM|HIGH|CRITICAL)$/);
+      // Every Tool describes its own effects, including the ones that have none: a missing
+      // projector is indistinguishable from an unanalysed Tool at the Security boundary.
+      expect(definition.securityFactsProjector, definition.tool.name).toBeDefined();
       if (definition.security.requiredCapabilities.length === 0) {
-        // A Tool with no capability cannot be approval-gated and must not pretend otherwise: it
-        // carries no effect projector, because there is no effect to project.
+        // A Tool with no capability cannot be approval-gated and must not pretend otherwise.
         expect(definition.effectProjector, definition.tool.name).toBeUndefined();
       }
       expect(definition.promptSnippet?.length ?? 0).toBeGreaterThan(0);
@@ -571,15 +573,11 @@ describe("default Tool set fidelity", () => {
     expect(byName.get("git_diff")?.effectProjector).toBeUndefined();
   });
 
-  it("carries a security-facts projector for every capability-bearing Tool", () => {
-    // The Security gate is handed a Tool's facts; a Tool without a projector would be opaque to the
-    // input-aware policy, which is the one outcome that must never happen for a Tool that can touch
-    // the host. A Tool that declares no capability has no such facts to project.
+  it("carries a security-facts projector for every default Tool", () => {
+    // The Security gate is handed a Tool's facts. A Tool without a projector is opaque to the
+    // input-aware policy, and "it cannot do anything" is itself a fact that has to be declared
+    // rather than inferred from a missing field.
     for (const definition of createDefaultCodingTools(defaultOperations())) {
-      if (definition.security.requiredCapabilities.length === 0) {
-        expect(definition.securityFactsProjector, definition.tool.name).toBeUndefined();
-        continue;
-      }
       expect(definition.securityFactsProjector, definition.tool.name).toBeDefined();
     }
   });
