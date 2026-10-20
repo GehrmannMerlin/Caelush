@@ -1222,3 +1222,13 @@ export type {
   PrivateReplayStorePort,
   ReplayProtectionPort,
 } from "./messages/private-replay.js";
+
+export {
+  assertToolResultPruningPolicy,
+  DEFAULT_TOOL_RESULT_PRUNING,
+  omissionMarker,
+  PRUNED_TOOL_RESULT_PREFIX,
+  pruneSettledToolResult,
+  type ToolResultPruningPolicy,
+  type ToolResultPruningStats,
+} from "./context/index.js";

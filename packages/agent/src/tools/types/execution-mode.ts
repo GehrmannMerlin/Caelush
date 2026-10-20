@@ -5,14 +5,13 @@
  * export type ToolExecutionMode = "SEQUENTIAL" | "PARALLEL_SAFE";
  * ```
  *
- * Tool System V2 freezes this discriminant on `AgentTool` and freezes the behaviour that comes with
- * it: **the first migration wave executes every batch sequentially.** `PARALLEL_SAFE` is a declared
- * future capability, not an enabled one. Even when a Tool declares it, the scheduler keeps running
- * it in order until parallel admission, approval-in-mixed-batch, per-invocation settlement and file
- * mutation conflict strategy are frozen.
+ * `PARALLEL_SAFE` declares that a Tool reads without mutating shared workspace state. It is only a
+ * scheduling capability: the host must opt into bounded parallel windows, the approval path must be
+ * known not to pause on an approval, and the batch must contain consecutive Tools with this mode.
+ * Otherwise the canonical batch coordinator keeps the calls sequential.
  *
- * Declaring the type now is what lets a *later* round enable concurrency without touching the Tool
- * contract; enabling it now would change execution semantics inside a structural migration.
+ * The durable invocation lifecycle and result order remain unchanged when a host enables those
+ * windows.
  */
 export type ToolExecutionMode = "SEQUENTIAL" | "PARALLEL_SAFE";
 

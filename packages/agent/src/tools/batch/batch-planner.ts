@@ -55,8 +55,9 @@ export interface PlannableToolCall {
  * V2 first implementation = sequential scheduler
  * ```
  *
- * Every call is planned in its original order, and there is no branch that could produce any other
- * plan. A Tool's declared `executionMode` is read only to report it.
+ * This is the historical sequential fallback used when a host does not opt into bounded windows. A
+ * Tool's declared `executionMode` is read only to report it here; enabled windows are handled by the
+ * separate private parallel scheduler.
  */
 export function planSequentialToolBatch(
   calls: readonly PlannableToolCall[],

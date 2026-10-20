@@ -40,7 +40,7 @@ describe("read_file target builtin", () => {
 
     expect(tool.name).toBe("read_file");
     expect(tool.description).toBe("Read workspace text.");
-    expect(tool.executionMode).toBe("SEQUENTIAL");
+    expect(tool.executionMode).toBe("PARALLEL_SAFE");
     expect(tool.label).toBe("Read File");
     expect(tool.inputSchema).toEqual({
       type: "object",

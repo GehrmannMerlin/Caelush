@@ -48,6 +48,7 @@ import {
   startAgentState,
 } from "./agent-state.js";
 import { cancelAgentStep, completeAgentStep, failAgentStep } from "./agent-step.js";
+import { classifyInterruptedStep } from "./interrupted-step-recovery.js";
 import { normalizeToolResultBatch } from "./agent-tool-results.js";
 import { defaultObservationPolicy } from "./agent-tool-batch.js";
 import {
@@ -222,6 +223,15 @@ const STALE_STEP_ERROR = {
   phase: "RUNTIME" as const,
 };
 
+/**
+ * How many interrupted-Step re-issues one Run gets per daemon lifetime.
+ *
+ * A provider turn that produced no durable output may still have been billed, so a replay is a
+ * deliberate, bounded exception rather than the default. Two covers "the process died once and then
+ * the machine slept"; more than that is a crash loop, and the fail-closed settlement is correct.
+ */
+const MAX_INTERRUPTED_STEP_REISSUES = 2;
+
 /** What one driven Tool directive produced. Exactly one arm is set. */
 type ToolBatchDirectiveExecution =
   | { readonly result: ToolTurnResult; readonly observation: RunToolTurnObservation }
@@ -302,6 +312,14 @@ function unresolvedCompletionModel(ref: AgentRun["model"]): import("@caelush/ai"
 
 export class RunController {
   private readonly activeRuns = new Set<RunId>();
+  /**
+   * How many times this controller has re-issued an interrupted Step for one Run.
+   *
+   * Deliberately in-memory: the budget exists to stop a crash loop *within one daemon lifetime*,
+   * not to be a durable fact about the Run. Two is enough to survive a transient restart and small
+   * enough that a deterministic crash cannot turn into unbounded provider spend.
+   */
+  private readonly interruptedStepReissues = new Map<RunId, number>();
   private shuttingDown = false;
   private readonly scopes: RunExecutionScopeRegistry;
   private readonly deadlineRegistry: RunDeadlineRegistry;
@@ -3642,6 +3660,23 @@ export class RunController {
     if (snapshot.state === undefined || snapshot.activeStep === undefined) {
       throw new RunControllerInputError("stale Step recovery requires Run, State, and Step");
     }
+    /*
+     * Two different failures used to share one settlement:
+     *
+     * ```text
+     * the attempt produced nothing durable   → resend the same turn (bounded)
+     * the attempt produced a decision/tools  → fail closed; the world may have changed
+     * ```
+     *
+     * `classifyInterruptedStep` owns the first question, because it is a statement about durable
+     * facts rather than about this controller. The second settlement below is unchanged.
+     */
+    if (
+      classifyInterruptedStep(snapshot) === "REPLAY_SAFE" &&
+      this.claimInterruptedStepReissue(snapshot.run.id)
+    ) {
+      return this.reissueInterruptedStep(snapshot);
+    }
     const now = this.dependencies.clock.now();
     const failedStep = failAgentStep(snapshot.activeStep, now);
     const settled = settleAgentStepState(snapshot.state, { stepId: snapshot.activeStep.id, now });
@@ -3664,6 +3699,52 @@ export class RunController {
     });
     this.notify(commit.events);
     return this.resultFromSnapshot(commit.snapshot);
+  }
+
+  /**
+   * A restart interrupted a Step that produced **no durable output**.
+   *
+   * ```text
+   * settle the attempt as FAILED     one provider attempt really was made
+   * keep the Run RUNNING             the Run itself did nothing wrong
+   * clear currentStepId              the next Step gets the next sequence
+   * drive again                      the same conversation is resent, unchanged
+   * ```
+   *
+   * Nothing is appended to the conversation: no assistant record exists for the interrupted Step,
+   * so the next turn's Context is byte-identical to the one that was lost. This is what makes the
+   * replay safe — and what distinguishes it from the fail-closed path, where an assistant record
+   * (and possibly Tool calls) already depend on the attempt.
+   */
+  private async reissueInterruptedStep(
+    snapshot: RunExecutionSnapshot,
+  ): Promise<RunControllerResult> {
+    if (snapshot.state === undefined || snapshot.activeStep === undefined) {
+      throw new RunControllerInputError("stale Step recovery requires Run, State, and Step");
+    }
+    const now = this.dependencies.clock.now();
+    const failedStep = failAgentStep(snapshot.activeStep, now);
+    const state = settleAgentStepState(snapshot.state, { stepId: snapshot.activeStep.id, now });
+    const run = AgentRunSchema.parse({ ...snapshot.run, currentStepId: undefined });
+    const commit = await this.commit({
+      run,
+      state,
+      expectedStateRevision: snapshot.stateRevision ?? null,
+      expectedContinuationRevision: snapshot.continuationRevision ?? null,
+      stepWrites: [{ operation: "UPDATE", step: failedStep }],
+      messagesToAppend: [],
+      events: [],
+    });
+    this.notify(commit.events);
+    return this.driveRunExecutionLocked(commit.snapshot, "RECOVER");
+  }
+
+  /** Claim one bounded re-issue for this Run; `false` means the budget is spent. */
+  private claimInterruptedStepReissue(runId: RunId): boolean {
+    const used = this.interruptedStepReissues.get(runId) ?? 0;
+    if (used >= MAX_INTERRUPTED_STEP_REISSUES) return false;
+    this.interruptedStepReissues.set(runId, used + 1);
+    return true;
   }
 
   private async load(runId: RunId): Promise<RunExecutionSnapshot> {

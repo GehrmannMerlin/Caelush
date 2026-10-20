@@ -1,3 +1,4 @@
+import { createStepId } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 
 import type { ModelDescriptor } from "@caelush/ai";
@@ -330,7 +331,7 @@ describe("Phase 7D ContextMaterializer", () => {
     });
     const toolResultIndex = projected.findIndex((message) => message.role === "tool");
     const deltaIndex = projected.findIndex((message) =>
-      message.content.includes("after complete tool batch"),
+      JSON.stringify(message.content).includes("after complete tool batch"),
     );
 
     expect(projected[toolResultIndex - 1]).toMatchObject({ role: "assistant" });
@@ -344,7 +345,7 @@ describe("Phase 7D ContextMaterializer", () => {
       "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a",
       "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b",
       "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9c",
-    ];
+    ] as const;
     const messages = [
       ...Array.from({ length: 8 }, (_, index) =>
         userMessage({
@@ -432,5 +433,103 @@ describe("Phase 7D ContextMaterializer", () => {
       content: "reprojected recovery content",
     });
     expect(reprojectCalls).toBe(1);
+  });
+});
+
+describe("settled Tool result pruning", () => {
+  const policy = { maxBytes: 8, headBytes: 2, tailBytes: 2 };
+
+  /**
+   * The shared fixture gives every message the same `sourceStepId`, which is exactly the "active step"
+   * case. A settled result is one produced by an **earlier** step, so the fixture is re-pointed here
+   * rather than duplicating a whole prepared Context.
+   */
+  function withSettledToolResult() {
+    const base = prepared();
+    return {
+      ...base,
+      conversationMessages: base.conversationMessages.map((stored, index) =>
+        index === 3
+          ? { ...stored, message: { ...stored.message, sourceStepId: createStepId() } }
+          : stored,
+      ),
+    } as PreparedAgentContext;
+  }
+
+  it("prunes a Tool result from an earlier step and leaves the active step alone", async () => {
+    const materializer = createContextMaterializer({
+      projectors: createStandardAgentMessageProjectorRegistry(),
+      tokenEstimator: createUtf8HeuristicTokenEstimator(),
+      toolResultPruning: policy,
+    });
+
+    const messages = await materializer.materialize({
+      prepared: withSettledToolResult(),
+      model: MODEL,
+      signal: new AbortController().signal,
+    });
+
+    const toolMessages = messages.filter((message) => message.role === "tool");
+    expect(toolMessages).toHaveLength(1);
+    expect(String(toolMessages[0]!.content)).toContain("[... ");
+  });
+
+  it("never prunes a result produced by the active step", async () => {
+    const materializer = createContextMaterializer({
+      projectors: createStandardAgentMessageProjectorRegistry(),
+      tokenEstimator: createUtf8HeuristicTokenEstimator(),
+      toolResultPruning: policy,
+    });
+
+    // The unmodified fixture: every message belongs to the step the model is still working on.
+    const messages = await materializer.materialize({
+      prepared: prepared(),
+      model: MODEL,
+      signal: new AbortController().signal,
+    });
+
+    const toolMessages = messages.filter((message) => message.role === "tool");
+    expect(toolMessages).toHaveLength(1);
+    expect(String(toolMessages[0]!.content)).toBe("tool output");
+  });
+
+  it("changes nothing when the policy is not configured", async () => {
+    const materializer = createContextMaterializer({
+      projectors: createStandardAgentMessageProjectorRegistry(),
+      tokenEstimator: createUtf8HeuristicTokenEstimator(),
+    });
+
+    const messages = await materializer.materialize({
+      prepared: withSettledToolResult(),
+      model: MODEL,
+      signal: new AbortController().signal,
+    });
+
+    const toolMessages = messages.filter((message) => message.role === "tool");
+    expect(String(toolMessages[0]!.content)).toBe("tool output");
+  });
+
+  it("reports what it pruned without letting the observer change the Context", async () => {
+    const stats: { prunedMessages: number; omittedBytes: number }[] = [];
+    const materializer = createContextMaterializer({
+      projectors: createStandardAgentMessageProjectorRegistry(),
+      tokenEstimator: createUtf8HeuristicTokenEstimator(),
+      toolResultPruning: policy,
+      onToolResultsPruned: (value) => {
+        stats.push(value);
+        throw new Error("observer failure must be ignored");
+      },
+    });
+
+    const messages = await materializer.materialize({
+      prepared: withSettledToolResult(),
+      model: MODEL,
+      signal: new AbortController().signal,
+    });
+
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!.prunedMessages).toBe(1);
+    expect(stats[0]!.omittedBytes).toBeGreaterThan(0);
+    expect(messages.some((message) => String(message.content).includes("[... "))).toBe(true);
   });
 });

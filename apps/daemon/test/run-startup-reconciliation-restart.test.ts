@@ -44,8 +44,7 @@ import { testRunMessageAuthority } from "../../../packages/core/test/support/run
  *
  * What must hold afterwards is the whole point of §27:
  *
- * - a Run a dead generation left `RUNNING` is *settled*, never permanently `RUNNING`;
- * - the stale provider Step is not resent — recovery performs **zero** provider turns;
+ * - a Run a dead generation left `RUNNING` with no durable model output is safely re-issued once;
  * - a stale side-effectful Tool is not replayed — the boundary still holds the *same* unanswered
  *   tool requests, so a tool effect can never be executed twice;
  * - a terminal Run is never reopened;
@@ -81,6 +80,8 @@ function makeRun(
       expectedVersion: 1,
       createdAt: new Date(options.createdAt).toISOString(),
     }),
+    contextBudgetPolicy: { version: "LEGACY_FULL_OUTPUT_V1" },
+    ...(options.status === "COMPLETED" ? {} : { completionContract: "NATURAL_V1" }),
     limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 1000 },
     createdAt: createTimestampMs(options.createdAt),
     ...(options.status === undefined || options.status === "PENDING"
@@ -142,7 +143,7 @@ async function waitUntil(
 }
 
 describe("Daemon startup stale-Run reconciliation across a real SQLite restart", () => {
-  it("settles a mid-turn Run, never resends a stale provider turn or Tool, and never reopens or auto-starts a Run", async () => {
+  it("reissues an output-free stale Step once, preserves Tool boundaries, and never reopens or auto-starts a Run", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-startup-reconcile-"));
     await mkdir(path.join(directory, "project"));
 
@@ -204,11 +205,11 @@ describe("Daemon startup stale-Run reconciliation across a real SQLite restart",
 
     // ── generation 2 ────────────────────────────────────────────────────────────────────────────
     const second = await openDatabase(directory);
-    // An executor that refuses every turn: if recovery re-opened a provider turn, `callCount` would
-    // be non-zero and the assertion below would fail.
-    const recoveryExecutor = fakeFrozenModelTurnExecutor(() => {
-      throw new Error("recovery must not open a provider turn");
-    });
+    // The output-free Step is replay-safe: recovery may open the provider turn once, and it can
+    // finish the Run normally. The Tool-boundary Run must not send another provider turn.
+    const recoveryExecutor = fakeFrozenModelTurnExecutor(() =>
+      modelTurnResult({ text: "recovered", finishReason: "STOP" }),
+    );
     const recoveryController = createController(second, recoveryExecutor);
     const supervisor = new RunExecutionSupervisor({
       runs: second.runs,
@@ -227,13 +228,13 @@ describe("Daemon startup stale-Run reconciliation across a real SQLite restart",
     expect(summary.noopTerminal).toEqual([]);
     expect(summary.failed).toEqual([]);
 
-    // §27: a stale provider Step is never resent, and a stale side-effectful Tool is never replayed.
-    expect(recoveryExecutor.callCount()).toBe(0);
+    // The provider Step with no durable assistant output is re-issued exactly once. The Run parked
+    // at its Tool boundary remains parked and does not add a provider call.
+    expect(recoveryExecutor.callCount()).toBe(1);
 
-    // §27: the Run the dead generation left RUNNING is settled — it is not permanently RUNNING, and
-    // the stale Step is failed closed rather than resent.
+    // The stale Step is recorded as failed before the next Step completes the Run.
     const settledMidTurn = await second.runs.get(runMidTurn.id);
-    expect(settledMidTurn?.status).toBe("FAILED");
+    expect(settledMidTurn?.status).toBe("COMPLETED");
     expect(settledMidTurn?.currentStepId).toBeUndefined();
     expect((await second.steps.get(staleStepId))?.status).toBe("FAILED");
 

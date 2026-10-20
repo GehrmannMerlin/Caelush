@@ -1145,10 +1145,10 @@ describe("production ADVANCE_AGENT settlement", () => {
     expect(h.notifications.map((event) => event.type)).not.toContain("run.failed");
   });
 
-  it("recovers a stale RUNNING Step after a crash without replaying the provider", async () => {
-    // Simulate the crash the boundary exists for: the open-Step commit succeeded, then the process
-    // stopped before any effect settlement. A fresh controller must find the stale Step, settle it,
-    // and never resend the turn.
+  it("replays a stale RUNNING Step that produced no durable output", async () => {
+    // The crash the boundary exists for: the open-Step commit succeeded, then the process stopped
+    // before any effect settlement. Nothing about that attempt is durable, so recovery settles the
+    // Step and re-issues the same turn instead of destroying the Run.
     const run = makeRun({ status: "RUNNING", startedAt: createTimestampMs(1) });
     const step = {
       id: "stp_0195f3a0-0000-7000-8000-0000000000ff" as StepId,
@@ -1188,12 +1188,63 @@ describe("production ADVANCE_AGENT settlement", () => {
 
     const result = await h.controller.recover(run.id);
 
-    expect(result.run.status).toBe("FAILED");
+    // The interrupted attempt is settled, never left open...
     expect(h.store.steps.get(step.id)).toMatchObject({ status: "FAILED" });
     expect(h.store.snapshot.state?.currentStepId).toBeUndefined();
-    // The interrupted attempt is never resent: zero provider calls on the recovery path.
+    // ...and the turn is reissued: exactly one provider call for the replay, one new Step.
+    expect(result.run.status).toBe("COMPLETED");
+    expect(call.callCount()).toBe(1);
+    expect(h.allocatedSteps).toHaveLength(1);
+  });
+
+  it("fails a stale RUNNING Step that already produced an assistant record", async () => {
+    // The opposite case: the attempt committed model output, so the Tool ledger and the conversation
+    // already depend on it. Resending would be a second provider turn for one durable attempt.
+    const run = makeRun({ status: "RUNNING", startedAt: createTimestampMs(1) });
+    const step = {
+      id: "stp_0195f3a0-0000-7000-8000-0000000000fe" as StepId,
+      runId: run.id,
+      sequence: 1,
+      status: "RUNNING" as const,
+      startedAt: createTimestampMs(2),
+    };
+    const call = fakeFrozenModelTurnExecutor(async () => turn());
+    const messages = testRunMessageAuthority();
+    const goal = createUserMessageAppend(messages, run, "GOAL").draft;
+    const h = harness({
+      executor: call,
+      run,
+      snapshot: {
+        run: { ...run, currentStepId: step.id },
+        conversationRecords: [
+          { runId: run.id, sequence: 1, ...goal },
+          {
+            ...goal,
+            sequence: 2,
+            sourceStepId: step.id,
+            messageType: "ASSISTANT",
+          } as never,
+        ],
+        state: {
+          ...startAgentState(
+            createInitialAgentState(
+              AgentRunSchema.parse({ ...run, status: "PENDING", startedAt: undefined }),
+              createTimestampMs(1),
+            ),
+            createTimestampMs(1),
+          ),
+          currentStepId: step.id,
+        },
+        activeStep: step,
+        stateRevision: 1,
+      },
+    });
+
+    const result = await h.controller.recover(run.id);
+
+    expect(result.run.status).toBe("FAILED");
+    expect(h.store.steps.get(step.id)).toMatchObject({ status: "FAILED" });
     expect(call.callCount()).toBe(0);
-    expect(h.allocatedSteps).toHaveLength(0);
   });
 
   it("does not resend the provider when the settlement commit loses the revision race", async () => {

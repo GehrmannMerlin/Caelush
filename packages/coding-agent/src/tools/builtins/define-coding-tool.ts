@@ -12,11 +12,17 @@ import type { AgentTool } from "@caelush/agent";
  * stated once rather than ten times:
  *
  * ```text
- * executionMode is SEQUENTIAL   the first migration wave schedules every batch sequentially; a Tool
- *                               that would be parallel-safe later does not get to opt in now
- * label is derived from the name   stable and human-readable, never model-facing
- * the tool is frozen            a builtin is data plus a function, not a mutable object
+ * executionMode defaults to SEQUENTIAL   a Tool opts into a parallel window explicitly
+ * label is derived from the name        stable and human-readable, never model-facing
+ * the tool is frozen                    a builtin is data plus a function, not a mutable object
  * ```
+ *
+ * ## Who may declare `PARALLEL_SAFE`
+ *
+ * Only a Tool that **reads and never mutates** the workspace: it must be safe for a sibling read to
+ * observe the same state, and it must not need an approval that could park the batch mid-window. The
+ * coordinator still refuses to form a window under `ALWAYS_ASK`, and the host still has to turn
+ * parallelism on. Declaring the mode is a statement about the Tool, not a scheduling decision.
  *
  * ## Why `label` and not a display string
  *
@@ -39,6 +45,8 @@ export interface CodingToolDefinitionInput {
   readonly resultDetailsSchema: AgentTool["resultDetailsSchema"];
   readonly execute: AgentTool["execute"];
   readonly prepareArguments?: AgentTool["prepareArguments"];
+  /** Declared scheduling capability; omitted means `SEQUENTIAL`. */
+  readonly executionMode?: AgentTool["executionMode"];
 }
 
 /**
@@ -54,7 +62,7 @@ export function defineCodingTool(input: CodingToolDefinitionInput): AgentTool {
     inputSchema: input.inputSchema,
     label: humanizeToolName(input.name),
     resultDetailsSchema: input.resultDetailsSchema,
-    executionMode: "SEQUENTIAL",
+    executionMode: input.executionMode ?? "SEQUENTIAL",
     ...(input.prepareArguments === undefined ? {} : { prepareArguments: input.prepareArguments }),
     execute: input.execute,
   });

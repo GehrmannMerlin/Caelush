@@ -17,6 +17,7 @@ import {
   createToolObservationBatchProjector,
   createV2ContextEngine,
   createUtf8HeuristicTokenEstimator,
+  DEFAULT_TOOL_RESULT_PRUNING,
   type ContextAuthorityProviderPort,
   type ContextCheckpointProjection,
   type ContextContributionPipeline,
@@ -147,6 +148,13 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
     materializer: createContextMaterializer({
       projectors: options.messageProjectors,
       tokenEstimator,
+      /*
+       * Settled Tool output is the predictable part of a long Run's prompt: file reads, search hits and
+       * command logs. Bounding it costs no model call and no durable write — the stored observation is
+       * untouched, and the current turn is never pruned. Compaction stays responsible for the
+       * conversation itself.
+       */
+      toolResultPruning: DEFAULT_TOOL_RESULT_PRUNING,
       toolObservationReprojector: {
         async reproject({ stored, policy, signal }) {
           if (signal.aborted) throw createContextAbortError();

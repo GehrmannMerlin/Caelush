@@ -214,7 +214,17 @@ describe("Phase 3A agent kernel dependency boundaries", () => {
      */
     const hostVocabulary = /\b(?:workspace|cwd|permissionProfile|approvalPolicy)\b/;
     const offenders = agentKernelFiles()
-      .filter((file) => hostVocabulary.test(executableSource(file)))
+      .filter((file) => {
+        const source = executableSource(file);
+        const isBatchAdmissionProjection =
+          file.endsWith("tools/batch/batch-coordinator.ts") ||
+          file.endsWith("tools/batch/parallel-scheduler.ts");
+        // The batch may inspect this Protocol policy value to keep approval-capable calls ordered;
+        // it still cannot name workspace, cwd or the Security package's permission profile.
+        return hostVocabulary.test(
+          isBatchAdmissionProjection ? source.replaceAll(/\bapprovalPolicy\b/g, "") : source,
+        );
+      })
       .filter(
         (file) =>
           !file.endsWith("tools/types/execution-environment.ts") &&

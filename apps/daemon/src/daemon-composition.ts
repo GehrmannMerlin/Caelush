@@ -514,6 +514,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       clock,
       sanitizeReason: (reason) => sanitizeTerminalOutput(redactText(reason)),
     });
+  const admissionMayRequireApproval =
+    options.beforeToolDispatchPipeline !== undefined ||
+    (options.beforeToolDispatchHooks?.length ?? 0) > 0;
   const toolFeedbackContributionPipeline =
     options.toolFeedbackContributionPipeline ??
     createToolFeedbackContributionPipeline({
@@ -970,6 +973,22 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     budget: toolBudgetAdmission,
     durable: toolDurableCoordinator,
     registry: activeToolRegistry,
+    /*
+     * Read-only Tools run in bounded windows.
+     *
+     * ```text
+     * only consecutive PARALLEL_SAFE calls      read_file / list_directory / find_files
+     *                                         search_text / git_status / git_diff
+     * no Guard registrations                    admission cannot pause on a Guard approval
+     * never under ALWAYS_ASK                   any call could park on an approval
+     * results still assembled in call order    the durable lifecycle is untouched
+     * ```
+     *
+     * A model that asks for eight files used to pay for eight sequential reads. The window is
+     * deliberately small: these are filesystem and process reads on one host, and the point is to
+     * remove dead waiting, not to saturate the disk.
+     */
+    parallelism: { maxConcurrency: 4, admissionMayRequireApproval },
   });
   const feedbackContributions: ToolFeedbackContributionApplier = {
     async apply(input) {

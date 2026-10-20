@@ -69,6 +69,35 @@ class ControlPipelineProvider implements ApiAdapter {
   }
 }
 
+class ParallelReadApprovalProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
+  calls = 0;
+
+  stream(): AsyncGenerator<AIAdapterEvent> {
+    this.calls += 1;
+    return this.calls === 1 ? this.readCalls() : this.events("done");
+  }
+
+  private async *readCalls(): AsyncGenerator<AIAdapterEvent> {
+    for (const [toolCallId, path] of [
+      ["read_call_1", "first.txt"],
+      ["read_call_2", "second.txt"],
+    ] as const) {
+      yield { type: "tool_call.start", payload: { toolCallId, toolName: "read_file" } };
+      yield {
+        type: "tool_call.completed",
+        payload: { id: toolCallId, name: "read_file", input: { path } },
+      };
+    }
+    yield { type: "adapter.finish", payload: { finishReason: "TOOL_CALLS" } };
+  }
+
+  private async *events(text: string): AsyncGenerator<AIAdapterEvent> {
+    yield { type: "text.delta", payload: { text } };
+    yield { type: "adapter.finish", payload: { finishReason: "STOP" } };
+  }
+}
+
 afterEach(async () => {
   await daemon?.close().catch(() => undefined);
   await composition?.dispose().catch(() => undefined);
@@ -265,6 +294,72 @@ describe("Phase 6G daemon Tool control composition", () => {
     expect(output[1]).toBe(syntheticBefore);
     expect(output[1]).toEqual(syntheticBefore);
   });
+
+  it("does not start a later parallel read before a Guard approval decision", async () => {
+    directory = await mkdtemp(join(tmpdir(), "caelush-phase-6g-approval-window-"));
+    await writeFile(join(directory, "first.txt"), "first", "utf8");
+    await writeFile(join(directory, "second.txt"), "second", "utf8");
+    storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
+    const provider = new ParallelReadApprovalProvider();
+    daemon = await startDaemon({
+      databasePath: join(directory, "caelush.db"),
+      port: 0,
+      sseHeartbeatIntervalMs: 0,
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
+      processSandboxProviders: [restrictedProvider],
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+      beforeToolDispatchHooks: [
+        {
+          id: createControlHookId("approval-before-parallel-read"),
+          priority: 10,
+          criticality: "REQUIRED",
+          timeoutMs: 100,
+          hook: {
+            evaluate: async (input) =>
+              input.externalCallId === "read_call_1"
+                ? {
+                    kind: "REQUIRE_APPROVAL" as const,
+                    code: "REVIEW_REQUIRED",
+                    reason: "Review this read before continuing.",
+                  }
+                : { kind: "PASS" as const },
+          },
+        },
+      ],
+    });
+
+    const client = new CaelushClient({ baseUrl: daemon.url });
+    const workspace = { id: createWorkspaceId(), path: directory };
+    const session = await client.createSession({
+      defaultWorkspace: workspace,
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+    });
+    const run = await client.createRun(session.id, {
+      goal: "inspect both files",
+      workspace: session.defaultWorkspace ?? workspace,
+      model: { provider: "fixture", model: "fixture-model" },
+      runtime: { id: "local", kind: "local" },
+      preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+      limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 10_000 },
+    });
+    await client.startRun(run.id);
+
+    let status = "RUNNING";
+    for (let attempt = 0; attempt < 240 && status !== "WAITING_APPROVAL"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      status = ((await client.getRun(run.id)) as { status: string }).status;
+    }
+
+    const invocations = await storage.toolInvocations.listByRun(run.id);
+    expect(
+      status,
+      JSON.stringify({ run: await client.getRun(run.id), invocations }),
+    ).toBe("WAITING_APPROVAL");
+    expect(provider.calls).toBe(1);
+    expect(invocations.map((invocation) => invocation.externalCallId)).toEqual(["read_call_1"]);
+  }, 20_000);
 });
 
 function isTerminal(status: string): boolean {

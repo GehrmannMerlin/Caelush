@@ -360,6 +360,14 @@ export interface VerificationRunnerInput {
   readonly store: VerificationExecutionStorePort;
   readonly evidenceIdFactory: () => VerificationEvidence["id"];
   readonly pollYieldTimeMs?: number;
+  /**
+   * Bound on one verification command, in milliseconds.
+   *
+   * A check that never exits used to leave the Run parked in `VERIFYING` forever: nothing in this
+   * package had a deadline, and the completion gate simply waited. Omitted values use the runner
+   * default; `0` or a negative value is rejected rather than treated as "no limit".
+   */
+  readonly commandTimeoutMs?: number;
   readonly evidenceSanitizer: VerificationEvidenceSanitizer;
   readonly onCommittedEvents?: (
     events: readonly VerificationCommittedEvent[],

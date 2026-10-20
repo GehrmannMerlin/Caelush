@@ -489,7 +489,7 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
       toolTurn.indexOf("export interface AgentToolResult {"),
       toolTurn.indexOf("}", toolTurn.indexOf("export interface AgentToolResult {")),
     );
-    expect(turnResult.match(/readonly /g) ?? []).toHaveLength(4);
+    expect(turnResult.match(/readonly /g) ?? []).toHaveLength(5);
     expect(turnResult).not.toContain("details");
     expect(executable("packages/agent/src/index.ts")).toContain(
       'export type { AgentToolResult as AgentToolExecutionResult } from "./tools/types/tool-result.js";',

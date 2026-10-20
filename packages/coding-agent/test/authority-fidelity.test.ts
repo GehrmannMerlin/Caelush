@@ -488,9 +488,20 @@ describe("default Tool set fidelity", () => {
       ...DEFAULT_CODING_TOOL_ORDER,
     ]);
     // Every one is a complete Coding Tool: an executable AgentTool plus its Coding overlay.
+    // Only the Tools that read and never mutate may share a scheduling window.
+    const parallelSafe = new Set([
+      "read_file",
+      "list_directory",
+      "find_files",
+      "search_text",
+      "git_status",
+      "git_diff",
+    ]);
     for (const definition of definitions) {
       expect(typeof definition.tool.execute).toBe("function");
-      expect(definition.tool.executionMode).toBe("SEQUENTIAL");
+      expect(definition.tool.executionMode).toBe(
+        parallelSafe.has(definition.tool.name) ? "PARALLEL_SAFE" : "SEQUENTIAL",
+      );
       expect(definition.security.riskLevel).toMatch(/^(?:LOW|MEDIUM|HIGH|CRITICAL)$/);
       // Every Tool describes its own effects, including the ones that have none: a missing
       // projector is indistinguishable from an unanalysed Tool at the Security boundary.

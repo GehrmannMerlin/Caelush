@@ -290,23 +290,27 @@ describe("Phase 4D canonical batch boundaries", () => {
     }
   });
 
-  it("keeps the batch strictly sequential and never prepares or executes a skipped call", () => {
+  it("keeps the default batch sequential and bounds opted-in read windows", () => {
     const batch = executable(`${BATCH}batch-coordinator.ts`);
 
-    // 19. No concurrency anywhere in the canonical batch or its planner.
+    // Concurrency stays in the separate bounded scheduler; the coordinator keeps the ordered
+    // lifecycle and its sequential fallback.
     expect(batch).not.toContain("Promise.all");
     expect(batch).not.toContain("Promise.allSettled");
     expect(batch).not.toContain("Promise.race");
     expect(executable(`${BATCH}batch-planner.ts`)).not.toContain("Promise.all");
 
-    // It iterates the calls in their original order.
+    // The opt-in is a host capability, and the default path remains an ordinary ordered loop.
+    expect(batch).toContain("if (options.parallelism !== undefined)");
+    expect(batch).toContain("executeCallsWithWindows(options, request,");
+    expect(batch).toContain("admissionMayRequireApproval === false");
     expect(batch).toContain("for (const call of request.calls)");
 
     // The skip is decided *before* preparation, so a skipped call is never prepared, never admitted,
     // never durably recorded and never executed.
     const loop = declarationBody(
       batch,
-      "async function executeCalls(",
+      "async function executeCallsSequentially(",
       "): Promise<ToolBatchOutcome> {",
     );
     const skipIndex = loop.indexOf("if (skipRemaining)");
@@ -316,11 +320,17 @@ describe("Phase 4D canonical batch boundaries", () => {
     expect(prepareIndex).toBeGreaterThan(skipIndex);
     expect(executeIndex).toBeGreaterThan(skipIndex);
 
-    // The planner only implements the sequential plan, and a declared `PARALLEL_SAFE` changes nothing.
+    // A declared `PARALLEL_SAFE` mode does not enable scheduling by itself.
     const planner = executable(`${BATCH}batch-planner.ts`);
     expect(planner).toContain('readonly kind: "SEQUENTIAL";');
     expect(planner).toContain("executionMode");
     expect(planner).not.toContain('"CONCURRENT"');
+    const windowed = declarationBody(
+      batch,
+      "async function executeCallsWithWindows(",
+      "): Promise<ToolBatchOutcome> {",
+    );
+    expect(windowed).toContain("runBoundedByIndex(window.length, maxConcurrency");
   });
 
   it("uses explicit unknown-outcome and not-started feedback without a new durable contract", () => {
@@ -345,10 +355,16 @@ describe("Phase 4D canonical batch boundaries", () => {
     expect(batch).toContain('kind: "REJECTED"');
     const loop = declarationBody(
       batch,
-      "async function executeCalls(",
+      "async function executeCallsSequentially(",
       "): Promise<ToolBatchOutcome> {",
     );
     expect(loop).toContain("continue;");
+    const windowed = declarationBody(
+      batch,
+      "async function executeCallsWithWindows(",
+      "): Promise<ToolBatchOutcome> {",
+    );
+    expect(windowed).toContain('if (first.kind === "REJECTED")');
 
     // Validation and the duplicate check happen before the budget preflight, and the preflight happens
     // before the first preparation. That ordering is what makes "execute first, discover the duplicate

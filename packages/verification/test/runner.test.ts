@@ -345,3 +345,56 @@ describe("storage-free verification runner", () => {
     expect(durable.calls).toEqual([`start:${plan.checks[0]!.id}`, "settle:FAILED"]);
   });
 });
+
+describe("verification command deadline", () => {
+  it("settles a hung command as ERROR with a timeout error code", async () => {
+    const plan = planFor("TEST");
+    const settlements: VerificationSettlementCommit[] = [];
+    const durable = {
+      ...store(),
+      async settleCheck(commit: VerificationSettlementCommit) {
+        settlements.push(commit);
+        return { check: commit.check, events: [] };
+      },
+    };
+    const hanging: VerificationCommandExecutionPort = {
+      async executeArgv() {
+        return {
+          status: "RUNNING",
+          sessionId: "proc_hung",
+          output: "",
+          totalOutputBytes: 0,
+          omittedBytes: 0,
+        };
+      },
+      async interact({ sessionId }) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return {
+          status: "RUNNING",
+          sessionId,
+          output: "",
+          totalOutputBytes: 0,
+          omittedBytes: 0,
+        };
+      },
+    };
+
+    const result = await new VerificationRunner().run(
+      input(plan, hanging, durable, { commandTimeoutMs: 40 }),
+    );
+
+    expect(result.outcome).toBe("BLOCKED");
+    expect(result.errorCount).toBe(1);
+    expect(settlements.at(-1)?.check.status).toBe("ERROR");
+    expect(JSON.stringify(settlements.at(-1)?.evidence)).toContain("VERIFICATION_TIMEOUT");
+  });
+
+  it("rejects a non-positive deadline instead of treating it as unbounded", async () => {
+    const plan = planFor("TEST");
+    const durable = store();
+
+    await expect(
+      new VerificationRunner().run(input(plan, execution().port, durable, { commandTimeoutMs: 0 })),
+    ).rejects.toBeInstanceOf(RangeError);
+  });
+});

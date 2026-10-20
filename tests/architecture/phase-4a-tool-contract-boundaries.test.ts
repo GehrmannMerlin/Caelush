@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
  * one argument-preparation path         the canonical Preparer; the legacy one only formats outcomes
  * one Coding overlay                    @caelush/coding-agent, keyed by the registry's ToolName
  * no Coding vocabulary in the kernel    a general AgentTool cannot carry product policy
- * no second execution authority         this round adds no scheduler, executor or durable pipeline
+ * one bounded scheduler                 an Agent batch detail gated by host admission policy
  * ```
  *
  * Phase 4A's success criterion is an **authority switch**: the executable Tool contract, schema
@@ -291,9 +291,13 @@ describe("Phase 4A Agent Tool package boundaries", () => {
     expect(catalogBuilder).toContain('reason: "DANGLING_CODING_TOOL"');
   });
 
-  it("adds no second execution authority and enables no parallelism", () => {
-    // This round adds contracts, a registry and a Preparer — no executor, no scheduler, no pipeline.
-    const toolFiles = [...filesUnder(AGENT_TOOLS), ...filesUnder(CODING_TOOLS)];
+  it("keeps bounded read scheduling in the Agent batch without a second execution authority", () => {
+    // This round's scheduler remains an Agent batch detail; Tool definitions and Coding adapters do
+    // not gain another executor or a host-owned scheduling path.
+    const schedulerPath = `${AGENT_TOOLS}batch/parallel-scheduler.ts`;
+    const toolFiles = [...filesUnder(AGENT_TOOLS), ...filesUnder(CODING_TOOLS)].filter(
+      (file) => file !== schedulerPath,
+    );
     const forbiddenDeclarations = [
       "class DurableToolExecutionCoordinator",
       "class ToolInvocationExecutor",
@@ -310,8 +314,8 @@ describe("Phase 4A Agent Tool package boundaries", () => {
       }
     }
 
-    // No production file gains a concurrency primitive for Tool execution. Phase 4F removed the two
-    // legacy modules that used to be named here, so the rule now covers all production source.
+    // No Tool definition, durable lifecycle or host adapter gains a concurrency primitive. The
+    // Agent-owned scheduler is the one deliberate, bounded scheduling surface.
     for (const file of toolFiles) {
       const source = executable(file);
       expect(source, `${file} must not introduce parallelism`).not.toMatch(
@@ -326,16 +330,23 @@ describe("Phase 4A Agent Tool package boundaries", () => {
         file.includes("/tools/execution/") ||
         file.includes("/tools/result/");
       if (!isToolExecutionPath) continue;
+      if (file === schedulerPath) continue;
       expect(source, `${file} must not introduce parallelism`).not.toMatch(
         /\bPromise\.all\b|\bPromise\.allSettled\b|\bnew Worker\b/,
       );
     }
 
-    // The execution mode is a declaration only: nothing selects on it to schedule.
+    // Only the Agent batch can select on execution mode; providers, Runtime and Coding product
+    // adapters treat it as immutable Tool metadata.
     const schedulers = productionSources().filter((file) =>
-      /executionMode\s*===\s*"PARALLEL_SAFE"/.test(executable(file)),
+      /executionMode\s*(?:===|!==)\s*"PARALLEL_SAFE"/.test(executable(file)),
     );
-    expect(schedulers).toEqual([]);
+    expect(schedulers.sort()).toEqual(
+      [
+        "packages/agent/src/tools/batch/batch-coordinator.ts",
+        schedulerPath,
+      ].sort(),
+    );
   });
 
   it("adds no database migration and no public HTTP or SSE contract", () => {
@@ -369,7 +380,7 @@ describe("Phase 4A Agent Tool package boundaries", () => {
       toolTurn.indexOf("export interface AgentToolResult {"),
       toolTurn.indexOf("}", toolTurn.indexOf("export interface AgentToolResult {")),
     );
-    expect(result.match(/readonly /g) ?? []).toHaveLength(4);
+    expect(result.match(/readonly /g) ?? []).toHaveLength(5);
     expect(result).toContain("readonly externalCallId: string;");
     expect(result).toContain("readonly toolName: ToolName;");
     expect(result).toContain("readonly content: string;");

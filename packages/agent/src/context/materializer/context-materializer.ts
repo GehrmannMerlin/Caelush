@@ -16,6 +16,12 @@ import { projectPromptSurface } from "../surface/prompt-surface-projector.js";
 import { PromptSurfaceIntegrityError } from "../surface/prompt-surface.js";
 import type { PromptSurfaceAnchor } from "../surface/prompt-surface.js";
 import { renderStableContextHead } from "../surface/prompt-surface-renderer.js";
+import {
+  assertToolResultPruningPolicy,
+  pruneSettledToolResult,
+  type ToolResultPruningPolicy,
+  type ToolResultPruningStats,
+} from "./tool-result-pruner.js";
 
 export interface ContextMaterializer {
   materialize(input: {
@@ -48,12 +54,24 @@ export interface ContextMaterializerOptions {
   readonly projectors: AgentMessageProjectorRegistry;
   readonly tokenEstimator: ContextTokenEstimatorPort;
   readonly toolObservationReprojector?: ContextToolObservationReprojector;
+  /**
+   * Deterministic pruning of **settled** Tool results.
+   *
+   * Omitted means no pruning, which is the historical behaviour. The current turn's results are never
+   * pruned, and the durable message is never touched: this only narrows what the model is shown.
+   */
+  readonly toolResultPruning?: ToolResultPruningPolicy | undefined;
+  /** Observation hook; must not affect the Context it reports on. */
+  readonly onToolResultsPruned?: ((stats: ToolResultPruningStats) => void) | undefined;
 }
 
 /** Build the one provider-neutral AI message sequence for a prepared Context. */
 export function createContextMaterializer(
   options: ContextMaterializerOptions,
 ): ContextMaterializer {
+  if (options.toolResultPruning !== undefined) {
+    assertToolResultPruningPolicy(options.toolResultPruning);
+  }
   return Object.freeze({
     async materialize(input: {
       readonly prepared: PreparedAgentContext;
@@ -71,6 +89,14 @@ export function createContextMaterializer(
 
       const conversation = withRecoveryTailMessageIds(input.prepared.conversationMessages);
       const messages: AIMessage[] = [Object.freeze({ role: "system", content: documentText })];
+      let prunedMessages = 0;
+      let omittedBytes = 0;
+      /*
+       * "Settled" is a step boundary, not a turn boundary: a Run is exactly one conversation turn, so
+       * a turn-based tail would protect the whole history and prune nothing. The active step is the
+       * batch the model has not reasoned over yet; everything produced by an earlier step is settled.
+       */
+      const activeSourceStepId = activeStepOf(conversation.messages);
       const surfaceMessages = projectPromptSurface(input.prepared.promptSurface?.epoch);
       const snapshotsByAnchor = snapshotsByValidAnchor(
         input.prepared.conversationMessages,
@@ -78,6 +104,7 @@ export function createContextMaterializer(
       );
       for (const stored of conversation.messages) {
         throwIfAborted(input.signal);
+        const appendedFrom = messages.length;
         await appendProjection(
           messages,
           stored,
@@ -88,6 +115,18 @@ export function createContextMaterializer(
             conversation.tailMessageIds.has(stored.message.id),
           input.prepared,
         );
+        if (
+          options.toolResultPruning !== undefined &&
+          stored.message.sourceStepId !== activeSourceStepId
+        ) {
+          for (let index = appendedFrom; index < messages.length; index += 1) {
+            const pruned = pruneSettledToolResult(messages[index]!, options.toolResultPruning);
+            if (pruned.omittedBytes === 0) continue;
+            messages[index] = Object.freeze(pruned.message);
+            prunedMessages += 1;
+            omittedBytes += pruned.omittedBytes;
+          }
+        }
         for (const surfaceMessage of snapshotsByAnchor.get(stored.message.id) ?? []) {
           throwIfAborted(input.signal);
           assertEstimate(
@@ -99,6 +138,13 @@ export function createContextMaterializer(
         }
       }
       throwIfAborted(input.signal);
+      if (prunedMessages > 0) {
+        try {
+          options.onToolResultsPruned?.({ prunedMessages, omittedBytes });
+        } catch {
+          // Observation must never change the Context it describes.
+        }
+      }
       return Object.freeze(messages);
     },
   });
@@ -138,6 +184,25 @@ async function appendProjection(
   assertEstimate(options.tokenEstimator.estimateAgentMessage(stored.message, model), "message");
   const projection = options.projectors.project(stored);
   for (const message of projection.messages) messages.push(Object.freeze({ ...message }));
+}
+
+/**
+ * The Step the model has not reasoned over yet.
+ *
+ * The last message of a Run is not always a model turn: a trailing USER record (a steering correction,
+ * an attachment-only record) can carry an older `sourceStepId`. The active Step is therefore the one
+ * behind the newest message that actually produced model output.
+ */
+function activeStepOf(
+  messages: readonly StoredAgentMessage[],
+): StoredAgentMessage["message"]["sourceStepId"] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!.message;
+    if (message.type === "TOOL_RESULT" || message.type === "ASSISTANT") {
+      return message.sourceStepId;
+    }
+  }
+  return undefined;
 }
 
 function withRecoveryTailMessageIds(messages: readonly StoredAgentMessage[]): {

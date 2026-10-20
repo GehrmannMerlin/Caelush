@@ -36,7 +36,7 @@ describe("list_directory target builtin", () => {
 
     expect(tool.name).toBe("list_directory");
     expect(tool.description).toBe("List dir.");
-    expect(tool.executionMode).toBe("SEQUENTIAL");
+    expect(tool.executionMode).toBe("PARALLEL_SAFE");
     expect(tool.inputSchema).toEqual({
       type: "object",
       properties: {

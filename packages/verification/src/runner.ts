@@ -13,6 +13,43 @@ import type {
 
 const DEFAULT_POLL_YIELD_TIME_MS = 5_000;
 
+/**
+ * Default bound on one verification command.
+ *
+ * Long enough for a real typecheck or test suite on a cold cache, short enough that a hung process
+ * cannot park a Run for hours. Callers may override it per run; the value is validated, never
+ * silently ignored.
+ */
+const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60_000;
+const MAX_COMMAND_TIMEOUT_MS = 2 * 60 * 60_000;
+
+interface CommandDeadline {
+  readonly signal: AbortSignal;
+  readonly timedOut: () => boolean;
+  readonly dispose: () => void;
+}
+
+function createCommandDeadline(
+  caller: AbortSignal | undefined,
+  timeoutMs: number,
+): CommandDeadline {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_COMMAND_TIMEOUT_MS) {
+    throw new RangeError("Verification commandTimeoutMs must be a bounded positive integer.");
+  }
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  timer.unref?.();
+  return {
+    signal: caller === undefined ? controller.signal : AbortSignal.any([caller, controller.signal]),
+    timedOut: () => timedOut,
+    dispose: () => clearTimeout(timer),
+  };
+}
+
 export class VerificationRunner {
   async run(input: VerificationRunnerInput): Promise<VerificationRunnerResult> {
     const counters = {
@@ -128,9 +165,13 @@ export class VerificationRunner {
       counters.executedCount += 1;
 
       let execution: VerificationRuntimeExecResult;
+      const deadline = createCommandDeadline(
+        input.signal,
+        input.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
+      );
       try {
         execution = await input.execution.executeArgv({
-          ...(input.signal === undefined ? {} : { signal: input.signal }),
+          signal: deadline.signal,
           ownerRunId: input.runId,
           executable: candidate.executable,
           args: candidate.args,
@@ -139,16 +180,23 @@ export class VerificationRunner {
         });
         while (execution.status === "RUNNING") {
           if (execution.sessionId === undefined) throw new Error("PROCESS_SESSION_UNAVAILABLE");
+          if (deadline.timedOut()) throw new Error("VERIFICATION_COMMAND_TIMED_OUT");
           execution = await input.execution.interact({
-            ...(input.signal === undefined ? {} : { signal: input.signal }),
+            signal: deadline.signal,
             ownerRunId: input.runId,
             sessionId: execution.sessionId,
             chars: "",
             yieldTimeMs: input.pollYieldTimeMs ?? DEFAULT_POLL_YIELD_TIME_MS,
           });
         }
+        /*
+         * A poll that observed the abort returns a killed process rather than throwing. Treat that
+         * as the timeout it is, so the check records `ERROR` instead of a misleading "failed".
+         */
+        if (deadline.timedOut()) throw new Error("VERIFICATION_COMMAND_TIMED_OUT");
       } catch (error) {
         const aborted = input.signal?.aborted === true;
+        const timedOut = !aborted && deadline.timedOut();
         const evidence = createCommandEvidence(
           {
             id: input.evidenceIdFactory(),
@@ -159,7 +207,11 @@ export class VerificationRunner {
             candidateHash: candidate.candidateHash,
             totalOutputBytes: 0,
             omittedBytes: 0,
-            errorCode: aborted ? "RUN_ABORTED" : safeRuntimeErrorCode(error),
+            errorCode: aborted
+              ? "RUN_ABORTED"
+              : timedOut
+                ? "VERIFICATION_TIMEOUT"
+                : safeRuntimeErrorCode(error),
           },
           input.evidenceSanitizer,
         );
@@ -182,6 +234,10 @@ export class VerificationRunner {
           break;
         }
         continue;
+      } finally {
+        // The command is settled either way; an armed timer outliving it would abort nothing and
+        // keep the process alive for up to the timeout.
+        deadline.dispose();
       }
 
       const passed = execution.exitCode === 0 && execution.signal === undefined;

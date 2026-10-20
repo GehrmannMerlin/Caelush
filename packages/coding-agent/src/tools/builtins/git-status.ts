@@ -81,6 +81,7 @@ export function createGitStatusTool(operations: GitOperations): CodingToolDefini
   const tool = defineCodingTool({
     name: "git_status",
     description: "Git.",
+    executionMode: "PARALLEL_SAFE",
     inputSchema,
     resultDetailsSchema,
     execute: async (input): Promise<AgentToolResult> => {

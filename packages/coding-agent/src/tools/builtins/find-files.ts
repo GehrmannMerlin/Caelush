@@ -79,6 +79,7 @@ export function createFindFilesTool(
   const tool = defineCodingTool({
     name: "find_files",
     description: "Find workspace files.",
+    executionMode: "PARALLEL_SAFE",
     inputSchema,
     resultDetailsSchema: READ_ONLY_OUTPUT_SCHEMA,
     execute: async (input): Promise<AgentToolResult> => {

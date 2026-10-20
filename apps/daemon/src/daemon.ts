@@ -49,6 +49,11 @@ import {
   reconcileStaleRuns,
   type StartupReconciliationSummary,
 } from "./execution/run-startup-reconciliation.js";
+import {
+  RunLivenessSweeper,
+  type RunLivenessPolicy,
+  type RunLivenessSweepSummary,
+} from "./execution/run-liveness-sweeper.js";
 import { SessionTranscriptService } from "./services/session-transcript-service.js";
 import { SessionPresentationService } from "./services/session-presentation-service.js";
 import { ArchiveService } from "./services/archive-service.js";
@@ -250,6 +255,8 @@ export interface DaemonOptions {
   /** Finite managed-shutdown drain deadline; primarily injectable for lifecycle tests. */
   readonly shutdownTimeoutMs?: number;
   readonly sseHeartbeatIntervalMs?: number;
+  /** Periodic liveness sweep for non-terminal Runs no execution driver owns; production defaults apply. */
+  readonly runLivenessPolicy?: Partial<RunLivenessPolicy>;
   readonly runEventQueuePolicy?: SubscriberQueuePolicy;
   readonly logger?: boolean;
   readonly providers?: readonly DaemonModelProviderConfig[];
@@ -303,6 +310,12 @@ export interface DaemonHandle {
    * unless the next generation asks. This is the evidence that it asked, and what happened.
    */
   readonly startupReconciliation?: StartupReconciliationSummary;
+  /**
+   * One explicit liveness sweep, for hosts and tests that cannot wait for the timer.
+   *
+   * The periodic sweep is the production path; this is the same operation, invoked directly.
+   */
+  readonly sweepRunLiveness?: () => Promise<RunLivenessSweepSummary>;
   readonly workspaceBackfill?: WorkspaceBackfillSummary;
   close(): Promise<void>;
 }
@@ -766,13 +779,33 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     }
   }
 
+  /**
+   * Keep asking after startup.
+   *
+   * Startup reconciliation covers the Runs a dead generation left behind. It cannot cover a Run that
+   * goes silent *while this daemon is alive*: a verification check that finished with ERROR and
+   * never re-entered the loop, an approval that expired with nothing to resolve it, a retry timer
+   * that was lost. Those Runs stay non-terminal with no driver until someone calls recovery again.
+   * The sweep is that caller, and it reuses the same authority: no new state machine, no writes.
+   */
+  const livenessSweeper = new RunLivenessSweeper({
+    runs: storage.runs,
+    supervisor: composition.supervisor,
+    ...(options.runLivenessPolicy === undefined ? {} : { policy: options.runLivenessPolicy }),
+    ...(options.logger === true ? { logger: safeSupervisorLogger } : {}),
+  });
+  livenessSweeper.start();
+
   return {
     url,
     workspaceBackfill,
     ...(startupReconciliation === undefined ? {} : { startupReconciliation }),
+    sweepRunLiveness: () => livenessSweeper.sweepOnce(),
     close: () => {
       if (closePromise === undefined) {
         closePromise = (async () => {
+          // Stop asking for recoveries before the supervisor starts refusing work.
+          livenessSweeper.stop();
           observeSyncShutdownPhase(shutdownObserver, "beginDrain", () =>
             composition.supervisor.beginDrain(),
           );

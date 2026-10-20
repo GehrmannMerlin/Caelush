@@ -73,6 +73,7 @@ export function createReadFileTool(operations: ReadFileProbeOperations): CodingT
   const tool = defineCodingTool({
     name: "read_file",
     description: "Read workspace text.",
+    executionMode: "PARALLEL_SAFE",
     inputSchema,
     resultDetailsSchema: READ_ONLY_OUTPUT_SCHEMA,
     execute: async (input): Promise<AgentToolResult> => {

@@ -25,6 +25,7 @@ import type {
 import { ToolExecutionAbortedError } from "../durable/durable-execution-coordinator.js";
 import type { ToolFailureFeedback } from "../types/tool-feedback.js";
 import { planSequentialToolBatch, type ToolBatchExecutionPlan } from "./batch-planner.js";
+import { runBoundedByIndex } from "./parallel-scheduler.js";
 import { ToolBatchInfrastructureError, ToolBatchInputError } from "./batch-errors.js";
 import type {
   ToolBatchCoordinator,
@@ -57,12 +58,16 @@ import type {
  * return COMPLETED
  * ```
  *
- * ## Strictly sequential, and structurally so
+ * ## Sequential by default, with one opt-in window
  *
- * The loop is an ordinary `for` over the calls. There is no `Promise.all`, no worker pool and no
- * completion-order contract, and a Tool that declares `PARALLEL_SAFE` changes nothing: the first
- * implementation of the frozen scheduler is sequential for every batch. `call_1` is fully decided
- * before `call_2` is prepared.
+ * The default loop is an ordinary `for` over the calls: `call_1` is fully decided before `call_2` is
+ * prepared, and a Tool that declares `PARALLEL_SAFE` changes nothing by itself.
+ *
+ * A host may opt in with `parallelism.maxConcurrency`. Even then the only calls that can run together
+ * are a **maximal run of consecutive `PARALLEL_SAFE` calls**, preparation stays sequential, the durable
+ * invocation lifecycle is untouched, and results are assembled in original call order. Under
+ * `ALWAYS_ASK` no window is formed at all, because every call could park on an approval and a parked
+ * call must never have a later sibling already running. See `parallel-scheduler.ts`.
  *
  * ## What this object is allowed to depend on
  *
@@ -97,6 +102,19 @@ export interface ToolBatchCoordinatorOptions {
   readonly registry?: Pick<AgentToolRegistry, "resolve"> | undefined;
   /** The bound applied to a model Tool call id, matching the durable invocation limit. */
   readonly maxExternalCallIdBytes?: number | undefined;
+  /**
+   * Opt-in parallel windows over consecutive `PARALLEL_SAFE` calls.
+   *
+   * Omitted means the historical strictly sequential behaviour. The host must also state whether
+   * admission can request approval; an unknown or approval-capable admission path stays sequential
+   * so a later sibling cannot run before a guard decision.
+   */
+  readonly parallelism?:
+    | {
+        readonly maxConcurrency: number;
+        readonly admissionMayRequireApproval?: boolean | undefined;
+      }
+    | undefined;
 }
 
 /** Stable model-facing code for a call that the batch did not start. */
@@ -156,6 +174,16 @@ export function createToolBatchCoordinator(
  * ---------------------------------------------------------------------------------------------- */
 
 async function executeCalls(
+  options: ToolBatchCoordinatorOptions,
+  request: ToolBatchRequest,
+): Promise<ToolBatchOutcome> {
+  if (options.parallelism !== undefined) {
+    return executeCallsWithWindows(options, request, options.parallelism.maxConcurrency);
+  }
+  return executeCallsSequentially(options, request);
+}
+
+async function executeCallsSequentially(
   options: ToolBatchCoordinatorOptions,
   request: ToolBatchRequest,
 ): Promise<ToolBatchOutcome> {
@@ -248,6 +276,158 @@ async function executeCalls(
         return cancelledOutcome(items, request.calls.slice(callIndex));
       }
     }
+  }
+
+  return Object.freeze({ kind: "COMPLETED", items: Object.freeze([...items]) });
+}
+
+/**
+ * The opt-in scheduler.
+ *
+ * ```text
+ * prepare the next call                     sequential, unchanged
+ * if it declares PARALLEL_SAFE              extend the window over consecutive siblings
+ * execute the window                        bounded concurrency, one durable invocation per call
+ * assemble the window in original order     first non-settled outcome ends the batch
+ * ```
+ *
+ * The window is bounded by `maxConcurrency` and by the first sibling that is not `PARALLEL_SAFE`, so a
+ * mutating call never shares a window. A `REJECTED` sibling ends the window without being executed: it
+ * is handled on the next iteration, in order, exactly as before.
+ *
+ * ## One deliberate difference from the sequential path
+ *
+ * A window runs to completion before it is interpreted. If one call parks (approval, budget,
+ * cancellation) its siblings have already settled, and those settlements are **durable facts**. They
+ * are reported in order rather than hidden, so the batch outcome never contradicts the ledger. In the
+ * sequential path the same situation cannot arise, which is why its `items` are always a strict prefix.
+ */
+async function executeCallsWithWindows(
+  options: ToolBatchCoordinatorOptions,
+  request: ToolBatchRequest,
+  maxConcurrency: number,
+): Promise<ToolBatchOutcome> {
+  const items: ToolBatchItemOutcome[] = [];
+  let skipRemaining = false;
+  let index = 0;
+
+  while (index < request.calls.length) {
+    if (skipRemaining) {
+      items.push(skippedItem(request.calls[index]!));
+      index += 1;
+      continue;
+    }
+    if (request.signal.aborted) return cancelledOutcome(items, request.calls.slice(index));
+
+    const first = prepareCall(options, request.calls[index]!);
+    if (first.kind === "REJECTED") {
+      items.push(
+        Object.freeze({ kind: "REJECTED", call: request.calls[index]!, feedback: first.feedback }),
+      );
+      index += 1;
+      continue;
+    }
+
+    const window: PreparedToolCall[] = [first.call];
+    // ALWAYS_ASK or a Guard-capable admission path can park a call on approval. A later sibling must
+    // never run before that decision, so both cases remain sequential regardless of Tool declaration.
+    const windowingAllowed =
+      request.securityContext.approvalPolicy !== "ALWAYS_ASK" &&
+      options.parallelism?.admissionMayRequireApproval === false;
+    if (windowingAllowed && first.call.resolved.tool.executionMode === "PARALLEL_SAFE") {
+      let probe = index + 1;
+      while (probe < request.calls.length && window.length < maxConcurrency) {
+        const prepared = prepareCall(options, request.calls[probe]!);
+        if (prepared.kind !== "READY") break;
+        if (prepared.call.resolved.tool.executionMode !== "PARALLEL_SAFE") break;
+        window.push(prepared.call);
+        probe += 1;
+      }
+    }
+
+    const results = await runBoundedByIndex(window.length, maxConcurrency, (offset) =>
+      executeOne(options, request, window[offset]!),
+    );
+
+    let waitingApproval:
+      | {
+          readonly call: ToolCallRequest;
+          readonly approval: Extract<DurableToolExecutionOutcome, { kind: "WAITING_APPROVAL" }>["approval"];
+        }
+      | undefined;
+    let budgetBlock: Extract<DurableToolExecutionOutcome, { kind: "BUDGET_EXCEEDED" }>["block"] | undefined;
+    let cancelled = false;
+
+    for (let offset = 0; offset < results.length; offset += 1) {
+      const call = request.calls[index + offset]!;
+      const result = results[offset]!;
+      if (result.kind === "ABORTED") {
+        items.push(skippedItem(call, TOOL_NOT_STARTED_CANCELLED_CONTENT));
+        cancelled = true;
+        continue;
+      }
+      const outcome = result.outcome;
+      switch (outcome.kind) {
+        case "SETTLED": {
+          const invocation = outcome.invocation;
+          items.push(
+            Object.freeze({
+              kind: "OBSERVATION",
+              call,
+              invocationId: invocation.id,
+              finalStatus: finalStatusOf(invocation.status),
+              observation: outcome.observation,
+            }),
+          );
+          if (isUncertainSettlement(invocation.error)) skipRemaining = true;
+          break;
+        }
+        case "WAITING_APPROVAL":
+          waitingApproval ??= { call, approval: outcome.approval };
+          break;
+        case "BUDGET_EXCEEDED":
+          budgetBlock ??= outcome.block;
+          break;
+        case "CANCELLED": {
+          if (outcome.observation !== undefined) {
+            items.push(
+              Object.freeze({
+                kind: "OBSERVATION",
+                call,
+                invocationId: outcome.invocation.id,
+                finalStatus: "CANCELLED",
+                observation: outcome.observation,
+              }),
+            );
+          }
+          cancelled = true;
+          break;
+        }
+      }
+    }
+
+    // A parallel window has already run every sibling before its outcomes can be interpreted. Keep
+    // every durable result from that window, even when an earlier sibling is waiting or cancelled.
+    // Calls after the window never started and remain explicit safe skips on cancellation.
+    if (cancelled) {
+      return cancelledOutcome(items, request.calls.slice(index + window.length));
+    }
+    if (waitingApproval !== undefined) {
+      return Object.freeze({
+        kind: "WAITING_APPROVAL",
+        items: Object.freeze([...items]),
+        pendingCall: waitingApproval.call,
+        approval: waitingApproval.approval,
+      });
+    }
+    if (budgetBlock !== undefined) {
+      return Object.freeze({
+        kind: "BUDGET_EXCEEDED",
+        items: Object.freeze([...items]),
+        block: budgetBlock,
+      });
+    }
+    index += window.length;
   }
 
   return Object.freeze({ kind: "COMPLETED", items: Object.freeze([...items]) });

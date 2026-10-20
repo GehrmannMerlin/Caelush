@@ -75,6 +75,7 @@ export function createListDirectoryTool(
   const tool = defineCodingTool({
     name: "list_directory",
     description: "List dir.",
+    executionMode: "PARALLEL_SAFE",
     inputSchema,
     resultDetailsSchema: READ_ONLY_OUTPUT_SCHEMA,
     execute: async (input): Promise<AgentToolResult> => {

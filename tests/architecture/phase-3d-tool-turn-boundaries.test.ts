@@ -178,12 +178,10 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     expect(controller).toContain("await this.settleToolEffect(");
     expect(controller).toContain("classifyToolEffectSettlement({");
 
-    // The entry mode is threaded in and refreshed in exactly three places — a settled Tool batch, a
-    // completed Agent turn and a settled completion — because those are the three points at which the
-    // next batch stops being the one the caller entered with. A fourth refresh would mean the loop had
-    // re-derived the mode from something other than its own entry.
+    // The entry mode is refreshed after the established settlement points and after a bounded
+    // interrupted-Step replay, which re-enters the driver under recovery mode.
     const modeRefreshes = controller.match(/^\s+mode = "EXECUTE";$/gm) ?? [];
-    expect(modeRefreshes).toHaveLength(3);
+    expect(modeRefreshes).toHaveLength(4);
   });
 
   it("routes every Tool turn result to exactly one typed settlement authority", () => {
@@ -400,20 +398,28 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     );
   });
 
-  it("keeps sequential Tool semantics and introduces no parallelism", () => {
-    // The canonical Agent batch is the production scheduler, and it is strictly sequential: an ordinary
-    // `for` over the calls, and no `Promise.all` anywhere in the batch or its planner.
+  it("keeps Tool scheduling in the canonical Agent batch with gated bounded windows", () => {
+    // The canonical Agent batch owns both the historical sequential path and the host-opted-in
+    // bounded read window. No Core or Runtime layer creates a second scheduler.
     const canonical = executable("packages/agent/src/tools/batch/batch-coordinator.ts");
+    expect(canonical).toContain("return executeCallsSequentially(options, request);");
+    expect(canonical).toContain("executeCallsWithWindows(options, request,");
     expect(canonical).toContain("for (const call of request.calls)");
     expect(canonical).not.toContain("Promise.all");
     const planner = executable("packages/agent/src/tools/batch/batch-planner.ts");
     expect(planner).not.toContain("Promise.all");
-    // Phase 4F removed the legacy batch, so there is no second sequential scheduler to check.
+    const schedulerPath = "packages/agent/src/tools/batch/parallel-scheduler.ts";
+    const scheduler = executable(schedulerPath);
+    expect(scheduler).toContain("runBoundedByIndex");
+    expect(scheduler).toContain('approvalPolicy === "ALWAYS_ASK"');
+    expect(scheduler).toContain("admissionMayRequireApproval !== false");
+
+    // Phase 4F removed the legacy batch. Only the Agent-owned bounded scheduler may fan out Tool work.
     expect(existsSync(join(root, "packages/tools/src/batch-coordinator.ts"))).toBe(false);
-    // And no Tool execution path reaches for a fan-out primitive.
     for (const file of productionSources().filter((path) =>
       /\/(?:tools|batch|durable|execution)\//.test(path),
     )) {
+      if (file === schedulerPath) continue;
       expect(executable(file), `${file} must not introduce parallelism`).not.toMatch(
         /\bPromise\.all\b|\bPromise\.allSettled\b|\bnew Worker\b/,
       );

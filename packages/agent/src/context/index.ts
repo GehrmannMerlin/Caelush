@@ -455,3 +455,13 @@ export {
   ContextSourceCollectionError,
   createContextSourceRegistryBuilder,
 } from "./source/context-source-registry.js";
+
+export {
+  assertToolResultPruningPolicy,
+  DEFAULT_TOOL_RESULT_PRUNING,
+  omissionMarker,
+  PRUNED_TOOL_RESULT_PREFIX,
+  pruneSettledToolResult,
+  type ToolResultPruningPolicy,
+  type ToolResultPruningStats,
+} from "./materializer/tool-result-pruner.js";

@@ -69,6 +69,7 @@ export function createGitDiffTool(operations: GitOperations): CodingToolDefiniti
   const tool = defineCodingTool({
     name: "git_diff",
     description: "Git.",
+    executionMode: "PARALLEL_SAFE",
     inputSchema,
     resultDetailsSchema,
     execute: async (input): Promise<AgentToolResult> => {

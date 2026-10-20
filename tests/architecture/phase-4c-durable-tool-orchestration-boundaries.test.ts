@@ -492,7 +492,7 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
     // Phase 3 Tool turn contract.
     const toolTurn = executable("packages/agent/src/run/ports/tool-turn.ts");
     const turnResult = interfaceBody(toolTurn, "export interface AgentToolResult");
-    expect(turnResult.match(/readonly /g) ?? []).toHaveLength(4);
+    expect(turnResult.match(/readonly /g) ?? []).toHaveLength(5);
     expect(turnResult).not.toContain("details");
     expect(toolTurn).toContain('readonly kind: "BUDGET_EXCEEDED";');
     expect(toolTurn).toContain("readonly block: AgentBudgetBlock;");
