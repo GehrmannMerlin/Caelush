@@ -22,6 +22,14 @@ export interface TaskPlanSnapshot {
   readonly revision: string;
   readonly sourceStepId?: string;
   readonly steps: readonly PlanStep[];
+  /**
+   * Successful Tool results accepted after this plan was recorded.
+   *
+   * It is a count, not a judgement: it says "work happened after the plan", which is the only thing
+   * the message log proves. It never claims a step is done - a completed step is the model's report,
+   * and a verification is a different fact that only the verification records can supply.
+   */
+  readonly resultsSincePlan: number;
 }
 
 /**
@@ -62,6 +70,14 @@ export function deriveTaskPlanSnapshot(input: {
       revision: message.id,
       ...(message.sourceStepId === undefined ? {} : { sourceStepId: message.sourceStepId }),
       steps: validated.steps,
+      resultsSincePlan: input.messages.filter(
+        (candidate) =>
+          candidate.sequence > entry.sequence &&
+          candidate.message.type === "TOOL_RESULT" &&
+          candidate.message.runId === input.runId &&
+          candidate.message.toolName !== "update_plan" &&
+          !candidate.message.isError,
+      ).length,
     });
   }
   return latest;
@@ -78,5 +94,7 @@ export function renderTaskPlanBlock(snapshot: TaskPlanSnapshot): string {
     "CURRENT PLAN (recorded by the model; a step marked completed is a report, not proof)",
     ...lines,
     `${String(completed)} of ${String(snapshot.steps.length)} steps reported completed.`,
+    `Evidence: ${String(snapshot.resultsSincePlan)} successful Tool result(s) accepted since this plan was recorded.`,
+    "A completed step is not a verification; only a check that actually ran proves anything.",
   ].join("\n");
 }

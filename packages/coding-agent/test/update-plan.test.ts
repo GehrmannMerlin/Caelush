@@ -85,6 +85,41 @@ describe("task plan projection", () => {
     });
     expect(snapshot?.steps).toHaveLength(2);
     expect(snapshot?.revision).toBe("msg_result_call_1");
+    expect(snapshot?.resultsSincePlan).toBe(0);
+  });
+
+  it("counts work that happened after the plan without calling it evidence of completion", () => {
+    const snapshot = deriveTaskPlanSnapshot({
+      runId: "run_1",
+      messages: [
+        { sequence: 1, message: assistantCall("call_1", plan) },
+        { sequence: 2, message: toolResult("call_1", false) },
+        {
+          sequence: 3,
+          message: {
+            type: "TOOL_RESULT",
+            runId: "run_1",
+            id: "m3",
+            toolName: "apply_patch",
+            isError: false,
+          } as never,
+        },
+        {
+          sequence: 4,
+          message: {
+            type: "TOOL_RESULT",
+            runId: "run_1",
+            id: "m4",
+            toolName: "apply_patch",
+            isError: true,
+          } as never,
+        },
+      ],
+    });
+    expect(snapshot?.resultsSincePlan).toBe(1);
+    const block = renderTaskPlanBlock(snapshot!);
+    expect(block).toContain("1 successful Tool result(s) accepted");
+    expect(block).toContain("not a verification");
   });
 
   it("ignores a rejected call and a call with no result", () => {
