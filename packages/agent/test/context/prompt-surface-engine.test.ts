@@ -705,9 +705,10 @@ describe("Prompt Surface Context Engine integration", () => {
         (update) => update.op === "SET" && update.content.includes("step 129"),
       ),
     ).toBe(true);
-    expect(lastPrepared?.messages.some((message) => message.content.includes("step 130"))).toBe(
-      true,
-    );
+    const lastPreparedText = (lastPrepared?.messages ?? [])
+      .map((message) => (typeof message.content === "string" ? message.content : ""))
+      .join("\n");
+    expect(lastPreparedText).toContain("step 130");
 
     // The superseded epoch is kept intact for audit and replay.
     expect(
