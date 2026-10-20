@@ -246,3 +246,7 @@ export type {
   STOP_PROCESS_PROMPT_SNIPPET,
   WRITE_STDIN_PROMPT_SNIPPET,
 } from "./prompt/prompt-snippets.js";
+export {
+  APPLY_PATCH_ARGUMENT_EXAMPLE,
+  APPLY_PATCH_ARGUMENT_NOTES,
+} from "./prompt/apply-patch-arguments.js";

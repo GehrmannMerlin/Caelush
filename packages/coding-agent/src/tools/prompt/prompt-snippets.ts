@@ -1,5 +1,7 @@
 import type { ToolName } from "@caelush/protocol";
 
+import { APPLY_PATCH_ARGUMENT_NOTES } from "./apply-patch-arguments.js";
+
 /**
  * The Coding Tool prompt snippets.
  *
@@ -90,7 +92,7 @@ const SNIPPET_SOURCE: Readonly<Record<string, SnippetSource>> = {
     purpose: "Apply verified patch.",
     whenToUse: "Requested inspected changes.",
     whenNotToUse: "Reads/guesses.",
-    argumentNotes: "One exact patch document.",
+    argumentNotes: APPLY_PATCH_ARGUMENT_NOTES,
     sideEffects: "Mutates files after guards.",
     safety: "Gate/approval may apply.",
     resultHandling: "Re-read files/diff.",

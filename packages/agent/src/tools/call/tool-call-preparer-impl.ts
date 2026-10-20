@@ -14,6 +14,11 @@ import {
   ToolPreparationInfrastructureError,
 } from "../types/errors.js";
 import type { ToolFailureFeedback } from "../types/tool-feedback.js";
+import type { ToolSchemaIssue } from "../schema/schema-runtime.js";
+import {
+  normalizeInstancePath,
+  renderToolSchemaFeedback,
+} from "./schema-feedback-renderer.js";
 import type {
   PreparedToolCall,
   ToolCallPreparationOutcome,
@@ -126,7 +131,11 @@ export function createToolCallPreparer(
         return {
           kind: "REJECTED",
           request,
-          feedback: schemaFeedback(resolved.tool.name, validation.issues),
+          feedback: schemaFeedback(
+            resolved.tool.name,
+            validation.issues,
+            validation.truncatedIssueCount,
+          ),
         };
       }
 
@@ -250,42 +259,41 @@ function oversizedFeedback(): ToolFailureFeedback {
 }
 
 /**
- * Schema feedback is built from issue paths, keywords and the sanitized validator message.
+ * Schema feedback names the fields a model actually got wrong.
  *
- * The validator message is safe by construction — AJV reports "must be number", "must have required
- * property 'cmd'" and similar structural statements — but it is still never handed to a model on its
- * own: the model receives the fixed actionable content, and the structured issues stay in `details`
- * for a caller that wants to render its own bounded text. That is how a legacy-facing adapter can
- * keep its existing message format without this layer printing raw validation output.
+ * The rendered content comes from the bounded renderer, which quotes only schema-declared names,
+ * paths and types; the validator's own message and the raw arguments stay here, in `details`, for a
+ * caller that wants its own formatting. `details` is still bounded and still carries no argument
+ * value, so a diagnostics consumer cannot become a bypass of the model-facing boundary.
  */
 function schemaFeedback(
   toolName: ToolName,
-  issues: readonly {
-    readonly instancePath: string;
-    readonly keyword: string;
-    readonly message: string;
-  }[],
+  issues: readonly ToolSchemaIssue[],
+  truncatedIssueCount?: number,
 ): ToolFailureFeedback {
-  const summarized = issues.slice(0, 16).map((issue) => ({
-    path: normalizeInstancePath(issue.instancePath),
-    keyword: issue.keyword,
-    message: issue.message,
-  }));
+  const summarized = issues.slice(0, 16);
   return Object.freeze({
     code: TOOL_CALL_REJECTION_CODES.INVALID_ARGUMENTS,
-    content: `Arguments for "${toolName}" do not match its input schema. Correct the reported fields and call it again.`,
+    content: renderToolSchemaFeedback({
+      toolName,
+      issues,
+      ...(truncatedIssueCount === undefined ? {} : { truncatedIssueCount }),
+    }),
     details: Object.freeze({
-      issues: Object.freeze(summarized.map((issue) => Object.freeze(issue))),
+      issues: Object.freeze(
+        summarized.map((issue) =>
+          Object.freeze({
+            path: normalizeInstancePath(issue.instancePath),
+            keyword: issue.keyword,
+            message: issue.message,
+            ...(issue.property === undefined ? {} : { property: issue.property }),
+            ...(issue.expectedType === undefined ? {} : { expectedType: issue.expectedType }),
+          }),
+        ),
+      ),
     }),
     disposition: "SAFE_FAILURE",
   });
 }
 
-/** Turn a JSON Pointer instance path into a readable dotted field path. */
-export function normalizeInstancePath(instancePath: string): string {
-  return instancePath
-    .split("/")
-    .filter((part) => part.length > 0)
-    .map((part) => part.replaceAll("~1", "/").replaceAll("~0", "~"))
-    .join(".");
-}
+export { normalizeInstancePath };

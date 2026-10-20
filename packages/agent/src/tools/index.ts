@@ -115,6 +115,11 @@ export type {
   ToolArgumentNormalization,
   ToolCallPreparerOptions,
 } from "./call/tool-call-preparer-impl.js";
+export {
+  MAX_MODEL_SCHEMA_FEEDBACK_BYTES,
+  MAX_MODEL_SCHEMA_ISSUES,
+  renderToolSchemaFeedback,
+} from "./call/schema-feedback-renderer.js";
 export type {
   PreparedToolCall,
   ToolCallPreparationOutcome,

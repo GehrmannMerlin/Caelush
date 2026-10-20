@@ -114,6 +114,9 @@ export type {
 
 export {
   APPLY_PATCH_PROMPT_SNIPPET,
+  APPLY_PATCH_ARGUMENT_EXAMPLE,
+  APPLY_PATCH_ARGUMENT_NOTES,
+  applyPatchInputSchema,
   applyToolEffectsToAgentState,
   assertToolSecurityFactsProjector,
   boundToolModelContent,
