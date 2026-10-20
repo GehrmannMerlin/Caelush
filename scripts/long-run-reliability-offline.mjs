@@ -27,23 +27,23 @@
  */
 import { createHash } from "node:crypto";
 
-import {
-  PROMPT_SURFACE_LIMITS,
-  ToolSchemaRuntime,
-  decidePromptSurfaceCapacity,
-} from "@caelush/agent";
-import {
+// Load the built packages by path. A bare specifier would depend on how the workspace happens to be
+// installed (hoisted links at the root, isolated links per package), and this script has to run from
+// any checkout after `pnpm build`.
+const load = (relative) => import(new URL(relative, import.meta.url).href);
+const agent = await load("../packages/agent/dist/index.js");
+const core = await load("../packages/core/dist/index.js");
+const coding = await load("../packages/coding-agent/dist/index.js");
+
+const { PROMPT_SURFACE_LIMITS, ToolSchemaRuntime, decidePromptSurfaceCapacity } = agent;
+const {
   applyResourceProgressTurn,
   decideResourceSemanticIntervention,
   emptyResourceSemanticProgress,
   resourceProgressTurn,
-} from "@caelush/core";
-import {
-  applyPatchInputSchema,
-  deriveTaskPlanSnapshot,
-  renderTaskPlanBlock,
-  validatePlanSteps,
-} from "@caelush/coding-agent";
+} = core;
+const { applyPatchInputSchema, deriveTaskPlanSnapshot, renderTaskPlanBlock, validatePlanSteps } =
+  coding;
 
 const results = [];
 function check(name, condition, detail) {
