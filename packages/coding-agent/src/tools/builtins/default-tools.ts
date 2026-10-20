@@ -11,6 +11,7 @@ import type {
 import { AttachmentReadOperationError } from "../operations/attachment-read-operations.js";
 import type { CodingReadOnlyOperations } from "../operations/coding-read-only-operations.js";
 import { createApplyPatchTool } from "./apply-patch.js";
+import { createUpdatePlanTool } from "./update-plan.js";
 import { createExecCommandTool } from "./exec-command.js";
 import { createFindFilesTool } from "./find-files.js";
 import { createGitDiffTool } from "./git-diff.js";
@@ -67,6 +68,7 @@ export const DEFAULT_CODING_TOOL_ORDER = Object.freeze([
   "find_files",
   "search_text",
   "apply_patch",
+  "update_plan",
   "exec_command",
   "write_stdin",
   "stop_process",
@@ -119,6 +121,9 @@ export function createDefaultCodingTools(
     createFindFilesTool(operations.readOnly),
     createSearchTextTool(operations.readOnly),
     createApplyPatchTool(operations.patch),
+    // The plan is bookkeeping the model owns, so it sits next to the edits it describes and needs no
+    // operation port of its own.
+    createUpdatePlanTool(),
     createExecCommandTool(operations.exec),
     createWriteStdinTool(operations.process),
     createStopProcessTool(operations.process),

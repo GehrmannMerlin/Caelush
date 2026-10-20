@@ -10,6 +10,7 @@ import {
   createSearchTextTool,
   createWriteStdinTool,
   createStopProcessTool,
+  createUpdatePlanTool,
   DEFAULT_CODING_TOOL_ORDER,
   projectApplyPatchSecurityFacts,
   projectExecCommandSecurityFacts,
@@ -211,7 +212,7 @@ describe("approval identity fidelity", () => {
     });
   }
 
-  it("is deterministic for all eleven Tools across every policy pair", () => {
+  it("is deterministic for every approval-gated Tool across every policy pair", () => {
     // ```text
     // same prepared args + same metadata + same context  →  byte-identical key
     // ```
@@ -250,7 +251,9 @@ describe("approval identity fidelity", () => {
         }
       }
     }
-    expect(compared).toBe(99);
+    // Every default Tool across the nine policy pairs. A capability-free Tool still has a stable
+    // identity; it simply can never be approval-gated by capability.
+    expect(compared).toBe(definitions.length * 9);
   });
 
   it("is order-insensitive over capabilities", () => {
@@ -478,7 +481,7 @@ describe("effects fidelity", () => {
 });
 
 describe("default Tool set fidelity", () => {
-  it("produces the eleven Tools in the frozen order, from the one declaration", () => {
+  it("produces the default Tools in the frozen order, from the one declaration", () => {
     const definitions = createDefaultCodingTools(defaultOperations());
 
     expect(definitions.map((definition) => definition.tool.name)).toEqual([
@@ -489,12 +492,16 @@ describe("default Tool set fidelity", () => {
       expect(typeof definition.tool.execute).toBe("function");
       expect(definition.tool.executionMode).toBe("SEQUENTIAL");
       expect(definition.security.riskLevel).toMatch(/^(?:LOW|MEDIUM|HIGH|CRITICAL)$/);
-      expect(definition.security.requiredCapabilities.length).toBeGreaterThan(0);
+      if (definition.security.requiredCapabilities.length === 0) {
+        // A Tool with no capability cannot be approval-gated and must not pretend otherwise: it
+        // carries no effect projector, because there is no effect to project.
+        expect(definition.effectProjector, definition.tool.name).toBeUndefined();
+      }
       expect(definition.promptSnippet?.length ?? 0).toBeGreaterThan(0);
     }
   });
 
-  it("keeps the documented risk level, capabilities and runtime requirements for all eleven", () => {
+  it("keeps the documented risk level, capabilities and runtime requirements for the default Tools", () => {
     // The security envelope of the default product, asserted as a table rather than derived. A change
     // to any cell is a security change and has to be an explicit one.
     const definitions = createDefaultCodingTools(defaultOperations());
@@ -510,6 +517,9 @@ describe("default Tool set fidelity", () => {
       // `search_text` has a bounded Runtime fallback and does not require an external executable.
       ["search_text", "LOW", ["FS_READ"], { runtimeKinds: ["local"] }],
       ["apply_patch", "HIGH", ["FS_WRITE", "FS_DELETE"], { runtimeKinds: ["local"] }],
+      // The plan is bookkeeping the model owns. It touches no file, starts no process and therefore
+      // declares no capability and no runtime requirement.
+      ["update_plan", "LOW", [], { runtimeKinds: [] }],
       ["exec_command", "CRITICAL", ["SHELL_EXEC", "PROCESS_START"], { runtimeKinds: ["local"] }],
       [
         "write_stdin",
@@ -561,10 +571,15 @@ describe("default Tool set fidelity", () => {
     expect(byName.get("git_diff")?.effectProjector).toBeUndefined();
   });
 
-  it("carries a security-facts projector for every one of the eleven", () => {
+  it("carries a security-facts projector for every capability-bearing Tool", () => {
     // The Security gate is handed a Tool's facts; a Tool without a projector would be opaque to the
-    // input-aware policy, which is the one outcome that must never happen for a default Tool.
+    // input-aware policy, which is the one outcome that must never happen for a Tool that can touch
+    // the host. A Tool that declares no capability has no such facts to project.
     for (const definition of createDefaultCodingTools(defaultOperations())) {
+      if (definition.security.requiredCapabilities.length === 0) {
+        expect(definition.securityFactsProjector, definition.tool.name).toBeUndefined();
+        continue;
+      }
       expect(definition.securityFactsProjector, definition.tool.name).toBeDefined();
     }
   });
@@ -622,7 +637,7 @@ describe("Coding Tool execution fidelity", () => {
     });
   });
 
-  it("constructs every one of the eleven Tools", () => {
+  it("constructs every default Tool", () => {
     const readOnly = readOnlyFake({ read: async () => readFileAnswer() }).operations;
     const process = processFake({ execute: async () => ({}), interact: async () => ({}) });
     const git = gitFake({ status: async () => ({}) }).operations;
@@ -638,6 +653,7 @@ describe("Coding Tool execution fidelity", () => {
     expect(createWriteStdinTool(process.process).tool.name).toBe("write_stdin");
     expect(createStopProcessTool(process.process).tool.name).toBe("stop_process");
     expect(createGitStatusTool(git).tool.name).toBe("git_status");
+    expect(createUpdatePlanTool().tool.name).toBe("update_plan");
     expect(createGitDiffTool(git).tool.name).toBe("git_diff");
   });
 
@@ -646,9 +662,9 @@ describe("Coding Tool execution fidelity", () => {
     const definitions: readonly CodingToolDefinition[] =
       createDefaultCodingTools(defaultOperations());
     const tools = new Set(definitions.map((definition) => definition.tool));
-    expect(tools.size).toBe(11);
+    expect(tools.size).toBe(DEFAULT_CODING_TOOL_ORDER.length);
     const schemas = new Set(definitions.map((definition) => definition.tool.inputSchema));
-    expect(schemas.size).toBe(11);
+    expect(schemas.size).toBe(DEFAULT_CODING_TOOL_ORDER.length);
   });
 
   it("reports a Runtime failure as a model-recoverable Tool error", async () => {

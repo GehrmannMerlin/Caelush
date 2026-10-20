@@ -100,6 +100,17 @@ export { createListDirectoryTool, listDirectoryInputSchema } from "./builtins/li
 export { createFindFilesTool, findFilesInputSchema } from "./builtins/find-files.js";
 export { createSearchTextTool, searchTextInputSchema } from "./builtins/search-text.js";
 export { createApplyPatchTool, applyPatchInputSchema } from "./builtins/apply-patch.js";
+export {
+  createUpdatePlanTool,
+  renderPlanSteps,
+  validatePlanSteps,
+  type PlanStep,
+} from "./builtins/update-plan.js";
+export {
+  deriveTaskPlanSnapshot,
+  renderTaskPlanBlock,
+  type TaskPlanSnapshot,
+} from "./plan/task-plan-projection.js";
 export { createExecCommandTool, execCommandInputSchema } from "./builtins/exec-command.js";
 export { createWriteStdinTool, writeStdinInputSchema } from "./builtins/write-stdin.js";
 export { createStopProcessTool, stopProcessInputSchema } from "./builtins/stop-process.js";
@@ -244,6 +255,7 @@ export type {
   READ_FILE_PROMPT_SNIPPET,
   SEARCH_TEXT_PROMPT_SNIPPET,
   STOP_PROCESS_PROMPT_SNIPPET,
+  UPDATE_PLAN_PROMPT_SNIPPET,
   WRITE_STDIN_PROMPT_SNIPPET,
 } from "./prompt/prompt-snippets.js";
 export {

@@ -97,6 +97,16 @@ const SNIPPET_SOURCE: Readonly<Record<string, SnippetSource>> = {
     safety: "Gate/approval may apply.",
     resultHandling: "Re-read files/diff.",
   },
+  update_plan: {
+    purpose: "Record the step list you are working through.",
+    whenToUse: "Multi-step work: before starting, and when a step changes state.",
+    whenNotToUse: "One-shot questions or single-file edits.",
+    argumentNotes:
+      'Full replacement: {"plan":[{"step":"...","status":"pending|in_progress|completed"}]}. At most one in_progress.',
+    sideEffects: "None; it records intent, it does not execute anything.",
+    safety: "Steps are your own report, not proof of completion.",
+    resultHandling: "The list is echoed back; keep it current rather than restating it.",
+  },
   exec_command: {
     purpose: "Run command.",
     whenToUse: "Tests/builds/installs/services.",
@@ -178,6 +188,7 @@ export const LIST_DIRECTORY_PROMPT_SNIPPET = renderSnippet(
 export const FIND_FILES_PROMPT_SNIPPET = renderSnippet("find_files", SNIPPET_SOURCE.find_files!);
 export const SEARCH_TEXT_PROMPT_SNIPPET = renderSnippet("search_text", SNIPPET_SOURCE.search_text!);
 export const APPLY_PATCH_PROMPT_SNIPPET = renderSnippet("apply_patch", SNIPPET_SOURCE.apply_patch!);
+export const UPDATE_PLAN_PROMPT_SNIPPET = renderSnippet("update_plan", SNIPPET_SOURCE.update_plan!);
 export const EXEC_COMMAND_PROMPT_SNIPPET = renderSnippet(
   "exec_command",
   SNIPPET_SOURCE.exec_command!,
@@ -201,6 +212,7 @@ export const CODING_TOOL_PROMPT_SNIPPETS: Readonly<Record<string, string>> = Obj
   find_files: FIND_FILES_PROMPT_SNIPPET,
   search_text: SEARCH_TEXT_PROMPT_SNIPPET,
   apply_patch: APPLY_PATCH_PROMPT_SNIPPET,
+  update_plan: UPDATE_PLAN_PROMPT_SNIPPET,
   exec_command: EXEC_COMMAND_PROMPT_SNIPPET,
   write_stdin: WRITE_STDIN_PROMPT_SNIPPET,
   stop_process: STOP_PROCESS_PROMPT_SNIPPET,

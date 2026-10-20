@@ -53,6 +53,7 @@ import type { AgentMessageProjectorRegistry } from "@caelush/agent";
 import { createBudgetedContextSummarizer } from "./context-compaction-composition.js";
 import { createDeterministicCompactionFactsProvider } from "./deterministic-compaction-facts-adapter.js";
 import { createWorkCommentaryContextProvider } from "./work-commentary-context-provider.js";
+import { createTaskPlanContextProvider } from "./task-plan-context-provider.js";
 import { projectModelResourceGovernance } from "./resource-governance-context.js";
 
 export interface DaemonV2ContextCompositionOptions {
@@ -228,6 +229,9 @@ function createSourceRegistry(options: {
     "REQUIRED",
   );
   register(createWorkCommentaryContextProvider({ storage: options.storage }), 5, "OPTIONAL");
+  // The model's own step list, re-derived from its accepted update_plan call. Optional and cheap:
+  // a Run that never plans contributes nothing.
+  register(createTaskPlanContextProvider(), 6, "OPTIONAL");
   register(createConversationContextSourceProvider(), 10, "REQUIRED");
   register(
     createCheckpointContextSourceProvider({
