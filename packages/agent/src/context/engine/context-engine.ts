@@ -56,6 +56,11 @@ import {
 } from "../compaction/context-compaction-contracts.js";
 import { createContextCompactionPlanner } from "../compaction/context-compaction-planner.js";
 import { createContextPressureEvaluator } from "../compaction/context-pressure-evaluator.js";
+import {
+  advanceContextCompactionSchedule,
+  initialContextCompactionSchedule,
+  type ContextCompactionSchedule,
+} from "../compaction/context-compaction-schedule.js";
 import type { ContextCompactionCommitPort } from "../ports/context-compaction-commit-port.js";
 import {
   createContextCheckpointEnricher,
@@ -271,6 +276,23 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
   const compactionPlanner = options.compactionPlanner ?? createContextCompactionPlanner();
   const recoveryPlanner = options.recoveryPlanner ?? createContextRecoveryPlanner();
   const pressureEvaluator = createContextPressureEvaluator();
+  /**
+   * Per-Run compaction pacing.
+   *
+   * It is bounded and disposable: a missing entry means "start armed", which can cost at most one
+   * extra attempt and never changes what a compaction is allowed to do. Every attempt still passes
+   * through the planner, the semantic validator, the gain gate and the compaction transaction.
+   */
+  const compactionSchedules = new Map<string, ContextCompactionSchedule>();
+  const scheduleFor = (runId: string): ContextCompactionSchedule => {
+    const existing = compactionSchedules.get(runId);
+    if (existing !== undefined) return existing;
+    if (compactionSchedules.size >= 256) {
+      const oldest = compactionSchedules.keys().next();
+      if (!oldest.done) compactionSchedules.delete(oldest.value);
+    }
+    return initialContextCompactionSchedule();
+  };
   const rehydrator = options.rehydrator ?? createContextRehydrator();
   const documentBuilder = options.documentBuilder ?? createContextDocumentBuilder();
   const summarizer: ContextSummarizerPort =
@@ -424,8 +446,18 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         persistPromptSurface: false,
         compactionCount: 0,
       });
+      const estimatedInputTokens = initialProjection.audit.report.estimatedInputTokens;
+      const pressureRatio = estimatedInputTokens / policy.effectiveInputLimitTokens;
+      const emergency = estimatedInputTokens >= policy.emergencyCompactionTokens;
+      const schedule = advanceContextCompactionSchedule(scheduleFor(String(input.identity.runId)), {
+        pressureRatio,
+        emergency,
+        forced: input.mode === "FORCED_RECOVERY",
+        compacted: false,
+      });
+      compactionSchedules.set(String(input.identity.runId), schedule);
       const pressure = pressureEvaluator.evaluate({
-        estimatedInputTokens: initialProjection.audit.report.estimatedInputTokens,
+        estimatedInputTokens,
         selectedPlanningTokens: initialProjection.plan.budget.selectedTokens,
         mandatoryTokens: initialProjection.plan.budget.mandatoryTokens,
         historySelectionPressure: initialProjection.plan.historySelectionPressure,
@@ -438,6 +470,12 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         hasCompressibleHistory: activeCoverage.history.units.some(
           (unit) => unit.status === "CLOSED" && unit.compactionEligible,
         ),
+        proactive: {
+          enabled: policy.proactiveCompaction.enabled,
+          armed: schedule.armed,
+          cooldownTurnsRemaining: schedule.cooldownTurnsRemaining,
+          emergency,
+        },
       });
       const recoveryPlan = recoveryPlanner.plan({
         mode: input.mode,
@@ -452,6 +490,19 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           ? recoveryPlan.actions.filter((action) => action !== "EXHAUSTED")
           : [];
       if (recoveryPlan.actions.includes("COMPACT_HISTORY")) {
+        // Recorded when the attempt is made, not when it succeeds: a failed or gainless attempt is
+        // exactly the case that must not be retried next turn with the same input and strategy.
+        compactionSchedules.set(
+          String(input.identity.runId),
+          advanceContextCompactionSchedule(
+            schedule,
+            { pressureRatio, emergency, forced: input.mode === "FORCED_RECOVERY", compacted: true },
+            {
+              rearmRatio: policy.proactiveCompaction.rearmRatio,
+              cooldownTurns: policy.proactiveCompaction.cooldownTurns,
+            },
+          ),
+        );
         const replayProjection = await buildPreparedProjectionWithoutCompaction({
           contextInput: input,
           policy: withRecoveryTailPolicy(policy, recoveryPlan),
@@ -590,23 +641,40 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           },
           tentativeRebuild: composition.tentativeRebuild,
         });
-        const outcome = await coordinator.compact({
-          identity: input.identity,
-          conversation: input.conversation,
-          history: activeCoverage.history,
-          policy: withRecoveryTailPolicy(policy, recoveryPlan),
-          model: input.model,
-          ...(replayPrefix === undefined
-            ? {}
-            : {
-                replayPrefix,
-                replayPrefixFingerprint: createContextSummaryReplayPrefixFingerprint(replayPrefix),
-              }),
-          reason,
-          estimatedInputTokensBefore: beforeCompactionProjection.audit.report.estimatedInputTokens,
-          signal: input.signal,
-        });
-        if (outcome.kind === "COMPACTED") {
+        // An elective compaction that cannot run must not fail a turn whose input still fits. The
+        // original context is legal; replacing it with a failure would turn "summary unavailable"
+        // into "the Run cannot continue", which is exactly the outcome this pacing exists to avoid.
+        const elective =
+          input.mode !== "FORCED_RECOVERY" &&
+          beforeCompactionProjection.audit.report.estimatedInputTokens <=
+            policy.effectiveInputLimitTokens;
+        let outcome: Awaited<ReturnType<typeof coordinator.compact>> | undefined;
+        try {
+          outcome = await coordinator.compact({
+            identity: input.identity,
+            conversation: input.conversation,
+            history: activeCoverage.history,
+            policy: withRecoveryTailPolicy(policy, recoveryPlan),
+            model: input.model,
+            ...(replayPrefix === undefined
+              ? {}
+              : {
+                  replayPrefix,
+                  replayPrefixFingerprint:
+                    createContextSummaryReplayPrefixFingerprint(replayPrefix),
+                }),
+            reason,
+            estimatedInputTokensBefore:
+              beforeCompactionProjection.audit.report.estimatedInputTokens,
+            signal: input.signal,
+          });
+        } catch (error) {
+          throwIfAborted(input.signal);
+          if (!elective) throw error;
+          // Bounded, silent fallback: the uncompacted projection is what this turn already had.
+          outcome = undefined;
+        }
+        if (outcome?.kind === "COMPACTED") {
           activeCheckpoint = outcome.checkpoint;
           activeCoverage = createContextCompactionCoverage({
             history,
@@ -1415,11 +1483,7 @@ function prepareV3PromptSurface(
     targetSectionStates: targetStates,
   });
   if (capacity.kind === "BASELINE_TOO_LARGE") {
-    throw promptSurfaceBaselineTooLarge(
-      capacity.dimension,
-      capacity.observed,
-      capacity.limit,
-    );
+    throw promptSurfaceBaselineTooLarge(capacity.dimension, capacity.observed, capacity.limit);
   }
   if (capacity.kind === "ROLLOVER_REQUIRED") {
     return rolloverPreparedSurface(input, surface, candidate, targetStates);

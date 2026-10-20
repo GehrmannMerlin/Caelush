@@ -23,6 +23,17 @@ export interface ContextPolicyOptions {
   readonly maxObservationBatchRatio?: number;
   readonly conversationCapTokens?: number;
   readonly sourceLimits?: Readonly<Record<string, number>>;
+  /**
+   * Whether a `PROACTIVE` pressure reading may actually start a compaction.
+   *
+   * Defaults to enabled: the whole point of having a 75% band is to act inside it. A host that needs
+   * the historical behaviour (label only, compact at the limit) sets this to false.
+   */
+  readonly proactiveCompactionEnabled?: boolean;
+  /** Fall back below this ratio before another ordinary attempt is allowed. */
+  readonly proactiveCompactionRearmRatio?: number;
+  /** Minimum new model turns between ordinary attempts. */
+  readonly proactiveCompactionCooldownTurns?: number;
 }
 
 export interface ContextPolicyInput {
@@ -106,6 +117,12 @@ export interface ContextPolicy {
   readonly conversationCapTokens: number;
   readonly sourceLimits: Readonly<Record<string, number>>;
   readonly elasticPoolTokens: number;
+  /** Frozen pacing of elective compaction for this policy. */
+  readonly proactiveCompaction: {
+    readonly enabled: boolean;
+    readonly rearmRatio: number;
+    readonly cooldownTurns: number;
+  };
 }
 
 const DEFAULTS = {
@@ -253,6 +270,11 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
     conversationCapTokens,
     sourceLimits,
     elasticPoolTokens: Math.max(0, effectiveInputLimitTokens - targetRecentTailTokens),
+    proactiveCompaction: Object.freeze({
+      enabled: options.proactiveCompactionEnabled ?? true,
+      rearmRatio: options.proactiveCompactionRearmRatio ?? 0.65,
+      cooldownTurns: options.proactiveCompactionCooldownTurns ?? 4,
+    }),
   });
 }
 
