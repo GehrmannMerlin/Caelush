@@ -605,9 +605,20 @@ describe("RunController Tool resume provenance", () => {
 
     await controllerFor(store, []).continueResourceGuard(run.id);
 
-    const recorded = store.snapshot.continuation;
-    expect(recorded?.type === "WAITING_TOOL_RESULTS" ? recorded.sourceStepId : undefined).toBe(
-      ORIGINAL_TOOL_STEP,
+    // The wait is over, and it ended by *closing* the batch rather than re-running it: the calls were
+    // never dispatched, so re-admitting them would have re-asked a question the Run had already
+    // answered. The closure is attributed to the Step that requested the Tools, which is what this
+    // file is about — a resume must not invent a Step for results belonging to an older request.
+    expect(store.snapshot.run.status).not.toBe("WAITING_RESOURCE");
+    const closedResults = store.snapshot.conversationRecords.filter(
+      (record) => record.messageType === "TOOL_RESULT",
     );
+    expect(closedResults).toHaveLength(1);
+    expect(closedResults[0]?.sourceStepId).toBe(ORIGINAL_TOOL_STEP);
+    expect(closedResults[0]?.data["toolCallId"]).toBe("call_a");
+    expect(closedResults[0]?.data["isError"]).toBe(true);
+    // Every requested call got exactly one result, in assistant source order: the batch stays
+    // cardinality- and order-preserving even when nothing ran.
+    expect(closedResults.map((record) => record.data["toolCallId"])).toEqual(["call_a"]);
   });
 });
