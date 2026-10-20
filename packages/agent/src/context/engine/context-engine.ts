@@ -27,6 +27,14 @@ import type {
 } from "../surface/prompt-surface.js";
 import type { PromptSurfaceStorePort } from "../surface/prompt-surface-store.js";
 import {
+  decidePromptSurfaceCapacity,
+  promptSurfaceBaselineTooLarge,
+} from "../surface/prompt-surface-capacity.js";
+import {
+  rolloverPromptSurface,
+  type PromptSurfaceRolloverOutcome,
+} from "../surface/prompt-surface-rollover.js";
+import {
   comparePromptSurfaceAnchorOrder,
   latestCompletePromptSurfaceAnchor,
   promptSurfaceAnchorsAreAvailable,
@@ -1401,8 +1409,38 @@ function prepareV3PromptSurface(
     return Promise.resolve(preparedSurface(surface, input, true));
   }
 
+  const capacity = decidePromptSurfaceCapacity({
+    epoch: surface,
+    candidate,
+    targetSectionStates: targetStates,
+  });
+  if (capacity.kind === "BASELINE_TOO_LARGE") {
+    throw promptSurfaceBaselineTooLarge(
+      capacity.dimension,
+      capacity.observed,
+      capacity.limit,
+    );
+  }
+  if (capacity.kind === "ROLLOVER_REQUIRED") {
+    return rolloverPreparedSurface(input, surface, candidate, targetStates);
+  }
+  return appendPreparedSurface(input, surface, candidate, stepSequence);
+}
+
+/**
+ * Append one decision to the epoch that still has room for it.
+ *
+ * The committed epoch is read back and re-verified: an append that the store accepted but that
+ * cannot be reproduced byte-for-byte is treated as corruption, not as success.
+ */
+function appendPreparedSurface(
+  input: PromptSurfacePreparationInput,
+  surface: PromptSurfaceEpochWithSnapshots,
+  candidate: PromptSurfaceRecord,
+  stepSequence: number,
+): Promise<PromptSurfacePreparationResult> {
   return input.store
-    .appendRecord(candidate, promptSurfaceEpochOnly(surface), records.length)
+    .appendRecord(candidate, promptSurfaceEpochOnly(surface), (surface.records ?? []).length)
     .then(async () => {
       const committed = await input.store.readEpoch(surface.runId, surface.epochId);
       if (committed === undefined) {
@@ -1433,6 +1471,64 @@ function prepareV3PromptSurface(
       if (error instanceof PromptSurfaceIntegrityError) throw error;
       throw error;
     });
+}
+
+/**
+ * Continue this Step in a new epoch whose baseline is the complete Section view.
+ *
+ * The old epoch and every durable message remain; the next model request is simply projected
+ * against a smaller, equivalent log. No model inference, summary or Tool call is involved, so the
+ * cost of crossing this boundary is one projection rebuild.
+ */
+async function rolloverPreparedSurface(
+  input: PromptSurfacePreparationInput,
+  surface: PromptSurfaceEpochWithSnapshots,
+  candidate: PromptSurfaceRecord,
+  targetSectionStates: readonly PromptSurfaceSectionState[],
+): Promise<PromptSurfacePreparationResult> {
+  const rolled = await rolloverPromptSurface({
+    store: input.store,
+    epoch: surface,
+    stepSequence: candidate.sourceStepSequence,
+    anchor: candidate.anchor,
+    targetSectionStates,
+    decisionFingerprint: candidate.decisionFingerprint,
+    createdAt: candidate.createdAt,
+  });
+  return confirmRolledSurface(input, rolled, candidate);
+}
+
+async function confirmRolledSurface(
+  input: PromptSurfacePreparationInput,
+  rolled: PromptSurfaceRolloverOutcome,
+  candidate: PromptSurfaceRecord,
+): Promise<PromptSurfacePreparationResult> {
+  const committed = await input.store.readEpoch(rolled.epoch.runId, rolled.epoch.epochId);
+  if (committed === undefined) {
+    throw new PromptSurfaceIntegrityError("Committed Prompt Surface rollover could not be read.");
+  }
+  assertPromptSurfaceEpochWithSnapshots(committed);
+  const stored = committed.records?.find(
+    (record) => record.sourceStepSequence === candidate.sourceStepSequence,
+  );
+  // The committed decision is the epoch's baseline, not the delta this Step would have appended:
+  // it must still fingerprint the same target view and anchor the caller decided on.
+  if (
+    stored === undefined ||
+    stored.kind !== "BASELINE" ||
+    stored.ordinal !== 1 ||
+    stored.decisionFingerprint !== candidate.decisionFingerprint
+  ) {
+    throw new PromptSurfaceIntegrityError(
+      "Committed Prompt Surface rollover differs from its request.",
+    );
+  }
+  if (
+    !promptSurfaceAnchorsAreAvailable(input.conversationMessages, promptSurfaceAnchors(committed))
+  ) {
+    throw new PromptSurfaceIntegrityError("Committed Prompt Surface anchor is unavailable.");
+  }
+  return preparedSurface(committed, input, true);
 }
 
 function replayPromptSurfaceSectionStates(

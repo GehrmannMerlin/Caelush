@@ -4,6 +4,7 @@ import {
   assertPromptSurfaceSnapshot,
   assertPromptSurfaceRecord,
   applyPromptSurfaceSectionUpdates,
+  PromptSurfaceRolloverConflictError,
   type PromptSurfaceEpoch,
   type PromptSurfaceEpochId,
   type PromptSurfaceEpochWithSnapshots,
@@ -173,6 +174,40 @@ export function createPromptSurfaceMemoryStore(): PromptSurfaceMemoryStore {
     },
     async readEpoch(runId: RunId, epochId: PromptSurfaceEpochId) {
       return byRun.get(runId)?.find((candidate) => candidate.epochId === epochId);
+    },
+    async rolloverEpoch(command) {
+      assertPromptSurfaceRecord(command.baseline);
+      const epochs = byRun.get(command.baseline.runId) ?? [];
+      const existing = epochs.find((candidate) => candidate.epochId === command.newEpoch.epochId);
+      if (existing !== undefined) {
+        const first = existing.records?.at(0);
+        if (first === undefined || first.contentHash !== command.baseline.contentHash) {
+          throw new PromptSurfaceRolloverConflictError("test rollover operation conflict");
+        }
+        return "IDEMPOTENT";
+      }
+      const current = epochs.at(-1);
+      if (
+        current === undefined ||
+        current.formatVersion !== 3 ||
+        current.epochId !== command.expectedCurrentEpoch.epochId ||
+        current.records === undefined ||
+        current.records.length !== command.expectedRecordOrdinal ||
+        (current.records.at(-1)?.decisionFingerprint ?? null) !==
+          command.expectedDecisionFingerprint
+      ) {
+        throw new PromptSurfaceRolloverConflictError("test rollover compare-and-swap failed");
+      }
+      epochs.push(
+        Object.freeze({
+          ...command.newEpoch,
+          snapshots: Object.freeze([]),
+          records: Object.freeze([command.baseline]),
+          sectionStates: Object.freeze([...command.expectedSectionStates]),
+        }),
+      );
+      byRun.set(command.baseline.runId, epochs);
+      return "COMMITTED";
     },
   };
 }

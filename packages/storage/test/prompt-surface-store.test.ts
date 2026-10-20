@@ -9,6 +9,7 @@ import {
   createPromptSurfaceSnapshot,
   createPromptSurfaceRecord,
   hashPromptSurfaceContent,
+  PromptSurfaceRolloverConflictError,
   type PromptSurfaceEpochInput,
   type PromptSurfaceSnapshotInput,
   type PromptSurfaceRecordInput,
@@ -611,5 +612,226 @@ describe("SqlitePromptSurfaceStore", () => {
     await expect(storage.promptSurface.readEpoch(run.id, epoch.epochId)).resolves.toMatchObject({
       snapshots: [first],
     });
+  });
+
+  it("commits a capacity rollover atomically and recognises its own retry", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    stores.push(storage);
+    const run = await addRun(storage);
+    const source = makeEpoch(run.id, "epoch-rollover-source", 1, { formatVersion: 3 });
+    await storage.promptSurface.createEpoch(source);
+    const sourceState = makeSetUpdate("a", "state v1");
+    await storage.promptSurface.appendRecord(
+      makeV3Record(source, {
+        ordinal: 1,
+        anchor: anchorFor(source, 1),
+        sourceStepSequence: 1,
+        kind: "BASELINE",
+        updates: [sourceState],
+        decisionFingerprint: "a".repeat(64),
+      }),
+      source,
+      0,
+    );
+
+    const next = makeEpoch(run.id, "epoch-rollover-next", 2, {
+      formatVersion: 3,
+      resetReason: "CAPACITY_ROLLOVER",
+    });
+    const nextState = makeSetUpdate("a", "state v2");
+    const baseline = makeV3Record(next, {
+      ordinal: 1,
+      anchor: anchorFor(next, 2),
+      sourceStepSequence: 2,
+      kind: "BASELINE",
+      updates: [nextState],
+      decisionFingerprint: "b".repeat(64),
+    });
+    const command = {
+      expectedCurrentEpoch: source,
+      expectedRecordOrdinal: 1,
+      expectedDecisionFingerprint: "a".repeat(64),
+      operationId: "operation-1",
+      newEpoch: next,
+      baseline,
+      expectedSectionStates: [
+        {
+          stateKey: nextState.stateKey,
+          contentHash: nextState.contentHash,
+          content: nextState.content,
+        },
+      ],
+    };
+
+    await expect(storage.promptSurface.rolloverEpoch(command)).resolves.toBe("COMMITTED");
+    await expect(storage.promptSurface.rolloverEpoch(command)).resolves.toBe("IDEMPOTENT");
+    await expect(storage.promptSurface.getCurrent(run.id)).resolves.toMatchObject({
+      epochId: next.epochId,
+      resetReason: "CAPACITY_ROLLOVER",
+      createdStepSequence: 2,
+    });
+    await expect(storage.promptSurface.readEpoch(run.id, next.epochId)).resolves.toMatchObject({
+      records: [baseline],
+    });
+    // The superseded epoch is preserved for audit and replay.
+    await expect(storage.promptSurface.readEpoch(run.id, source.epochId)).resolves.toMatchObject({
+      records: [expect.objectContaining({ ordinal: 1, sourceStepSequence: 1 })],
+    });
+  });
+
+  it("refuses a rollover whose compare-and-swap expectation no longer holds", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    stores.push(storage);
+    const run = await addRun(storage);
+    const source = makeEpoch(run.id, "epoch-rollover-cas", 1, { formatVersion: 3 });
+    await storage.promptSurface.createEpoch(source);
+    await storage.promptSurface.appendRecord(
+      makeV3Record(source, {
+        ordinal: 1,
+        anchor: anchorFor(source, 1),
+        sourceStepSequence: 1,
+        kind: "BASELINE",
+        updates: [makeSetUpdate("a", "state v1")],
+        decisionFingerprint: "a".repeat(64),
+      }),
+      source,
+      0,
+    );
+    const next = makeEpoch(run.id, "epoch-rollover-cas-next", 2, {
+      formatVersion: 3,
+      resetReason: "CAPACITY_ROLLOVER",
+    });
+    const nextState = makeSetUpdate("a", "state v2");
+    const baseline = makeV3Record(next, {
+      ordinal: 1,
+      anchor: anchorFor(next, 2),
+      sourceStepSequence: 2,
+      kind: "BASELINE",
+      updates: [nextState],
+      decisionFingerprint: "b".repeat(64),
+    });
+    const command = {
+      expectedCurrentEpoch: source,
+      expectedRecordOrdinal: 1,
+      expectedDecisionFingerprint: "a".repeat(64),
+      operationId: "operation-2",
+      newEpoch: next,
+      baseline,
+      expectedSectionStates: [
+        {
+          stateKey: nextState.stateKey,
+          contentHash: nextState.contentHash,
+          content: nextState.content,
+        },
+      ],
+    };
+
+    await expect(
+      storage.promptSurface.rolloverEpoch({ ...command, expectedRecordOrdinal: 0 }),
+    ).rejects.toBeInstanceOf(PromptSurfaceRolloverConflictError);
+    await expect(
+      storage.promptSurface.rolloverEpoch({
+        ...command,
+        expectedDecisionFingerprint: "c".repeat(64),
+      }),
+    ).rejects.toBeInstanceOf(PromptSurfaceRolloverConflictError);
+    await expect(
+      storage.promptSurface.rolloverEpoch({
+        ...command,
+        expectedSectionStates: [makeSetUpdate("a", "different state")],
+      }),
+    ).rejects.toBeInstanceOf(StorageDecodeError);
+    await expect(storage.promptSurface.getCurrent(run.id)).resolves.toMatchObject({
+      epochId: source.epochId,
+    });
+
+    // A committed epoch cannot be re-bound to different semantics under the same operation.
+    await storage.promptSurface.rolloverEpoch(command);
+    const otherState = makeSetUpdate("a", "state v3");
+    const otherBaseline = makeV3Record(next, {
+      ordinal: 1,
+      anchor: anchorFor(next, 2),
+      sourceStepSequence: 2,
+      kind: "BASELINE",
+      updates: [otherState],
+      decisionFingerprint: "d".repeat(64),
+    });
+    await expect(
+      storage.promptSurface.rolloverEpoch({
+        ...command,
+        baseline: otherBaseline,
+        expectedSectionStates: [
+          {
+            stateKey: otherState.stateKey,
+            contentHash: otherState.contentHash,
+            content: otherState.content,
+          },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(PromptSurfaceRolloverConflictError);
+  });
+
+  it("leaves the source epoch current when a rollover write fails", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-prompt-surface-rollover-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "caelush.db");
+    const storage = await openCaelushStorage({ path: databasePath });
+    stores.push(storage);
+    const run = await addRun(storage);
+    const source = makeEpoch(run.id, "epoch-rollover-crash", 1, { formatVersion: 3 });
+    await storage.promptSurface.createEpoch(source);
+    await storage.promptSurface.appendRecord(
+      makeV3Record(source, {
+        ordinal: 1,
+        anchor: anchorFor(source, 1),
+        sourceStepSequence: 1,
+        kind: "BASELINE",
+        updates: [makeSetUpdate("a", "state v1")],
+        decisionFingerprint: "a".repeat(64),
+      }),
+      source,
+      0,
+    );
+
+    const raw = new DatabaseSync(databasePath);
+    rawDatabases.push(raw);
+    raw.exec(`CREATE TRIGGER fail_rollover_state BEFORE INSERT ON prompt_surface_section_state
+      WHEN NEW.epoch_id = 'epoch-rollover-crash-next'
+      BEGIN SELECT RAISE(ABORT, 'injected rollover failure'); END;`);
+
+    const next = makeEpoch(run.id, "epoch-rollover-crash-next", 2, {
+      formatVersion: 3,
+      resetReason: "CAPACITY_ROLLOVER",
+    });
+    const nextState = makeSetUpdate("a", "state v2");
+    await expect(
+      storage.promptSurface.rolloverEpoch({
+        expectedCurrentEpoch: source,
+        expectedRecordOrdinal: 1,
+        expectedDecisionFingerprint: "a".repeat(64),
+        operationId: "operation-3",
+        newEpoch: next,
+        baseline: makeV3Record(next, {
+          ordinal: 1,
+          anchor: anchorFor(next, 2),
+          sourceStepSequence: 2,
+          kind: "BASELINE",
+          updates: [nextState],
+          decisionFingerprint: "b".repeat(64),
+        }),
+        expectedSectionStates: [
+          {
+            stateKey: nextState.stateKey,
+            contentHash: nextState.contentHash,
+            content: nextState.content,
+          },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(StorageError);
+
+    await expect(storage.promptSurface.getCurrent(run.id)).resolves.toMatchObject({
+      epochId: source.epochId,
+    });
+    await expect(storage.promptSurface.readEpoch(run.id, next.epochId)).resolves.toBeUndefined();
   });
 });

@@ -26,9 +26,43 @@ export const PROMPT_SURFACE_RESET_REASONS = [
   "CACHE_SETTINGS_CHANGED",
   "COMPACTION_COMMITTED",
   "RECOVERY_INCOMPATIBLE",
+  /**
+   * Internal only: the epoch reached a structural capacity bound and an equivalent projection was
+   * rebuilt from the current complete Section state. It is not a semantic change to the
+   * conversation, so the public cache-usage projection omits it rather than inventing a reason the
+   * closed public vocabulary does not contain.
+   */
+  "CAPACITY_ROLLOVER",
 ] as const;
 
 export type PromptSurfaceResetReason = (typeof PROMPT_SURFACE_RESET_REASONS)[number];
+
+/**
+ * The reset reasons a public client is allowed to see.
+ *
+ * This list is a projection allow-list, not a second source of truth: the internal vocabulary above
+ * remains authoritative for storage, receipts and cache-reset accounting.
+ */
+export const PUBLIC_PROMPT_SURFACE_RESET_REASONS = [
+  "INITIAL",
+  "MODEL_CHANGED",
+  "TOOL_SCHEMA_CHANGED",
+  "STABLE_HEAD_CHANGED",
+  "CACHE_SETTINGS_CHANGED",
+  "COMPACTION_COMMITTED",
+  "RECOVERY_INCOMPATIBLE",
+] as const;
+
+export type PublicPromptSurfaceResetReason = (typeof PUBLIC_PROMPT_SURFACE_RESET_REASONS)[number];
+
+/** Project an internal reset reason onto the closed public vocabulary, or omit it. */
+export function projectPromptSurfaceResetReason(
+  value: string | undefined,
+): PublicPromptSurfaceResetReason | undefined {
+  return PUBLIC_PROMPT_SURFACE_RESET_REASONS.some((reason) => reason === value)
+    ? (value as PublicPromptSurfaceResetReason)
+    : undefined;
+}
 
 export const PROMPT_SURFACE_LIMITS = Object.freeze({
   maxEpochSnapshots: 128,

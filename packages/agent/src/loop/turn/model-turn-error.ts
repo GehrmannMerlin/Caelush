@@ -48,6 +48,7 @@ export type ModelTurnExecutionErrorCode =
   | "NETWORK"
   | "TIMEOUT"
   | "CONTEXT_OVERFLOW"
+  | "CONTEXT_UNAVAILABLE"
   | "PROVIDER_ERROR"
   | "INVALID_RESPONSE"
   | "UNSUPPORTED_MODEL"
@@ -67,6 +68,7 @@ export const MODEL_TURN_EXECUTION_ERROR_CODES = [
   "NETWORK",
   "TIMEOUT",
   "CONTEXT_OVERFLOW",
+  "CONTEXT_UNAVAILABLE",
   "PROVIDER_ERROR",
   "INVALID_RESPONSE",
   "UNSUPPORTED_MODEL",
@@ -83,6 +85,11 @@ export const MODEL_TURN_EXECUTION_ERROR_CODES = [
  * `CONTEXT_OVERFLOW` is deliberately not retryable. It is recovered by one forced
  * context recovery inside the loop, which is a different mechanism from a provider
  * retry.
+ *
+ * `CONTEXT_UNAVAILABLE` is not retryable either, and for the opposite reason: the
+ * local projection or its storage failed. Resending the same request would fail the
+ * same way, and the loop cannot distinguish a recoverable local fault from a
+ * persistent one, so the Run Layer — not the provider retry path — owns the outcome.
  */
 export const RETRYABLE_MODEL_TURN_ERROR_CODES = [
   "RATE_LIMIT",

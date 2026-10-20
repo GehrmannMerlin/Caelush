@@ -269,6 +269,8 @@ export {
   PROMPT_SURFACE_ANCHOR_VERSION,
   PROMPT_SURFACE_LIMITS,
   PROMPT_SURFACE_RESET_REASONS,
+  PUBLIC_PROMPT_SURFACE_RESET_REASONS,
+  projectPromptSurfaceResetReason,
   PromptSurfaceIntegrityError,
 } from "./surface/prompt-surface.js";
 export type {
@@ -285,6 +287,7 @@ export type {
   PromptSurfaceRecord,
   PromptSurfaceRecordInput,
   PromptSurfaceRecordKind,
+  PublicPromptSurfaceResetReason,
 } from "./surface/prompt-surface.js";
 export {
   applyPromptSurfaceSectionUpdates,
@@ -309,8 +312,34 @@ export { projectPromptSurface } from "./surface/prompt-surface-projector.js";
 export type { PromptSurfaceModelMessage } from "./surface/prompt-surface-projector.js";
 export type {
   PromptSurfaceAppendResult,
+  PromptSurfaceRolloverCommand,
+  PromptSurfaceRolloverResult,
   PromptSurfaceStorePort,
 } from "./surface/prompt-surface-store.js";
+export { PromptSurfaceRolloverConflictError } from "./surface/prompt-surface-store.js";
+export {
+  assessPromptSurfaceBaseline,
+  decidePromptSurfaceCapacity,
+  promptSurfaceBaselineByteLength,
+  promptSurfaceBaselineTooLarge,
+  PROMPT_SURFACE_CAPACITY_DIMENSIONS,
+  PROMPT_SURFACE_CAPACITY_REASONS,
+  PromptSurfaceCapacityError,
+} from "./surface/prompt-surface-capacity.js";
+export type {
+  PromptSurfaceCapacityDecision,
+  PromptSurfaceCapacityDimension,
+  PromptSurfaceCapacityReason,
+  PromptSurfaceCapacityStage,
+} from "./surface/prompt-surface-capacity.js";
+export {
+  promptSurfaceRolloverOperationId,
+  rolloverPromptSurface,
+} from "./surface/prompt-surface-rollover.js";
+export type {
+  PromptSurfaceRolloverOutcome,
+  PromptSurfaceRolloverRequest,
+} from "./surface/prompt-surface-rollover.js";
 
 export {
   ContextDocumentConstructionError,

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AGENT_CONTEXT_SOURCE_IDS,
+  PROMPT_SURFACE_LIMITS,
   PromptSurfaceIntegrityError,
   createPromptSurfaceEpoch,
   createPromptSurfaceSnapshot,
@@ -654,5 +655,65 @@ describe("Prompt Surface Context Engine integration", () => {
 
     expect(value.store.inspect(value.runId)).toEqual(corruptedSurface);
     expect(value.store.inspect(value.runId)?.epochId).toBe(warmSurface.epochId);
+  });
+
+  it("continues a long Run across the visible-decision capacity bound", async () => {
+    const value = fixture();
+    const engine = value.engine();
+    // A real long Run has room for 128 accumulated deltas; the 10k fixture window does not.
+    const wideModel: ModelDescriptor = {
+      ...MODEL,
+      limits: { contextWindowTokens: 400_000, maxOutputTokens: 512 },
+    };
+    const history = fullHistory(value.runId, value.sessionId, 4);
+    const lastStep = PROMPT_SURFACE_LIMITS.maxEpochSnapshots + 2;
+    let lastPrepared: Awaited<ReturnType<typeof engine.prepare>> | undefined;
+
+    for (let sequence = 1; sequence <= lastStep; sequence += 1) {
+      value.state.dynamicText = `workspace state: step ${String(sequence)}`;
+      lastPrepared = await engine.prepare(
+        request(value.runId, value.sessionId, sequence, history, { model: wideModel }),
+      );
+    }
+
+    const epochs = value.store.inspectEpochs(value.runId);
+    expect(epochs).toHaveLength(2);
+    const [firstEpoch, secondEpoch] = epochs;
+    expect(firstEpoch?.resetReason).toBe("INITIAL");
+    expect(firstEpoch?.records).toHaveLength(PROMPT_SURFACE_LIMITS.maxEpochSnapshots);
+    expect(secondEpoch?.resetReason).toBe("CAPACITY_ROLLOVER");
+    expect(secondEpoch?.createdStepSequence).toBe(PROMPT_SURFACE_LIMITS.maxEpochSnapshots + 1);
+    expect(secondEpoch?.records).toHaveLength(2);
+    expect(secondEpoch?.records?.[0]).toMatchObject({
+      ordinal: 1,
+      kind: "BASELINE",
+      sourceStepSequence: PROMPT_SURFACE_LIMITS.maxEpochSnapshots + 1,
+    });
+
+    // Every Step has exactly one decision, and none was dropped by the boundary.
+    const steps = epochs.flatMap((epoch) =>
+      (epoch.records ?? []).map((record) => record.sourceStepSequence),
+    );
+    expect(steps).toHaveLength(lastStep);
+    expect(new Set(steps).size).toBe(lastStep);
+    expect(Math.max(...steps)).toBe(lastStep);
+
+    // The Step that crossed the boundary kept its own update: the baseline is this Step's view.
+    const baseline = secondEpoch?.records?.[0];
+    expect(
+      baseline?.updates.some(
+        (update) => update.op === "SET" && update.content.includes("step 129"),
+      ),
+    ).toBe(true);
+    expect(lastPrepared?.messages.some((message) => message.content.includes("step 130"))).toBe(
+      true,
+    );
+
+    // The superseded epoch is kept intact for audit and replay.
+    expect(
+      firstEpoch?.sectionStates?.some((state) => state.content.includes("step 128")),
+    ).toBe(true);
+    expect(value.state.usage.at(-1)?.promptSurface?.resetReason).toBe("CAPACITY_ROLLOVER");
+    expect(value.state.usage.at(-2)?.promptSurface?.resetReason).toBe("CAPACITY_ROLLOVER");
   });
 });

@@ -354,7 +354,19 @@ export {
   PROMPT_SURFACE_ANCHOR_VERSION,
   PROMPT_SURFACE_LIMITS,
   PROMPT_SURFACE_RESET_REASONS,
+  PUBLIC_PROMPT_SURFACE_RESET_REASONS,
+  projectPromptSurfaceResetReason,
   PromptSurfaceIntegrityError,
+  PromptSurfaceRolloverConflictError,
+  PromptSurfaceCapacityError,
+  decidePromptSurfaceCapacity,
+  assessPromptSurfaceBaseline,
+  promptSurfaceBaselineByteLength,
+  promptSurfaceBaselineTooLarge,
+  promptSurfaceRolloverOperationId,
+  rolloverPromptSurface,
+  PROMPT_SURFACE_CAPACITY_DIMENSIONS,
+  PROMPT_SURFACE_CAPACITY_REASONS,
 } from "./context/index.js";
 export type {
   ContextPromptSurfaceReceipt,
@@ -377,6 +389,15 @@ export type {
   PromptSurfaceSectionState,
   PromptSurfaceSectionUpdate,
   PromptSurfaceStorePort,
+  PromptSurfaceRolloverCommand,
+  PromptSurfaceRolloverResult,
+  PromptSurfaceRolloverOutcome,
+  PromptSurfaceRolloverRequest,
+  PromptSurfaceCapacityDecision,
+  PromptSurfaceCapacityDimension,
+  PromptSurfaceCapacityReason,
+  PromptSurfaceCapacityStage,
+  PublicPromptSurfaceResetReason,
 } from "./context/index.js";
 
 /* Decision classification. */

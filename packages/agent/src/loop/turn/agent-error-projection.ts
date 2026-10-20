@@ -28,6 +28,7 @@ import type { ModelTurnExecutionError, ModelTurnExecutionErrorCode } from "./mod
  * NETWORK                 → NETWORK_ERROR      transient, retryable
  * TIMEOUT                 → MODEL_TIMEOUT      transient, retryable
  * CONTEXT_OVERFLOW        → CONTEXT_EXHAUSTED  the window could not be recovered
+ * CONTEXT_UNAVAILABLE     → INTERNAL_ERROR     the local context projection failed
  * INVALID_RESPONSE        → MODEL_ERROR        the provider answered unusably
  * PROVIDER_ERROR          → MODEL_ERROR        an unclassified provider problem
  * UNSUPPORTED_MODEL       → MODEL_ERROR        deterministic
@@ -39,7 +40,7 @@ export function toAgentError(error: ModelTurnExecutionError): AgentError {
     code: toAgentErrorCode(error.code),
     message: error.message,
     retryable: error.retryable,
-    phase: "LLM",
+    phase: error.code === "CONTEXT_UNAVAILABLE" ? "INTERNAL" : "LLM",
     ...(error.continuityReason === undefined
       ? {}
       : { details: { continuityReason: error.continuityReason } }),
@@ -99,6 +100,8 @@ export function toAgentErrorCode(code: ModelTurnExecutionErrorCode): AgentErrorC
       return "MODEL_TIMEOUT";
     case "CONTEXT_OVERFLOW":
       return "CONTEXT_EXHAUSTED";
+    case "CONTEXT_UNAVAILABLE":
+      return "INTERNAL_ERROR";
     case "AUTHENTICATION":
     case "PROVIDER_ERROR":
     case "INVALID_RESPONSE":

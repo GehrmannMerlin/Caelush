@@ -430,6 +430,13 @@ function retryMetadata(error: ModelTurnExecutionError): {
  * value in its own channel.
  */
 function toContextFailure(error: unknown): ModelTurnExecutionError {
+  if (isContextUnavailable(error)) {
+    return {
+      code: "CONTEXT_UNAVAILABLE",
+      message: "The local model context projection could not be prepared.",
+      retryable: false,
+    };
+  }
   return isContextOverflow(error)
     ? {
         code: "CONTEXT_OVERFLOW",
@@ -441,6 +448,20 @@ function toContextFailure(error: unknown): ModelTurnExecutionError {
         message: "The model context could not be prepared.",
         retryable: false,
       };
+}
+
+/**
+ * Recognize a local projection failure that is not a window overflow.
+ *
+ * The distinction matters for diagnosis, not for recovery: an exhausted window may still be
+ * recovered by compaction, while a projection or storage fault must not be mistaken for a model
+ * problem and must not be retried as one. The check is structural, so the kernel still does not
+ * depend on any particular context implementation.
+ */
+function isContextUnavailable(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { readonly code?: unknown };
+  return typeof candidate.code === "string" && /CONTEXT_UNAVAILABLE/i.test(candidate.code);
 }
 
 /**

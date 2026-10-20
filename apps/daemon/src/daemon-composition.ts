@@ -22,6 +22,10 @@ import type { ProviderStreamPolicy } from "./config.js";
 import type { AttachmentService } from "./attachments/attachment-service.js";
 import { AttachmentServiceError } from "./attachments/attachment-service.js";
 import { createInterruptedToolHistoryService } from "./services/interrupted-tool-history.js";
+import {
+  isInternalPromptCacheResetReason,
+  toPublicPromptCacheResetReason,
+} from "./context/prompt-cache-reset-projection.js";
 import type { RunContextBudgetPolicyResolver } from "./services/run-service.js";
 import { createModelTransportRecoveryPort } from "./providers/model-transport-recovery.js";
 import {
@@ -1838,9 +1842,10 @@ export function projectPromptCacheUsage(
 
   const promptSurface = contextUsage.promptSurface;
   const epochId = currentEpoch?.epochId ?? promptSurface?.epochId;
-  const resetReason = isPromptCacheResetReason(currentEpoch?.resetReason)
-    ? currentEpoch.resetReason
-    : promptSurface?.resetReason;
+  // Cache accounting uses the internal reason, because a capacity rollover invalidates the reusable
+  // prefix just like any other boundary. Only the public field is whitelisted.
+  const internalResetReason = currentEpoch?.resetReason ?? promptSurface?.resetReason;
+  const resetReason = toPublicPromptCacheResetReason(internalResetReason);
   const expectedReusablePrefixTokens = promptSurface?.expectedReusablePrefixTokens ?? 0;
   const orderedRateSamples = [...rateSamples].sort(
     (left, right) => Number(left.measuredAt) - Number(right.measuredAt),
@@ -1851,8 +1856,8 @@ export function projectPromptCacheUsage(
     latestRate !== undefined &&
     (resetBoundary === undefined || Number(latestRate.measuredAt) >= Number(resetBoundary));
   const resetPending =
-    resetReason !== undefined &&
-    resetReason !== "INITIAL" &&
+    isInternalPromptCacheResetReason(internalResetReason) &&
+    internalResetReason !== "INITIAL" &&
     (resetBoundary === undefined
       ? latestRate === undefined || Number(latestRate.measuredAt) < Number(contextUsage.updatedAt)
       : !measuredAfterCurrentReset);
@@ -2315,20 +2320,6 @@ function addPromptCacheCount(left: number, right: number): number {
     throw new RangeError("Prompt-cache usage counter is outside the safe integer range.");
   }
   return result;
-}
-
-function isPromptCacheResetReason(
-  value: string | undefined,
-): value is NonNullable<ContextUsageSnapshot["promptSurface"]>["resetReason"] {
-  return (
-    value === "INITIAL" ||
-    value === "MODEL_CHANGED" ||
-    value === "TOOL_SCHEMA_CHANGED" ||
-    value === "STABLE_HEAD_CHANGED" ||
-    value === "CACHE_SETTINGS_CHANGED" ||
-    value === "COMPACTION_COMMITTED" ||
-    value === "RECOVERY_INCOMPATIBLE"
-  );
 }
 
 /**

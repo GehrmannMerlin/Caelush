@@ -10,11 +10,14 @@ import {
   createPromptSurfaceSnapshot,
   createPromptSurfaceRecord,
   PROMPT_SURFACE_LIMITS,
+  PromptSurfaceRolloverConflictError,
   type PromptSurfaceAppendResult,
   type PromptSurfaceEpoch,
   type PromptSurfaceEpochInput,
   type PromptSurfaceEpochId,
   type PromptSurfaceEpochWithSnapshots,
+  type PromptSurfaceRolloverCommand,
+  type PromptSurfaceRolloverResult,
   type PromptSurfaceSnapshot,
   type PromptSurfaceRecord,
   type PromptSurfaceSectionState,
@@ -130,27 +133,7 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
           }
         }
 
-        this.database.client
-          .prepare(
-            `INSERT INTO prompt_surface_epochs
-             (run_id, epoch_id, format_version, model_provider, model_id, stable_head_fingerprint,
-              tool_schema_fingerprint, cache_settings_fingerprint, reset_reason,
-              created_step_sequence, created_at_ms)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            epoch.runId,
-            epoch.epochId,
-            epoch.formatVersion,
-            epoch.modelRef.provider,
-            epoch.modelRef.model,
-            epoch.stableHeadFingerprint,
-            epoch.toolSchemaFingerprint,
-            epoch.cacheSettingsFingerprint,
-            epoch.resetReason,
-            epoch.createdStepSequence,
-            epoch.createdAt,
-          );
+        this.insertEpochRow(epoch);
       });
     } catch (error) {
       if (error instanceof StorageError) throw error;
@@ -375,56 +358,7 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
           sectionStates,
         };
         assertPromptSurfaceEpochWithSnapshots(next);
-        const result = this.database.client
-          .prepare(
-            `INSERT INTO prompt_surface_records
-           (run_id, epoch_id, ordinal, anchor_message_sequence, anchor_message_id, anchor_run_id,
-            anchor_conversation_turn_id, source_step_sequence, kind, updates_json, decision_fingerprint,
-            content_hash, byte_length, created_at_ms)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            record.runId,
-            record.epochId,
-            record.ordinal,
-            record.anchor.sequence,
-            record.anchor.messageId,
-            record.anchor.runId,
-            record.anchor.conversationTurnId,
-            record.sourceStepSequence,
-            record.kind,
-            stableJson(record.updates),
-            record.decisionFingerprint,
-            record.contentHash,
-            record.byteLength,
-            record.createdAt,
-          );
-        if (Number(result.changes) !== 1)
-          throw new StorageConflictError("Prompt Surface V3 record insert did not affect one row.");
-
-        const deleteState = this.database.client.prepare(
-          "DELETE FROM prompt_surface_section_state WHERE run_id = ? AND epoch_id = ? AND state_key = ?",
-        );
-        const upsertState = this.database.client.prepare(
-          `INSERT INTO prompt_surface_section_state (run_id, epoch_id, state_key, content_hash, content, updated_ordinal)
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT(run_id, epoch_id, state_key) DO UPDATE SET
-             content_hash = excluded.content_hash, content = excluded.content, updated_ordinal = excluded.updated_ordinal`,
-        );
-        for (const update of record.updates) {
-          if (update.op === "CLEAR") {
-            deleteState.run(record.runId, record.epochId, update.stateKey);
-          } else {
-            upsertState.run(
-              record.runId,
-              record.epochId,
-              update.stateKey,
-              update.contentHash,
-              update.content,
-              record.ordinal,
-            );
-          }
-        }
+        this.insertRecordRow(record);
         const storedState = this.readSectionStates(record.runId, record.epochId, [
           ...complete.records,
           record,
@@ -444,11 +378,224 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
     }
   }
 
+  async rolloverEpoch(
+    command: PromptSurfaceRolloverCommand,
+  ): Promise<PromptSurfaceRolloverResult> {
+    try {
+      assertPromptSurfaceEpoch(command.expectedCurrentEpoch);
+      assertPromptSurfaceEpoch(command.newEpoch);
+      assertPromptSurfaceRecord(command.baseline);
+      assertPromptSurfaceSectionStates(command.expectedSectionStates);
+      if (!Number.isSafeInteger(command.expectedRecordOrdinal) || command.expectedRecordOrdinal < 0) {
+        throw new TypeError("Prompt Surface expected record ordinal is invalid.");
+      }
+      if (
+        command.baseline.epochId !== command.newEpoch.epochId ||
+        command.baseline.ordinal !== 1 ||
+        command.baseline.kind !== "BASELINE" ||
+        command.baseline.runId !== command.newEpoch.runId ||
+        command.baseline.sourceStepSequence !== command.newEpoch.createdStepSequence
+      ) {
+        throw new TypeError("Prompt Surface rollover baseline does not open its epoch.");
+      }
+    } catch (error) {
+      throw new StorageError("Prompt Surface rollover input or identity is invalid.", {
+        cause: error,
+      });
+    }
+
+    try {
+      return withImmediateTransaction(this.database, () => {
+        const { newEpoch, baseline } = command;
+
+        // A retried command whose response was lost must find the epoch it already created.
+        const existingTarget = this.readEpochRow(newEpoch.runId, newEpoch.epochId);
+        if (existingTarget !== undefined) {
+          if (!sameEpochIdentity(decodeEpoch(existingTarget), newEpoch)) {
+            throw new PromptSurfaceRolloverConflictError(
+              "Prompt Surface rollover operation is bound to a different epoch.",
+            );
+          }
+          const storedBaseline = this.readRecordBySourceStep(
+            newEpoch.runId,
+            newEpoch.epochId,
+            baseline.sourceStepSequence,
+          );
+          if (
+            storedBaseline === undefined ||
+            decodeRecord(storedBaseline).contentHash !== baseline.contentHash
+          ) {
+            throw new PromptSurfaceRolloverConflictError(
+              "Prompt Surface rollover operation is bound to a different baseline.",
+            );
+          }
+          return "IDEMPOTENT";
+        }
+
+        const current = this.readCurrentRow(newEpoch.runId);
+        if (
+          current === undefined ||
+          current.epoch_id !== command.expectedCurrentEpoch.epochId ||
+          !sameEpoch(decodeEpoch(current), command.expectedCurrentEpoch)
+        ) {
+          throw new PromptSurfaceRolloverConflictError(
+            "Prompt Surface rollover did not target the expected current epoch.",
+          );
+        }
+        const source = this.readEpochSync(newEpoch.runId, command.expectedCurrentEpoch.epochId);
+        if (source === undefined || source.formatVersion !== 3) {
+          throw new PromptSurfaceRolloverConflictError(
+            "Prompt Surface rollover source epoch is not a V3 epoch.",
+          );
+        }
+        const sourceRecords = source.records ?? [];
+        if (
+          sourceRecords.length !== command.expectedRecordOrdinal ||
+          (sourceRecords.at(-1)?.decisionFingerprint ?? null) !==
+            command.expectedDecisionFingerprint ||
+          sourceRecords.some(
+            (record) => record.sourceStepSequence >= baseline.sourceStepSequence,
+          )
+        ) {
+          throw new PromptSurfaceRolloverConflictError(
+            "Prompt Surface rollover compare-and-swap did not hold.",
+          );
+        }
+        if (
+          newEpoch.createdStepSequence < command.expectedCurrentEpoch.createdStepSequence ||
+          newEpoch.formatVersion !== 3 ||
+          newEpoch.resetReason !== "CAPACITY_ROLLOVER"
+        ) {
+          throw new PromptSurfaceRolloverConflictError(
+            "Prompt Surface rollover epoch identity is inconsistent with its source.",
+          );
+        }
+
+        // The baseline must reproduce the complete target view exactly; anything else would make
+        // the new epoch a different projection than the one the caller is about to use.
+        const appliedStates = applyPromptSurfaceSectionUpdates(
+          [],
+          "BASELINE",
+          baseline.updates,
+        );
+        if (stableJson(appliedStates) !== stableJson(command.expectedSectionStates)) {
+          throw new StorageDecodeError(
+            "PromptSurfaceSectionState",
+            epochKey(newEpoch.runId, newEpoch.epochId),
+            "prompt_surface_section_state",
+          );
+        }
+
+        this.insertEpochRow(newEpoch);
+        this.insertRecordRow(baseline);
+
+        const resolved = this.readCurrentRow(newEpoch.runId);
+        if (resolved === undefined || resolved.epoch_id !== newEpoch.epochId) {
+          throw new PromptSurfaceRolloverConflictError(
+            "Prompt Surface rollover did not become the current epoch.",
+          );
+        }
+        const verified = this.readEpochSync(newEpoch.runId, newEpoch.epochId);
+        if (verified === undefined || verified.formatVersion !== 3) {
+          throw new StorageDecodeError(
+            "PromptSurfaceEpoch",
+            epochKey(newEpoch.runId, newEpoch.epochId),
+            "prompt_surface_epochs",
+          );
+        }
+        return "COMMITTED";
+      });
+    } catch (error) {
+      if (error instanceof PromptSurfaceRolloverConflictError) throw error;
+      if (error instanceof StorageError) throw error;
+      throw new StorageError("Unable to roll over the Prompt Surface epoch.", { cause: error });
+    }
+  }
+
   async readEpoch(
     runId: RunId,
     epochId: PromptSurfaceEpochId,
   ): Promise<PromptSurfaceEpochWithSnapshots | undefined> {
     return this.readEpochSync(runId, epochId);
+  }
+
+  private insertEpochRow(epoch: PromptSurfaceEpoch): void {
+    this.database.client
+      .prepare(
+        `INSERT INTO prompt_surface_epochs
+         (run_id, epoch_id, format_version, model_provider, model_id, stable_head_fingerprint,
+          tool_schema_fingerprint, cache_settings_fingerprint, reset_reason,
+          created_step_sequence, created_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        epoch.runId,
+        epoch.epochId,
+        epoch.formatVersion,
+        epoch.modelRef.provider,
+        epoch.modelRef.model,
+        epoch.stableHeadFingerprint,
+        epoch.toolSchemaFingerprint,
+        epoch.cacheSettingsFingerprint,
+        epoch.resetReason,
+        epoch.createdStepSequence,
+        epoch.createdAt,
+      );
+  }
+
+  /** Insert one decision and apply its Section state changes in the enclosing transaction. */
+  private insertRecordRow(record: PromptSurfaceRecord): void {
+    const result = this.database.client
+      .prepare(
+        `INSERT INTO prompt_surface_records
+         (run_id, epoch_id, ordinal, anchor_message_sequence, anchor_message_id, anchor_run_id,
+          anchor_conversation_turn_id, source_step_sequence, kind, updates_json, decision_fingerprint,
+          content_hash, byte_length, created_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.runId,
+        record.epochId,
+        record.ordinal,
+        record.anchor.sequence,
+        record.anchor.messageId,
+        record.anchor.runId,
+        record.anchor.conversationTurnId,
+        record.sourceStepSequence,
+        record.kind,
+        stableJson(record.updates),
+        record.decisionFingerprint,
+        record.contentHash,
+        record.byteLength,
+        record.createdAt,
+      );
+    if (Number(result.changes) !== 1) {
+      throw new StorageConflictError("Prompt Surface V3 record insert did not affect one row.");
+    }
+
+    const deleteState = this.database.client.prepare(
+      "DELETE FROM prompt_surface_section_state WHERE run_id = ? AND epoch_id = ? AND state_key = ?",
+    );
+    const upsertState = this.database.client.prepare(
+      `INSERT INTO prompt_surface_section_state (run_id, epoch_id, state_key, content_hash, content, updated_ordinal)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(run_id, epoch_id, state_key) DO UPDATE SET
+         content_hash = excluded.content_hash, content = excluded.content, updated_ordinal = excluded.updated_ordinal`,
+    );
+    for (const update of record.updates) {
+      if (update.op === "CLEAR") {
+        deleteState.run(record.runId, record.epochId, update.stateKey);
+      } else {
+        upsertState.run(
+          record.runId,
+          record.epochId,
+          update.stateKey,
+          update.contentHash,
+          update.content,
+          record.ordinal,
+        );
+      }
+    }
   }
 
   private readEpochSync(
@@ -744,6 +891,22 @@ function sameEpoch(left: PromptSurfaceEpoch, right: PromptSurfaceEpoch): boolean
     left.resetReason === right.resetReason &&
     left.createdStepSequence === right.createdStepSequence &&
     left.createdAt === right.createdAt &&
+    left.formatVersion === right.formatVersion
+  );
+}
+
+/** Everything that identifies an epoch's projection, excluding the time it was first written. */
+function sameEpochIdentity(left: PromptSurfaceEpoch, right: PromptSurfaceEpoch): boolean {
+  return (
+    left.runId === right.runId &&
+    left.epochId === right.epochId &&
+    left.modelRef.provider === right.modelRef.provider &&
+    left.modelRef.model === right.modelRef.model &&
+    left.stableHeadFingerprint === right.stableHeadFingerprint &&
+    left.toolSchemaFingerprint === right.toolSchemaFingerprint &&
+    left.cacheSettingsFingerprint === right.cacheSettingsFingerprint &&
+    left.resetReason === right.resetReason &&
+    left.createdStepSequence === right.createdStepSequence &&
     left.formatVersion === right.formatVersion
   );
 }
