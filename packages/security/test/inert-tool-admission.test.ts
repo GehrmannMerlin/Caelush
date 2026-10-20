@@ -1,4 +1,6 @@
 import { createUpdatePlanTool } from "@caelush/coding-agent";
+import type { JsonObject } from "@caelush/protocol";
+import type { ToolGateMetadata } from "../src/index.js";
 import {
   createRunId,
   createStepId,
@@ -35,7 +37,14 @@ import {
 
 function planSecurityMetadata() {
   const definition = createUpdatePlanTool();
-  return { definition, security: definition.security };
+  // The two packages spell their JSON object type separately; the value is the same JSON, and the
+  // runtime validates it, so the test states the conversion once instead of at every call site.
+  const runtimeRequirements = definition.security.runtimeRequirements as JsonObject;
+  return {
+    definition,
+    security: definition.security,
+    runtimeRequirements,
+  };
 }
 
 const planFacts = {
@@ -70,12 +79,12 @@ describe("inert control Tool admission", () => {
   });
 
   it("admits update_plan to the logical sandbox without inventing a host runtime", () => {
-    const { security } = planSecurityMetadata();
+    const { security, runtimeRequirements } = planSecurityMetadata();
     expect(
       evaluateLogicalSandboxAdmission({
         containment: "STRUCTURED_WORKSPACE",
         runtimeKind: "local",
-        runtimeRequirements: security.runtimeRequirements,
+        runtimeRequirements,
         requiredCapabilities: security.requiredCapabilities,
         securityFacts: planFacts,
       }),
@@ -83,12 +92,12 @@ describe("inert control Tool admission", () => {
   });
 
   it("still requires the projected security facts of an inert Tool", () => {
-    const { security } = planSecurityMetadata();
+    const { security, runtimeRequirements } = planSecurityMetadata();
     expect(
       evaluateLogicalSandboxAdmission({
         containment: "STRUCTURED_WORKSPACE",
         runtimeKind: "local",
-        runtimeRequirements: security.runtimeRequirements,
+        runtimeRequirements,
         requiredCapabilities: security.requiredCapabilities,
         securityFacts: undefined,
       }),
@@ -96,12 +105,12 @@ describe("inert control Tool admission", () => {
   });
 
   it("refuses an inert declaration whose facts claim host access", () => {
-    const { security } = planSecurityMetadata();
+    const { security, runtimeRequirements } = planSecurityMetadata();
     expect(
       evaluateLogicalSandboxAdmission({
         containment: "STRUCTURED_WORKSPACE",
         runtimeKind: "local",
-        runtimeRequirements: security.runtimeRequirements,
+        runtimeRequirements,
         requiredCapabilities: security.requiredCapabilities,
         securityFacts: {
           resourceAccesses: [{ operation: "WRITE", path: "src/app.ts" }],
@@ -114,7 +123,7 @@ describe("inert control Tool admission", () => {
       evaluateLogicalSandboxAdmission({
         containment: "STRUCTURED_WORKSPACE",
         runtimeKind: "local",
-        runtimeRequirements: security.runtimeRequirements,
+        runtimeRequirements,
         requiredCapabilities: security.requiredCapabilities,
         securityFacts: {
           resourceAccesses: [],
@@ -159,13 +168,13 @@ describe("inert control Tool admission", () => {
   });
 
   it("admits the real plan call through the real Gate under every preset", async () => {
-    const { security } = planSecurityMetadata();
+    const { security, runtimeRequirements } = planSecurityMetadata();
     const gate = new CaelushToolExecutionGate();
-    const definition = {
-      name: "update_plan" as const,
+    const definition: ToolGateMetadata = {
+      name: "update_plan",
       riskLevel: security.riskLevel,
       requiredCapabilities: security.requiredCapabilities,
-      runtimeRequirements: security.runtimeRequirements,
+      runtimeRequirements,
     };
     for (const [permissionProfile, approvalPolicy] of [
       ["READ_ONLY", "ON_BOUNDARY"],
