@@ -1367,13 +1367,36 @@ export class WebSessionManager {
     try {
       const response = await this.options.client.continueResourceGuard(runId);
       if (this.disposed || this.snapshot.activeRun?.id !== runId) return false;
-      this.publishActiveRun(response.run, "ACTIVE");
+      // The response says the *request* was accepted. It is not a new execution truth: the snapshot it
+      // carries was taken when the action was produced, and an SSE event may already have published a
+      // newer one. So the published state is re-read from the daemon's own read model, and the response
+      // snapshot is only a fallback when that read is unavailable.
+      const refreshed = await this.readRunAfterControl(runId);
+      this.publishActiveRun(refreshed ?? response.run, "ACTIVE");
       return true;
     } catch {
       if (!this.disposed && this.snapshot.activeRun?.id === runId) {
         this.publish({ controlMode: "RESOURCE_GUARD", error: sessionError("RUN_REFRESH_FAILED") });
       }
       return false;
+    }
+  }
+
+  /**
+   * Re-read one Run after a control request, or `undefined` when the read is unavailable or stale.
+   *
+   * A failed read is not an error the user needs: the Run's durable state is unaffected by a control
+   * call, and the SSE stream is still the primary source. It only means this caller has nothing newer to
+   * publish than what it already holds.
+   */
+  private async readRunAfterControl(runId: RunId): Promise<ClientAgentRun | undefined> {
+    try {
+      const run = await this.options.client.getRun(runId);
+      if (this.disposed || run.id !== runId) return undefined;
+      if (this.snapshot.activeRun?.id !== runId) return undefined;
+      return run;
+    } catch {
+      return undefined;
     }
   }
 
@@ -2133,6 +2156,19 @@ export class WebSessionManager {
     submission: WebSubmissionState,
     timeline: TimelineState = this.snapshot.timeline,
   ): void {
+    // A settled Run stays settled. Control responses and late reads carry a snapshot taken *before* the
+    // daemon settled the Run, and publishing one would move a finished Run back to `RUNNING` or
+    // `WAITING_RESOURCE` on screen — the user then sees a run that is over as one still waiting for them.
+    // The current projection is the newer fact, so it wins and nothing is rewritten.
+    const known = this.snapshot.runs.find((item) => item.id === run.id) ?? this.snapshot.activeRun;
+    if (
+      known !== undefined &&
+      known.id === run.id &&
+      isTerminalRunStatus(known.status) &&
+      !isTerminalRunStatus(run.status)
+    ) {
+      return;
+    }
     const activeRuns = this.snapshot.activeRuns.map((item) => (item.id === run.id ? run : item));
     const lifecycle = this.activeLifecycle;
     this.publish({

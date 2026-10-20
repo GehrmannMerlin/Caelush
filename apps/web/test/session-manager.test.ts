@@ -46,6 +46,72 @@ const otherWorkspace: WorkspaceRef = {
 };
 
 describe("WebSessionManager", () => {
+  it("publishes the daemon's current state after a resource continuation, not the action snapshot", async () => {
+    // ```text
+    // the action response says WAITING_RESOURCE   it was taken when the action was produced
+    // the re-read says RUNNING                    the Run really advanced
+    // ```
+    //
+    // Publishing the response snapshot would show the user a Run that is still waiting, and a later SSE
+    // event would then look like a spontaneous change. The published state comes from the daemon's read
+    // model, and the response is only a fallback when that read is unavailable.
+    const session = makeSession({ defaultWorkspace: workspace });
+    const waiting = makeRun({ sessionId: session.id, status: "WAITING_RESOURCE", startedAt: 2 });
+    const running = makeRun({ id: waiting.id, sessionId: session.id, status: "RUNNING", startedAt: 2 });
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [waiting]]]),
+    });
+    client.continueResourceGuard = vi.fn(async () =>
+      actionResponse(waiting, waiting.id),
+    ) as never;
+    client.getRun = vi.fn(async () => running) as never;
+
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    await manager.loadSessions();
+    await manager.selectSession(session.id);
+    await manager.prepareRecoveryRun(waiting);
+    expect(manager.getSnapshot().activeRun?.status).toBe("WAITING_RESOURCE");
+
+    await expect(manager.continueResourceGuard()).resolves.toBe(true);
+
+    expect(client.continueResourceGuard).toHaveBeenCalledTimes(1);
+    expect(client.getRun).toHaveBeenCalledWith(waiting.id);
+    expect(manager.getSnapshot().activeRun?.status).toBe("RUNNING");
+    manager.dispose();
+  });
+
+  it("does not move a settled Run back to a waiting state from a stale control response", async () => {
+    // The same defence one step later: a late read or a control response that predates the settlement
+    // must not rewrite a finished Run. The terminal snapshot is the newer fact.
+    const session = makeSession({ defaultWorkspace: workspace });
+    const waiting = makeRun({ sessionId: session.id, status: "WAITING_RESOURCE", startedAt: 2 });
+    const completed = makeCompletedRun({ ...waiting, status: "WAITING_RESOURCE" });
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [waiting]]]),
+    });
+    client.getRun = vi.fn(async () => completed) as never;
+
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    await manager.loadSessions();
+    await manager.selectSession(session.id);
+    await manager.prepareRecoveryRun(waiting);
+
+    // A response that still describes the pre-settlement state arrives after the completion was shown.
+    client.continueResourceGuard = vi.fn(async () =>
+      actionResponse(waiting, waiting.id),
+    ) as never;
+    await manager.continueResourceGuard();
+    expect(manager.getSnapshot().activeRun?.status).toBe("COMPLETED");
+
+    // Nothing may downgrade it afterwards either.
+    client.getRun = vi.fn(async () => waiting) as never;
+    await manager.continueResourceGuard();
+    expect(manager.getSnapshot().activeRun?.status).toBe("COMPLETED");
+    manager.dispose();
+  });
+
   it("opens a validated deep-linked session ahead of the persisted selection", async () => {
     const persisted = makeSession({ defaultWorkspace: workspace });
     const requested = makeSession({ defaultWorkspace: workspace });
