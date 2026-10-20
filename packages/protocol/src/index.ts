@@ -118,6 +118,8 @@ export {
 } from "./resource-progress.js";
 export type {
   ResourceActivePatternRecord,
+  ResourceCorrectionRecord,
+  ResourceCorrectionStageRecord,
   ResourceProgressFieldRecord,
   ResourceProgressPatternRecord,
   ResourceProgressRecordV1,
@@ -181,15 +183,19 @@ export { RunLimitsSchema } from "./limits.js";
 export { isSafePositiveMicroUsd } from "./limits.js";
 export type { RunLimits } from "./limits.js";
 export {
+  AUTONOMOUS_CORRECTION_V2,
+  RunCorrectionVersionSchema,
   RunResourcePolicySchema,
   applyEnterpriseHardLimits,
   compatibilityLimitsForResourcePolicy,
   createLegacyRunResourcePolicy,
+  isAutonomousCorrectionV2,
   normalizeCreateRunResourcePolicy,
 } from "./resource-policy.js";
 export type {
   CreateRunResourcePolicyInput,
   EnterpriseResourceHardLimits,
+  RunCorrectionVersion,
   RunResourcePolicy,
 } from "./resource-policy.js";
 export { ModelRefSchema } from "./model.js";

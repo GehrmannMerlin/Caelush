@@ -53,6 +53,61 @@ export interface ResourceActivePatternRecord {
   readonly sinceTurnId?: string;
   readonly replans: number;
   readonly nudged: boolean;
+  /**
+   * How many distinct corrective interventions have actually reached a model request.
+   *
+   * ```text
+   * detected   an episode crossed a threshold; nothing has been said yet
+   * delivered  a model request that carried the correction was committed
+   * ```
+   *
+   * It counts *deliveries*, never detections, which is the whole distinction the field exists for: a
+   * correction that was prepared and then lost — a failed provider turn, a cancelled Run, a Context
+   * build that never reached a request — must not consume the escalation step, or the model would be
+   * told less and less while the same mistake repeated.
+   *
+   * Optional, and absent on every record written before it existed. Absence decodes as "no delivery
+   * recorded", which is the conservative reading: an older episode gets its correction once.
+   */
+  readonly deliveredInterventions?: number;
+}
+
+/** Where a correction is in its life. */
+export type ResourceCorrectionStageRecord =
+  | "INPUT_CORRECTION"
+  | "REVIEW_APPROACH"
+  | "REBUILD_WORK_STATE";
+
+/**
+ * One corrective intervention that has been *prepared* and not yet *delivered*.
+ *
+ * ```text
+ * detected    the repetition crossed a policy threshold
+ * prepared    this record — the guidance exists, bound to the step that produced the evidence
+ * delivered   a model request built from a Context that carried it settled successfully
+ * ```
+ *
+ * The three states are distinct facts and are stored as distinct facts. Collapsing "prepared" into
+ * "delivered" is what made the previous reminder both unverifiable and unrepeatable: the ledger said
+ * the model had been told, the model had not been told, and nothing would ever say it again.
+ *
+ * It is retired by the delivery receipt, never by a timer, and it carries only bounded, already-safe
+ * text — a Tool name, a schema code, declared field labels and generated guidance. No argument value,
+ * no output, no exception text.
+ */
+export interface ResourceCorrectionRecord {
+  /** Stable identity of this intervention, unique per Run. */
+  readonly interventionId: string;
+  readonly stage: ResourceCorrectionStageRecord;
+  /** The pattern the correction is about. */
+  readonly patternKey: string;
+  readonly toolName: string;
+  readonly code: string;
+  readonly occurrences: number;
+  /** The bounded guidance text a model request may carry. */
+  readonly guidance: string;
+  /** The durable Step whose accepted results produced the evidence. */
+  readonly sourceStepId: string;
 }
 
 /** The whole window, as it is stored. */
@@ -60,6 +115,13 @@ export interface ResourceProgressRecordV1 {
   readonly version: typeof RESOURCE_PROGRESS_RECORD_VERSION;
   readonly turns: readonly ResourceProgressTurnRecord[];
   readonly active?: ResourceActivePatternRecord;
+  /**
+   * A correction prepared but not yet delivered.
+   *
+   * Optional and absent on every record written before it existed; absence means "nothing is waiting
+   * to be said", which is the only safe reading of a ledger that has no opinion.
+   */
+  readonly correction?: ResourceCorrectionRecord;
 }
 
 /** Bounds on the stored window. Exceeding them is a policy mismatch, not a silent truncation. */
@@ -70,6 +132,16 @@ export const RESOURCE_PROGRESS_LIMITS = Object.freeze({
   maxSucceededToolsPerTurn: 16,
   maxFieldsPerPattern: 4,
   maxJsonBytes: 65_536,
+  /** The guidance a correction may carry. It is advice, not a report; 800 characters is plenty. */
+  maxCorrectionChars: 800,
+  /**
+   * The escalation ladder is three steps deep and then stops.
+   *
+   * A pattern that keeps repeating after a work-state rebuild has no more useful thing to say; the
+   * episode ends when the pattern leaves the window or a call to the same Tool actually succeeds.
+   * Repeating the strongest advice forever would be noise in every request, not help.
+   */
+  maxDeliveredInterventions: 3,
 });
 
 const FieldSchema = z
@@ -107,6 +179,25 @@ const ActiveSchema = z
     sinceTurnId: z.string().min(1).max(256).optional(),
     replans: z.number().int().min(0).max(RESOURCE_PROGRESS_LIMITS.maxTurns),
     nudged: z.boolean(),
+    deliveredInterventions: z
+      .number()
+      .int()
+      .min(0)
+      .max(RESOURCE_PROGRESS_LIMITS.maxDeliveredInterventions)
+      .optional(),
+  })
+  .strict();
+
+const CorrectionSchema = z
+  .object({
+    interventionId: z.string().min(1).max(160),
+    stage: z.enum(["INPUT_CORRECTION", "REVIEW_APPROACH", "REBUILD_WORK_STATE"]),
+    patternKey: z.string().regex(/^[a-f0-9]{64}$/),
+    toolName: z.string().min(1).max(128),
+    code: z.string().min(1).max(64),
+    occurrences: z.number().int().min(0).max(RESOURCE_PROGRESS_LIMITS.maxTurns),
+    guidance: z.string().min(1).max(RESOURCE_PROGRESS_LIMITS.maxCorrectionChars),
+    sourceStepId: z.string().min(1).max(256),
   })
   .strict();
 
@@ -115,6 +206,7 @@ export const ResourceProgressRecordV1Schema = z
     version: z.literal(RESOURCE_PROGRESS_RECORD_VERSION),
     turns: z.array(TurnSchema).max(RESOURCE_PROGRESS_LIMITS.maxTurns),
     active: ActiveSchema.optional(),
+    correction: CorrectionSchema.optional(),
   })
   .strict()
   .superRefine((record, context) => {

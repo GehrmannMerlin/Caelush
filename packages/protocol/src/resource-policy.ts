@@ -15,9 +15,33 @@ const optionalSafePositiveUsd = z
   .refine(isSafePositiveMicroUsd, "must be representable as positive safe micro-USD")
   .optional();
 
+/**
+ * Which correction discipline a Run was created under.
+ *
+ * ```text
+ * absent                      historical V1: repeated no-progress may end in a human decision
+ * AUTONOMOUS_CORRECTION_V2    repeated no-progress is help, never a gate
+ * ```
+ *
+ * The distinction is a *behavioural contract*, not a tuning knob, so it is a version and not a set of
+ * numbers: V1 reads `progress.replansBeforePause` as a pause threshold, V2 never does. Both versions
+ * read the same `windowTurns`, `identicalCallNudgeThreshold` and `noProgressTurnsBeforeReplan`, so
+ * every threshold still comes from the one policy the Run froze at creation.
+ *
+ * Absence means V1 for exactly the reason epoch fields always mean absence: a Run created before this
+ * field existed was governed by V1, and a process upgrade cannot retroactively re-decide what its
+ * evidence meant. Only Run creation stamps a version — see
+ * `normalizeCreateRunResourcePolicy`.
+ */
+export const AUTONOMOUS_CORRECTION_V2 = "AUTONOMOUS_CORRECTION_V2" as const;
+
+export const RunCorrectionVersionSchema = z.literal(AUTONOMOUS_CORRECTION_V2);
+export type RunCorrectionVersion = z.infer<typeof RunCorrectionVersionSchema>;
+
 export const RunResourcePolicySchema = z
   .object({
     mode: z.enum(["ADAPTIVE", "LEGACY_FIXED"]),
+    correctionVersion: RunCorrectionVersionSchema.optional(),
     operationalLease: z
       .object({
         maxAgentTurns: safePositiveInteger,
@@ -53,6 +77,11 @@ export const RunResourcePolicySchema = z
   })
   .strict();
 export type RunResourcePolicy = z.infer<typeof RunResourcePolicySchema>;
+
+/** Whether this Run corrects autonomously instead of pausing for a resource decision. */
+export function isAutonomousCorrectionV2(policy: RunResourcePolicy): boolean {
+  return policy.correctionVersion === AUTONOMOUS_CORRECTION_V2;
+}
 
 export interface EnterpriseResourceHardLimits {
   readonly maxAgentTurns?: number;
@@ -90,6 +119,23 @@ export function createLegacyRunResourcePolicy(limits: RunLimits): RunResourcePol
   });
 }
 
+/**
+ * Normalize a create-Run payload into the policy this Run will be governed by.
+ *
+ * ```text
+ * creation      freezes a correction version, explicitly, into the Run row
+ * decoding      reads what the row says, and absence means V1
+ * ```
+ *
+ * This function is the *only* place a new Run's correction discipline is decided, which is what makes
+ * the discipline checkable: a Run either carries `AUTONOMOUS_CORRECTION_V2` because it was created
+ * here, or it does not because it was created before the field existed. There is deliberately no
+ * environment variable and no process default that could re-interpret a Run already in flight.
+ *
+ * Rolling back the default is therefore a one-line change here that affects **new** Runs only.
+ * Runs already stamped V2 keep decoding as V2, because the alternative — recomputing an old Run's
+ * history under a different pause rule — would change the meaning of evidence it already gathered.
+ */
 export function normalizeCreateRunResourcePolicy(
   input: CreateRunResourcePolicyInput,
   enterprise?: EnterpriseResourceHardLimits,
@@ -102,7 +148,13 @@ export function normalizeCreateRunResourcePolicy(
   const policy = hasPolicy
     ? RunResourcePolicySchema.parse(input.resourcePolicy)
     : createLegacyRunResourcePolicy(RunLimitsSchema.parse(input.limits));
-  return applyEnterpriseHardLimits(policy, enterprise);
+  return applyEnterpriseHardLimits(withFrozenCorrectionVersion(policy), enterprise);
+}
+
+/** Stamp the creation-time correction version when the caller did not name one. */
+function withFrozenCorrectionVersion(policy: RunResourcePolicy): RunResourcePolicy {
+  if (policy.correctionVersion !== undefined) return policy;
+  return { ...policy, correctionVersion: AUTONOMOUS_CORRECTION_V2 };
 }
 
 export function applyEnterpriseHardLimits(

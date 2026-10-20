@@ -1,8 +1,10 @@
 import {
+  AUTONOMOUS_CORRECTION_V2,
   CreateRunRequestSchema,
   DefaultRunConfigurationSchema,
   RunResourcePolicySchema,
   createLegacyRunResourcePolicy,
+  isAutonomousCorrectionV2,
   normalizeCreateRunResourcePolicy,
 } from "../src/index.js";
 import { describe, expect, it } from "vitest";
@@ -62,11 +64,15 @@ describe("RunResourcePolicy", () => {
     };
     const canonical = normalizeCreateRunResourcePolicy({ ...base, resourcePolicy: adaptivePolicy });
     expect(canonical.mode).toBe("ADAPTIVE");
+    // Creation freezes the correction discipline into the Run row. A client that supplies its own
+    // numbers does not get to leave it implicit.
+    expect(canonical.correctionVersion).toBe(AUTONOMOUS_CORRECTION_V2);
     const legacy = normalizeCreateRunResourcePolicy({
       ...base,
       limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
     });
     expect(legacy.mode).toBe("LEGACY_FIXED");
+    expect(legacy.correctionVersion).toBe(AUTONOMOUS_CORRECTION_V2);
     expect(CreateRunRequestSchema.safeParse({ ...base }).success).toBe(false);
     expect(
       CreateRunRequestSchema.safeParse({
@@ -87,6 +93,28 @@ describe("RunResourcePolicy", () => {
     );
     expect(result.hardLimits.maxToolCalls).toBe(50);
     expect(result.hardLimits.maxCost).toBe(20);
+  });
+
+  it("decodes an existing policy without a correction version as historical V1", () => {
+    // Absence is not "unset": a Run created before the field existed was governed by V1, and reading it
+    // back must not upgrade its discipline.
+    const parsed = RunResourcePolicySchema.parse(adaptivePolicy);
+    expect(parsed.correctionVersion).toBeUndefined();
+    expect(isAutonomousCorrectionV2(parsed)).toBe(false);
+    expect(
+      isAutonomousCorrectionV2(
+        RunResourcePolicySchema.parse({
+          ...adaptivePolicy,
+          correctionVersion: AUTONOMOUS_CORRECTION_V2,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      RunResourcePolicySchema.safeParse({
+        ...adaptivePolicy,
+        correctionVersion: "SOMETHING_ELSE",
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts an adaptive policy in the daemon default configuration", () => {
