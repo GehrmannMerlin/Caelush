@@ -21,16 +21,25 @@ describe("LocalShellResolver", () => {
       env: {},
       executableExists: (value) => value === "powershell.exe",
     });
-    expect(powershell.resolve("Write-Output ready")).toEqual({
-      executable: "powershell.exe",
-      args: [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "& { Write-Output ready }; exit $LASTEXITCODE",
-      ],
-    });
+    const launch = powershell.resolve("Write-Output ready");
+    expect(launch.executable).toBe("powershell.exe");
+    expect(launch.args.slice(0, 5)).toEqual([
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      launch.args[4]!,
+    ]);
+    const script = launch.args[4]!;
+    // The command is carried unchanged, and the exit status is derived from the command rather than
+    // from an inherited native exit code.
+    expect(script).toContain("& { Write-Output ready;");
+    expect(script).toContain("$global:LASTEXITCODE = 0");
+    expect(script).toContain("$LASTEXITCODE -ne 0");
+    // `$?` must be captured *inside* the block: after `& { ... }` it describes the invocation, which
+    // is `$true` even when the command inside failed.
+    expect(script).toContain("{ Write-Output ready; $global:caelushOk = $? }");
+    expect(script).not.toContain("}; exit $LASTEXITCODE");
 
     const cmd = new LocalShellResolver({
       platform: "win32",
