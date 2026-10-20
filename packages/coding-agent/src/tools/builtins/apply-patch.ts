@@ -6,6 +6,7 @@ import type { PatchOperations } from "../operations/operations.js";
 import { projectPatchEffects } from "../effects/effect-projectors.js";
 import { projectApplyPatchSecurityFacts } from "../security/security-facts.js";
 import { APPLY_PATCH_PROMPT_SNIPPET } from "../prompt/prompt-snippets.js";
+import { normalizeApplyPatchArguments } from "../prompt/apply-patch-arguments.js";
 import { defineCodingTool } from "./define-coding-tool.js";
 import {
   errorResult,
@@ -94,6 +95,10 @@ export function createApplyPatchTool(operations: PatchOperations): CodingToolDef
     description: "Apply workspace patch.",
     inputSchema,
     resultDetailsSchema,
+    // The one known argument drift, repaired inside the single Preparer stage that already owns
+    // bounded normalization. It runs before the byte re-measure, the real schema, the canonical
+    // fingerprint and admission, so both spellings reach Guard and Security as the same call.
+    prepareArguments: normalizeApplyPatchArguments,
     execute: async (input): Promise<AgentToolResult> => {
       const patch = input.args.patch;
       if (typeof patch !== "string" || patch.length === 0) {

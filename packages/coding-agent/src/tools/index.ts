@@ -261,4 +261,7 @@ export type {
 export {
   APPLY_PATCH_ARGUMENT_EXAMPLE,
   APPLY_PATCH_ARGUMENT_NOTES,
+  APPLY_PATCH_ARGUMENT_NORMALIZATION_VERSION,
+  isApplyPatchInputCompatibilityShape,
+  normalizeApplyPatchArguments,
 } from "./prompt/apply-patch-arguments.js";
