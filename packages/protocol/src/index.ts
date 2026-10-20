@@ -110,6 +110,20 @@ export type {
 } from "./attachment-processing.js";
 export { TimestampMsSchema, createTimestampMs } from "./primitives/time.js";
 export type { TimestampMs } from "./primitives/time.js";
+export {
+  RESOURCE_PROGRESS_LIMITS,
+  RESOURCE_PROGRESS_RECORD_VERSION,
+  ResourceProgressRecordV1Schema,
+  parseResourceProgressRecordV1,
+} from "./resource-progress.js";
+export type {
+  ResourceActivePatternRecord,
+  ResourceProgressFieldRecord,
+  ResourceProgressPatternRecord,
+  ResourceProgressRecordV1,
+  ResourceProgressTurnRecord,
+} from "./resource-progress.js";
+
 export { AgentErrorCodeSchema, AgentErrorPhaseSchema, AgentErrorSchema } from "./error.js";
 export type { AgentError, AgentErrorCode, AgentErrorPhase } from "./error.js";
 export {

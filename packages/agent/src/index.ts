@@ -1010,6 +1010,8 @@ export {
   assertJsonSafePayload,
   assertProjectionFingerprint,
   assertToolFeedbackProjectionPolicy,
+  assertToolPreparationFailureFact,
+  TOOL_PREPARATION_FAILURE_LIMITS,
   assertToolResultObservationRef,
   assistantToolCalls,
   attachmentMarker,
@@ -1095,6 +1097,7 @@ export {
   AGENT_TOOL_RESULT_MESSAGE_AUDIENCE,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V2,
+  AGENT_TOOL_RESULT_MESSAGE_CODEC_V3,
   AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_V1,
   AGENT_USER_MESSAGE_AUDIENCE,
   AGENT_USER_MESSAGE_CODEC_V1,
@@ -1186,6 +1189,8 @@ export type {
   TokenEstimator,
   ToolFeedbackProjectionPolicy,
   ToolFeedbackProjectionReceipt,
+  ToolPreparationFailureFact,
+  ToolPreparationFailureIssue,
   ToolResultObservationRef,
 } from "./messages/index.js";
 

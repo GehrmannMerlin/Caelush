@@ -247,6 +247,149 @@ export interface ToolFeedbackProjectionReceipt {
 export const TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION = 1 as const;
 
 /**
+ * One schema problem a rejected call reported, reduced to the facts a pattern can use.
+ *
+ * These are the same bounded, schema-derived names the model-facing renderer quotes; they are
+ * stored so a *classification* can be reproduced after a restart without re-parsing the historical
+ * feedback text. No argument value, no patch body and no host path can appear here.
+ */
+export interface ToolPreparationFailureIssue {
+  /** The declared constraint that failed, for example `required` or `additionalProperties`. */
+  readonly keyword: string;
+  /** Normalized instance path such as `options.mode`, when the failure had one. */
+  readonly path?: string;
+  /** The declared property name that is missing or unsupported, when there is one. */
+  readonly property?: string;
+}
+
+/**
+ * The durable fact that a Tool call was refused **before execution** by its declared schema.
+ *
+ * ```text
+ * PREPARATION_REJECTED   the only kind this version defines
+ * ```
+ *
+ * This is deliberately narrower than `ToolFailureFeedback`. It exists because the resource layer
+ * must recognise "the same parameter mistake again, with different argument text" without reading
+ * the model-facing sentence, and because a rejection is *not* an execution outcome: there is no
+ * observation, no side effect and no replay authorisation behind it. Approval refusals, synthetic
+ * replan results and real execution failures are different facts and never become this one.
+ *
+ * `classifierVersion` pins the meaning of the pattern key derived from these fields, so a later
+ * change to the classification cannot silently reinterpret history.
+ */
+export interface ToolPreparationFailureFact {
+  readonly kind: "PREPARATION_REJECTED";
+  readonly code: string;
+  readonly issues: readonly ToolPreparationFailureIssue[];
+  readonly disposition: "SAFE_FAILURE";
+  readonly classifierVersion: 1;
+}
+
+/** Bounds on one preparation-failure fact, enforced at construction and at decode. */
+export const TOOL_PREPARATION_FAILURE_LIMITS = Object.freeze({
+  maxIssues: 8,
+  maxFactUtf8Bytes: 2_048,
+  maxCodeBytes: 64,
+  maxKeywordBytes: 32,
+  maxPathBytes: 128,
+  maxPropertyBytes: 64,
+});
+
+/** Assert one stored preparation-failure fact is well-formed and bounded. */
+export function assertToolPreparationFailureFact(
+  value: unknown,
+): asserts value is ToolPreparationFailureFact {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("Tool preparation failure fact must be an object.");
+  }
+  const candidate = value as Record<string, unknown>;
+  const expected = ["kind", "code", "issues", "disposition", "classifierVersion"];
+  const actual = Object.keys(candidate).sort();
+  if (
+    actual.length !== expected.length ||
+    actual.some((key, index) => key !== [...expected].sort()[index])
+  ) {
+    throw new TypeError("Tool preparation failure fact has an unsupported shape.");
+  }
+  if (candidate["kind"] !== "PREPARATION_REJECTED") {
+    throw new TypeError("Tool preparation failure kind is unsupported.");
+  }
+  if (candidate["disposition"] !== "SAFE_FAILURE") {
+    throw new TypeError("Tool preparation failure disposition is unsupported.");
+  }
+  if (candidate["classifierVersion"] !== 1) {
+    throw new TypeError("Tool preparation failure classifier version is unsupported.");
+  }
+  const code = candidate["code"];
+  if (
+    typeof code !== "string" ||
+    code.length === 0 ||
+    Buffer.byteLength(code, "utf8") > TOOL_PREPARATION_FAILURE_LIMITS.maxCodeBytes
+  ) {
+    throw new TypeError("Tool preparation failure code is invalid.");
+  }
+  const issues = candidate["issues"];
+  if (
+    !Array.isArray(issues) ||
+    issues.length > TOOL_PREPARATION_FAILURE_LIMITS.maxIssues
+  ) {
+    throw new TypeError("Tool preparation failure issues exceed the bounded limit.");
+  }
+  for (const issue of issues) assertToolPreparationFailureIssue(issue);
+  if (
+    Buffer.byteLength(JSON.stringify(candidate), "utf8") >
+    TOOL_PREPARATION_FAILURE_LIMITS.maxFactUtf8Bytes
+  ) {
+    throw new TypeError("Tool preparation failure fact exceeds its byte limit.");
+  }
+}
+
+function assertToolPreparationFailureIssue(
+  value: unknown,
+): asserts value is ToolPreparationFailureIssue {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("Tool preparation failure issue must be an object.");
+  }
+  const candidate = value as Record<string, unknown>;
+  const allowed = new Set(["keyword", "path", "property"]);
+  if (Object.keys(candidate).some((key) => !allowed.has(key))) {
+    throw new TypeError("Tool preparation failure issue has an unsupported field.");
+  }
+  assertBoundedSafeName(
+    candidate["keyword"],
+    "Tool preparation failure keyword",
+    TOOL_PREPARATION_FAILURE_LIMITS.maxKeywordBytes,
+  );
+  if (candidate["path"] !== undefined) {
+    assertBoundedSafeName(
+      candidate["path"],
+      "Tool preparation failure path",
+      TOOL_PREPARATION_FAILURE_LIMITS.maxPathBytes,
+    );
+  }
+  if (candidate["property"] !== undefined) {
+    assertBoundedSafeName(
+      candidate["property"],
+      "Tool preparation failure property",
+      TOOL_PREPARATION_FAILURE_LIMITS.maxPropertyBytes,
+    );
+  }
+}
+
+function assertBoundedSafeName(value: unknown, label: string, maxBytes: number): void {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    Buffer.byteLength(value, "utf8") > maxBytes ||
+    // eslint-disable-next-line no-control-regex
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw new TypeError(`${label} is invalid.`);
+  }
+}
+
+/**
  * The result of one Tool call, as the model saw it.
  *
  * ```text
@@ -298,6 +441,15 @@ export interface AgentToolResultMessage extends AgentMessageBase {
   readonly attachmentReferences: readonly AttachmentModelContentReference[];
 
   readonly projection: ToolFeedbackProjectionReceipt;
+
+  /**
+   * Present only when the call was refused before execution by its declared schema.
+   *
+   * It is absent for a real observation, for a skipped trailing call and for a synthetic replan
+   * result, so "the model was told the arguments were wrong" and "something ran and failed" stay
+   * distinguishable facts rather than one inferred from text.
+   */
+  readonly preparationFailure?: ToolPreparationFailureFact;
 }
 
 /** Create a frozen Tool result message. */
@@ -311,6 +463,7 @@ export function createAgentToolResultMessage(
     readonly projectedContent: string;
     readonly attachmentReferences?: readonly AttachmentModelContentReference[] | undefined;
     readonly projection: ToolFeedbackProjectionReceipt;
+    readonly preparationFailure?: ToolPreparationFailureFact | undefined;
   },
 ): AgentToolResultMessage {
   if (input.toolCallId.length === 0) {
@@ -339,6 +492,14 @@ export function createAgentToolResultMessage(
     );
   }
   assertToolFeedbackProjectionPolicy(input.projection.policy);
+  if (input.preparationFailure !== undefined) {
+    assertToolPreparationFailureFact(input.preparationFailure);
+    if (input.observation.kind !== "NO_OBSERVATION") {
+      throw new TypeError(
+        "A Tool result with an execution observation cannot carry a preparation failure.",
+      );
+    }
+  }
   return Object.freeze({
     ...base,
     type: "TOOL_RESULT" as const,
@@ -357,6 +518,19 @@ export function createAgentToolResultMessage(
       fingerprint: input.projection.fingerprint,
       version: TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION,
     }),
+    ...(input.preparationFailure === undefined
+      ? {}
+      : {
+          preparationFailure: Object.freeze({
+            kind: "PREPARATION_REJECTED" as const,
+            code: input.preparationFailure.code,
+            issues: Object.freeze(
+              input.preparationFailure.issues.map((issue) => Object.freeze({ ...issue })),
+            ),
+            disposition: "SAFE_FAILURE" as const,
+            classifierVersion: 1 as const,
+          }),
+        }),
   });
 }
 

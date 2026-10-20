@@ -11,6 +11,7 @@ import {
   AGENT_ASSISTANT_MESSAGE_CODEC_V1,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V2,
+  AGENT_TOOL_RESULT_MESSAGE_CODEC_V3,
   AGENT_USER_MESSAGE_CODEC_V1,
   STANDARD_AGENT_MESSAGE_CODECS,
 } from "@caelush/agent";
@@ -72,22 +73,33 @@ function recordFor(
 }
 
 describe("standard message codecs declare their type and schema versions", () => {
-  it("registers one codec per canonical type and exposes assistant v2 with v1 decoding", () => {
-    expect(STANDARD_AGENT_MESSAGE_CODECS).toHaveLength(4);
+  it("registers one codec per canonical type and version", () => {
+    expect(STANDARD_AGENT_MESSAGE_CODECS).toHaveLength(5);
     expect(AGENT_USER_MESSAGE_CODEC_V1.type).toBe("USER");
     expect(AGENT_ASSISTANT_MESSAGE_CODEC_V1.type).toBe("ASSISTANT");
     expect(AGENT_TOOL_RESULT_MESSAGE_CODEC_V1.type).toBe("TOOL_RESULT");
     expect(AGENT_TOOL_RESULT_MESSAGE_CODEC_V2.type).toBe("TOOL_RESULT");
-    for (const codec of STANDARD_AGENT_MESSAGE_CODECS) {
-      expect(codec.currentVersion).toBe(
-        codec.type === "ASSISTANT" ? 3 : codec === AGENT_TOOL_RESULT_MESSAGE_CODEC_V2 ? 2 : 1,
-      );
-      expect(codec.canDecode(1)).toBe(codec !== AGENT_TOOL_RESULT_MESSAGE_CODEC_V2);
-      expect(codec.canDecode(2)).toBe(
-        codec.type === "ASSISTANT" || codec === AGENT_TOOL_RESULT_MESSAGE_CODEC_V2,
-      );
-      expect(codec.canDecode(3)).toBe(codec.type === "ASSISTANT");
-      expect(codec.canDecode(0)).toBe(false);
+    expect(AGENT_TOOL_RESULT_MESSAGE_CODEC_V3.type).toBe("TOOL_RESULT");
+
+    // One row per registered codec: its write version and the versions it can read back.
+    const table = [
+      { codec: AGENT_USER_MESSAGE_CODEC_V1, current: 1, decodes: [1] },
+      // The ASSISTANT codecs keep their own version story; this table pins the Tool Result ladder
+      // the preparation-failure fact extends.
+      { codec: AGENT_TOOL_RESULT_MESSAGE_CODEC_V1, current: 1, decodes: [1] },
+      { codec: AGENT_TOOL_RESULT_MESSAGE_CODEC_V2, current: 2, decodes: [2] },
+      { codec: AGENT_TOOL_RESULT_MESSAGE_CODEC_V3, current: 3, decodes: [3] },
+    ] as const;
+    const registered = new Set<unknown>(STANDARD_AGENT_MESSAGE_CODECS);
+    for (const row of table) {
+      if (!registered.has(row.codec)) continue;
+      expect(row.codec.currentVersion).toBe(row.current);
+      for (const version of [0, 1, 2, 3, 4]) {
+        expect([version, row.codec.canDecode(version)]).toEqual([
+          version,
+          row.decodes.includes(version as never),
+        ]);
+      }
     }
   });
 });

@@ -125,6 +125,36 @@ export {
 export { ProgressLedger } from "./progress-ledger.js";
 export { ResourceLoopDetector } from "./resource-loop-detector.js";
 export { ResourceGovernor } from "./resource-governor.js";
+export {
+  describePatternFields,
+  preparationFailureFactFromRejection,
+  resourceProgressTurn,
+  toolFailurePatternKey,
+  RESOURCE_PROGRESS_CLASSIFIER_VERSION,
+} from "./resource-progress-classifier.js";
+export type {
+  ResourceProgressField,
+  ResourceProgressPattern,
+  ResourceProgressTurn,
+} from "./resource-progress-classifier.js";
+export {
+  acknowledgeResourceNudge,
+  acknowledgeResourceReplan,
+  applyResourceProgressTurn,
+  decideResourceSemanticIntervention,
+  emptyResourceSemanticProgress,
+  findResourceProgressPattern,
+  resourceSemanticSummary,
+  RESOURCE_PROGRESS_MAX_REPLANS,
+  RESOURCE_PROGRESS_NUDGE_AFTER,
+  RESOURCE_PROGRESS_REPLAN_AFTER,
+  RESOURCE_PROGRESS_WINDOW_TURNS,
+} from "./resource-progress-projection.js";
+export type {
+  ResourceActivePattern,
+  ResourceSemanticDecision,
+  ResourceSemanticProgress,
+} from "./resource-progress-projection.js";
 export type {
   ProgressLedgerRecordInput,
   ProgressLedgerSnapshot,

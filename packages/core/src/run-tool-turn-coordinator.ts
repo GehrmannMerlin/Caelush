@@ -14,6 +14,7 @@ import type {
   ToolSecurityContext,
   ToolTurnCoordinator,
   ToolTurnRequest,
+  ToolPreparationFailureFact,
   ToolTurnResult,
   WaitingApprovalBoundary,
 } from "@caelush/agent";
@@ -36,6 +37,20 @@ import type {
 } from "./resource-governance-port.js";
 import type { RunExecutionSnapshotView as RunExecutionSnapshot } from "./run-execution-store.js";
 import type { RunToolFeedbackProjection } from "./run-message-materializer.js";
+import {
+  describePatternFields as describeSemanticFields,
+  preparationFailureFactFromRejection,
+  resourceProgressTurn,
+} from "./resource-progress-classifier.js";
+import {
+  acknowledgeResourceNudge,
+  acknowledgeResourceReplan,
+  applyResourceProgressTurn,
+  decideResourceSemanticIntervention,
+  emptyResourceSemanticProgress,
+  findResourceProgressPattern,
+  type ResourceSemanticProgress,
+} from "./resource-progress-projection.js";
 import { RunControllerInvariantError } from "./run-controller-errors.js";
 import { toTextOnlyAIToolResultContent } from "./ai-message-content.js";
 import type { ToolFeedbackContributionApplier } from "./run-controller-ports.js";
@@ -484,6 +499,56 @@ type ResourceAdmission =
     };
 
 /**
+ * The strongest progress signal the Run has, without inventing a new lifecycle state.
+ *
+ * A semantic decision is evidence about *this* Tool, gathered from accepted results; the counter
+ * based level is evidence about the Run as a whole. The stronger of the two wins, and the existing
+ * governor still owns what each level means. `WAITING_RESOURCE` is only ever raised from semantic
+ * evidence after the configured number of re-plans, so a long but productive Run cannot reach it.
+ */
+function semanticProgressLevel(
+  decision: ReturnType<typeof decideResourceSemanticIntervention>,
+  fallback: "HEALTHY" | "NUDGE" | "FORCED_REPLAN",
+): "HEALTHY" | "NUDGE" | "FORCED_REPLAN" | "WAITING_RESOURCE" {
+  switch (decision.kind) {
+    case "WAITING_RESOURCE":
+      return "WAITING_RESOURCE";
+    case "REPLAN":
+      return "FORCED_REPLAN";
+    case "NUDGE":
+      return fallback === "HEALTHY" ? "NUDGE" : fallback;
+    default:
+      return fallback;
+  }
+}
+
+/**
+ * A reminder that names the mistake instead of asking the model to reflect.
+ *
+ * It quotes only what the schema declared - the Tool, the stable rejection code, how many times it
+ * happened and which fields were wrong - and states the part that matters most: nothing ran.
+ */
+function semanticGuidanceFor(
+  decision: Extract<ReturnType<typeof decideResourceSemanticIntervention>, { kind: "NUDGE" }>,
+  progress: ResourceSemanticProgress | undefined,
+): string {
+  const pattern =
+    progress === undefined ? undefined : findResourceProgressPattern(progress, decision.patternKey);
+  const fields = describeSemanticFields(pattern?.fields ?? []);
+  return (
+    `The last ${String(decision.occurrences)} calls to ${decision.toolName} were rejected before execution ` +
+    `with ${decision.code}: ${fields}. Nothing was executed. ` +
+    `Use the declared argument shape from the Tool guidance and change exactly these fields; ` +
+    `if the call still cannot be formed, choose a different approach.`
+  );
+}
+
+/** The newest accepted batch identity in a window, used as an episode boundary. */
+function lastTurnId(progress: ResourceSemanticProgress): string | undefined {
+  return progress.turns.at(-1)?.turnId;
+}
+
+/**
  * Admit a Tool batch against the Run's resource policy.
  *
  * The order is the contract and is preserved exactly:
@@ -514,12 +579,20 @@ async function admitResource(
     now: dependencies.clock.now(),
   });
   const noProgress = state.consecutiveNoProgressTurns;
-  const progressLevel =
+  const semantic = state.semanticProgress;
+  const semanticDecision = decideResourceSemanticIntervention(
+    semantic ?? emptyResourceSemanticProgress(),
+  );
+  const progressLevel = semanticProgressLevel(
+    semanticDecision,
     noProgress >= policy.progress.noProgressTurnsBeforeReplan
       ? "FORCED_REPLAN"
       : noProgress >= policy.progress.identicalCallNudgeThreshold
         ? "NUDGE"
-        : "HEALTHY";
+        : "HEALTHY",
+  );
+  const semanticGuidance =
+    semanticDecision.kind === "NUDGE" ? semanticGuidanceFor(semanticDecision, semantic) : undefined;
   const decision = new ResourceGovernor(policy).evaluateToolBatch({
     agentTurnsConsumed: context.state.usage.steps,
     toolOperationsConsumed: state.toolOperationsConsumed,
@@ -527,7 +600,19 @@ async function admitResource(
     progressLevel,
     replanCount: state.replanCount,
     currentLeaseEpoch: state.leaseEpoch,
+    ...(semanticGuidance === undefined ? {} : { guidance: semanticGuidance }),
   });
+  if (decision.kind === "REPLAN" && semanticDecision.kind === "REPLAN" && semantic !== undefined) {
+    // The re-plan is being produced now, so this is the moment the episode advances. Counting it at
+    // record time would advance an episode that a cancellation might never have reached.
+    const acknowledged = acknowledgeResourceReplan(semantic, lastTurnId(semantic));
+    await updateResourceState(dependencies, state, {
+      ...state,
+      semanticProgress: acknowledged,
+      revision: state.revision + 1,
+      updatedAt: dependencies.clock.now(),
+    });
+  }
   if (decision.kind === "RENEW_AND_ALLOW") {
     await updateResourceState(dependencies, state, {
       ...state,
@@ -666,11 +751,12 @@ async function completedToolTurnResult(
   );
   return {
     kind: "COMPLETED",
-    results: projected.map(({ message }) => ({
+    results: projected.map(({ message, preparationFailure }) => ({
       externalCallId: message.toolCallId,
       toolName: message.toolName,
       content: toTextOnlyAIToolResultContent(message.content),
       isError: message.isError,
+      ...(preparationFailure === undefined ? {} : { preparationFailure }),
     })),
   };
 }
@@ -710,6 +796,7 @@ async function projectAndNormalize(
     results: contributed.map(({ message }) => message),
   });
   const attachmentReferences = attachmentReferencesByCall(items);
+  const preparationFailures = preparationFailuresByCall(items);
   const byCallId = new Map(projected.map((item) => [item.message.toolCallId, item] as const));
   const ordered = normalized.map((message) => {
     const item = byCallId.get(message.toolCallId);
@@ -728,15 +815,36 @@ async function projectAndNormalize(
             receipt: Object.freeze({ ...item.receipt, fingerprint }),
           };
     const references = message.isError ? undefined : attachmentReferences.get(message.toolCallId);
+    const preparationFailure = preparationFailures.get(message.toolCallId);
     return Object.freeze({
       ...withMessage,
       ...(references === undefined || references.length === 0
         ? {}
         : { attachmentReferences: references }),
+      ...(preparationFailure === undefined ? {} : { preparationFailure }),
     }) satisfies RunToolFeedbackProjection;
   });
   observation.projectedFeedback = Object.freeze(ordered);
   return observation.projectedFeedback;
+}
+
+/**
+ * The trusted preparation-failure fact of every refused call in this batch.
+ *
+ * Only `REJECTED` items qualify. A `SKIPPED` call was never prepared, and a synthetic replan result
+ * never reached the Tool Layer at all, so neither can become evidence that the model repeated a
+ * schema mistake.
+ */
+function preparationFailuresByCall(
+  items: readonly ToolBatchItemOutcome[],
+): ReadonlyMap<string, ToolPreparationFailureFact> {
+  const byCall = new Map<string, ToolPreparationFailureFact>();
+  for (const item of items) {
+    if (item.kind !== "REJECTED") continue;
+    const fact = preparationFailureFactFromRejection(item.feedback);
+    if (fact !== undefined) byCall.set(item.call.externalCallId, fact);
+  }
+  return byCall;
 }
 
 /** Keep only bounded, schema-checked image pointers from successful real observations. */
@@ -878,7 +986,14 @@ async function settleObservation(
 export async function recordRunToolTurnProgress(input: {
   readonly dependencies: RunToolTurnDriverDependencies;
   readonly facts: RunToolTurnFacts;
-  readonly results: readonly { readonly content: string; readonly isError: boolean }[];
+  /** The durable identity of this batch: the Step that requested it. */
+  readonly turnId: string;
+  readonly results: readonly {
+    readonly toolName: string;
+    readonly isError: boolean;
+    readonly content?: string;
+    readonly preparationFailure?: ToolPreparationFailureFact | undefined;
+  }[];
 }): Promise<void> {
   const repository = input.dependencies.resourceGovernance;
   const policy = input.facts.run.resourcePolicy;
@@ -889,10 +1004,36 @@ export async function recordRunToolTurnProgress(input: {
     now: input.dependencies.clock.now(),
   });
   const requestFingerprint = fingerprintToolBatch(input.facts.pendingDecision.toolRequests);
-  const resultFingerprint = fingerprintToolResultBatch(input.results);
+  const resultFingerprint = fingerprintToolResultBatch(
+    input.results.map((result) => ({
+      content: result.content ?? "",
+      isError: result.isError,
+    })),
+  );
   const previous = current.recentFingerprints.at(-1);
   const exactRepeat =
     previous?.request === requestFingerprint && previous?.result === resultFingerprint;
+
+  // The semantic window is a projection of accepted results, folded once per batch identity. A
+  // repeated post-commit update after a crash finds its own turn already recorded and changes
+  // nothing, so evidence cannot be counted twice.
+  const turn = resourceProgressTurn({ turnId: input.turnId, results: input.results });
+  const semantic =
+    turn === undefined
+      ? current.semanticProgress
+      : applyResourceProgressTurn(
+          current.semanticProgress ?? emptyResourceSemanticProgress(),
+          turn,
+        );
+  const decision = decideResourceSemanticIntervention(semantic ?? emptyResourceSemanticProgress());
+  // A reminder is acknowledged when it is recorded, so the next batch is not told the same thing
+  // again. A re-plan is acknowledged where it is actually produced - at admission - because until
+  // then no re-plan has happened.
+  const withAcknowledgement =
+    decision.kind === "NUDGE" && semantic !== undefined
+      ? acknowledgeResourceNudge(semantic)
+      : semantic;
+
   const now = input.dependencies.clock.now();
   await updateResourceState(input.dependencies, current, {
     ...current,
@@ -900,14 +1041,32 @@ export async function recordRunToolTurnProgress(input: {
     toolOperationsConsumed: input.facts.state.usage.toolCalls,
     ...(exactRepeat ? {} : { lastProgressAt: now }),
     consecutiveNoProgressTurns: exactRepeat ? current.consecutiveNoProgressTurns + 1 : 0,
-    resourceGuardState: exactRepeat ? "NUDGE" : "NONE",
+    resourceGuardState: semanticGuardState(decision, exactRepeat),
     recentFingerprints: [
       ...current.recentFingerprints,
       { request: requestFingerprint, result: resultFingerprint },
     ].slice(-64),
+    ...(withAcknowledgement === undefined ? {} : { semanticProgress: withAcknowledgement }),
     revision: current.revision + 1,
     updatedAt: now,
   });
+}
+
+/** The durable guard label a semantic decision corresponds to. */
+function semanticGuardState(
+  decision: ReturnType<typeof decideResourceSemanticIntervention>,
+  exactRepeat: boolean,
+): ResourceGovernanceState["resourceGuardState"] {
+  switch (decision.kind) {
+    case "WAITING_RESOURCE":
+      return "WAITING_RESOURCE";
+    case "REPLAN":
+      return "REPLAN_REQUIRED";
+    case "NUDGE":
+      return "NUDGE";
+    default:
+      return exactRepeat ? "NUDGE" : "NONE";
+  }
 }
 
 /**

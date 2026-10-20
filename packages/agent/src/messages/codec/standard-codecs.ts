@@ -26,10 +26,12 @@ import type { AgentAssistantModelProvenance } from "../types/assistant-message.j
 import type {
   ToolFeedbackProjectionPolicy,
   ToolFeedbackProjectionReceipt,
+  ToolPreparationFailureFact,
 } from "../types/tool-result-message.js";
 import {
   LEGACY_UNKNOWN_TOOL_FEEDBACK_POLICY,
   TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION,
+  assertToolPreparationFailureFact,
   toToolFeedbackProjectionReceiptJson,
   toolFeedbackPolicySnapshot,
 } from "../types/tool-result-message.js";
@@ -253,12 +255,54 @@ export const AGENT_TOOL_RESULT_MESSAGE_CODEC_V2: AgentMessageCodec<AgentToolResu
   },
 };
 
+/**
+ * Tool-result codec v3 adds the bounded preparation-failure fact while preserving v1/v2 decoding.
+ *
+ * The fact is written only for a call the Preparer refused, and only ever alongside
+ * `NO_OBSERVATION`: a real execution outcome and a refused call must not share a shape, because the
+ * resource layer treats them as different evidence. Rows written at v1 or v2 keep decoding exactly
+ * as before - a missing fact means "unknown", never "not a failure".
+ */
+export const AGENT_TOOL_RESULT_MESSAGE_CODEC_V3: AgentMessageCodec<AgentToolResultMessage> = {
+  type: "TOOL_RESULT",
+  currentVersion: 3,
+  canDecode(version: AgentMessageSchemaVersion): boolean {
+    return version === 3;
+  },
+  encode(message: AgentToolResultMessage): JsonObject {
+    const base = AGENT_TOOL_RESULT_MESSAGE_CODEC_V2.encode(message);
+    return {
+      ...base,
+      ...(message.preparationFailure === undefined
+        ? {}
+        : { preparationFailure: message.preparationFailure as unknown as JsonValue }),
+    };
+  },
+  decode(record: AgentMessageRecord): AgentToolResultMessage {
+    const base = decodeEnvelope(record, "TOOL_RESULT", 3);
+    const preparationFailure = record.data["preparationFailure"];
+    return createAgentToolResultMessage(base, {
+      toolCallId: requireString(record.data, "toolCallId", "TOOL_RESULT"),
+      toolName: requireString(record.data, "toolName", "TOOL_RESULT"),
+      observation: decodeObservationRef(record.data["observation"]),
+      isError: requireBoolean(record.data, "isError", "TOOL_RESULT"),
+      projectedContent: requireString(record.data, "projectedContent", "TOOL_RESULT"),
+      attachmentReferences: decodeAttachmentModelReferences(record.data["attachmentReferences"]),
+      projection: decodeProjectionReceipt(record.data["projection"]),
+      ...(preparationFailure === undefined
+        ? {}
+        : { preparationFailure: decodePreparationFailure(preparationFailure) }),
+    });
+  },
+};
+
 /** The three standard codecs, in canonical order. */
 export const STANDARD_AGENT_MESSAGE_CODECS = [
   AGENT_USER_MESSAGE_CODEC_V1,
   AGENT_ASSISTANT_MESSAGE_CODEC_V3,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V2,
+  AGENT_TOOL_RESULT_MESSAGE_CODEC_V3,
 ] as const;
 
 /* ------------------------------------------------------------------------------ envelope */
@@ -710,6 +754,16 @@ function decodeAttachmentModelReferences(value: unknown) {
     return value.map((reference) => AttachmentModelContentReferenceSchema.parse(reference));
   } catch {
     throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT", 2);
+  }
+}
+
+/** Decode the bounded preparation-failure fact; an unreadable one fails closed. */
+function decodePreparationFailure(value: unknown): ToolPreparationFailureFact {
+  try {
+    assertToolPreparationFailureFact(value);
+    return value;
+  } catch {
+    throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT", 3);
   }
 }
 

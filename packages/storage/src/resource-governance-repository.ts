@@ -1,6 +1,8 @@
 import {
   RunIdSchema,
   TimestampMsSchema,
+  parseResourceProgressRecordV1,
+  type ResourceProgressRecordV1,
   type RunId,
   type RunResourcePolicy,
   type TimestampMs,
@@ -22,6 +24,13 @@ export interface ResourceGovernanceState {
   readonly replanCount: number;
   readonly resourceGuardState: "NONE" | "NUDGE" | "REPLAN_REQUIRED" | "WAITING_RESOURCE";
   readonly recentFingerprints: readonly ResourceFingerprint[];
+  /**
+   * The derived repeated-failure window, stored beside the fingerprint ledger.
+   *
+   * Absent for every row written before this version, and absent for a Run that never produced one.
+   * A missing value means "no semantic evidence", never "no failures happened".
+   */
+  readonly semanticProgress?: ResourceProgressRecordV1 | undefined;
   readonly revision: number;
   readonly createdAt: TimestampMs;
   readonly updatedAt: TimestampMs;
@@ -62,6 +71,9 @@ export const ResourceGovernanceStateSchema = {
         "WAITING_RESOURCE",
       ]),
       recentFingerprints: fingerprints(value.recentFingerprints),
+      ...(value.semanticProgress === undefined
+        ? {}
+        : { semanticProgress: parseResourceProgressRecordV1(value.semanticProgress) }),
       revision: nonNegativeInteger(value.revision, "revision"),
       createdAt: TimestampMsSchema.parse(value.createdAt),
       updatedAt: TimestampMsSchema.parse(value.updatedAt),
@@ -177,7 +189,7 @@ export class SqliteResourceGovernanceRepository implements ResourceGovernanceRep
           state.replanCount,
           state.resourceGuardState,
           state.revision,
-          JSON.stringify(state.recentFingerprints),
+          encodeRecentLedger(state),
           state.createdAt,
           state.updatedAt,
         );
@@ -221,7 +233,7 @@ export class SqliteResourceGovernanceRepository implements ResourceGovernanceRep
         parsed.replanCount,
         parsed.resourceGuardState,
         parsed.revision,
-        JSON.stringify(parsed.recentFingerprints),
+        encodeRecentLedger(parsed),
         parsed.createdAt,
         parsed.updatedAt,
         runId,
@@ -233,9 +245,9 @@ export class SqliteResourceGovernanceRepository implements ResourceGovernanceRep
 }
 
 function decodeRow(row: ResourceRow): ResourceGovernanceState {
-  let recentFingerprints: unknown;
+  let ledger: ReturnType<typeof decodeRecentLedger>;
   try {
-    recentFingerprints = JSON.parse(row.recent_fingerprints_json);
+    ledger = decodeRecentLedger(JSON.parse(row.recent_fingerprints_json));
   } catch (error) {
     throw new StorageDecodeError("ResourceGovernanceState", row.run_id, "run_resource_states", {
       cause: error,
@@ -255,7 +267,10 @@ function decodeRow(row: ResourceRow): ResourceGovernanceState {
       consecutiveNoProgressTurns: row.consecutive_no_progress_turns,
       replanCount: row.replan_count,
       resourceGuardState: row.resource_guard_state,
-      recentFingerprints,
+      recentFingerprints: ledger.recentFingerprints,
+      ...(ledger.semanticProgress === undefined
+        ? {}
+        : { semanticProgress: ledger.semanticProgress }),
       revision: row.revision,
       createdAt: row.created_at_ms,
       updatedAt: row.updated_at_ms,
@@ -281,6 +296,7 @@ const stateKeys = new Set([
   "replanCount",
   "resourceGuardState",
   "recentFingerprints",
+  "semanticProgress",
   "revision",
   "createdAt",
   "updatedAt",
@@ -324,4 +340,41 @@ function fingerprints(value: unknown): readonly ResourceFingerprint[] {
       result: boundedString(entry.result, "fingerprint result", 128),
     };
   });
+}
+
+/**
+ * The recent-facts ledger, versioned in place.
+ *
+ * ```text
+ * legacy   [ {request, result}, ... ]                     written before this version
+ * current  { version: 2, fingerprints, semantic? }        written from this version on
+ * ```
+ *
+ * The column already holds one bounded JSON ledger per Run, so the semantic window rides beside the
+ * fingerprints instead of adding a second column and a migration for the same fact. A legacy array
+ * keeps decoding exactly as before; an unknown envelope version is refused rather than guessed at,
+ * because a window this build cannot read must not silently become "no failures".
+ */
+function encodeRecentLedger(state: ResourceGovernanceState): string {
+  return JSON.stringify({
+    version: 2,
+    fingerprints: state.recentFingerprints,
+    ...(state.semanticProgress === undefined ? {} : { semantic: state.semanticProgress }),
+  });
+}
+
+function decodeRecentLedger(value: unknown): {
+  readonly recentFingerprints: readonly ResourceFingerprint[];
+  readonly semanticProgress?: ResourceProgressRecordV1;
+} {
+  if (Array.isArray(value)) return { recentFingerprints: fingerprints(value) };
+  if (!isRecord(value) || value.version !== 2) {
+    throw new TypeError("resource governance ledger version is unsupported");
+  }
+  return {
+    recentFingerprints: fingerprints(value.fingerprints),
+    ...(value.semantic === undefined
+      ? {}
+      : { semanticProgress: parseResourceProgressRecordV1(value.semantic) }),
+  };
 }

@@ -2,6 +2,7 @@ import { createTimestampMs, type RunResourcePolicy } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushDatabase } from "../src/database.js";
 import { migrateCaelushDatabase } from "../src/migrate.js";
+import { StorageDecodeError } from "../src/errors.js";
 import {
   ResourceGovernanceConflictError,
   SqliteResourceGovernanceRepository,
@@ -38,7 +39,7 @@ async function openRepository() {
   const run = makeRun(session.id, { status: "RUNNING", startedAt: createTimestampMs(100) });
   await new SqliteSessionRepository(database).insert(session);
   await new SqliteRunRepository(database).insert(run);
-  return { repository: new SqliteResourceGovernanceRepository(database), run };
+  return { repository: new SqliteResourceGovernanceRepository(database), run, database };
 }
 
 describe("SqliteResourceGovernanceRepository", () => {
@@ -98,5 +99,70 @@ describe("SqliteResourceGovernanceRepository", () => {
     expect(loaded?.recentFingerprints).toHaveLength(64);
     expect(JSON.stringify(loaded)).not.toContain("raw Tool output");
     expect(loaded?.recentFingerprints[0]).toEqual({ request: "r0", result: "s0" });
+  });
+
+  it("stores the repeated-failure window beside the fingerprint ledger", async () => {
+    const { repository, run } = await openRepository();
+    const state = await repository.createOrGet(run.id, {
+      policyVersion: "v1",
+      mode: policy.mode,
+      now: createTimestampMs(101),
+    });
+    const progress = {
+      version: 1 as const,
+      turns: [
+        {
+          turnId: "step-1",
+          patterns: [
+            {
+              key: "a".repeat(64),
+              toolName: "apply_patch",
+              code: "TOOL_ARGUMENT_ERROR",
+              fields: [{ keyword: "required", name: "patch" }],
+            },
+          ],
+          succeededTools: [],
+          classified: true,
+        },
+      ],
+      active: {
+        key: "a".repeat(64),
+        toolName: "apply_patch",
+        code: "TOOL_ARGUMENT_ERROR",
+        replans: 0,
+        nudged: false,
+      },
+    };
+    await repository.compareAndSwap(run.id, state.revision, {
+      ...state,
+      semanticProgress: progress,
+      revision: state.revision + 1,
+      updatedAt: createTimestampMs(102),
+    });
+
+    const loaded = await repository.get(run.id);
+    expect(loaded?.semanticProgress).toEqual(progress);
+    // Nothing raw travels with it: the window holds declared names only.
+    expect(JSON.stringify(loaded?.semanticProgress)).not.toContain("*** Begin Patch");
+  });
+
+  it("keeps reading a legacy fingerprint array and refuses an unknown ledger version", async () => {
+    const { repository, run, database } = await openRepository();
+    await repository.createOrGet(run.id, {
+      policyVersion: "v1",
+      mode: policy.mode,
+      now: createTimestampMs(101),
+    });
+    database.client
+      .prepare("UPDATE run_resource_states SET recent_fingerprints_json = ? WHERE run_id = ?")
+      .run(JSON.stringify([{ request: "r0", result: "s0" }]), run.id);
+    const legacy = await repository.get(run.id);
+    expect(legacy?.recentFingerprints).toEqual([{ request: "r0", result: "s0" }]);
+    expect(legacy?.semanticProgress).toBeUndefined();
+
+    database.client
+      .prepare("UPDATE run_resource_states SET recent_fingerprints_json = ? WHERE run_id = ?")
+      .run(JSON.stringify({ version: 99, fingerprints: [] }), run.id);
+    await expect(repository.get(run.id)).rejects.toBeInstanceOf(StorageDecodeError);
   });
 });

@@ -1493,7 +1493,12 @@ export class RunController {
     // decision — and it is what a later `WAITING_RESOURCE` reports as `replanCount`.
     if (result.kind === "REPLAN") await recordRunToolTurnReplan({ dependencies, facts });
     if (results.length === 0) return;
-    await recordRunToolTurnProgress({ dependencies, facts, results });
+    await recordRunToolTurnProgress({
+      dependencies,
+      facts,
+      turnId: String(facts.continuation.sourceStepId),
+      results,
+    });
   }
 
   /**

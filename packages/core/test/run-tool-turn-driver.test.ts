@@ -206,8 +206,10 @@ describe("Phase 3D Tool turn driver", () => {
     const durable = harness.store.snapshot.conversationRecords.find(
       (record) => record.messageType === "TOOL_RESULT",
     );
+    // TOOL_RESULT v3 is the current writer: it carries the same image pointers as v2 plus the
+    // optional preparation-failure fact.
     expect(durable).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       data: { attachmentReferences: [reference] },
     });
     expect(JSON.stringify(durable?.data)).not.toContain("aGVsbG8=");

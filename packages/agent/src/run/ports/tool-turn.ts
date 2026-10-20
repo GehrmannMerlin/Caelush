@@ -3,6 +3,7 @@ import type { ApprovalRequestId, StepId, ToolInvocationId, ToolName } from "@cae
 import type { AgentBudgetBlock } from "../../loop/ports/model-request-admission.js";
 import type { AgentToolCallsDecision } from "../../loop/decision/decision.js";
 import type { ToolObservationPolicySnapshot } from "../../loop/types.js";
+import type { ToolPreparationFailureFact } from "../../messages/types/tool-result-message.js";
 import type { RunExecutionMode } from "../directive.js";
 
 /**
@@ -39,6 +40,14 @@ export interface AgentToolResult {
   /** The model-facing text. */
   readonly content: string;
   readonly isError: boolean;
+  /**
+   * Present only when the call was refused before execution by its declared schema.
+   *
+   * It is the generic, argument-free classification the Run Layer needs in order to recognise "the
+   * same parameter mistake again" without reading the model-facing sentence. It never appears for an
+   * executed call, and it is not a replay authorisation.
+   */
+  readonly preparationFailure?: ToolPreparationFailureFact | undefined;
 }
 
 /** The Tool invocation an approval boundary is waiting on. */

@@ -105,7 +105,9 @@ export {
   toolFeedbackPolicySnapshot,
   toolResultObservationId,
   toToolFeedbackProjectionPolicyJson,
+  assertToolPreparationFailureFact,
   toToolFeedbackProjectionReceiptJson,
+  TOOL_PREPARATION_FAILURE_LIMITS,
   LEGACY_UNKNOWN_TOOL_FEEDBACK_POLICY,
   TOOL_FEEDBACK_PROJECTION_POLICY_KINDS,
   TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION,
@@ -116,6 +118,8 @@ export type {
   ToolFeedbackProjectionPolicyJson,
   ToolFeedbackProjectionReceipt,
   ToolFeedbackProjectionReceiptJson,
+  ToolPreparationFailureFact,
+  ToolPreparationFailureIssue,
 } from "./types/tool-result-message.js";
 
 export {
@@ -195,6 +199,7 @@ export {
   AGENT_ASSISTANT_MESSAGE_CODEC_V1,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V2,
+  AGENT_TOOL_RESULT_MESSAGE_CODEC_V3,
   AGENT_USER_MESSAGE_CODEC_V1,
   assertJsonSafePayload,
   STANDARD_AGENT_MESSAGE_CODECS,

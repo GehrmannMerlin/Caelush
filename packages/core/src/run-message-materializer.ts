@@ -10,6 +10,7 @@ import type {
   PrivateReplayIdentity,
   ConversationTurnIdFactory,
   ToolFeedbackProjectionReceipt,
+  ToolPreparationFailureFact,
   ToolResultObservationRef,
 } from "@caelush/agent";
 import {
@@ -56,6 +57,13 @@ export interface RunToolFeedbackProjection {
   readonly receipt: ToolFeedbackProjectionReceipt;
   readonly observation: ToolResultObservationRef;
   readonly attachmentReferences?: readonly AttachmentModelContentReference[] | undefined;
+  /**
+   * The bounded fact that this call was refused before execution by its declared schema.
+   *
+   * It travels with the projection so the durable message can carry it; it is never part of the
+   * model-visible text, which stays exactly what the model was shown.
+   */
+  readonly preparationFailure?: ToolPreparationFailureFact | undefined;
 }
 
 export function createUserMessageAppend(
@@ -225,6 +233,9 @@ export function createToolResultMessageAppend(
     ...(projected.attachmentReferences === undefined
       ? {}
       : { attachmentReferences: projected.attachmentReferences }),
+    ...(projected.preparationFailure === undefined
+      ? {}
+      : { preparationFailure: projected.preparationFailure }),
     projection: projected.receipt,
   });
   return appendFromMessage(authority, message);

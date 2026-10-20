@@ -45,9 +45,15 @@ export interface ResourceToolBatchEvaluationInput {
   readonly agentTurnsConsumed: number;
   readonly toolOperationsConsumed: number;
   readonly requestedToolCalls: number;
-  readonly progressLevel: "HEALTHY" | "NUDGE" | "FORCED_REPLAN";
+  /**
+   * `WAITING_RESOURCE` is only ever produced from repeated-failure evidence: it is not a clock and
+   * not a turn count, and it means "this specific mistake has already been re-planned twice".
+   */
+  readonly progressLevel: "HEALTHY" | "NUDGE" | "FORCED_REPLAN" | "WAITING_RESOURCE";
   readonly replanCount: number;
   readonly currentLeaseEpoch?: number;
+  /** Specific guidance for a semantic reminder; absent for the generic nudge. */
+  readonly guidance?: string | undefined;
 }
 
 const REPLAN_GUIDANCE =
@@ -80,6 +86,9 @@ export class ResourceGovernor {
         limit: maxToolCalls,
       };
     }
+    if (input.progressLevel === "WAITING_RESOURCE") {
+      return { kind: "WAIT_FOR_RESOURCE_DECISION", reason: "NO_PROGRESS" };
+    }
     if (
       input.progressLevel === "FORCED_REPLAN" &&
       input.replanCount >= this.policy.progress.replansBeforePause
@@ -104,7 +113,7 @@ export class ResourceGovernor {
       };
     }
     if (input.progressLevel === "NUDGE") {
-      return { kind: "ALLOW_WITH_NUDGE", guidance: REPLAN_GUIDANCE };
+      return { kind: "ALLOW_WITH_NUDGE", guidance: input.guidance ?? REPLAN_GUIDANCE };
     }
     return { kind: "ALLOW" };
   }
