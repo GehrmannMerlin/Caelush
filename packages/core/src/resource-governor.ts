@@ -172,7 +172,8 @@ export class ResourceGovernor {
     }
     const leaseExhausted =
       input.turnsInLease >= this.policy.operationalLease.maxAgentTurns ||
-      input.toolsInLease + input.requestedToolCalls > this.policy.operationalLease.maxToolOperations;
+      input.toolsInLease + input.requestedToolCalls >
+        this.policy.operationalLease.maxToolOperations;
     // A lease is renewed at a healthy boundary only. Renewing because of a mistake would reset the
     // accounting that is supposed to make the mistake visible; the mistake is the reason *not* to move
     // the checkpoint.

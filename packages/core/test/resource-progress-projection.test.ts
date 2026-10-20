@@ -341,7 +341,12 @@ describe("resource progress policy", () => {
         emptyResourceSemanticProgress(),
       );
     // One quiet turn is not enough: the pattern is still inside a three-turn window.
-    const withOneQuiet = fold([turn("w1"), turn("w2"), turn("w3"), turn("w4", { pattern: "none" })]);
+    const withOneQuiet = fold([
+      turn("w1"),
+      turn("w2"),
+      turn("w3"),
+      turn("w4", { pattern: "none" }),
+    ]);
     expect(withOneQuiet.turns).toHaveLength(3);
     expect(withOneQuiet.active).toBeDefined();
 

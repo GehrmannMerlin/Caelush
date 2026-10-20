@@ -52,7 +52,6 @@ import {
   recordResourceNudgeDelivery,
   resourceProgressPolicyFrom,
   type ResourceCorrectionStage,
-  type ResourceProgressPolicy,
   type ResourceSemanticProgress,
 } from "./resource-progress-projection.js";
 import { RunControllerInvariantError } from "./run-controller-errors.js";

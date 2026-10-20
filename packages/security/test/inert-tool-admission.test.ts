@@ -186,7 +186,11 @@ describe("inert control Tool admission", () => {
 
   it("keeps a host-modifying Tool under the same admission it always had", async () => {
     const gate = new CaelushToolExecutionGate();
-    const invocation = { ...planInvocation(), toolName: "apply_patch" as const, riskLevel: "HIGH" as const };
+    const invocation = {
+      ...planInvocation(),
+      toolName: "apply_patch" as const,
+      riskLevel: "HIGH" as const,
+    };
     const definition = {
       name: "apply_patch" as const,
       riskLevel: "HIGH" as const,

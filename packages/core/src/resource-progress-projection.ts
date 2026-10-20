@@ -104,10 +104,7 @@ export type ResourceSemanticProgress = ResourceProgressRecordV1;
  * The ladder is advice, not a gate. Reaching the last rung does not stop anything; it changes what the
  * model is told.
  */
-export type ResourceCorrectionStage =
-  | "INPUT_CORRECTION"
-  | "REVIEW_APPROACH"
-  | "REBUILD_WORK_STATE";
+export type ResourceCorrectionStage = "INPUT_CORRECTION" | "REVIEW_APPROACH" | "REBUILD_WORK_STATE";
 
 export type ResourceSemanticDecision =
   | { readonly kind: "NONE" }

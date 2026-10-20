@@ -117,6 +117,4 @@ describe.skipIf(!isWindows)("Windows shell exit semantics (real execution)", () 
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });
-
-
 });

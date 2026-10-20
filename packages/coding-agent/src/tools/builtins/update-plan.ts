@@ -3,7 +3,6 @@ import {
   parseTaskPlanInput,
   TASK_PLAN_LIMITS,
   type TaskPlan,
-  type TaskPlanStep,
 } from "../plan/task-plan-contract.js";
 import { UPDATE_PLAN_PROMPT_SNIPPET } from "../prompt/prompt-snippets.js";
 import { asOverlaySecurityFactsProjector } from "./result.js";

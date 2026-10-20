@@ -78,8 +78,7 @@ export interface TaskPlan {
 }
 
 export type TaskPlanParseResult =
-  | { readonly ok: true; readonly plan: TaskPlan }
-  | { readonly ok: false; readonly reason: string };
+  { readonly ok: true; readonly plan: TaskPlan } | { readonly ok: false; readonly reason: string };
 
 /**
  * The bounds, in one object so a test can assert them and a caller can cite them.
@@ -114,7 +113,6 @@ const STEP_STATUSES: ReadonlySet<string> = new Set(["pending", "in_progress", "c
  * interpreted by two parsers is exactly the ambiguity the version exists to remove.
  */
 const V2_ONLY_STEP_FIELDS = ["id", "acceptance", "evidenceRefs"] as const;
-const V2_ONLY_TOP_FIELDS = ["execution"] as const;
 
 /**
  * Parse `update_plan` arguments into the plan they describe.
@@ -138,6 +136,7 @@ export function parseTaskPlanInput(value: unknown): TaskPlanParseResult {
   }
   const isV2 = declaredVersion === 2;
   if (!isV2) {
+    // `execution` is the top-level v2-only field; the step-level ones are checked below.
     if (record["execution"] !== undefined) return { ok: false, reason: "PLAN_VERSION_REQUIRED" };
     const rawSteps = record["plan"];
     if (Array.isArray(rawSteps)) {
@@ -171,7 +170,9 @@ export function parseTaskPlanInput(value: unknown): TaskPlanParseResult {
     }
   }
 
-  const execution = isV2 ? parseExecution(record["execution"]) : { ok: true as const, value: undefined };
+  const execution = isV2
+    ? parseExecution(record["execution"])
+    : { ok: true as const, value: undefined };
   if (!execution.ok) return execution;
 
   return {
@@ -282,10 +283,7 @@ function parseExecution(
   }
   const nextAction = record["nextAction"];
   if (nextAction !== undefined) {
-    if (
-      typeof nextAction !== "string" ||
-      nextAction.length > TASK_PLAN_LIMITS.maxNextActionChars
-    ) {
+    if (typeof nextAction !== "string" || nextAction.length > TASK_PLAN_LIMITS.maxNextActionChars) {
       return { ok: false, reason: "EXECUTION_NEXT_ACTION_INVALID" };
     }
   }
@@ -304,7 +302,10 @@ function parseExecution(
 
 function readStepId(
   value: unknown,
-): { readonly ok: true; readonly value: string } | { readonly ok: false; readonly reason: string } | undefined {
+):
+  | { readonly ok: true; readonly value: string }
+  | { readonly ok: false; readonly reason: string }
+  | undefined {
   if (value === undefined) return undefined;
   if (
     typeof value !== "string" ||
