@@ -4,6 +4,14 @@ export type { ExecutionContainment } from "./containment.js";
 export { evaluateLogicalSandboxAdmission } from "./logical-sandbox.js";
 export type { LogicalSandboxAdmission, LogicalSandboxAdmissionInput } from "./logical-sandbox.js";
 export {
+  declaresHostAccess,
+  resolveToolExecutionRequirement,
+} from "./tool-execution-requirement.js";
+export type {
+  ToolExecutionRequirement,
+  ToolExecutionRequirementInput,
+} from "./tool-execution-requirement.js";
+export {
   evaluateSecurityDecision,
   evaluateSecurityPolicy,
   securityPolicyEvaluator,

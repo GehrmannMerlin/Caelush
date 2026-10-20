@@ -22,6 +22,7 @@ import type { ToolExecutionGatePort, ToolGateSecurityFacts } from "./tool-gate-t
 import { CaelushToolExecutionGate } from "./tool-gate.js";
 import { CaelushToolPresentation, type TerminalOutputSanitizer } from "./presentation.js";
 import { CaelushToolResultSanitizer } from "./tool-result-sanitizer.js";
+import { resolveToolExecutionRequirement } from "./tool-execution-requirement.js";
 
 /**
  * The pending-approval lifetime, in milliseconds.
@@ -249,27 +250,28 @@ export function assertDefaultBuiltinSecurityCoverage(
 /**
  * A Tool's Coding security metadata must describe a real executable Tool.
  *
- * `runtimeKinds` is the one structured runtime requirement the current default ten all declare, and
- * it must include `local`: a Tool offered to a local host that cannot say it runs locally is a
- * metadata defect, not an exotic configuration.
+ * The combination rules are not restated here. They are read from
+ * {@link resolveToolExecutionRequirement}, which is the same function the runtime logical sandbox
+ * asks, because a startup check that accepts a combination the runtime refuses — or the reverse —
+ * turns a metadata mistake into a Tool that is offered to a model and can never run.
+ *
+ * What remains this function's own business is the part only a local host can judge: a Tool that
+ * reaches the host must say it can run on `local`, or this host cannot offer it at all.
  */
 function isValidCodingToolMetadata(
   security: CodingToolSecurityMetadata,
   resolved: ResolvedAgentTool,
 ): boolean {
-  const runtimeKinds = security.runtimeRequirements.runtimeKinds;
   if (resolved.tool.name.length === 0 || resolved.tool.description.length === 0) return false;
-  if (!Array.isArray(runtimeKinds)) return false;
-  if (!runtimeKinds.every((kind): kind is string => typeof kind === "string")) return false;
-  // A Tool that touches the host must declare what it needs, and how it reaches it.
-  if (security.requiredCapabilities.length > 0) {
-    return runtimeKinds.length > 0 && runtimeKinds.includes("local");
+  const requirement = resolveToolExecutionRequirement(security);
+  switch (requirement.kind) {
+    case "INVALID":
+      return false;
+    case "IN_PROCESS":
+      return true;
+    case "HOST_RUNTIME":
+      return requirement.supportedRuntimeKinds.includes("local");
   }
-  // A Tool that declares no capability is inert by construction: it cannot read, write, execute or
-  // signal anything, so it needs no runtime either. Declaring "nothing" explicitly is the opposite
-  // of an omission - an empty capability list with a runtime requirement, or the reverse, is refused
-  // above and below.
-  return runtimeKinds.length === 0;
 }
 
 export type SecureDispatcherDependencySummary = {
