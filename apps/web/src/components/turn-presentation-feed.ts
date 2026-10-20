@@ -1,8 +1,10 @@
 import {
   createElement,
   lazy,
+  memo,
   Suspense,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactElement,
@@ -145,8 +147,23 @@ export function SessionConversation(props: SessionConversationProps): ReactEleme
   const nearBottom = useRef(true);
   const mounted = useRef(false);
   const pendingScrollFrame = useRef<FrameHandle | undefined>(undefined);
-  const turnRunIds = new Set(props.presentation.turns.map((turn) => turn.runId));
-  const pendingUsers = (props.optimisticUsers ?? []).filter((item) => !turnRunIds.has(item.runId));
+  // Two maps instead of two `find()` calls per Turn: the conversation is re-rendered on every
+  // snapshot, and a 100-Turn session would otherwise scan both arrays 200 times per render.
+  const optimisticByRun = useMemo(
+    () => new Map((props.optimisticUsers ?? []).map((item) => [item.runId, item])),
+    [props.optimisticUsers],
+  );
+  const transcriptByRun = useMemo(
+    () => new Map((props.transcriptUsers ?? []).map((item) => [item.runId, item])),
+    [props.transcriptUsers],
+  );
+  const runsWithTurn = useMemo(
+    () => new Set(props.presentation.turns.map((turn) => turn.runId)),
+    [props.presentation.turns],
+  );
+  const pendingUsers = (props.optimisticUsers ?? []).filter(
+    (item) => !runsWithTurn.has(item.runId),
+  );
 
   useEffect(() => {
     mounted.current = true;
@@ -190,25 +207,29 @@ export function SessionConversation(props: SessionConversationProps): ReactEleme
     "div",
     { className: "session-conversation", ref: conversationRef },
     props.presentation.turns.map((turn) => {
-      const optimisticUser = (props.optimisticUsers ?? []).find(
-        (item) =>
-          item.runId === turn.runId && !turn.items.some((turnItem) => turnItem.kind === "USER"),
-      );
-      const transcriptUser = (props.transcriptUsers ?? []).find(
-        (item) => item.runId === turn.runId,
-      );
+      const optimisticUser = optimisticByRun.get(turn.runId);
+      const withoutUserItem =
+        optimisticUser !== undefined && !turn.items.some((turnItem) => turnItem.kind === "USER")
+          ? optimisticUser
+          : undefined;
+      const transcriptUser = transcriptByRun.get(turn.runId);
+      // Only the current Run can have live state. Handing every Turn the same live objects would
+      // defeat the memo boundary below, because they change on every streamed delta.
+      const isCurrentRun = props.activeRun?.id === turn.runId;
       return createElement(TurnPresentation, {
         key: turn.runId,
         turn,
         theme: props.theme,
-        ...(optimisticUser === undefined ? {} : { optimisticUser }),
-        userAttachments: transcriptUser?.attachments ?? optimisticUser?.attachments,
+        ...(withoutUserItem === undefined ? {} : { optimisticUser: withoutUserItem }),
+        userAttachments: transcriptUser?.attachments ?? withoutUserItem?.attachments,
         attachmentOwner: props.attachmentOwner,
         onLoadAttachment: props.onLoadAttachment,
         onDownloadAttachment: props.onDownloadAttachment,
-        ...(props.activeRun === undefined ? {} : { activeRun: props.activeRun }),
-        ...(props.liveActivity === undefined ? {} : { liveActivity: props.liveActivity }),
-        ...(props.timeline === undefined ? {} : { timeline: props.timeline }),
+        ...(isCurrentRun && props.activeRun !== undefined ? { activeRun: props.activeRun } : {}),
+        ...(isCurrentRun && props.liveActivity !== undefined
+          ? { liveActivity: props.liveActivity }
+          : {}),
+        ...(isCurrentRun && props.timeline !== undefined ? { timeline: props.timeline } : {}),
       });
     }),
     pendingUsers.map((item) =>
@@ -243,13 +264,40 @@ export function SessionConversation(props: SessionConversationProps): ReactEleme
 }
 
 /**
- * Render one V3 Run as one conversation Turn.
+ * Render one V3 Run as one conversation Turn, and make that Turn one memo boundary.
  *
  * Durable commentary, Tools and verification stay together in one readable process disclosure;
  * final answers and the terminal Run report remain directly below it after the disclosure collapses.
  * Ephemeral deltas are rendered only as bounded live annotations and never become historical facts.
+ *
+ * A streamed delta changes `liveActivity` up to once per frame. Before this boundary existed the
+ * whole conversation re-rendered on every one of those frames, and every already-settled assistant
+ * message was re-parsed as Markdown again. Comparing the props a Turn actually depends on — and
+ * only handing live state to the current Run — keeps a long session's cost proportional to the one
+ * Turn that is changing.
  */
-export function TurnPresentation(props: TurnPresentationProps): ReactElement {
+export const TurnPresentation = memo(TurnPresentationView, turnPresentationPropsEqual);
+
+function turnPresentationPropsEqual(
+  previous: TurnPresentationProps,
+  next: TurnPresentationProps,
+): boolean {
+  return (
+    previous.turn === next.turn &&
+    previous.theme === next.theme &&
+    previous.activeRun?.id === next.activeRun?.id &&
+    previous.activeRun?.status === next.activeRun?.status &&
+    previous.liveActivity === next.liveActivity &&
+    previous.timeline === next.timeline &&
+    previous.optimisticUser === next.optimisticUser &&
+    previous.userAttachments === next.userAttachments &&
+    previous.attachmentOwner === next.attachmentOwner &&
+    previous.onLoadAttachment === next.onLoadAttachment &&
+    previous.onDownloadAttachment === next.onDownloadAttachment
+  );
+}
+
+function TurnPresentationView(props: TurnPresentationProps): ReactElement {
   const isCurrentRun = props.activeRun?.id === props.turn.runId;
   const durableTerminalStatus = isTerminalRunStatus(props.turn.runStatus)
     ? props.turn.runStatus
@@ -578,6 +626,21 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
                     { className: "turn-presentation-task-elapsed" },
                     taskElapsed,
                   ),
+              /*
+               * The Run id, visible and one-click selectable.
+               *
+               * It used to exist only as a `data-run-id` attribute, which meant a user reporting a
+               * failure had no way to name the Run they were looking at. Support and the durable
+               * ledger both address Runs by this id.
+               */
+              createElement(
+                "span",
+                {
+                  className: "turn-presentation-run-id",
+                  title: "任务 ID（点击可全选复制）",
+                },
+                props.runId,
+              ),
             ),
             createElement(
               "span",
@@ -629,7 +692,7 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
                         title: activity.text,
                       },
                       activity.phase === "COMMENTARY" || activity.phase === "FINAL_ANSWER"
-                        ? renderAssistantMarkdown(activity.text)
+                        ? renderAssistantMarkdown(activity.text, { streaming: true })
                         : createElement(
                             "p",
                             { className: "turn-presentation-item-text" },
@@ -741,14 +804,45 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
   );
 }
 
-function renderAssistantMarkdown(text: string): ReactElement {
+/** How much of an in-flight answer is re-rendered on every frame. */
+const STREAMING_TAIL_CHARS = 2_000;
+
+/**
+ * Render one assistant answer.
+ *
+ * - Settled text goes through the Markdown renderer, which caches by content.
+ * - In-flight text is capped: below the cap it is rendered as Markdown without caching (every
+ *   delta is a new string), above the cap only a plain-text tail is rendered. Re-parsing a
+ *   multi-kilobyte answer up to 60 times a second is quadratic in the answer length, and it is the
+ *   single largest cost while a model is talking.
+ */
+function renderAssistantMarkdown(
+  text: string,
+  options?: { readonly streaming?: boolean },
+): ReactElement {
+  const streaming = options?.streaming === true;
+  if (streaming && text.length > STREAMING_TAIL_CHARS) {
+    return createElement(
+      "p",
+      { className: "turn-presentation-item-text turn-presentation-item-text--streaming" },
+      streamingTail(text),
+    );
+  }
   return createElement(
     Suspense,
     {
       fallback: createElement("p", { className: "turn-presentation-item-text" }, text),
     },
-    createElement(AssistantMarkdown, null, text),
+    createElement(AssistantMarkdown, streaming ? { cache: false } : null, text),
   );
+}
+
+function streamingTail(text: string): string {
+  if (text.length <= STREAMING_TAIL_CHARS) return text;
+  const tail = text.slice(-STREAMING_TAIL_CHARS);
+  // Start at a line boundary when there is one, so the visible tail does not begin mid-word.
+  const lineBreak = tail.indexOf("\n");
+  return `…${lineBreak >= 0 && lineBreak < 200 ? tail.slice(lineBreak + 1) : tail}`;
 }
 
 function renderItem(

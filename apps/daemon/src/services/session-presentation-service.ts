@@ -83,7 +83,8 @@ export interface SessionPresentationServiceOptions {
   readonly messageRecords: Pick<
     import("@caelush/agent").SessionReadableAgentMessageRecordStore,
     "listBySession"
-  >;
+  > &
+    Partial<Pick<import("@caelush/agent").SessionReadableAgentMessageRecordStore, "listByRun">>;
   readonly codecs: AgentMessageCodecRegistry;
   readonly toolInvocations: Pick<ToolInvocationRepository, "listByRun">;
   readonly observations: Pick<ObservationRepository, "listByRun">;
@@ -104,6 +105,14 @@ interface PositionedItem {
   readonly region: number;
 }
 
+/** The resumable half of a verification projection. */
+interface VerificationFold {
+  readonly watermark: number;
+  readonly items: Map<string, PositionedItem>;
+  readonly pendingGeneralKeys: readonly string[];
+  readonly generalIndex: number;
+}
+
 /**
  * Historical, safe projection for the Web turn feed.
  *
@@ -113,6 +122,34 @@ interface PositionedItem {
  * deltas, so a refresh and a live page use the same bounded contract.
  */
 export class SessionPresentationService {
+  /**
+   * Projected Turns, keyed by the durable facts they were projected from.
+   *
+   * A session switch used to re-project **every** Turn of the session: for each Run that meant a
+   * full durable-event replay plus a Tool and observation read. Historical Turns never change, so
+   * the second visit paid the same cost as the first.
+   *
+   * The key is `runId : highWatermark : recordCount : status`. Any new durable fact for a Run
+   * advances at least one of those, so a cache hit can only describe the same durable state — this
+   * is a memo over immutable inputs, not a second source of truth. It is bounded and in-memory:
+   * the daemon rebuilds it lazily after a restart.
+   */
+  private static readonly TURN_CACHE_LIMIT = 256;
+  private readonly turnCache = new Map<string, SessionTurnPresentationTurnV3>();
+
+  /**
+   * The verification half of a live Run's Turn, folded up to `watermark`.
+   *
+   * A live Run re-projects on every durable event. Replaying its whole event log each time is
+   * quadratic in the Run's length; this fold lets the next projection read only
+   * `(watermark, newWatermark]` and carry the lifecycle queue forward.
+   *
+   * It is only ever used for a **non-terminal** Run. A terminal Run is projected once and then served
+   * from `turnCache`, and its `RUN_SUMMARY` needs the full event list anyway.
+   */
+  private static readonly VERIFICATION_FOLD_LIMIT = 32;
+  private readonly verificationFolds = new Map<string, VerificationFold>();
+
   constructor(private readonly options: SessionPresentationServiceOptions) {}
 
   async getPresentation(
@@ -125,7 +162,11 @@ export class SessionPresentationService {
 
     const [allRuns, allRecords] = await Promise.all([
       this.options.runs.listBySession(sessionId),
-      this.options.messageRecords.listBySession(sessionId),
+      // A targeted read only needs the Run it names. Loading the whole session's ledger here was
+      // the difference between O(1) and O(session) work on every live refresh.
+      query.runId !== undefined && this.options.messageRecords.listByRun !== undefined
+        ? this.options.messageRecords.listByRun(query.runId)
+        : this.options.messageRecords.listBySession(sessionId),
     ]);
     const runs = [...allRuns]
       .filter((run) => query.runId === undefined || run.id === query.runId)
@@ -157,7 +198,16 @@ export class SessionPresentationService {
     run: AgentRun,
     records: readonly AgentMessageRecord[],
   ): Promise<SessionTurnPresentationTurnV3> {
-    const history = await readDurableEvents(this.options.eventReader, run.id);
+    const highWatermark = await this.options.eventReader.latestSequence(run.id);
+    const cacheKey = `${run.id}:${highWatermark}:${records.length}:${run.status}`;
+    const cached = this.turnCache.get(cacheKey);
+    if (cached !== undefined) {
+      // Refresh the entry's position so the eviction order stays least-recently-used.
+      this.turnCache.delete(cacheKey);
+      this.turnCache.set(cacheKey, cached);
+      return cached;
+    }
+    const history = await this.readRunHistory(run, highWatermark);
     const turnId = conversationTurnIds.forRun(run.id);
     const positioned: PositionedItem[] = [];
     for (const record of [...records].sort((left, right) => left.sequence - right.sequence)) {
@@ -199,32 +249,8 @@ export class SessionPresentationService {
       });
     }
 
-    const verificationItems = new Map<string, PositionedItem>();
-    const pendingGeneralVerificationKeys: string[] = [];
-    let generalVerificationIndex = 0;
-    for (const event of history.events) {
-      if (!VERIFICATION_EVENT_TYPES.has(event.type)) continue;
-      const lifecycleKey = verificationLifecycleKey(
-        event,
-        pendingGeneralVerificationKeys,
-        () => `general:${generalVerificationIndex++}`,
-      );
-      const item = this.projectVerification(event, run, turnId, lifecycleKey);
-      if (item === undefined) continue;
-      const existing = verificationItems.get(lifecycleKey);
-      const createdAt = existing?.createdAt ?? Number(event.timestamp);
-      const stableItem: VerificationPresentationItem = {
-        ...item,
-        createdAt: existing?.item.createdAt ?? item.createdAt,
-      };
-      verificationItems.set(lifecycleKey, {
-        item: stableItem,
-        createdAt,
-        stableId: stableItem.id,
-        region: presentationRegion(stableItem),
-      });
-    }
-    for (const entry of verificationItems.values()) {
+    const verification = this.projectVerificationItems(run, turnId, history.events, highWatermark);
+    for (const entry of verification.items.values()) {
       positioned.push(
         TERMINAL_RUN_STATUSES.has(run.status) && entry.item.status === "STREAMING"
           ? settleIncompleteVerification(entry, run.status)
@@ -258,7 +284,7 @@ export class SessionPresentationService {
     }
 
     positioned.sort(comparePositionedItems);
-    return {
+    const turn: SessionTurnPresentationTurnV3 = {
       runId: run.id,
       conversationTurnId: turnId,
       runStatus: run.status,
@@ -266,6 +292,110 @@ export class SessionPresentationService {
       ...(run.finishedAt === undefined ? {} : { closedAt: run.finishedAt }),
       highWatermark: history.highWatermark,
       items: positioned.map((entry, ordinal) => ({ ...entry.item, ordinal })),
+    };
+    this.turnCache.set(cacheKey, turn);
+    if (this.turnCache.size > SessionPresentationService.TURN_CACHE_LIMIT) {
+      const oldest = this.turnCache.keys().next().value;
+      if (oldest !== undefined) this.turnCache.delete(oldest);
+    }
+    return turn;
+  }
+
+  /**
+   * Only the events this projection still needs.
+   *
+   * A live Run advances by a handful of events per refresh; a terminal Run is projected once and
+   * then served from `turnCache`, so it always takes the full read its `RUN_SUMMARY` needs.
+   */
+  private async readRunHistory(
+    run: AgentRun,
+    highWatermark: number,
+  ): Promise<{ events: readonly DurableRunEvent[]; highWatermark: number }> {
+    const reusable = TERMINAL_RUN_STATUSES.has(run.status)
+      ? undefined
+      : this.verificationFolds.get(run.id);
+    if (reusable !== undefined && reusable.watermark <= highWatermark) {
+      const events = await readDurableEventsRange(
+        this.options.eventReader,
+        run.id,
+        reusable.watermark,
+        highWatermark,
+      );
+      return { events, highWatermark };
+    }
+    return readDurableEvents(this.options.eventReader, run.id, highWatermark);
+  }
+
+  private projectVerificationItems(
+    run: AgentRun,
+    turnId: string,
+    events: readonly DurableRunEvent[],
+    highWatermark: number,
+  ): VerificationFold {
+    const terminal = TERMINAL_RUN_STATUSES.has(run.status);
+    const reusable = terminal ? undefined : this.verificationFolds.get(run.id);
+    const base: VerificationFold =
+      reusable !== undefined && reusable.watermark <= highWatermark
+        ? reusable
+        : { watermark: 0, items: new Map(), pendingGeneralKeys: [], generalIndex: 0 };
+    const fold = this.foldVerification(base, events, run, turnId, highWatermark);
+    if (terminal) {
+      // A settled Run never needs the fold again; its Turn is cached by watermark instead.
+      this.verificationFolds.delete(run.id);
+      return fold;
+    }
+    this.verificationFolds.delete(run.id);
+    this.verificationFolds.set(run.id, fold);
+    if (this.verificationFolds.size > SessionPresentationService.VERIFICATION_FOLD_LIMIT) {
+      const oldest = this.verificationFolds.keys().next().value;
+      if (oldest !== undefined) this.verificationFolds.delete(oldest);
+    }
+    return fold;
+  }
+
+  /**
+   * Apply verification events to a fold.
+   *
+   * The queue matters: `verification.started` opens a general lifecycle and `verification.completed`
+   * closes it, so an incremental fold must carry the queue across, exactly as a full replay would.
+   */
+  private foldVerification(
+    state: VerificationFold,
+    events: readonly DurableRunEvent[],
+    run: AgentRun,
+    turnId: string,
+    throughWatermark: number,
+  ): VerificationFold {
+    const items = new Map(state.items);
+    const pendingGeneralKeys = [...state.pendingGeneralKeys];
+    let generalIndex = state.generalIndex;
+    for (const event of events) {
+      if (!VERIFICATION_EVENT_TYPES.has(event.type)) continue;
+      const lifecycleKey = verificationLifecycleKey(
+        event,
+        pendingGeneralKeys,
+        () => `general:${generalIndex++}`,
+      );
+      const item = this.projectVerification(event, run, turnId, lifecycleKey);
+      if (item === undefined) continue;
+      const existing = items.get(lifecycleKey);
+      const createdAt = existing?.createdAt ?? Number(event.timestamp);
+      const stableItem: VerificationPresentationItem = {
+        ...item,
+        createdAt: existing?.item.createdAt ?? item.createdAt,
+      };
+      items.set(lifecycleKey, {
+        item: stableItem,
+        createdAt,
+        stableId: stableItem.id,
+        region: presentationRegion(stableItem),
+      });
+    }
+    return {
+      watermark: throughWatermark,
+      items,
+      pendingGeneralKeys,
+      generalIndex,
     };
   }
 
@@ -705,30 +835,43 @@ function itemRegion(item: TurnPresentationItemV3, record: AgentMessageRecord): n
 async function readDurableEvents(
   reader: DurableRunEventReaderPort,
   runId: import("@caelush/protocol").RunId,
+  knownHighWatermark?: number,
 ) {
-  const highWatermark = await reader.latestSequence(runId);
+  const highWatermark = knownHighWatermark ?? (await reader.latestSequence(runId));
   if (highWatermark <= 0) return { events: [] as DurableRunEvent[], highWatermark: 0 };
+  const events = await readDurableEventsRange(reader, runId, 0, highWatermark);
+  return { events, highWatermark };
+}
+
+/** Read `(afterSequence, throughSequence]`, in order, paginated. */
+async function readDurableEventsRange(
+  reader: DurableRunEventReaderPort,
+  runId: import("@caelush/protocol").RunId,
+  afterSequence: number,
+  throughSequence: number,
+): Promise<DurableRunEvent[]> {
+  if (throughSequence <= afterSequence) return [];
   const events: DurableRunEvent[] = [];
-  let afterSequence = 0;
-  while (afterSequence < highWatermark) {
+  let cursor = afterSequence;
+  while (cursor < throughSequence) {
     const batch = await reader.replay(runId, {
-      afterSequence,
-      throughSequence: highWatermark,
+      afterSequence: cursor,
+      throughSequence,
       limit: MAX_EVENT_PAGE,
     });
     if (batch.length === 0) break;
     let progressed = false;
     for (const event of batch) {
       const sequence = durableSequence(event);
-      if (sequence === undefined || sequence <= afterSequence || sequence > highWatermark) continue;
+      if (sequence === undefined || sequence <= cursor || sequence > throughSequence) continue;
       events.push(event);
-      afterSequence = Math.max(afterSequence, sequence);
+      cursor = Math.max(cursor, sequence);
       progressed = true;
     }
     if (!progressed) break;
   }
   events.sort((left, right) => (durableSequence(left) ?? 0) - (durableSequence(right) ?? 0));
-  return { events, highWatermark };
+  return events;
 }
 
 function durableSequence(event: DurableRunEvent): number | undefined {

@@ -1642,3 +1642,116 @@ describe("Prompt Cache daemon projection", () => {
     });
   });
 });
+
+describe("SessionPresentationService projection cache", () => {
+  it("projects an unchanged Run once and reuses the same Turn afterwards", async () => {
+    const user = factory.createUser({
+      runId: RUN_ID,
+      sessionId: SESSION_ID,
+      conversationTurnId: TURN_ID,
+      source: userMessageSource("GOAL"),
+      content: [agentTextPart("inspect the project")],
+    });
+    const durableEvents = [event(1, "run.started", {}), event(2, "run.completed", {})];
+    let replays = 0;
+    let toolReads = 0;
+    const service = new SessionPresentationService({
+      sessions: { get: async () => ({ id: SESSION_ID }) as never },
+      runs: { listBySession: async () => [RUN] },
+      messageRecords: { listBySession: async () => [record(user, 1)] },
+      codecs,
+      toolInvocations: {
+        listByRun: async () => {
+          toolReads += 1;
+          return [];
+        },
+      },
+      observations: { listByRun: async () => [] },
+      eventReader: {
+        latestSequence: async () => 2,
+        replay: async () => {
+          replays += 1;
+          return durableEvents;
+        },
+      },
+      toolPresentation: new CaelushToolPresentation({ terminalOutputSanitizer: (value) => value }),
+    });
+
+    const first = await service.getPresentation(SESSION_ID, {});
+    const afterFirst = { replays, toolReads };
+    const second = await service.getPresentation(SESSION_ID, {});
+
+    expect(second.turns[0]).toEqual(first.turns[0]);
+    expect(replays).toBe(afterFirst.replays);
+    expect(toolReads).toBe(afterFirst.toolReads);
+  });
+});
+
+describe("SessionPresentationService incremental verification fold", () => {
+  function liveRun() {
+    return AgentRunSchema.parse({ ...RUN, status: "RUNNING", finishedAt: undefined });
+  }
+
+  function build(options: { readonly watermark: () => number; readonly requested: number[] }) {
+    const run = liveRun();
+    const user = factory.createUser({
+      runId: run.id,
+      sessionId: SESSION_ID,
+      conversationTurnId: TURN_ID,
+      source: userMessageSource("GOAL"),
+      content: [agentTextPart("inspect the project")],
+    });
+    const durable = [
+      event(1, "verification.planned", { planId: "vplan_1" }),
+      event(2, "verification.started", { planId: "vplan_1" }),
+      event(3, "verification.check.started", { planId: "vplan_1", checkId: "vchk_1" }),
+      event(4, "verification.completed", { planId: "vplan_1" }),
+    ];
+    const service = new SessionPresentationService({
+      sessions: { get: async () => ({ id: SESSION_ID }) as never },
+      runs: { listBySession: async () => [run] },
+      messageRecords: { listBySession: async () => [record(user, 1)] },
+      codecs,
+      toolInvocations: { listByRun: async () => [] },
+      observations: { listByRun: async () => [] },
+      eventReader: {
+        latestSequence: async () => options.watermark(),
+        replay: async (_runId, query) => {
+          options.requested.push(query.afterSequence);
+          return durable.filter((item) => {
+            const sequence = item.durability.kind === "DURABLE" ? item.durability.sequence : 0;
+            return sequence > query.afterSequence && sequence <= query.throughSequence;
+          });
+        },
+      },
+      toolPresentation: new CaelushToolPresentation({ terminalOutputSanitizer: (value) => value }),
+    });
+    return service;
+  }
+
+  it("reads only the events added since the last projection and matches a full replay", async () => {
+    let watermark = 2;
+    const requested: number[] = [];
+    const incremental = build({ watermark: () => watermark, requested });
+
+    const first = await incremental.getPresentation(SESSION_ID, {});
+    // planned + started: two lifecycles, two items at watermark 2.
+    expect(first.turns[0]!.items.filter((item) => item.kind === "VERIFICATION")).toHaveLength(2);
+
+    watermark = 4;
+    const second = await incremental.getPresentation(SESSION_ID, {});
+    expect(requested).toEqual([0, 2]);
+
+    const fullRequested: number[] = [];
+    const full = await build({ watermark: () => 4, requested: fullRequested }).getPresentation(
+      SESSION_ID,
+      {},
+    );
+
+    expect(fullRequested).toEqual([0]);
+    // The fold is responsible for the verification items; message ids differ per fixture instance.
+    const verificationOf = (turn: { items: readonly { kind: string }[] }) =>
+      turn.items.filter((item) => item.kind === "VERIFICATION");
+    expect(verificationOf(second.turns[0]!)).toEqual(verificationOf(full.turns[0]!));
+  });
+});

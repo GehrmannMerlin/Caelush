@@ -82,3 +82,34 @@ describe("assistant Markdown links", () => {
     expect(html).toContain('<a href="#section">章节</a>');
   });
 });
+
+describe("assistant Markdown parse cache", () => {
+  it("returns the identical element for unchanged settled text", () => {
+    const text = "## 结论\n\n缓存命中应复用同一个元素。";
+
+    const first = createElement(AssistantMarkdown, null, text);
+    const second = createElement(AssistantMarkdown, null, text);
+
+    expect(renderToStaticMarkup(first)).toBe(renderToStaticMarkup(second));
+    // The cache is observable through the element identity the component returns.
+    expect(AssistantMarkdown({ children: text })).toBe(AssistantMarkdown({ children: text }));
+  });
+
+  it("does not cache in-flight text", () => {
+    const text = "流式增量 1";
+
+    expect(AssistantMarkdown({ children: text, cache: false })).not.toBe(
+      AssistantMarkdown({ children: text, cache: false }),
+    );
+  });
+
+  it("evicts the least recently used answer instead of growing without bound", () => {
+    const first = AssistantMarkdown({ children: "缓存淘汰 0" });
+    for (let index = 1; index <= 80; index += 1) {
+      AssistantMarkdown({ children: `缓存淘汰 ${index}` });
+    }
+
+    // The first entry must have been evicted, so asking again produces a new element.
+    expect(AssistantMarkdown({ children: "缓存淘汰 0" })).not.toBe(first);
+  });
+});

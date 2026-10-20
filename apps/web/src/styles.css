@@ -6117,6 +6117,10 @@ body {
 .turn-presentation-turn {
   min-width: 0;
   scroll-margin-block: 24px;
+  /* A long session keeps every Turn mounted; skip layout and paint for the ones off screen.
+     DOM order and `data-run-id` attributes stay intact, so anchors and tests are unaffected. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
 }
 
 .turn-presentation-turn + .turn-presentation-turn {
@@ -6182,6 +6186,16 @@ body {
 
 .turn-presentation-task-elapsed {
   font-size: 0.74rem;
+}
+
+.turn-presentation-run-id {
+  /* Secondary, but selectable in one click so it can be quoted in a bug report. */
+  color: var(--web-ink-muted, currentColor);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.66rem;
+  opacity: 0.55;
+  user-select: all;
+  overflow-wrap: anywhere;
 }
 
 .turn-presentation-logo {

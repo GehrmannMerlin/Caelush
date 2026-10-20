@@ -77,7 +77,9 @@ export function Timeline(props: TimelineProps): ReactElement {
   const alignToLatest = useCallback(() => {
     const region = regionRef.current;
     if (region === null) return;
-    region.scrollTo({ top: region.scrollHeight, behavior: "smooth" });
+    // Immediate, not `behavior: "smooth"`: during a stream every new activity would queue another
+    // animation, and the compositor would still be animating the previous one while new rows land.
+    region.scrollTop = region.scrollHeight;
   }, []);
 
   useEffect(() => {
