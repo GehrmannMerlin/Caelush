@@ -278,8 +278,21 @@ export const DEFAULT_CORE_AGENT_POLICY = [
 
 export const DEFAULT_BASE_SYSTEM_PROMPT = DEFAULT_CORE_AGENT_POLICY;
 
+/**
+ * The Adaptive policy a new Run is created with.
+ *
+ * `correctionVersion` is stated here rather than left to the creation default, because this constant is
+ * both the product's declared default and a value tests compare against. The authoritative stamping
+ * point is still `normalizeCreateRunResourcePolicy`: this object says what the product intends, and that
+ * function is what makes every new Run carry it even when a client supplies its own numbers.
+ *
+ * Under `AUTONOMOUS_CORRECTION_V2` the `replansBeforePause` value below is *decoded but not consulted* —
+ * it is retained so a Run can be read by an older build, and so the field keeps one spelling across
+ * versions. Pausing a complex task on a re-plan count is the behaviour this version removes.
+ */
 export const DEFAULT_ADAPTIVE_RESOURCE_POLICY = Object.freeze({
   mode: "ADAPTIVE",
+  correctionVersion: "AUTONOMOUS_CORRECTION_V2",
   operationalLease: Object.freeze({ maxAgentTurns: 24, maxToolOperations: 64 }),
   batch: Object.freeze({ maxToolCallsPerTurn: 16 }),
   progress: Object.freeze({

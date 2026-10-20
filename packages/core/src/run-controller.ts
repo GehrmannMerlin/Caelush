@@ -107,6 +107,7 @@ import type {
 import {
   captureRunToolTurnFacts,
   createRunToolTurnDriverFactory,
+  recordRunResourceCorrectionDelivery,
   recordRunToolTurnProgress,
   recordRunToolTurnReplan,
   type ResolvedRunToolTurn,
@@ -510,10 +511,47 @@ export class RunController {
     return this.resumeResolvedApprovalLocked(loaded, resolved);
   }
 
+  /**
+   * Continue a Run parked on a resource decision.
+   *
+   * ```text
+   * legacy NO_PROGRESS wait         close the un-dispatched batch, then reconsider
+   * a wait this build cannot retire  refuse, and say why
+   * ```
+   *
+   * ## What "continue" has to mean
+   *
+   * The old implementation restored `RUNNING`, put the *same* pending decision back on a
+   * `WAITING_TOOL_RESULTS` continuation and drove recovery. Nothing about the Run's conditions had
+   * changed, so the very next admission reached the same decision and parked it again — five user
+   * clicks, five round trips of 30-42 ms, no model turn and no Tool execution. A button that only
+   * rewrites a status is not a decision.
+   *
+   * What this records instead is a decision with content: the pending calls are closed as *explicitly
+   * not executed*, one result per call in source order, and the Run advances to its next model
+   * boundary where the model — not the governor — decides what to do with that. The refusal to
+   * dispatch was the old decision; re-asking the model is the new one.
+   *
+   * ## What it deliberately cannot resume
+   *
+   * Only a `WAITING_RESOURCE` checkpoint. That checkpoint is only ever written instead of a dispatch,
+   * so its pending batch is provably unexecuted. A batch that reached the Tool Layer lives on a
+   * `WAITING_TOOL_RESULTS` continuation and is recovered there, per invocation, by the durable Tool
+   * ledger — this path can never re-send a call whose side effects are unknown.
+   *
+   * A second click finds the Run already `RUNNING` and returns its current snapshot: the decision is
+   * one boundary, and a double submit must not append a second set of results.
+   */
   private async continueResourceGuardLocked(runId: RunId): Promise<RunControllerResult> {
     const loaded = await this.load(runId);
     if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
     if (this.isExpired(loaded)) return this.finalizeTimeout(loaded);
+    if (loaded.run.status === "RUNNING" || isTerminal(loaded.run.status)) {
+      // Already continued (double click, a retried request, a reconnected client), or continued and
+      // since settled. The boundary advanced once; returning the live snapshot is the idempotent
+      // answer, and it can never append a second set of results.
+      return this.resultFromSnapshot(loaded);
+    }
     if (
       loaded.run.status !== "WAITING_RESOURCE" ||
       loaded.state === undefined ||
@@ -524,22 +562,58 @@ export class RunController {
       );
     }
     const now = this.dependencies.clock.now();
+    const sourceStepId = loaded.continuation.sourceStepId;
+    const pendingDecision = loaded.continuation.pendingDecision;
+    const policy = defaultObservationPolicy();
+    // One result per requested call, in assistant source order, produced by the same normalizer the
+    // canonical Tool path uses so the batch stays cardinality- and order-preserving.
+    const normalized = normalizeToolResultBatch(
+      pendingDecision.toolRequests,
+      pendingDecision.toolRequests.map((request) => ({
+        role: "tool" as const,
+        toolCallId: request.externalCallId,
+        toolName: request.toolName,
+        content: [
+          {
+            type: "text" as const,
+            text:
+              "Not executed. Execution was paused before this batch was dispatched, and the Run has " +
+              "reconsidered instead of resending it. Re-read the current goal, the latest accepted " +
+              "results and the current step, then issue only the calls that can be formed correctly.",
+          },
+        ],
+        isError: true,
+      })),
+    );
     const run = resumeAgentRunFromResource(loaded.run);
     const state = resumeAgentStateFromResource(loaded.state, now);
-    const checkpoint = {
-      type: "WAITING_TOOL_RESULTS" as const,
-      runId: loaded.continuation.runId,
-      sourceStepId: loaded.continuation.sourceStepId,
-      pendingDecision: loaded.continuation.pendingDecision,
-    };
     const commit = await this.commit({
       run,
       state,
       expectedStateRevision: loaded.stateRevision ?? null,
       expectedContinuationRevision: loaded.continuationRevision ?? null,
       stepWrites: [],
-      messagesToAppend: [],
-      continuation: { operation: "SET", checkpoint, updatedAt: now },
+      messagesToAppend: normalized.map((message) =>
+        createExternalToolResultMessageAppend(
+          this.dependencies.messages,
+          loaded.run,
+          sourceStepId,
+          message,
+          policy,
+        ),
+      ),
+      continuation: {
+        operation: "SET",
+        checkpoint: {
+          type: "WAITING_TOOL_RESULTS" as const,
+          runId: loaded.continuation.runId,
+          sourceStepId,
+          pendingDecision,
+          receivedResults: normalized,
+          observationPolicy: policy,
+        },
+        updatedAt: now,
+      },
       events: [
         this.eventFactory.statusChanged(
           loaded.run,
@@ -551,7 +625,10 @@ export class RunController {
       ],
     });
     this.notify(commit.events);
-    return this.driveRunExecutionLocked(commit.snapshot, "RECOVER");
+    // The results are already durable in this transaction; this is the same validation every other
+    // accepted batch passes through, and it appends nothing when they are present.
+    const accepted = await this.ensureDurableToolResults(commit.snapshot);
+    return this.driveRunExecutionLocked(accepted, "EXECUTE");
   }
 
   private async resumeResolvedApprovalLocked(
@@ -2617,7 +2694,33 @@ export class RunController {
       return this.settleDeferredFinalCandidate(raced, result, observation);
     }
     this.notify(committed.events);
+    // A corrective intervention prepared for the following request is only *delivered* when a model
+    // result bound to that request commits. This runs after the assistant message is durable, so a
+    // failed, cancelled or never-started turn cannot consume an escalation step.
+    await this.recordCorrectionDelivery(committed.snapshot, String(result.turn.stepId));
     return this.resultFromSnapshot(committed.snapshot);
+  }
+
+  /**
+   * Record that one settled model turn carried a pending corrective intervention.
+   *
+   * The write is deliberately after the commit: delivery is a fact *about* a committed request, and a
+   * receipt written before the message existed could claim a delivery that a failed commit never
+   * made. It is idempotent by intervention identity, and it fails toward re-sending rather than toward
+   * silently retiring advice the model may not have seen.
+   */
+  private async recordCorrectionDelivery(
+    settled: RunExecutionSnapshot,
+    stepId: string,
+  ): Promise<void> {
+    const pipeline = this.dependencies.toolTurn;
+    if (pipeline === undefined || this.dependencies.resourceGovernance === undefined) return;
+    if (settled.run.resourcePolicy === undefined) return;
+    await recordRunResourceCorrectionDelivery({
+      dependencies: this.toolTurnDependencies(pipeline, settled.run.id),
+      run: settled.run,
+      settledStepId: stepId,
+    });
   }
 
   /**
