@@ -116,12 +116,17 @@ describe("daemon production composition", () => {
       composition.runtime,
     );
     expect(composition.runtime.kind).toBe("local");
+    // `update_plan` is in the catalog because it is a real Tool the model must be able to call. It
+    // used to be absent from this list: an inert Tool declared no capability and no runtime kind, the
+    // registry treated that combination as unofferable, and the plan Tool therefore never reached a
+    // model at all — one step short of the runtime refusal that made it unusable even when offered.
     expect(composition.toolRegistry.modelSpecs().map((tool) => tool.name)).toEqual([
       "read_file",
       "list_directory",
       "find_files",
       "search_text",
       "apply_patch",
+      "update_plan",
       "exec_command",
       "write_stdin",
       "stop_process",
@@ -172,6 +177,7 @@ describe("daemon production composition", () => {
         runRecovery: true,
         cancellation: true,
         approvals: true,
+        runInputV1: true,
         sessionContinuityPreflight: true,
         sessionTranscript: true,
         sessionTurnPresentation: true,
@@ -187,6 +193,9 @@ describe("daemon production composition", () => {
         approvalPolicy: "DANGEROUS_ONLY",
         resourcePolicy: {
           mode: "ADAPTIVE",
+          // The correction discipline is part of the frozen policy a new Run carries, so it is part of
+          // the advertised default configuration too.
+          correctionVersion: "AUTONOMOUS_CORRECTION_V2",
           operationalLease: { maxAgentTurns: 24, maxToolOperations: 64 },
           batch: { maxToolCallsPerTurn: 16 },
           progress: {
@@ -226,6 +235,7 @@ describe("daemon production composition", () => {
       "find_files",
       "search_text",
       "apply_patch",
+      "update_plan",
       "exec_command",
       "write_stdin",
       "stop_process",
