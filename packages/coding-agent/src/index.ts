@@ -135,9 +135,14 @@ export {
   createDefaultRuntimeProcessAuthorization,
   createApplyPatchTool,
   createUpdatePlanTool,
+  boundPlanBlock,
   deriveTaskPlanSnapshot,
+  parseTaskPlanInput,
+  renderAcceptedPlan,
   renderTaskPlanBlock,
   renderPlanSteps,
+  TASK_PLAN_LIMITS,
+  taskPlanEvidenceState,
   validatePlanSteps,
   createReadAttachmentTool,
   createCodingToolAdmissionPort,
@@ -327,3 +332,5 @@ export {
   CODING_COMMAND_EXECUTION_TRANSCRIPT_PROJECTOR,
 } from "./messages/command-execution.js";
 export type { CodingCommandExecutionMessage } from "./messages/command-execution.js";
+
+export { CODING_EXECUTION_DISCIPLINE } from "./policy/coding-execution-policy.js";

@@ -98,14 +98,22 @@ const SNIPPET_SOURCE: Readonly<Record<string, SnippetSource>> = {
     resultHandling: "Re-read files/diff.",
   },
   update_plan: {
-    purpose: "Record the step list you are working through.",
-    whenToUse: "Multi-step work: before starting, and when a step changes state.",
+    purpose: "Record the milestones you are working through, and your current working record.",
+    whenToUse:
+      "Multi-step work: before starting, when a step changes state, and whenever new evidence changes what you understand.",
     whenNotToUse: "One-shot questions or single-file edits.",
     argumentNotes:
-      'Full replacement: {"plan":[{"step":"...","status":"pending|in_progress|completed"}]}. At most one in_progress.',
+      'Full replacement. V2: {"planVersion":2,"explanation":"why this changed",' +
+      '"plan":[{"id":"stable-id","step":"...","status":"pending|in_progress|completed",' +
+      '"acceptance":["observable result"],"evidenceRefs":["opaque ref"]}],' +
+      '"execution":{"goal":"...","constraints":[],"discoveries":[],"decisions":[],' +
+      '"unresolved":[],"nextAction":"..."}}. At most one in_progress; ids stay stable across ' +
+      "reordering and a split creates new ids. V1 without planVersion still works.",
     sideEffects: "None; it records intent, it does not execute anything.",
-    safety: "Steps are your own report, not proof of completion.",
-    resultHandling: "The list is echoed back; keep it current rather than restating it.",
+    safety:
+      "Steps and evidenceRefs are your own report, not proof of completion, and not a verification.",
+    resultHandling:
+      "The list is echoed back with its version; keep it current rather than restating it.",
   },
   exec_command: {
     purpose: "Run command.",

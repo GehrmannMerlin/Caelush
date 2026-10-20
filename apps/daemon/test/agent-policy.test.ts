@@ -1,3 +1,4 @@
+import { CODING_EXECUTION_DISCIPLINE } from "@caelush/coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BASE_SYSTEM_PROMPT,
@@ -25,6 +26,34 @@ describe("default Core Agent Policy", () => {
       "chain-of-thought",
     ]) {
       expect(DEFAULT_CORE_AGENT_POLICY).toContain(phrase);
+    }
+  });
+
+  it("carries the coding execution discipline exactly once", () => {
+    // One canonical policy: a second copy would let the two drift, and a missing one would leave the
+    // plan Tool with guidance but no discipline for when to use it.
+    const occurrences = DEFAULT_CORE_AGENT_POLICY.split(CODING_EXECUTION_DISCIPLINE).length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it("states the behaviour the reliability fix depends on", () => {
+    // These are the sentences that make the rest of the change coherent: without them the plan Tool is
+    // available but unused, corrections are not applied, and a ticked checklist is mistaken for a
+    // finished task.
+    for (const phrase of [
+      "verifiable milestones",
+      "say briefly why it changed",
+      "Correct ordinary Tool errors yourself",
+      "Do not ask the user to confirm an ordinary re-plan",
+      "unresolved",
+      "single next action",
+      "Do not claim a check passed",
+      "do not declare the task complete merely because every plan step is marked done",
+      "If the plan Tool is unavailable",
+      "A simple question does not need a plan",
+      "must stop at the design",
+    ]) {
+      expect(CODING_EXECUTION_DISCIPLINE).toContain(phrase);
     }
   });
 });

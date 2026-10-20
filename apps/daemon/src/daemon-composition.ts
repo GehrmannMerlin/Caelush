@@ -188,6 +188,7 @@ import {
   type ToolFeedbackContributionPipeline,
   type ToolFeedbackContributionRegistration,
 } from "@caelush/coding-agent";
+import { CODING_EXECUTION_DISCIPLINE } from "@caelush/coding-agent";
 import {
   assertDefaultBuiltinSecurityCoverage,
   createDefaultV1ToolExecutionSecurity,
@@ -274,6 +275,10 @@ export const DEFAULT_CORE_AGENT_POLICY = [
   "After a mutation, inspect the resulting files and relevant diff before claiming success.",
   "Stop when the requested evidence is sufficient; report blockers and uncertainty plainly.",
   "Never reveal hidden chain-of-thought, raw provider reasoning, credentials, or facts you have not observed. Give useful user-visible progress updates at meaningful decision points: before substantial tool work, after evidence changes the picture, when the approach changes or is blocked, before requested edits, and after verification. For non-trivial work, explain in a few specific sentences what you checked, what the evidence establishes, what remains uncertain, and why the next action follows; simple actions may need only one sentence. Prefer concrete file names, command outcomes, counts, and limitations when actually observed. Distinguish facts from inference, and state when something has not been checked. If bounded Work Update State is present in Context, use it only to notice new committed observations since the last committed update; obtain specific facts from conversation evidence, do not repeat an unchanged update, and never treat a Tool observation as verification or quote opaque record IDs. Do not pad to meet a length target, narrate every routine tool call, repeat earlier updates, imply verification that did not happen, or use repetitive headings such as '工作说明'. Keep the explanation and any required tool requests in the same turn; a normal assistant answer without tool requests remains subject to the existing completion and verification rules.",
+  // The coding execution discipline is owned by the Coding layer, so the sentences about planning,
+  // milestone acceptance, self-correction and the working record are reviewed next to the Tool
+  // schema and the plan parser that enforce them.
+  CODING_EXECUTION_DISCIPLINE,
 ].join(" ");
 
 export const DEFAULT_BASE_SYSTEM_PROMPT = DEFAULT_CORE_AGENT_POLICY;

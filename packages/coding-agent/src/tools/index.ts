@@ -102,13 +102,26 @@ export { createSearchTextTool, searchTextInputSchema } from "./builtins/search-t
 export { createApplyPatchTool, applyPatchInputSchema } from "./builtins/apply-patch.js";
 export {
   createUpdatePlanTool,
+  renderAcceptedPlan,
   renderPlanSteps,
   validatePlanSteps,
   type PlanStep,
 } from "./builtins/update-plan.js";
 export {
+  parseTaskPlanInput,
+  TASK_PLAN_LIMITS,
+  type TaskPlan,
+  type TaskPlanExecution,
+  type TaskPlanParseResult,
+  type TaskPlanStep,
+  type TaskPlanStepStatus,
+} from "./plan/task-plan-contract.js";
+export {
+  boundPlanBlock,
   deriveTaskPlanSnapshot,
   renderTaskPlanBlock,
+  taskPlanEvidenceState,
+  type TaskPlanEvidenceState,
   type TaskPlanSnapshot,
 } from "./plan/task-plan-projection.js";
 export { createExecCommandTool, execCommandInputSchema } from "./builtins/exec-command.js";
