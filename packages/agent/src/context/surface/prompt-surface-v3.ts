@@ -238,6 +238,19 @@ function modelLabel(id: string): string {
   if (id.startsWith("authority.current.")) return id.slice("authority.current.".length);
   if (id.startsWith("coding.temporal:")) return "current time";
   if (id.startsWith("daemon.work-commentary-state:")) return "work progress";
+  /*
+   * The plan arrives as three Sections so that a per-Step counter does not rewrite the stable body.
+   * Three Sections with one label would defeat that: the model would read three `daemon.task-plan`
+   * entries and have no way to say which one is the plan, which one is the evidence and which one is
+   * the count it must not treat as progress.
+   */
+  if (id.startsWith("daemon.task-plan:")) {
+    const part = id.slice("daemon.task-plan:".length);
+    if (part === "current") return "current plan";
+    if (part === "evidence") return "plan evidence";
+    if (part === "notice") return "plan bookkeeping";
+    return "current plan";
+  }
   const colon = id.indexOf(":");
   return colon < 0 ? id : id.slice(0, colon);
 }

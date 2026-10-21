@@ -1,3 +1,4 @@
+import { UTF8_BYTES_PER_TOKEN } from "../token/context-token-estimator.js";
 import {
   PROMPT_SURFACE_LIMITS,
   type PromptSurfaceRecordKind,
@@ -41,6 +42,21 @@ export type PromptSurfaceCapacityDecision =
       readonly observed: number;
       readonly limit: number;
     }
+  /**
+   * The epoch still has room, but replaying it costs more than the soft budget and a baseline of the
+   * same Section view is cheaper.
+   *
+   * This is an *early* rollover, not a capacity boundary: nothing was full. It exists because a
+   * Prompt Surface Epoch is re-sent on every request, so an epoch that is comfortable for storage can
+   * still be expensive to replay for a hundred Steps.
+   */
+  | {
+      readonly kind: "ROLLOVER_SOFT";
+      /** Replay cost of the epoch plus this candidate, in UTF-8 bytes. */
+      readonly observed: number;
+      /** The soft budget it exceeded, in UTF-8 bytes. */
+      readonly limit: number;
+    }
   | {
       readonly kind: "BASELINE_TOO_LARGE";
       readonly dimension: PromptSurfaceCapacityDimension;
@@ -67,6 +83,13 @@ export interface PromptSurfaceCapacityInput {
   };
   /** The complete Section view this Step must leave in effect. */
   readonly targetSectionStates: readonly PromptSurfaceSectionState[];
+  /**
+   * The replay cost this epoch may reach before an early rollover becomes worthwhile, in UTF-8 bytes.
+   *
+   * Omitted means "no soft budget": the decision then only reacts to the hard epoch bounds, which is
+   * the behaviour every historical caller had.
+   */
+  readonly replaySoftBudgetBytes?: number;
 }
 
 /**
@@ -109,7 +132,9 @@ export function decidePromptSurfaceCapacity(
       limit: PROMPT_SURFACE_LIMITS.maxEpochUtf8Bytes,
     },
   ]);
-  if (overflow === undefined) return Object.freeze({ kind: "APPEND" });
+  if (overflow === undefined) {
+    return earlyRollover(input, records, nextEpochBytes, visibleRecords);
+  }
 
   // A rollover is only allowed when the complete target view still fits in one epoch. Rotating
   // into a baseline that cannot be persisted would replace a recoverable boundary with a
@@ -131,10 +156,94 @@ export function decidePromptSurfaceCapacity(
   });
 }
 
+/**
+ * The token budget above which a replay is worth rotating early.
+ *
+ * A constant, not a ratio: the reason to rotate is that a request is becoming expensive, and
+ * "expensive" is a property of the request rather than of the window it sits in. Both the bounded
+ * working-set policy and the legacy policy cap out here.
+ */
+const MAX_REPLAY_SOFT_BUDGET_TOKENS = 24_000;
+
+/**
+ * Convert the policy's replay budget into the byte budget the capacity decision compares against.
+ *
+ * ```text
+ * working set   min(24000, floor(target × 0.25))   a quarter of what the Run aims to carry
+ * legacy        min(24000, floor(effective × 0.10)) a tenth of the input budget
+ * ```
+ *
+ * The unit conversion is the estimator's own constant, not a second guess at it: the heuristic
+ * estimator used by the daemon converts three UTF-8 bytes to one token, and a hard byte bound has to
+ * be compared in the same unit the records are stored in.
+ */
+export function promptSurfaceReplaySoftBudgetBytes(input: {
+  readonly workingSetTargetTokens?: number;
+  readonly effectiveInputLimitTokens: number;
+}): number {
+  const budgetTokens =
+    input.workingSetTargetTokens === undefined
+      ? Math.min(
+          MAX_REPLAY_SOFT_BUDGET_TOKENS,
+          Math.floor(input.effectiveInputLimitTokens * 0.1),
+        )
+      : Math.min(
+          MAX_REPLAY_SOFT_BUDGET_TOKENS,
+          Math.floor(input.workingSetTargetTokens * 0.25),
+        );
+  if (!Number.isSafeInteger(budgetTokens) || budgetTokens < 1) {
+    throw new RangeError("Prompt Surface replay budget is not a positive token count.");
+  }
+  return budgetTokens * UTF8_BYTES_PER_TOKEN;
+}
+
 interface CapacityBound {
   readonly dimension: PromptSurfaceCapacityDimension;
   readonly observed: number;
   readonly limit: number;
+}
+
+/**
+ * Rotate early only when rotating actually makes the request cheaper.
+ *
+ * ```text
+ * replay over the soft budget   the cost this decision is about
+ * baseline smaller than replay  rotating must gain, or it is churn
+ * baseline inside the budget    a baseline that is itself over budget cannot be the answer;
+ *                               the full pressure/compaction decision owns that case
+ * ```
+ *
+ * Rotating is not free: it starts a new epoch, which costs one baseline and abandons the cacheable
+ * prefix of the old one. Each condition removes one way of paying that cost for nothing.
+ */
+function earlyRollover(
+  input: PromptSurfaceCapacityInput,
+  records: readonly { readonly byteLength: number }[],
+  replayBytes: number,
+  visibleRecords: number,
+): PromptSurfaceCapacityDecision {
+  const softBudget = input.replaySoftBudgetBytes;
+  if (softBudget === undefined) return Object.freeze({ kind: "APPEND" });
+  if (!Number.isSafeInteger(softBudget) || softBudget < 1) {
+    throw new RangeError("Prompt Surface replay soft budget must be a positive integer.");
+  }
+  if (replayBytes <= softBudget) return Object.freeze({ kind: "APPEND" });
+  // A one-record epoch has nothing to fold: rotating it would replace one record with one baseline
+  // and buy at most that record's bytes. Two records is the first shape where the replay is
+  // genuinely accumulating.
+  if (records.length < 2) return Object.freeze({ kind: "APPEND" });
+  const baselineBytes = promptSurfaceBaselineByteLength(input.targetSectionStates);
+  if (baselineBytes >= replayBytes) return Object.freeze({ kind: "APPEND" });
+  if (baselineBytes > softBudget) {
+    // Rotating would replace a large replay with a large baseline. The budget decision belongs to
+    // the pressure/compaction path, which can summarize history; a rollover cannot.
+    return Object.freeze({ kind: "APPEND" });
+  }
+  return Object.freeze({
+    kind: "ROLLOVER_SOFT" as const,
+    observed: replayBytes,
+    limit: softBudget,
+  });
 }
 
 /** The full Section view as one baseline record, measured against the single-record bound. */

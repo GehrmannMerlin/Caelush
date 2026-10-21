@@ -11,6 +11,7 @@ import {
   type PromptSurfaceRecord,
 } from "./prompt-surface.js";
 import { hashPromptSurfaceContent, PromptSurfaceIntegrityError } from "./prompt-surface-integrity.js";
+import { promptSurfaceEpochIdentity } from "./prompt-surface-identity.js";
 import {
   PromptSurfaceRolloverConflictError,
   type PromptSurfaceStorePort,
@@ -106,7 +107,11 @@ export async function rolloverPromptSurface(
 
     try {
       const status = await input.store.rolloverEpoch({
-        expectedCurrentEpoch: input.epoch,
+        // The store compares the caller's identity field by field against the durable epoch and
+        // validates its exact key set. `input.epoch` is the *wide* shape that also carries the
+        // replay log, so it must be projected down here — the same projection the append path uses.
+        // Forgetting this is what made the 129th visible record fatal instead of a new epoch.
+        expectedCurrentEpoch: promptSurfaceEpochIdentity(input.epoch),
         expectedRecordOrdinal: sourceOrdinal,
         expectedDecisionFingerprint: sourceDecisionFingerprint,
         operationId,

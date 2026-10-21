@@ -5,7 +5,7 @@ import type { EventId, TimestampMs } from "@caelush/protocol";
 
 import type { RunEventNotifierPort } from "../../events/notifier-port.js";
 import type { DurableRunEventDraft } from "../../events/durable-run-event-draft.js";
-import type { PreparedModelContext } from "../../loop/types.js";
+import type { ContextPreflightReport, PreparedModelContext } from "../../loop/types.js";
 import type { StoredAgentMessage } from "../../messages/persistence/record.js";
 import type { ContextPrepareInput, ContextEnginePort } from "../contracts/context-engine.js";
 import type { PreparedPromptSurface } from "../contracts/prepared-agent-context.js";
@@ -29,8 +29,10 @@ import type { PromptSurfaceStorePort } from "../surface/prompt-surface-store.js"
 import {
   decidePromptSurfaceCapacity,
   promptSurfaceBaselineTooLarge,
+  promptSurfaceReplaySoftBudgetBytes,
 } from "../surface/prompt-surface-capacity.js";
 import {
+  promptSurfaceRolloverOperationId,
   rolloverPromptSurface,
   type PromptSurfaceRolloverOutcome,
 } from "../surface/prompt-surface-rollover.js";
@@ -40,6 +42,7 @@ import {
   promptSurfaceAnchorsAreAvailable,
 } from "../surface/prompt-surface-anchors.js";
 import { renderStableContextHead } from "../surface/prompt-surface-renderer.js";
+import { promptSurfaceEpochIdentity } from "../surface/prompt-surface-identity.js";
 import {
   applyPromptSurfaceSectionUpdates,
   createPromptSurfaceSectionStates,
@@ -446,6 +449,12 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         compactionCount: 0,
       });
       const estimatedInputTokens = initialProjection.audit.report.estimatedInputTokens;
+      // The preflight's exact projection, by content. Comparing it with the committed projection is
+      // what turns "the estimate and the request disagreed" from an invisible property of this
+      // function into a value a caller, a test and a support report can read.
+      const preflightFingerprint = projectionContentFingerprint(
+        initialProjection.materializedMessages,
+      );
       const schedulePressureRatio =
         estimatedInputTokens /
         (options.workingSet?.targetTokens ?? policy.effectiveInputLimitTokens);
@@ -745,8 +754,28 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       if (
         finalProjection.audit.report.estimatedInputTokens > finalPolicy.effectiveInputLimitTokens
       ) {
+        // The committed projection is the one that would be sent. A preflight estimate that no
+        // longer describes it must never authorise the request: fail closed and let the existing
+        // bounded recovery chain decide whether the Run can continue.
         throw new ContextExhaustedError();
       }
+      const sentFingerprint = projectionContentFingerprint(finalProjection.materializedMessages);
+      const preflight: ContextPreflightReport = Object.freeze({
+        estimatedInputTokens,
+        // REPLAY_TOKENS: what re-sending the Surface records costs on its own, before the stable
+        // head and the conversation. It is the number the replay soft budget is about.
+        replayTokens: initialProjection.promptSurface.receipt.snapshotTokens,
+        projectionFingerprint: preflightFingerprint,
+        sentFingerprint,
+        compacted: compactionCount > 0,
+        ...(compactionCount > 0
+          ? {}
+          : { matchesSentProjection: preflightFingerprint === sentFingerprint }),
+      });
+      // The preflight is added to the *final* report, never to the projection that produced it: the
+      // report describes the request that will be sent, and its preflight field says what the
+      // compaction decision was made from.
+      const finalReport = Object.freeze({ ...finalProjection.audit.report, preflight });
       await options.usageStore.upsert(
         recoveryStages.length === 0
           ? finalProjection.audit.usage
@@ -786,7 +815,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
             }),
           ),
         ),
-        report: finalProjection.audit.report,
+        report: finalReport,
         observationPolicy: finalPolicy.observationPolicy,
         ...checkpointReference(activeCheckpoint),
         contextFingerprint: finalProjection.audit.contextFingerprint,
@@ -898,6 +927,12 @@ async function buildPreparedProjectionWithoutCompaction(input: {
     compactionCommitted: input.compactionCount > 0,
     persist: input.persistPromptSurface !== false,
     replayOnly: input.replayOnlyPromptSurface === true,
+    replaySoftBudgetBytes: promptSurfaceReplaySoftBudgetBytes({
+      ...(input.policy.workingSet === undefined
+        ? {}
+        : { workingSetTargetTokens: input.policy.workingSet.targetTokens }),
+      effectiveInputLimitTokens: input.policy.effectiveInputLimitTokens,
+    }),
   });
   const provisional = input.receiptBuilder.build({
     identity: input.contextInput.identity,
@@ -1286,6 +1321,13 @@ interface PromptSurfacePreparationInput {
   readonly compactionCommitted: boolean;
   readonly persist: boolean;
   readonly replayOnly: boolean;
+  /**
+   * The replay cost this epoch may reach before an early rollover is worth it, in UTF-8 bytes.
+   *
+   * Derived from the frozen Context policy, so the decision and the request budget come from one
+   * place. Absent means "hard bounds only", which is what a host without a working set gets.
+   */
+  readonly replaySoftBudgetBytes?: number;
 }
 
 interface PromptSurfacePreparationResult extends PreparedPromptSurface {
@@ -1298,7 +1340,9 @@ async function preparePromptSurface(
 ): Promise<PromptSurfacePreparationResult> {
   const identity = promptSurfaceIdentity(input);
   if (input.replayOnly) return preparePromptSurfaceReplay(input);
-  if (!input.persist) return preparePreviewSurface(input, identity);
+  // A preflight is not a licence to estimate a different projection: it reads the durable epoch and
+  // projects exactly the decision the commit will make.
+  if (!input.persist) return projectPromptSurface(input, identity);
 
   let current: PromptSurfaceEpoch | undefined;
   try {
@@ -1436,6 +1480,68 @@ function prepareV3PromptSurface(
   input: PromptSurfacePreparationInput,
   surface: PromptSurfaceEpochWithSnapshots,
 ): Promise<PromptSurfacePreparationResult> {
+  return commitPromptSurfaceDecision(input, surface, 0);
+}
+
+/**
+ * How many times one Step may re-decide after a concurrent writer moved the epoch.
+ *
+ * Mirrors the rollover bound: one re-read is enough to absorb a lost race, and a second conflict
+ * means another writer is actively moving this Run's projection, which is a conflict to report
+ * rather than a spin to win.
+ */
+const MAX_SURFACE_DECISION_ATTEMPTS = 2;
+
+/** What this Step must do to the durable epoch, and the exact projection that would result. */
+interface PromptSurfaceDecision {
+  /** The decision already exists durably for this Step; nothing is written and nothing is new. */
+  readonly kind: "EXISTING";
+  readonly committed: PromptSurfaceEpochWithSnapshots;
+}
+
+interface PromptSurfaceNewDecision {
+  readonly kind: "APPEND" | "ROLLOVER";
+  readonly candidate: PromptSurfaceRecord;
+  /** The complete Section view this Step leaves in effect. */
+  readonly targetStates: readonly PromptSurfaceSectionState[];
+  /**
+   * The projection the next model request would be rendered from if this decision were committed.
+   *
+   * For an `APPEND` it is the durable log plus this Step's candidate; for a `ROLLOVER` it is the new
+   * epoch with its baseline. Both are the *same bytes* the committed epoch would later render,
+   * because a record's content is a pure function of its kind and Section updates.
+   */
+  readonly projected: PromptSurfaceEpochWithSnapshots;
+  readonly expectedCurrentEpoch: PromptSurfaceEpoch;
+  readonly expectedRecordOrdinal: number;
+}
+
+type PromptSurfaceAnyDecision = PromptSurfaceDecision | PromptSurfaceNewDecision;
+
+/**
+ * Decide this Step's surface transition without writing anything.
+ *
+ * ```text
+ * one function → APPEND | ROLLOVER | EXISTING    (+ the projection each would produce)
+ *        ↓                    ↓
+ *   preflight             commit
+ * ```
+ *
+ * Both callers read the same durable epoch, the same complete Section view and the same anchor, so
+ * the estimated input and the estimate at send time differ only by the Step's own candidate — which
+ * is precisely the thing the old preview path substituted away, replacing 127 historical deltas
+ * with one synthetic baseline and reporting a projection the model was never sent.
+ */
+function decidePromptSurface(input: {
+  readonly surface: PromptSurfaceEpochWithSnapshots;
+  readonly contextInput: ContextPrepareInput;
+  readonly document: import("../document/context-document.js").ContextDocument;
+  readonly allowSectionClear: boolean;
+  readonly conversationMessages: readonly StoredAgentMessage[];
+  readonly clock: { now(): TimestampMs };
+  readonly replaySoftBudgetBytes?: number;
+}): PromptSurfaceAnyDecision {
+  const surface = input.surface;
   if (surface.records === undefined || surface.sectionStates === undefined) {
     throw new PromptSurfaceIntegrityError(
       "V3 Prompt Surface is missing its durable Section state.",
@@ -1495,21 +1601,242 @@ function prepareV3PromptSurface(
         "Prompt Surface Step retry differs from its durable Section decision.",
       );
     }
-    return Promise.resolve(preparedSurface(surface, input, true));
+    return { kind: "EXISTING", committed: surface };
   }
 
   const capacity = decidePromptSurfaceCapacity({
     epoch: surface,
     candidate,
     targetSectionStates: targetStates,
+    ...(input.replaySoftBudgetBytes === undefined
+      ? {}
+      : { replaySoftBudgetBytes: input.replaySoftBudgetBytes }),
   });
   if (capacity.kind === "BASELINE_TOO_LARGE") {
     throw promptSurfaceBaselineTooLarge(capacity.dimension, capacity.observed, capacity.limit);
   }
-  if (capacity.kind === "ROLLOVER_REQUIRED") {
-    return rolloverPreparedSurface(input, surface, candidate, targetStates);
+  const expectedCurrentEpoch = promptSurfaceEpochIdentity(surface);
+  const expectedRecordOrdinal = records.length;
+  if (capacity.kind === "APPEND") {
+    const projected: PromptSurfaceEpochWithSnapshots = Object.freeze({
+      ...surface,
+      records: Object.freeze([...records, candidate]),
+      sectionStates: targetStates,
+    });
+    return {
+      kind: "APPEND",
+      candidate,
+      targetStates,
+      projected,
+      expectedCurrentEpoch,
+      expectedRecordOrdinal,
+    };
   }
-  return appendPreparedSurface(input, surface, candidate, stepSequence);
+
+  const operationId = promptSurfaceRolloverOperationId({
+    epoch: surface,
+    recordOrdinal: expectedRecordOrdinal,
+    decisionFingerprint: lastDurableDecisionFingerprint(surface),
+    stepSequence,
+    anchor,
+    targetSectionStates: targetStates,
+  });
+  const nextEpoch = createPromptSurfaceEpoch({
+    formatVersion: 3,
+    runId: surface.runId,
+    epochId: `rollover-${operationId}`,
+    modelRef: surface.modelRef,
+    stableHeadFingerprint: surface.stableHeadFingerprint,
+    toolSchemaFingerprint: surface.toolSchemaFingerprint,
+    cacheSettingsFingerprint: surface.cacheSettingsFingerprint,
+    resetReason: "CAPACITY_ROLLOVER",
+    createdStepSequence: stepSequence,
+    createdAt: candidate.createdAt,
+  });
+  const baseline = createPromptSurfaceRecord({
+    runId: surface.runId,
+    epochId: nextEpoch.epochId,
+    ordinal: 1,
+    anchor,
+    sourceStepSequence: stepSequence,
+    kind: "BASELINE",
+    updates: diffPromptSurfaceSections([], targetStates, true).updates,
+    decisionFingerprint: candidate.decisionFingerprint,
+    createdAt: candidate.createdAt,
+  });
+  const projected: PromptSurfaceEpochWithSnapshots = Object.freeze({
+    ...nextEpoch,
+    snapshots: Object.freeze([]),
+    records: Object.freeze([baseline]),
+    sectionStates: targetStates,
+  });
+  return {
+    kind: "ROLLOVER",
+    candidate,
+    targetStates,
+    projected,
+    expectedCurrentEpoch,
+    expectedRecordOrdinal,
+  };
+}
+
+/** The CAS token for the source epoch's last decision; `null` only when it has no decisions. */
+function lastDurableDecisionFingerprint(
+  surface: PromptSurfaceEpochWithSnapshots,
+): string | null {
+  return surface.records?.at(-1)?.decisionFingerprint ?? null;
+}
+
+/**
+ * Commit one decision, re-deciding at most once if a concurrent writer moved the epoch.
+ *
+ * A conflict is not a corruption and must not be retried without bound: the refreshed epoch is read
+ * once, the Step is decided again against it, and a second conflict surfaces. The committed epoch is
+ * always read back and verified, so the projection the caller estimates is the projection the model
+ * is sent.
+ */
+async function commitPromptSurfaceDecision(
+  input: PromptSurfacePreparationInput,
+  surface: PromptSurfaceEpochWithSnapshots,
+  attempt: number,
+): Promise<PromptSurfacePreparationResult> {
+  const decision = decidePromptSurface({
+    surface,
+    contextInput: input.contextInput,
+    document: input.document,
+    allowSectionClear: input.allowSectionClear,
+    conversationMessages: input.conversationMessages,
+    clock: input.clock,
+    ...(input.replaySoftBudgetBytes === undefined
+      ? {}
+      : { replaySoftBudgetBytes: input.replaySoftBudgetBytes }),
+  });
+  if (decision.kind === "EXISTING") {
+    return preparedSurface(decision.committed, input, true);
+  }
+  try {
+    return decision.kind === "APPEND"
+      ? await appendPreparedSurface(input, decision)
+      : await rolloverPreparedSurface(input, surface, decision);
+  } catch (error) {
+    if (attempt + 1 < MAX_SURFACE_DECISION_ATTEMPTS && isSurfaceAppendConflict(error)) {
+      const refreshed = await input.store.readEpoch(surface.runId, surface.epochId);
+      if (refreshed === undefined) {
+        throw new PromptSurfaceIntegrityError(
+          "Prompt Surface epoch disappeared while re-deciding its Step.",
+          { cause: error },
+        );
+      }
+      assertPromptSurfaceEpochWithSnapshots(refreshed);
+      return commitPromptSurfaceDecision(input, refreshed, attempt + 1);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Recognize the store's compare-and-swap rejection without depending on a Storage class.
+ *
+ * `PromptSurfaceStorePort` deliberately exposes no error type for appends — a conflict is a normal
+ * outcome of two writers, not part of the port's contract. The name check keeps the kernel free of
+ * a Storage dependency; the alternative, widening the port, would make every host implement a
+ * conflict type it does not produce.
+ */
+function isSurfaceAppendConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const name = (error as { readonly name?: unknown }).name;
+  return name === "StorageConflictError" || name === "PromptSurfaceRolloverConflictError";
+}
+
+/**
+ * The read-only projection of the same decision the commit path would make.
+ *
+ * This is what a pressure preflight must estimate. It writes no epoch, no record, no checkpoint and
+ * no event, and it runs no model turn: it reads the durable epoch and computes the candidate exactly
+ * as the commit would, so `estimatedInputTokens` describes the messages the provider will receive.
+ *
+ * A Run with no durable epoch, an identity change or an unavailable anchor would reset the epoch on
+ * commit; the projection for that case is the same complete-baseline view `preparePreviewSurface`
+ * already builds, because a fresh epoch's first record *is* the complete current Section view.
+ */
+async function projectPromptSurface(
+  input: PromptSurfacePreparationInput,
+  identity: ReturnType<typeof promptSurfaceIdentity>,
+): Promise<PromptSurfacePreparationResult> {
+  let current: PromptSurfaceEpoch | undefined;
+  try {
+    current = await input.store.getCurrent(input.contextInput.identity.runId);
+  } catch (error) {
+    throw new PromptSurfaceIntegrityError("Prompt Surface epoch metadata could not be read.", {
+      cause: error,
+    });
+  }
+  if (current === undefined) return preparePreviewSurface(input, identity);
+  const currentIdentity = promptSurfaceIdentity(input, current.formatVersion);
+  if (resetReasonFor(current, currentIdentity, input) !== undefined) {
+    return preparePreviewSurface(input, identity);
+  }
+  let surface: PromptSurfaceEpochWithSnapshots;
+  try {
+    const loaded = await input.store.readEpoch(current.runId, current.epochId);
+    if (loaded === undefined) throw new Error("missing surface");
+    assertPromptSurfaceEpochWithSnapshots(loaded);
+    surface = loaded;
+  } catch (error) {
+    throw new PromptSurfaceIntegrityError("Persisted Prompt Surface failed integrity checks.", {
+      cause: error,
+    });
+  }
+  if (
+    !promptSurfaceAnchorsAreAvailable(input.conversationMessages, promptSurfaceAnchors(surface)) ||
+    !promptSurfaceAnchorsAreOrdered(input.conversationMessages, surface)
+  ) {
+    return preparePreviewSurface(input, identity);
+  }
+  const decision = projectedDecision(input, surface);
+  if (decision === undefined) return preparePreviewSurface(input, identity);
+  return preparedSurface(
+    decision.kind === "EXISTING" ? decision.committed : decision.projected,
+    input,
+    true,
+  );
+}
+
+/**
+ * The decision this Step would make against the durable epoch, or `undefined` when it cannot be
+ * produced without deciding something the commit has not decided yet.
+ *
+ * ```text
+ * commit  → integrity failure is a refusal to write        (it must throw)
+ * preflight → integrity failure is a projection to replace (it must not throw)
+ * ```
+ *
+ * A same-Step retry whose authoritative state changed between the two attempts is a real case: the
+ * commit path resolves it by resetting the epoch for a compaction, or refuses the write otherwise.
+ * Neither of those is a measurement outcome, so a read-only preflight that hit one estimates the
+ * complete-baseline view instead — exactly what this path produced before the preflight became
+ * decision-based — and the report's fingerprint comparison still exposes the divergence.
+ */
+function projectedDecision(
+  input: PromptSurfacePreparationInput,
+  surface: PromptSurfaceEpochWithSnapshots,
+): PromptSurfaceAnyDecision | undefined {
+  try {
+    return decidePromptSurface({
+      surface,
+      contextInput: input.contextInput,
+      document: input.document,
+      allowSectionClear: input.allowSectionClear,
+      conversationMessages: input.conversationMessages,
+      clock: input.clock,
+      ...(input.replaySoftBudgetBytes === undefined
+        ? {}
+        : { replaySoftBudgetBytes: input.replaySoftBudgetBytes }),
+    });
+  } catch (error) {
+    if (error instanceof PromptSurfaceIntegrityError) return undefined;
+    throw error;
+  }
 }
 
 /**
@@ -1520,14 +1847,14 @@ function prepareV3PromptSurface(
  */
 function appendPreparedSurface(
   input: PromptSurfacePreparationInput,
-  surface: PromptSurfaceEpochWithSnapshots,
-  candidate: PromptSurfaceRecord,
-  stepSequence: number,
+  decision: PromptSurfaceNewDecision,
 ): Promise<PromptSurfacePreparationResult> {
+  const candidate = decision.candidate;
+  const stepSequence = candidate.sourceStepSequence;
   return input.store
-    .appendRecord(candidate, promptSurfaceEpochOnly(surface), (surface.records ?? []).length)
+    .appendRecord(candidate, decision.expectedCurrentEpoch, decision.expectedRecordOrdinal)
     .then(async () => {
-      const committed = await input.store.readEpoch(surface.runId, surface.epochId);
+      const committed = await input.store.readEpoch(candidate.runId, candidate.epochId);
       if (committed === undefined) {
         throw new PromptSurfaceIntegrityError(
           "Committed Prompt Surface V3 record could not be read.",
@@ -1551,10 +1878,6 @@ function appendPreparedSurface(
         throw new PromptSurfaceIntegrityError("Committed Prompt Surface anchor is unavailable.");
       }
       return preparedSurface(committed, input, true);
-    })
-    .catch((error: unknown) => {
-      if (error instanceof PromptSurfaceIntegrityError) throw error;
-      throw error;
     });
 }
 
@@ -1568,19 +1891,18 @@ function appendPreparedSurface(
 async function rolloverPreparedSurface(
   input: PromptSurfacePreparationInput,
   surface: PromptSurfaceEpochWithSnapshots,
-  candidate: PromptSurfaceRecord,
-  targetSectionStates: readonly PromptSurfaceSectionState[],
+  decision: PromptSurfaceNewDecision,
 ): Promise<PromptSurfacePreparationResult> {
   const rolled = await rolloverPromptSurface({
     store: input.store,
     epoch: surface,
-    stepSequence: candidate.sourceStepSequence,
-    anchor: candidate.anchor,
-    targetSectionStates,
-    decisionFingerprint: candidate.decisionFingerprint,
-    createdAt: candidate.createdAt,
+    stepSequence: decision.candidate.sourceStepSequence,
+    anchor: decision.candidate.anchor,
+    targetSectionStates: decision.targetStates,
+    decisionFingerprint: decision.candidate.decisionFingerprint,
+    createdAt: decision.candidate.createdAt,
   });
-  return confirmRolledSurface(input, rolled, candidate);
+  return confirmRolledSurface(input, rolled, decision.candidate);
 }
 
 async function confirmRolledSurface(
@@ -1978,19 +2300,26 @@ function preparedSurface(
   });
 }
 
-function promptSurfaceEpochOnly(surface: PromptSurfaceEpochWithSnapshots): PromptSurfaceEpoch {
-  return {
-    formatVersion: surface.formatVersion,
-    runId: surface.runId,
-    epochId: surface.epochId,
-    modelRef: surface.modelRef,
-    stableHeadFingerprint: surface.stableHeadFingerprint,
-    toolSchemaFingerprint: surface.toolSchemaFingerprint,
-    cacheSettingsFingerprint: surface.cacheSettingsFingerprint,
-    resetReason: surface.resetReason,
-    createdStepSequence: surface.createdStepSequence,
-    createdAt: surface.createdAt,
-  };
+/**
+ * A content-exact fingerprint of one materialized projection.
+ *
+ * Roles and contents only: metadata that never reaches the provider must not make two identical
+ * requests look different, and two different requests must never look identical. The hash is over
+ * the text the model would read, which is the only definition of "the same projection" that cannot
+ * be satisfied by a producer that happens to serialize its own state the same way twice.
+ */
+function projectionContentFingerprint(messages: readonly AIMessage[]): string {
+  const hash = createHash("sha256");
+  for (const message of messages) {
+    hash.update(message.role, "utf8");
+    hash.update("\u0000", "utf8");
+    hash.update(
+      typeof message.content === "string" ? message.content : JSON.stringify(message.content),
+      "utf8",
+    );
+    hash.update("\u0000", "utf8");
+  }
+  return `sha256:${hash.digest("hex")}`;
 }
 
 function estimatePromptSurfaceTokens(value: number, label: string): number {

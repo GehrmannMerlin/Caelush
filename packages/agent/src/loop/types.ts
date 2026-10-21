@@ -212,6 +212,51 @@ export interface ContextBuildReport {
   readonly requestOverheadTokens: number;
 
   readonly contributions: readonly ContextBuildContribution[];
+
+  /**
+   * What the pressure preflight measured, and whether it is the projection that was sent.
+   *
+   * ```text
+   * estimatedInputTokens   the estimate the compaction decision was made from
+   * projectionFingerprint  the exact preflight message projection, by content
+   * sentFingerprint        the exact projection handed to the provider
+   * matchesSentProjection  false only when another writer moved the surface in between
+   * ```
+   *
+   * Absent on hosts and code paths that do not run a preflight. Present so that "the estimate
+   * described a different projection than the request" stops being an invisible property of the
+   * implementation: a delta here is a real, reportable divergence, not a heuristic mismatch.
+   */
+  readonly preflight?: ContextPreflightReport;
+}
+
+/** The preflight's own view of the request, kept apart from what was finally sent. */
+export interface ContextPreflightReport {
+  readonly estimatedInputTokens: number;
+  /**
+   * REPLAY_TOKENS: what re-sending the Prompt Surface records costs, on its own.
+   *
+   * ```text
+   * stable head + conversation   not counted here
+   * every durable Surface record  counted here, including this Step's candidate
+   * ```
+   *
+   * It is reported separately because it is the only part of the request that grows with the Run
+   * while carrying no new information: the same Sections are re-sent in incremental form. A replay
+   * budget is enforced against this number, so a support report has to be able to read it.
+   */
+  readonly replayTokens: number;
+  readonly projectionFingerprint: string;
+  readonly sentFingerprint: string;
+  /**
+   * True when a compaction replaced the history after the preflight ran.
+   *
+   * A compacted request is *supposed* to differ from the preflight, so the comparison is not made:
+   * reporting `false` there would read as a defect instead of as the decision that was taken.
+   */
+  readonly compacted: boolean;
+  /** Present only when nothing replaced the projection after the preflight measured it. */
+  readonly matchesSentProjection?: boolean;
 }
 
 /** Selected Context item identities, without their contents, for verifiable host receipts. */

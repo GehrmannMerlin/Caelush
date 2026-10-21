@@ -310,6 +310,7 @@ export {
 } from "./surface/prompt-surface-anchors.js";
 export { projectPromptSurface } from "./surface/prompt-surface-projector.js";
 export type { PromptSurfaceModelMessage } from "./surface/prompt-surface-projector.js";
+export { promptSurfaceEpochIdentity } from "./surface/prompt-surface-identity.js";
 export type {
   PromptSurfaceAppendResult,
   PromptSurfaceRolloverCommand,
@@ -320,6 +321,7 @@ export { PromptSurfaceRolloverConflictError } from "./surface/prompt-surface-sto
 export {
   assessPromptSurfaceBaseline,
   decidePromptSurfaceCapacity,
+  promptSurfaceReplaySoftBudgetBytes,
   promptSurfaceBaselineByteLength,
   promptSurfaceBaselineTooLarge,
   PROMPT_SURFACE_CAPACITY_DIMENSIONS,
@@ -378,6 +380,7 @@ export type { ContextPlanner, ContextPlannerInput } from "./planner/context-plan
 
 export {
   classifyContextPressure,
+  ContextPressureAccountingError,
   createContextPolicy,
   resolveAdaptiveContextBudget,
 } from "./policy/context-policy.js";

@@ -153,6 +153,32 @@ const DEFAULTS = {
   conversationCapTokens: 12_000,
 } as const;
 
+/**
+ * The input budget could not be established at all.
+ *
+ * ```text
+ * window 600 · output reserve 128 · safety reserve 6 · request overhead 1 900  → no positive budget
+ * ```
+ *
+ * This is a distinct, typed condition rather than a bare `RangeError` for one reason: it is the only
+ * failure in this family that a *host configuration* can cause (a model whose window cannot hold its
+ * own Tool schema), and a Run that fails here must be diagnosable as pressure accounting. A plain
+ * `RangeError` carries no stage a classifier can read without parsing the message, and parsing
+ * messages is how a diagnosis becomes confidently wrong after a wording change.
+ *
+ * It still extends `RangeError`, so every existing caller that treats it as a range violation keeps
+ * working unchanged.
+ */
+export class ContextPressureAccountingError extends RangeError {
+  readonly code = "CONTEXT_PRESSURE_ACCOUNTING_FAILED" as const;
+  readonly stage = "pressure_accounting" as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ContextPressureAccountingError";
+  }
+}
+
 /** Resolve the per-Run reserves and effective message-input budget once. */
 export function resolveAdaptiveContextBudget(
   input: AdaptiveContextBudgetInput,
@@ -183,7 +209,9 @@ export function resolveAdaptiveContextBudget(
     safetyReserveTokens -
     input.requestOverheadTokens;
   if (effectiveInputLimitTokens <= 0) {
-    throw new RangeError("Context reserves and request overhead leave no positive input budget.");
+    throw new ContextPressureAccountingError(
+      "Context reserves and request overhead leave no positive input budget.",
+    );
   }
 
   return Object.freeze({
@@ -213,7 +241,9 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
   const effectiveInputLimitTokens =
     contextWindowTokens - outputReserveTokens - safetyReserveTokens - requestOverhead.totalTokens;
   if (outputReserveTokens >= contextWindowTokens || effectiveInputLimitTokens <= 0) {
-    throw new RangeError("Context reserves and request overhead leave no positive input budget.");
+    throw new ContextPressureAccountingError(
+      "Context reserves and request overhead leave no positive input budget.",
+    );
   }
 
   const proactiveCompactionRatio =

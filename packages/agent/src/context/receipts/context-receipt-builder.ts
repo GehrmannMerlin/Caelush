@@ -50,6 +50,7 @@ export interface ContextReceiptBuilderInput {
   readonly compactionCount?: number;
   readonly lastCompactionAt?: TimestampMs;
   readonly promptSurface?: ContextPromptSurfaceReceipt;
+  readonly preflight?: import("../../loop/types.js").ContextPreflightReport;
 }
 
 export interface ContextReceiptBuilderResult {
@@ -137,6 +138,7 @@ export function createContextReceiptBuilder(
         compactionCount: input.compactionCount ?? 0,
         requestOverheadTokens,
         contributions,
+        ...(input.preflight === undefined ? {} : { preflight: input.preflight }),
       });
       const usage: ContextUsageSnapshot = Object.freeze({
         runId: input.identity.runId,

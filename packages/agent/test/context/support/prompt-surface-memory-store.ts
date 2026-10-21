@@ -98,6 +98,10 @@ export function createPromptSurfaceMemoryStore(): PromptSurfaceMemoryStore {
     },
     async appendSnapshot(snapshot, expectedCurrentEpoch) {
       assertPromptSurfaceSnapshot(snapshot);
+      // Storage validates the exact key set of the caller's identity. A double that skipped this
+      // would let a component hand over its own replay state unnoticed — which is exactly how the
+      // 129th-record rollover defect reached production with a green suite.
+      assertPromptSurfaceEpoch(expectedCurrentEpoch);
       const current = byRun.get(snapshot.runId)?.at(-1);
       if (
         current === undefined ||
@@ -129,6 +133,7 @@ export function createPromptSurfaceMemoryStore(): PromptSurfaceMemoryStore {
     },
     async appendRecord(record, expectedCurrentEpoch, expectedRecordOrdinal) {
       assertPromptSurfaceRecord(record);
+      assertPromptSurfaceEpoch(expectedCurrentEpoch);
       const current = byRun.get(record.runId)?.at(-1);
       if (
         current === undefined ||
@@ -177,6 +182,7 @@ export function createPromptSurfaceMemoryStore(): PromptSurfaceMemoryStore {
     },
     async rolloverEpoch(command) {
       assertPromptSurfaceRecord(command.baseline);
+      assertPromptSurfaceEpoch(command.expectedCurrentEpoch);
       const epochs = byRun.get(command.baseline.runId) ?? [];
       const existing = epochs.find((candidate) => candidate.epochId === command.newEpoch.epochId);
       if (existing !== undefined) {
