@@ -37,7 +37,7 @@ export type CliActivity =
   | "Retrying"
   | "Verifying"
   | "Approval required"
-  | "Waiting for resource decision"
+  | "Adjusting plan"
   | "Cancelling"
   | "Transport error"
   | "Completed"

@@ -46,44 +46,33 @@ const otherWorkspace: WorkspaceRef = {
 };
 
 describe("WebSessionManager", () => {
-  it("publishes the daemon's current state after a resource continuation, not the action snapshot", async () => {
+  it("reattaches historical resource waits without calling a user continuation endpoint", async () => {
     // ```text
-    // the action response says WAITING_RESOURCE   it was taken when the action was produced
-    // the re-read says RUNNING                    the Run really advanced
+    // the historical snapshot says WAITING_RESOURCE  the backend owns recovery
+    // the browser opens the event stream              it does not click continue or recover
     // ```
-    //
-    // Publishing the response snapshot would show the user a Run that is still waiting, and a later SSE
-    // event would then look like a spontaneous change. The published state comes from the daemon's read
-    // model, and the response is only a fallback when that read is unavailable.
     const session = makeSession({ defaultWorkspace: workspace });
     const waiting = makeRun({ sessionId: session.id, status: "WAITING_RESOURCE", startedAt: 2 });
-    const running = makeRun({ id: waiting.id, sessionId: session.id, status: "RUNNING", startedAt: 2 });
     const client = makeClient({
       sessions: [session],
       latestRuns: new Map([[session.id, [waiting]]]),
     });
-    client.continueResourceGuard = vi.fn(async () =>
-      actionResponse(waiting, waiting.id),
-    ) as never;
-    client.getRun = vi.fn(async () => running) as never;
+    const recoverRun = vi.fn(client.recoverRun);
+    client.recoverRun = recoverRun;
+    const legacyContinuation = vi.fn();
+    Object.assign(client, { continueResourceGuard: legacyContinuation });
 
     const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
     await manager.loadSessions();
     await manager.selectSession(session.id);
-    await manager.prepareRecoveryRun(waiting);
     expect(manager.getSnapshot().activeRun?.status).toBe("WAITING_RESOURCE");
-
-    await expect(manager.continueResourceGuard()).resolves.toBe(true);
-
-    expect(client.continueResourceGuard).toHaveBeenCalledTimes(1);
-    expect(client.getRun).toHaveBeenCalledWith(waiting.id);
-    expect(manager.getSnapshot().activeRun?.status).toBe("RUNNING");
+    expect(manager.getSnapshot().controlMode).toBe("NONE");
+    expect(recoverRun).not.toHaveBeenCalled();
+    expect(legacyContinuation).not.toHaveBeenCalled();
     manager.dispose();
   });
 
-  it("does not move a settled Run back to a waiting state from a stale control response", async () => {
-    // The same defence one step later: a late read or a control response that predates the settlement
-    // must not rewrite a finished Run. The terminal snapshot is the newer fact.
+  it("does not move a settled Run back to a waiting state from a stale projection", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const waiting = makeRun({ sessionId: session.id, status: "WAITING_RESOURCE", startedAt: 2 });
     const completed = makeCompletedRun({ ...waiting, status: "WAITING_RESOURCE" });
@@ -97,17 +86,14 @@ describe("WebSessionManager", () => {
     await manager.loadSessions();
     await manager.selectSession(session.id);
     await manager.prepareRecoveryRun(waiting);
-
-    // A response that still describes the pre-settlement state arrives after the completion was shown.
-    client.continueResourceGuard = vi.fn(async () =>
-      actionResponse(waiting, waiting.id),
-    ) as never;
-    await manager.continueResourceGuard();
+    (
+      manager as unknown as { publishActiveRun(run: ClientAgentRun, submission: "ACTIVE"): void }
+    ).publishActiveRun(completed, "ACTIVE");
     expect(manager.getSnapshot().activeRun?.status).toBe("COMPLETED");
 
-    // Nothing may downgrade it afterwards either.
-    client.getRun = vi.fn(async () => waiting) as never;
-    await manager.continueResourceGuard();
+    (
+      manager as unknown as { publishActiveRun(run: ClientAgentRun, submission: "ACTIVE"): void }
+    ).publishActiveRun(waiting, "ACTIVE");
     expect(manager.getSnapshot().activeRun?.status).toBe("COMPLETED");
     manager.dispose();
   });

@@ -42,7 +42,6 @@ export interface SessionWorkspaceProps {
   readonly controlMode?: WebControlMode | undefined;
   readonly approvals?: readonly ApprovalView[] | undefined;
   readonly recoveryRuns?: readonly RecoveryRunView[] | undefined;
-  readonly onContinueResource?: (() => Promise<boolean> | void) | undefined;
   readonly onResolveApproval?:
     | ((approvalId: ApprovalView["id"], resolution: ApprovalResolution) => Promise<boolean> | void)
     | undefined;
@@ -230,40 +229,6 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
               liveActivity: props.liveActivity,
               isActive: props.activeRun !== undefined && isActiveRun(props.activeRun.status),
             }),
-      props.activeRun !== undefined && props.controlMode === "RESOURCE_GUARD"
-        ? createElement(
-            "div",
-            { className: "resource-guard-card", role: "alert" },
-            createElement("span", null, "检测到重复或低进展路径。"),
-            props.timeline.resourceGuard === undefined
-              ? null
-              : createElement(
-                  "div",
-                  { className: "resource-guard-details" },
-                  createElement(
-                    "span",
-                    null,
-                    `已重新规划：${props.timeline.resourceGuard.replanCount} 次`,
-                  ),
-                  createElement(
-                    "span",
-                    null,
-                    `本阶段已请求工具：${props.timeline.resourceGuard.requestedToolCalls} 次`,
-                  ),
-                ),
-            props.onContinueResource === undefined
-              ? null
-              : createElement(
-                  "button",
-                  {
-                    type: "button",
-                    className: "continue-button",
-                    onClick: props.onContinueResource,
-                  },
-                  "继续任务",
-                ),
-          )
-        : null,
     ),
     approvals.length === 0
       ? null

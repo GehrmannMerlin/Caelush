@@ -245,7 +245,7 @@ describe("Timeline", () => {
     expect(html).toContain("检查调用链");
     expect(html).toContain("重试活动");
     expect(html).toContain("正在重新连接 1/5");
-    expect(html).toContain("任务需要资源决策");
+    expect(html).toContain("Agent 自动调整了执行路径");
     expect(html).toContain("已重新规划：2 次");
     expect(html).toContain("本阶段已请求工具：17 次");
     expect(html).not.toContain("NO_PROGRESS");

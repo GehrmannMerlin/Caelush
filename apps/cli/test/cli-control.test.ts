@@ -71,9 +71,9 @@ describe("CLI control state", () => {
     [stateWithApproval(), { input: "\r", key: { return: true } }, "APPROVAL_SUBMIT"],
     [stateWithApproval(), { input: "", key: { escape: true } }, "APPROVAL_CLOSE"],
     [stateWithSessionPicker(), { input: "\r", key: { return: true } }, "SESSION_SELECT"],
-    [stateWithResourceGuard(), { input: "\r", key: { return: true } }, "RESOURCE_CONTINUE"],
-    [stateWithResourceGuard(), { input: "c", key: {} }, "RESOURCE_CONTINUE"],
-    [stateWithResourceGuard(), { input: "c", key: { ctrl: true } }, "CANCEL"],
+    [stateWithResourceWait(), { input: "\r", key: { return: true } }, "NONE"],
+    [stateWithResourceWait(), { input: "c", key: {} }, "NONE"],
+    [stateWithResourceWait(), { input: "c", key: { ctrl: true } }, "CANCEL"],
     [stateWithActiveRun(), { input: "c", key: { ctrl: true } }, "CANCEL"],
     [stateWithActiveRun(), { input: "d", key: { ctrl: true } }, "DETACH"],
     [stateDisconnected(), { input: "r", key: {} }, "RECONNECT"],
@@ -147,10 +147,11 @@ function stateWithActiveRun(): CliViewState {
   };
 }
 
-function stateWithResourceGuard(): CliViewState {
+function stateWithResourceWait(): CliViewState {
   return {
     ...createInitialCliState(),
-    controlMode: "RESOURCE_GUARD",
+    controlMode: "NONE",
+    composerEnabled: false,
     activeRun: { runId: createRunId(), status: "WAITING_RESOURCE" },
   };
 }

@@ -1261,8 +1261,6 @@ function renderWorkspaceApp(input: {
                 attachmentOwner: input.attachmentOwner,
                 onLoadAttachment: input.onLoadAttachmentPreview,
                 onDownloadAttachment: input.onDownloadAttachment,
-                onContinueResource: async () =>
-                  (await input.sessionManager?.continueResourceGuard()) ?? false,
                 onResolveApproval: async (approvalId, resolution) =>
                   (await input.sessionManager?.resolveApproval(approvalId, resolution)) ?? false,
                 onSelectRecoveryRun: async (runId) =>

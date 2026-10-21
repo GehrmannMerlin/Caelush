@@ -154,7 +154,6 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
   startRun(runId: RunId): Promise<RunActionResponse>;
   recoverRun(runId: RunId): Promise<RunActionResponse>;
   cancelRun(runId: RunId): Promise<RunActionResponse>;
-  continueResourceGuard(runId: RunId): Promise<RunActionResponse>;
   getRunContextUsage?(runId: RunId): Promise<ContextUsageProjection | null>;
   watchRunEvents(runId: RunId, options?: WatchRunEventsOptions): AsyncIterable<PublicRunEvent>;
 }
@@ -173,12 +172,7 @@ export type WebSessionLoadState = "IDLE" | "LOADING" | "READY" | "ERROR";
 export type WebSubmissionState = "IDLE" | "SUBMITTING" | "RUN_CREATED" | "STARTING" | "ACTIVE";
 export type WebTransportState = "CONNECTED" | "RECONNECTING" | "DISCONNECTED";
 export type WebControlMode =
-  | "NONE"
-  | "APPROVAL"
-  | "RESOURCE_GUARD"
-  | "CANCELLING"
-  | "RECOVERY_PICKER"
-  | "PENDING_RUN_CONFIRMATION";
+  "NONE" | "APPROVAL" | "CANCELLING" | "RECOVERY_PICKER" | "PENDING_RUN_CONFIRMATION";
 
 export interface WebApprovalState {
   readonly requests: readonly ApprovalView[];
@@ -322,7 +316,6 @@ export class WebSessionManager {
   private readonly resolvingApprovals = new Set<ApprovalRequestId>();
   private approvalContextGeneration = 0;
   private cancelPromise: Promise<boolean> | undefined;
-  private resourceContinuePromise: Promise<boolean> | undefined;
   private contextUsageRefreshGeneration = 0;
   private contextUsageRefreshTimer: TimerHandle | undefined;
   private contextUsageRefreshRunId: RunId | undefined;
@@ -1350,56 +1343,6 @@ export class WebSessionManager {
     return promise;
   }
 
-  continueResourceGuard(): Promise<boolean> {
-    if (this.resourceContinuePromise !== undefined) return this.resourceContinuePromise;
-    const run = this.snapshot.activeRun;
-    if (this.disposed || run === undefined || run.status !== "WAITING_RESOURCE")
-      return Promise.resolve(false);
-    const promise = this.requestResourceContinuation(run.id);
-    this.resourceContinuePromise = promise;
-    void promise.then(() => {
-      if (this.resourceContinuePromise === promise) this.resourceContinuePromise = undefined;
-    });
-    return promise;
-  }
-
-  private async requestResourceContinuation(runId: RunId): Promise<boolean> {
-    try {
-      const response = await this.options.client.continueResourceGuard(runId);
-      if (this.disposed || this.snapshot.activeRun?.id !== runId) return false;
-      // The response says the *request* was accepted. It is not a new execution truth: the snapshot it
-      // carries was taken when the action was produced, and an SSE event may already have published a
-      // newer one. So the published state is re-read from the daemon's own read model, and the response
-      // snapshot is only a fallback when that read is unavailable.
-      const refreshed = await this.readRunAfterControl(runId);
-      this.publishActiveRun(refreshed ?? response.run, "ACTIVE");
-      return true;
-    } catch {
-      if (!this.disposed && this.snapshot.activeRun?.id === runId) {
-        this.publish({ controlMode: "RESOURCE_GUARD", error: sessionError("RUN_REFRESH_FAILED") });
-      }
-      return false;
-    }
-  }
-
-  /**
-   * Re-read one Run after a control request, or `undefined` when the read is unavailable or stale.
-   *
-   * A failed read is not an error the user needs: the Run's durable state is unaffected by a control
-   * call, and the SSE stream is still the primary source. It only means this caller has nothing newer to
-   * publish than what it already holds.
-   */
-  private async readRunAfterControl(runId: RunId): Promise<ClientAgentRun | undefined> {
-    try {
-      const run = await this.options.client.getRun(runId);
-      if (this.disposed || run.id !== runId) return undefined;
-      if (this.snapshot.activeRun?.id !== runId) return undefined;
-      return run;
-    } catch {
-      return undefined;
-    }
-  }
-
   reconnectActiveRun(): void {
     const active = this.activeLifecycle;
     if (this.disposed || active === undefined || this.snapshot.transportState !== "DISCONNECTED") {
@@ -1422,7 +1365,7 @@ export class WebSessionManager {
     }
     if (run.status === "WAITING_RESOURCE") {
       this.publish({
-        controlMode: "RESOURCE_GUARD",
+        controlMode: "NONE",
         composerEnabled: false,
         error: undefined,
       });
@@ -1648,10 +1591,7 @@ export class WebSessionManager {
       isDraft: false,
       composerEnabled: activeRuns.length === 0,
       submission: "IDLE",
-      controlMode:
-        activeRuns.length === 1 && activeRuns[0]?.status === "WAITING_RESOURCE"
-          ? "RESOURCE_GUARD"
-          : "NONE",
+      controlMode: "NONE",
       approvalState: undefined,
       error: activeRuns.length > 1 ? sessionError("MULTIPLE_ACTIVE_RUNS") : undefined,
     });
@@ -2181,12 +2121,7 @@ export class WebSessionManager {
       timeline,
       submission,
       composerEnabled: false,
-      controlMode:
-        run.status === "WAITING_RESOURCE"
-          ? "RESOURCE_GUARD"
-          : run.status === "RUNNING" && this.snapshot.controlMode === "RESOURCE_GUARD"
-            ? "NONE"
-            : this.snapshot.controlMode,
+      controlMode: this.snapshot.controlMode,
       error:
         lifecycle?.run.id === run.id && lifecycle.failure !== undefined
           ? sessionError(lifecycle.failure)

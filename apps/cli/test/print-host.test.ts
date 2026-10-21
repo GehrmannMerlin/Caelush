@@ -215,12 +215,6 @@ function makeClient(pending: ClientAgentRun, completed: ClientAgentRun): CliDaem
       disposition: "SCHEDULED",
       run: pending,
     }),
-    continueResourceGuard: async () => ({
-      runId: pending.id,
-      action: "CONTINUE_RESOURCE_GUARD",
-      disposition: "SCHEDULED",
-      run: pending,
-    }),
     listPendingApprovals: async () => ({ items: [] }),
     resolveApproval: async () => ({
       runId: pending.id,

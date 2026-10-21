@@ -159,20 +159,17 @@ describe("Web control presentation", () => {
     );
   });
 
-  it("keeps Resource Guard continuation available without a separate cancel control", () => {
+  it("shows automatic resource recovery without a blocker or continuation action", () => {
     const onCancel = vi.fn(async () => true);
-    const onContinueResource = vi.fn(async () => true);
     const html = renderToStaticMarkup(
       <SessionWorkspace
         title="控制台"
         activeRun={{ id: "run-1", status: "WAITING_RESOURCE" } as never}
-        controlMode="RESOURCE_GUARD"
         history={[]}
         timeline={{
           ...createInitialTimelineState(),
           resourceGuard: { reason: "NO_PROGRESS", replanCount: 2, requestedToolCalls: 17 },
         }}
-        onContinueResource={onContinueResource}
         composer={
           <PromptComposer
             disabled
@@ -184,12 +181,15 @@ describe("Web control presentation", () => {
       />,
     );
 
-    expect(html).toContain("继续任务");
+    expect(html).not.toContain("继续任务");
+    expect(html).not.toContain('class="resource-guard-card"');
+    expect(html).not.toContain('role="alert"');
+    expect(html).not.toContain('role="dialog"');
     expect(html).toContain('aria-label="停止任务"');
     expect(html).not.toContain("取消任务");
     expect(html).not.toContain("Caelush 正在执行任务");
-    expect(html).toContain("已重新规划：2 次");
-    expect(html).toContain("本阶段已请求工具：17 次");
+    expect(html).toContain("正在自动调整");
+    expect(onCancel).not.toHaveBeenCalled();
   });
 
   it("renders technical reconnect states and one manual retry", () => {

@@ -25,7 +25,7 @@ export function toolStatusLabel(status: string): string {
   const labels: Readonly<Record<string, string>> = {
     REQUESTED: "已请求",
     WAITING_APPROVAL: "等待批准",
-    WAITING_RESOURCE: "等待资源",
+    WAITING_RESOURCE: "自动调整中",
     RUNNING: "运行中",
     COMPLETED: "已完成",
     FAILED: "失败",

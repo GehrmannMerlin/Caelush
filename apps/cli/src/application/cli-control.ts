@@ -23,7 +23,6 @@ export type CliTransportState = "CONNECTED" | "RECONNECTING" | "DISCONNECTED";
 export type CliControlMode =
   | "NONE"
   | "APPROVAL"
-  | "RESOURCE_GUARD"
   | "CANCELLING"
   | "SESSION_PICKER"
   | "RUN_RECOVERY_PICKER"
@@ -51,7 +50,6 @@ export interface CliInputKey {
 
 export type CliInputAction =
   | { readonly kind: "APPROVAL_SUBMIT" }
-  | { readonly kind: "RESOURCE_CONTINUE" }
   | { readonly kind: "APPROVAL_CLOSE" }
   | { readonly kind: "APPROVAL_MOVE"; readonly delta: -1 | 1 }
   | { readonly kind: "SESSION_SELECT" }
@@ -123,19 +121,6 @@ export function routeCliInput(
     }
     if (key.upArrow) return { kind: "APPROVAL_MOVE", delta: -1 };
     if (key.downArrow) return { kind: "APPROVAL_MOVE", delta: 1 };
-    return { kind: "NONE" };
-  }
-
-  if (state.controlMode === "RESOURCE_GUARD") {
-    if (
-      key.ctrl &&
-      input.toLowerCase() === "c" &&
-      state.activeRun !== undefined &&
-      canCancelRunStatus(state.activeRun.status)
-    ) {
-      return { kind: "CANCEL" };
-    }
-    if (key.return || input.toLowerCase() === "c") return { kind: "RESOURCE_CONTINUE" };
     return { kind: "NONE" };
   }
 

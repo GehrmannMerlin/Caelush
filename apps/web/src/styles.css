@@ -750,21 +750,6 @@ textarea:disabled {
   font-size: 0.8rem;
 }
 
-.resource-guard-card,
-.resource-guard-details {
-  display: grid;
-  gap: 7px;
-}
-
-.resource-guard-card {
-  align-items: end;
-}
-
-.resource-guard-details {
-  color: var(--web-muted);
-  font-size: 0.74rem;
-}
-
 .timeline-entry,
 .timeline-check {
   display: flex;

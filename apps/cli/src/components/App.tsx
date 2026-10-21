@@ -70,9 +70,6 @@ export function App({ controller, writeMessage = defaultWriteMessage }: AppProps
         case "PENDING_CLOSE":
           controller.closePendingRunConfirmation();
           return;
-        case "RESOURCE_CONTINUE":
-          void controller.continueResourceGuard();
-          return;
         case "RECONNECT":
           controller.reconnectActiveRun();
           return;

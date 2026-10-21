@@ -506,7 +506,7 @@ async function handleModelRequest(request, response) {
         ),
       );
     } else {
-      holdStreamOpen(request, response);
+      holdStreamOpen(response);
     }
     return;
   }
@@ -554,7 +554,7 @@ async function handleModelRequest(request, response) {
     (promptText.includes("cancel browser task") || promptText.includes("reconnect browser task")) &&
     !hasToolResult
   ) {
-    holdStreamOpen(request, response);
+    holdStreamOpen(response);
     return;
   }
   writeSse(response, textChunks("Verified browser result."));
@@ -565,13 +565,12 @@ async function handleModelRequest(request, response) {
  *
  * The cancellation scenario needs a provider attempt that is genuinely in flight when the user cancels,
  * so the SSE headers are flushed and the response is deliberately left without a `finish_reason`.
- * `request.on("close")` drops the response when the daemon aborts the turn or the socket dies, and
- * `server.closeAllConnections()` is the backstop for anything still parked at teardown.
+ * Aborting the client closes its socket naturally; `server.closeAllConnections()` is the backstop for
+ * anything still parked when the fixture shuts down.
  */
-function holdStreamOpen(request, response) {
+function holdStreamOpen(response) {
   response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
   response.flushHeaders();
-  request.on("close", () => response.destroy());
 }
 
 async function readRequestBody(request) {

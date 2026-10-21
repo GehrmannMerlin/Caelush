@@ -36,11 +36,6 @@ export function projectPublicRunEvent(
     ...nextStateWithTimeline,
     activeRun: { runId: event.runId, status: lifecycle.status },
     activity: activityForStatus(lifecycle.status, lifecycle.activity),
-    ...(lifecycle.status === "WAITING_RESOURCE"
-      ? { controlMode: "RESOURCE_GUARD" as const, composerEnabled: false }
-      : lifecycle.status === "RUNNING" && state.controlMode === "RESOURCE_GUARD"
-        ? { controlMode: "NONE" as const }
-        : {}),
     ...(event.type === "run.failed" &&
     event.payload.error.code === "CONVERSATION_CONTINUITY_INCOMPATIBLE"
       ? {
@@ -123,7 +118,7 @@ function lifecycleForEvent(event: PublicRunEvent): EventLifecycle | undefined {
     case "resource.guard":
       return {
         status: "WAITING_RESOURCE",
-        activity: "Waiting for resource decision",
+        activity: "Adjusting plan",
         terminal: false,
       };
     case "llm.started":
@@ -143,7 +138,7 @@ function activityForStatus(status: RunStatus, explicit?: CliActivity): CliActivi
     case "WAITING_APPROVAL":
       return "Approval required";
     case "WAITING_RESOURCE":
-      return "Waiting for resource decision";
+      return "Adjusting plan";
     case "VERIFYING":
       return "Verifying";
     case "COMPLETED":

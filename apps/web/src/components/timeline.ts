@@ -354,9 +354,9 @@ function safeTransportId(value: string | undefined): string | undefined {
 function renderResourceGuard(guard: TimelineResourceGuard): ReactElement {
   return createElement(
     "section",
-    { className: "timeline-resource-guard", "aria-label": "资源决策" },
-    createElement("h3", null, "任务需要资源决策"),
-    createElement("p", null, "原因：连续低进展"),
+    { className: "timeline-resource-guard", "aria-label": "自动调整记录" },
+    createElement("h3", null, "Agent 自动调整了执行路径"),
+    createElement("p", null, "触发原因：连续低进展"),
     createElement("p", null, `已重新规划：${guard.replanCount} 次`),
     createElement("p", null, `本阶段已请求工具：${guard.requestedToolCalls} 次`),
   );

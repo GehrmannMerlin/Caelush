@@ -102,11 +102,11 @@ describe("CLI input precedence", () => {
     rendered.unmount();
   });
 
-  it("dispatches Resource Guard Enter to the controller through the rendered App", () => {
+  it("does not dispatch Enter to a resource continuation for an active Run", () => {
     const state: CliViewState = {
       ...createInitialCliState(),
       bootstrap: "READY",
-      controlMode: "RESOURCE_GUARD",
+      controlMode: "NONE",
       activeRun: { runId: createRunId(), status: "WAITING_RESOURCE" },
       composerEnabled: false,
     };
@@ -115,7 +115,7 @@ describe("CLI input precedence", () => {
 
     rendered.stdin.write("\r");
 
-    expect(continueResourceGuard).toHaveBeenCalledTimes(1);
+    expect(continueResourceGuard).not.toHaveBeenCalled();
     rendered.unmount();
   });
 

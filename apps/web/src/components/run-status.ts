@@ -16,7 +16,7 @@ export function runStatusLabel(status: RunStatus): string {
     PENDING: "准备中",
     RUNNING: "运行中",
     WAITING_APPROVAL: "等待审批",
-    WAITING_RESOURCE: "等待资源决策",
+    WAITING_RESOURCE: "Agent 正在自动调整",
     VERIFYING: "验证中",
     COMPLETED: "已完成",
     FAILED: "失败",

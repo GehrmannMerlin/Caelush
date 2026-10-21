@@ -39,6 +39,14 @@ const s4Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S4";
 const s5Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S5";
 const S2_COMPLETE_TEXT = `S2_COMPLETE ${"word ".repeat(1_800).trim()}`;
 const waitVisible = (locator, timeout = 15_000) => locator.waitFor({ state: "visible", timeout });
+const waitForCompletedRun = (title, timeout = 15_000) =>
+  waitVisible(
+    page
+      .locator('.turn-presentation-turn[data-run-status="COMPLETED"]')
+      .filter({ hasText: title })
+      .last(),
+    timeout,
+  );
 const waitUntil = async (predicate, description, timeout = 15_000) => {
   const deadline = Date.now() + timeout;
   for (;;) {
@@ -117,19 +125,24 @@ const openProcessDisclosure = async () => {
  */
 const assertViewportSplitLayout = async (options = {}) => {
   const scrollable = options.scrollable ?? false;
+  const expectedSessionOverflowY = options.sessionOverflowY ?? "visible";
   const layout = await page.evaluate(() => {
     const sidebar = document.querySelector(".workspace-sidebar");
+    const sidebarContent = document.querySelector(".workspace-sidebar-content");
     const sessionScroll = document.querySelector(".session-scroll");
     const workspaceColumn = document.querySelector(".workspace-column");
     const addWorkspaceButton = document.querySelector(".workspace-add-button");
     const workspaceCard = document.querySelector(".workspace-card");
     if (!(sidebar instanceof HTMLElement)) throw new Error("workspace sidebar missing");
+    if (!(sidebarContent instanceof HTMLElement))
+      throw new Error("workspace sidebar content missing");
     if (!(sessionScroll instanceof HTMLElement)) throw new Error("session scroll region missing");
     if (!(workspaceColumn instanceof HTMLElement)) throw new Error("workspace column missing");
     if (!(addWorkspaceButton instanceof HTMLElement))
       throw new Error("add workspace button missing");
     if (!(workspaceCard instanceof HTMLElement)) throw new Error("workspace card missing");
     const sidebarStyle = getComputedStyle(sidebar);
+    const sidebarContentStyle = getComputedStyle(sidebarContent);
     const sessionScrollStyle = getComputedStyle(sessionScroll);
     const columnStyle = getComputedStyle(workspaceColumn);
     const addWorkspaceButtonStyle = getComputedStyle(addWorkspaceButton);
@@ -141,6 +154,7 @@ const assertViewportSplitLayout = async (options = {}) => {
       brandInSidebar: sidebar.querySelector(".workspace-sidebar-brand") !== null,
       sidebarPosition: sidebarStyle.position,
       sidebarOverflowY: sidebarStyle.overflowY,
+      sidebarContentOverflowY: sidebarContentStyle.overflowY,
       sidebarBackgroundImage: sidebarStyle.backgroundImage,
       sessionOverflowY: sessionScrollStyle.overflowY,
       columnClass: workspaceColumn.className,
@@ -160,11 +174,17 @@ const assertViewportSplitLayout = async (options = {}) => {
     throw new Error("page-level vertical scroll leaked outside the panels");
   if (layout.sidebarPosition !== "fixed")
     throw new Error("sidebar is not fixed, observed " + layout.sidebarPosition);
-  if (layout.sidebarOverflowY !== "auto")
-    throw new Error("sidebar does not own vertical scroll, observed " + layout.sidebarOverflowY);
-  if (layout.sessionOverflowY !== "visible")
+  if (layout.sidebarOverflowY !== "hidden")
+    throw new Error("sidebar shell should clip overflow, observed " + layout.sidebarOverflowY);
+  if (layout.sidebarContentOverflowY !== "auto")
     throw new Error(
-      "session scroll region should defer vertical scroll to the workspace rail, observed " +
+      "sidebar content does not own vertical scroll, observed " + layout.sidebarContentOverflowY,
+    );
+  if (layout.sessionOverflowY !== expectedSessionOverflowY)
+    throw new Error(
+      "session scroll region overflow-y should be " +
+        expectedSessionOverflowY +
+        ", observed " +
         layout.sessionOverflowY,
     );
   if (layout.sidebarBackgroundImage !== "none") throw new Error("sidebar uses a gradient");
@@ -400,27 +420,36 @@ const assertReasoningSelection = async (sessionId, expectedLevel) => {
   return { sessionLevel: selectedSession.defaultReasoningLevel, runLevel: run.reasoningLevel };
 };
 
-const waitForSessionCompletion = async (sessionId, expectedLevel) => {
+const waitForSessionRunStatus = async (sessionId, expectedLevel, expectedStatus) => {
   let settledRun;
-  await waitUntil(async () => {
-    const runs = await getJson("/api/v1/sessions/" + sessionId + "/runs");
-    const run = (runs.items ?? []).find((item) => item.reasoningLevel === expectedLevel);
-    if (run === undefined) return false;
-    if (["FAILED", "CANCELLED", "TIMEOUT", "BUDGET_EXCEEDED"].includes(run.status)) {
-      throw new Error("the Run settled as " + run.status);
-    }
-    if (run.status !== "COMPLETED") return false;
-    settledRun = run;
-    return true;
-  }, "the Run to commit its completed status");
+  await waitUntil(
+    async () => {
+      const runs = await getJson("/api/v1/sessions/" + sessionId + "/runs");
+      const run = (runs.items ?? []).find((item) => item.reasoningLevel === expectedLevel);
+      if (run === undefined) return false;
+      if (["FAILED", "CANCELLED", "TIMEOUT", "BUDGET_EXCEEDED"].includes(run.status)) {
+        if (run.status === expectedStatus) {
+          settledRun = run;
+          return true;
+        }
+        throw new Error("the Run settled as " + run.status);
+      }
+      if (run.status !== expectedStatus) return false;
+      settledRun = run;
+      return true;
+    },
+    "the Run to commit its " + expectedStatus + " status",
+  );
   const presentation = await getJson(
     "/api/v1/sessions/" + sessionId + "/presentation?runId=" + encodeURIComponent(settledRun.id),
   );
   const turn = presentation.turns?.find((item) => item.runId === settledRun.id);
-  if (turn?.runStatus !== "COMPLETED") {
-    throw new Error("the durable presentation did not converge to COMPLETED");
+  if (turn?.runStatus !== expectedStatus) {
+    throw new Error("the durable presentation did not converge to " + expectedStatus);
   }
 };
+const waitForSessionCompletion = (sessionId, expectedLevel) =>
+  waitForSessionRunStatus(sessionId, expectedLevel, "COMPLETED");
 
 let smokeStage = "browser navigation";
 try {
@@ -621,7 +650,7 @@ try {
 
     smokeStage = "S0 16 KiB Tool Call stream";
     await submitPrompt("s0 streaming buffer");
-    await waitVisible(page.locator("button.cancel-button"));
+    await waitVisible(page.locator("button[aria-label=停止任务]"));
     await page.waitForTimeout(1_000);
     const heartbeatDuringStream = await page.evaluate(() => window.__caelushS0HeartbeatTicks ?? 0);
     if (heartbeatDuringStream <= heartbeatBefore) {
@@ -682,7 +711,7 @@ try {
       observer.observe(document.body, { childList: true, characterData: true, subtree: true });
     });
     await submitPrompt("s1 tool argument cutover");
-    await waitVisible(page.locator("button.cancel-button"));
+    await waitVisible(page.locator("button[aria-label=停止任务]"));
     await openProcessDisclosure();
     await waitVisible(exactText("正在准备编辑文件"));
 
@@ -819,7 +848,7 @@ try {
 
     smokeStage = "S2 streamed cancellation interaction";
     await submitPrompt("s2 cancel stream");
-    await waitVisible(page.locator("button.cancel-button"));
+    await waitVisible(page.locator("button[aria-label=停止任务]"));
     await waitUntil(
       async () => (await page.locator(".session-conversation").innerText()).includes("S2_CANCEL_"),
       "S2 cancellation stream text to appear",
@@ -841,7 +870,7 @@ try {
     if ([...writesByFrame.values()].some((count) => count > 1)) {
       throw new Error("streaming performed more than one scroll reconciliation in a frame");
     }
-    await page.locator("button.cancel-button").click();
+    await page.locator("button[aria-label=停止任务]").click();
     await waitVisible(
       page
         .locator("button.workspace-session-item")
@@ -851,7 +880,7 @@ try {
 
     smokeStage = "S2 complete ordered text stream";
     await submitPrompt("s2 complete stream");
-    await waitVisible(page.locator("button.cancel-button"));
+    await waitVisible(page.locator("button[aria-label=停止任务]"));
     await waitUntil(
       async () => (await page.locator(".session-conversation").innerText()).length > 3_000,
       "S2 long text deltas to fill the conversation",
@@ -1027,7 +1056,7 @@ try {
     const heartbeatBeforeModel = await page.evaluate(() => window.__caelushS4HeartbeatTicks);
     const modelBytesBeforeCancel = (await readFixtureStatus()).modelBytesServed;
     await submitPrompt("s4 cancel model stream");
-    await waitVisible(page.locator("button.cancel-button"));
+    await waitVisible(page.locator("button[aria-label=停止任务]"));
     await waitUntil(
       async () =>
         (await readFixtureStatus()).modelBytesServed >= modelBytesBeforeCancel + 100 * 1024,
@@ -1064,7 +1093,7 @@ try {
       throw new Error("the browser stopped responding during the S4 model stream");
     }
     await sidebarToggle.click({ timeout: 2_000 });
-    await page.locator("button.cancel-button").click();
+    await page.locator("button[aria-label=停止任务]").click();
     await waitVisible(
       page
         .locator("button.workspace-session-item")
@@ -1095,7 +1124,7 @@ try {
       sample();
     });
     await submitPrompt("s4 complete model stream");
-    await waitVisible(page.locator("button.cancel-button"));
+    await waitVisible(page.locator("button[aria-label=停止任务]"));
     await waitUntil(
       async () => (await page.locator(".session-conversation").innerText()).includes("S4_COMPLETE"),
       "S4 large model answer to render",
@@ -1153,7 +1182,7 @@ try {
       sample();
     });
     await submitPrompt("s4 shell output stress");
-    await waitVisible(page.locator("button.cancel-button"));
+    await waitVisible(page.locator("button[aria-label=停止任务]"));
     await openProcessDisclosure();
     await waitUntil(
       async () =>
@@ -1200,7 +1229,7 @@ try {
         throw new Error(`raw S4 Tool arguments entered the Web DOM during ${stage}`);
       }
     };
-    await waitVisible(page.locator("button.cancel-button"));
+    await waitVisible(page.locator("button[aria-label=停止任务]"));
     await openProcessDisclosure();
     await waitUntil(
       async () =>
@@ -1389,7 +1418,7 @@ try {
     smokeStage = "submitting active Tool Turn";
     await submitPrompt("multi-turn patch fixture");
     smokeStage = "active Run control";
-    await waitVisible(page.locator("button.cancel-button"));
+    await waitVisible(page.locator("button[aria-label=停止任务]"));
     smokeStage = "durable structured Tool row";
     const activeTurn = turns.nth(2);
     try {
@@ -1441,7 +1470,7 @@ try {
     }
 
     smokeStage = "cancel active Tool Turn";
-    await page.locator("button.cancel-button").click();
+    await page.locator("button[aria-label=停止任务]").click();
     smokeStage = "cancelled Run status";
     await waitUntil(
       async () => (await activeTurn.getAttribute("data-run-status")) === "CANCELLED",
@@ -1650,31 +1679,19 @@ try {
   if ((await page.locator(".approval-card").count()) !== 0) {
     throw new Error("an in-workspace patch under 工作区内修改 was gated behind an approval");
   }
-  await waitVisible(
-    page
-      .locator("button.workspace-session-item")
-      .filter({ hasText: "apply browser patch" })
-      .locator('.session-status-icon[aria-label="已完成"]'),
-  );
+  await waitForCompletedRun("apply browser patch");
+  const browserPatchRun = await assertSubmittedPreset("apply browser patch", "WORKSPACE_WRITE");
+  await waitForSessionCompletion(browserPatchRun.sessionId, browserPatchRun.reasoningLevel);
   await openProcessDisclosure();
-  // `apply_patch` is labelled 编辑文件 by the Tool presentation the Daemon projects (the legacy web
-  // timeline had its own 修改文件 label, which is what this assertion used to look for).
+  // The completed Tool presentation uses 已编辑 and projects the changed path as its subject.
+  const completedPatch = page
+    .locator(".turn-presentation-tool-entry")
+    .filter({ hasText: "已编辑" })
+    .last();
+  await waitVisible(completedPatch);
   await waitVisible(
-    page
-      .locator(".turn-presentation-tool-entry .turn-presentation-tool-action")
-      .filter({ hasText: "编辑文件" })
-      .last(),
+    completedPatch.locator(".turn-presentation-tool-subject").filter({ hasText: "fixture.txt" }),
   );
-  // The review a completed Run goes through is a verification item, not the legacy timeline's
-  // free-text "Verification passed." row.
-  await waitVisible(page.locator(".turn-presentation-item--verification").last());
-  await waitVisible(
-    page
-      .locator("button.workspace-session-item")
-      .filter({ hasText: "apply browser patch" })
-      .locator('.session-status-icon[aria-label="已完成"]'),
-  );
-
   // An escaping patch cannot be described by the facts projector, so `ON_BOUNDARY` answers it with a
   // review request — and the card has to survive a reload, because it is the durable Run's state and
   // not page state. Approving it resumes the Run, and the workspace boundary still refuses the write.
@@ -1682,51 +1699,57 @@ try {
   await submitPrompt("review browser patch");
   await waitVisible(exactText("需要审批"));
   await waitVisible(page.locator(".approval-card"));
+  const reviewedBrowserPatchRun = await assertSubmittedPreset(
+    "review browser patch",
+    "WORKSPACE_WRITE",
+  );
   await page.reload({ waitUntil: "domcontentloaded" });
   await selectSession("review browser patch");
   await waitVisible(page.locator(".approval-card"));
   await page.locator("button.approval-action--approve_once").click();
   await page.locator(".approval-card").waitFor({ state: "detached", timeout: 15_000 });
   await waitVisible(exactText("Verified browser result.").last());
-  await waitVisible(
-    page
-      .locator("button.workspace-session-item")
-      .filter({ hasText: "review browser patch" })
-      .locator('.session-status-icon[aria-label="已完成"]'),
+  await waitForCompletedRun("review browser patch");
+  await waitForSessionCompletion(
+    reviewedBrowserPatchRun.sessionId,
+    reviewedBrowserPatchRun.reasoningLevel,
   );
   await openProcessDisclosure();
   await waitVisible(
     page
       .locator(".turn-presentation-tool-entry.turn-presentation-tool-entry--failed")
-      .filter({ hasText: "编辑文件" })
+      .filter({ hasText: "编辑失败" })
       .last(),
   );
-  await waitVisible(
-    page
-      .locator("button.workspace-session-item")
-      .filter({ hasText: "review browser patch" })
-      .locator('.session-status-icon[aria-label="已完成"]'),
-  );
+  await waitForCompletedRun("review browser patch");
 
   await startNewSession();
   await submitPrompt("reject browser patch");
   await waitVisible(exactText("需要审批"));
   await waitVisible(page.locator(".approval-card"));
+  const rejectedBrowserPatchRun = await assertSubmittedPreset(
+    "reject browser patch",
+    "WORKSPACE_WRITE",
+  );
   await page.locator("button.approval-action--reject").click();
   await exactText("需要审批").waitFor({ state: "hidden", timeout: 15_000 });
   await waitVisible(exactText("Verified browser result.").last());
-  await waitVisible(
-    page
-      .locator("button.workspace-session-item")
-      .filter({ hasText: "reject browser patch" })
-      .locator('.session-status-icon[aria-label="已完成"]'),
+  await waitForCompletedRun("reject browser patch");
+  await waitForSessionCompletion(
+    rejectedBrowserPatchRun.sessionId,
+    rejectedBrowserPatchRun.reasoningLevel,
   );
 
   await startNewSession();
   await submitPrompt("cancel browser task");
-  await waitVisible(page.locator("button.cancel-button"));
-  await page.locator("button.cancel-button").click();
-  await waitVisible(page.locator('.session-status-icon[aria-label="已取消"]').last());
+  await waitVisible(page.locator("button[aria-label=停止任务]"));
+  const cancelledBrowserRun = await assertSubmittedPreset("cancel browser task", "WORKSPACE_WRITE");
+  await page.locator("button[aria-label=停止任务]").click();
+  await waitForSessionRunStatus(
+    cancelledBrowserRun.sessionId,
+    cancelledBrowserRun.reasoningLevel,
+    "CANCELLED",
+  );
 
   const reconnectSession = await postJson("/api/v1/sessions", {
     title: "reconnect browser task",
@@ -1748,16 +1771,25 @@ try {
   await postJson("/api/v1/runs/" + reconnectRun.id + "/start", {});
   await page.reload({ waitUntil: "domcontentloaded" });
   await selectSession("reconnect browser task");
-  await waitVisible(page.locator("button.cancel-button"));
-  // A live Run keeps its process disclosure expanded and reports the active state. That is the
-  // presentation feed's equivalent of the legacy timeline's per-entry "Model" row, which no longer
-  // exists now that the feed owns the execution view.
-  await waitVisible(
-    page.locator(".turn-presentation-summary-status").filter({ hasText: /正在执行|进行中/ }),
-  );
-  await waitVisible(page.locator(".turn-presentation-body"));
-  await page.locator("button.cancel-button").click();
-  await waitVisible(page.locator('.session-status-icon[aria-label="已取消"]').last());
+  await waitVisible(page.locator("button[aria-label=停止任务]"));
+  // The durable presentation restores the active Run state after reload; its model can be starting,
+  // streaming, or waiting for a scheduled retry while that same Run remains cancellable.
+  const reconnectTurn = page
+    .locator('.turn-presentation-turn[data-run-status="RUNNING"]')
+    .filter({ hasText: "reconnect browser task" })
+    .last();
+  await waitVisible(reconnectTurn);
+  await waitVisible(reconnectTurn.locator(".turn-presentation-summary-status"));
+  await waitVisible(reconnectTurn.locator(".turn-presentation-body"));
+  const reconnectViewport = page.viewportSize();
+  await page.setViewportSize({ width: 375, height: 812 });
+  await assertTaskTimerSummaryLayout({ mobile: true });
+  if (reconnectViewport !== null) await page.setViewportSize(reconnectViewport);
+  await page.locator("button[aria-label=停止任务]").click();
+  const reconnectRuns = await getJson("/api/v1/sessions/" + reconnectSession.id + "/runs");
+  const reconnectRecord = (reconnectRuns.items ?? []).find((item) => item.id === reconnectRun.id);
+  if (reconnectRecord === undefined) throw new Error("the reconnect Run disappeared from history");
+  await waitForSessionRunStatus(reconnectSession.id, reconnectRecord.reasoningLevel, "CANCELLED");
 
   const session = await postJson("/api/v1/sessions", {
     title: "pending browser task",
@@ -1765,7 +1797,7 @@ try {
     defaultModel: { provider: "browser-fixture", model: "browser-fixture-model" },
     metadata: {},
   });
-  await postJson("/api/v1/sessions/" + session.id + "/runs", {
+  const pendingRun = await postJson("/api/v1/sessions/" + session.id + "/runs", {
     goal: "pending browser task",
     workspace,
     model: { provider: "browser-fixture", model: "browser-fixture-model" },
@@ -1778,29 +1810,9 @@ try {
   await waitVisible(page.locator(".recovery-panel"));
   await page.locator(".recovery-run button").click();
   await waitVisible(exactText("Verified browser result.").last());
-  await waitVisible(
-    page
-      .locator("button.workspace-session-item")
-      .filter({ hasText: "pending browser task" })
-      .locator('.session-status-icon[aria-label="已完成"]'),
-  );
+  await waitForCompletedRun("pending browser task");
+  await waitForSessionCompletion(session.id, pendingRun.reasoningLevel);
 
-  await page.setViewportSize({ width: 375, height: 812 });
-  // Every scenario above left turns behind, so the column must own the rail again.
-  await assertViewportSplitLayout({ scrollable: true });
-  await page.locator(".sidebar-toggle-button").click();
-  if ((await page.locator(".sidebar-toggle-button").getAttribute("aria-expanded")) !== "true")
-    throw new Error("sidebar did not open");
-  await page.locator(".sidebar-backdrop").click({ position: { x: 350, y: 120 } });
-  if ((await page.locator(".sidebar-toggle-button").getAttribute("aria-expanded")) !== "false")
-    throw new Error("sidebar did not close");
-  await page.waitForTimeout(220);
-  const body = await page.locator("body").innerText();
-  if (!body.includes("pending browser task")) throw new Error("pending recovery title missing");
-  await assertTaskTimerSummaryLayout({ mobile: true });
-  for (const forbidden of ["Inspector", "Terminal", "stdout"]) {
-    if (body.includes(forbidden)) throw new Error(forbidden + " leaked into production UI");
-  }
   await page.locator(".workspace-card").first().hover();
   await page.waitForTimeout(220);
   const tooltipStyle = await page
@@ -1817,6 +1829,23 @@ try {
     });
   if (tooltipStyle.backgroundColor !== "rgb(30, 79, 133)")
     throw new Error("workspace path tooltip is not solid blue");
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  // Every scenario above left turns behind; the content column owns the rail and the session scroll
+  // region keeps its independent mobile scroller alongside the bottom composer.
+  await assertViewportSplitLayout({ scrollable: true, sessionOverflowY: "auto" });
+  await page.locator(".sidebar-toggle-button").click();
+  if ((await page.locator(".sidebar-toggle-button").getAttribute("aria-expanded")) !== "true")
+    throw new Error("sidebar did not open");
+  await page.locator(".sidebar-backdrop").click({ position: { x: 350, y: 120 } });
+  if ((await page.locator(".sidebar-toggle-button").getAttribute("aria-expanded")) !== "false")
+    throw new Error("sidebar did not close");
+  await page.waitForTimeout(220);
+  const body = await page.locator("body").innerText();
+  if (!body.includes("pending browser task")) throw new Error("pending recovery title missing");
+  for (const forbidden of ["Inspector", "Terminal", "stdout"]) {
+    if (body.includes(forbidden)) throw new Error(forbidden + " leaked into production UI");
+  }
 } catch (error) {
   const pageText = await page
     .locator("body")
@@ -1881,14 +1910,17 @@ async function assertAttachmentComposerAndUpload() {
   const geometry = await page.evaluate(() => {
     const menuElement = document.querySelector(".attachment-menu");
     const plusElement = document.querySelector("button.prompt-attachment-button");
+    const composerElement = document.querySelector(".prompt-composer");
     const footer = document.querySelector(".prompt-composer-footer");
     const ring = document.querySelector(".context-usage-control");
     if (!(menuElement instanceof HTMLElement)) throw new Error("attachment menu missing");
     if (!(plusElement instanceof HTMLElement)) throw new Error("attachment plus button missing");
+    if (!(composerElement instanceof HTMLElement)) throw new Error("composer missing");
     if (!(footer instanceof HTMLElement)) throw new Error("composer footer missing");
     if (!(ring instanceof HTMLElement)) throw new Error("context usage ring missing");
     const panel = menuElement.getBoundingClientRect();
     const button = plusElement.getBoundingClientRect();
+    const composer = composerElement.getBoundingClientRect();
     const footerBounds = footer.getBoundingClientRect();
     const ringBounds = ring.getBoundingClientRect();
     return {
@@ -1897,14 +1929,20 @@ async function assertAttachmentComposerAndUpload() {
       panelLeft: panel.left,
       panelRight: panel.right,
       panelBottom: panel.bottom,
+      composerWidth: composer.width,
       buttonTop: button.top,
       footerCenter: footerBounds.left + footerBounds.width / 2,
       ringCenter: ringBounds.left + ringBounds.width / 2,
       viewportWidth: window.innerWidth,
     };
   });
-  if (Math.abs(geometry.panelWidth - 320) > 1 || Math.abs(geometry.panelHeight - 160) > 1) {
-    throw new Error("attachment popover is not 320 by 160 pixels: " + JSON.stringify(geometry));
+  if (
+    Math.abs(geometry.panelWidth - geometry.composerWidth) > 3 ||
+    Math.abs(geometry.panelHeight - 320) > 1
+  ) {
+    throw new Error(
+      "attachment menu does not fill the composer at 320 pixels high: " + JSON.stringify(geometry),
+    );
   }
   if (geometry.panelLeft < 0 || geometry.panelRight > geometry.viewportWidth) {
     throw new Error("attachment popover is outside the viewport: " + JSON.stringify(geometry));
