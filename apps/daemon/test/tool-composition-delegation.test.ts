@@ -211,6 +211,33 @@ describe("production Tool composition delegation", () => {
     expect(outcome.call.args).toEqual({ cmd: "pnpm test", yield_time_ms: 3000 });
   });
 
+  it("prepares the apply_patch alias through both production hooks", () => {
+    const { registry } = createCodingToolComposition();
+    const preparer = createToolCallPreparer(registry, {
+      normalization: createLegacyNumericArgumentNormalization(),
+    });
+    const patch = "*** Begin Patch\n*** Add File: alias.txt\n+alias\n*** End Patch";
+
+    // The Tool's own hook returns a frozen object; the registration hook must convert its own copy
+    // of it. Composing them is the production configuration, and it is what a Run actually uses.
+    const drifted = preparer.prepare({
+      externalCallId: "call-alias",
+      toolName: "apply_patch",
+      args: { input: patch },
+    });
+    const canonical = preparer.prepare({
+      externalCallId: "call-canonical",
+      toolName: "apply_patch",
+      args: { patch },
+    });
+
+    expect(drifted.kind).toBe("READY");
+    expect(canonical.kind).toBe("READY");
+    if (drifted.kind !== "READY" || canonical.kind !== "READY") throw new Error("expected READY");
+    expect(drifted.call.args).toEqual(canonical.call.args);
+    expect(Object.keys(drifted.call.args)).toEqual(["patch"]);
+  });
+
   it("rejects an unavailable Tool and an invalid payload as safe feedback", () => {
     const { registry } = createCodingToolComposition();
     const preparer = createToolCallPreparer(registry);
