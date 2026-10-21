@@ -108,11 +108,14 @@ export {
   type PlanStep,
 } from "./builtins/update-plan.js";
 export {
+  describeTaskPlanRejection,
   parseTaskPlanInput,
+  renderTaskPlanRejection,
   TASK_PLAN_LIMITS,
   type TaskPlan,
   type TaskPlanExecution,
   type TaskPlanParseResult,
+  type TaskPlanRejectionGuidance,
   type TaskPlanStep,
   type TaskPlanStepStatus,
 } from "./plan/task-plan-contract.js";
@@ -120,6 +123,9 @@ export {
   boundPlanBlock,
   deriveTaskPlanSnapshot,
   renderBoundedTaskPlan,
+  renderBoundedTaskPlanSections,
+  TASK_PLAN_BLOCK_BUDGETS,
+  TASK_PLAN_STALE_AFTER_RESULTS,
   renderTaskPlanBlock,
   taskPlanEvidenceState,
   type TaskPlanSnapshot,

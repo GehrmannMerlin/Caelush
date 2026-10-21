@@ -1,10 +1,15 @@
 import {
   boundPlanBlock,
+  createUpdatePlanTool,
   deriveTaskPlanSnapshot,
+  describeTaskPlanRejection,
   parseTaskPlanInput,
+  renderBoundedTaskPlanSections,
   renderPlanSteps,
   renderTaskPlanBlock,
+  renderTaskPlanRejection,
   TASK_PLAN_LIMITS,
+  TASK_PLAN_STALE_AFTER_RESULTS,
   validatePlanSteps,
 } from "@caelush/coding-agent";
 import { describe, expect, it } from "vitest";
@@ -227,6 +232,54 @@ describe("update_plan argument contract (v2)", () => {
   });
 });
 
+/**
+ * A refusal is the most expensive Tool result a model can receive: the plan it composed is discarded
+ * and it has to compose another one. `PLAN_VERSION_REQUIRED.` alone leaves it guessing which field to
+ * change, and a real Run answered that guess by sending the same rejected call again until its budget
+ * ran out. These tests pin the two halves of the fix: the correction names fields, and the refusal
+ * never repeats what the model sent.
+ */
+describe("a refused plan is actionable", () => {
+  it("names the field to change, says nothing was recorded, and never echoes the payload", async () => {
+    const tool = createUpdatePlanTool();
+    const sentinel = "/home/private/sentinel.txt";
+    const result = await tool.tool.execute({
+      args: { plan: [{ id: "editor", step: `read ${sentinel}`, status: "pending" }] },
+    } as never);
+
+    expect(result).toMatchObject({ isError: true, details: { ok: false, error: "INVALID_PLAN" } });
+    const text = String(result.content);
+    // The code, for the host and for a model that knows the contract.
+    expect(text).toContain("PLAN_VERSION_REQUIRED");
+    // The correction, for a model that does not.
+    expect(text).toContain("Fix:");
+    expect(text).toContain("`planVersion: 2`");
+    // The fact it cannot know: the refusal wrote nothing, so the previous plan is still current.
+    expect(text).toContain("Nothing was recorded");
+    // Neither the step text nor the step id the model sent appears in the refusal.
+    expect(text).not.toContain(sentinel);
+    expect(text).not.toContain("editor");
+  });
+
+  it("answers an unknown code with a correction instead of an empty refusal", () => {
+    expect(describeTaskPlanRejection("NOT_A_REAL_CODE")).toEqual({
+      problem: "The arguments did not match the `update_plan` contract.",
+      fix: "Resend the complete plan using the documented field names.",
+    });
+    expect(renderTaskPlanRejection("NOT_A_REAL_CODE")).toContain(
+      "Tool operation failed: NOT_A_REAL_CODE.",
+    );
+  });
+
+  it("keeps the refusal bounded, because it becomes a durable message", () => {
+    // Every code in the vocabulary renders a fixed sentence: nothing about the length of this result
+    // depends on what the model sent, so a rejected 32 KiB plan does not become a 32 KiB refusal.
+    const text = renderTaskPlanRejection("PLAN_VERSION_REQUIRED");
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThan(700);
+    expect(text.split("\n")).toHaveLength(4);
+  });
+});
+
 describe("task plan projection", () => {
   const plan = V1_PLAN;
 
@@ -320,6 +373,74 @@ describe("task plan projection", () => {
     expect(snapshot?.revision).toBe("msg_result_call_2");
   });
 
+  /**
+   * A refusal after the accepted revision is an open question about the record.
+   *
+   * ```text
+   * before the accepted plan   already corrected; the accepted revision is the answer
+   * after it                   the model tried to update the plan and the update was discarded
+   * unreadable text            REJECTED, never the text, because the text may hold anything
+   * ```
+   */
+  it("reports a refusal made after the accepted revision, and clears it on a new one", () => {
+    const refusal = (sequence: number, text: string) => ({
+      sequence,
+      message: {
+        type: "TOOL_RESULT",
+        runId: "run_1",
+        id: `msg_refused_${String(sequence)}`,
+        toolName: "update_plan",
+        isError: true,
+        projectedContent: text,
+      } as never,
+    });
+    const accepted = [
+      { sequence: 1, message: assistantCall("call_1", { plan }) },
+      { sequence: 2, message: toolResult("call_1", false) },
+    ];
+
+    const afterAccepted = deriveTaskPlanSnapshot({
+      runId: "run_1",
+      messages: [
+        ...accepted,
+        refusal(3, "Tool operation failed: PLAN_VERSION_REQUIRED.\nFix: resend with planVersion: 2."),
+      ],
+    });
+    // The accepted plan is still the current one; the refusal is a fact about a later attempt.
+    expect(afterAccepted?.rejectedUpdate).toEqual({ reason: "PLAN_VERSION_REQUIRED" });
+    expect(afterAccepted?.steps).toHaveLength(3);
+
+    // A refusal that came before the accepted revision was already answered by it.
+    const beforeAccepted = deriveTaskPlanSnapshot({
+      runId: "run_1",
+      messages: [
+        refusal(1, "Tool operation failed: PLAN_VERSION_REQUIRED."),
+        { sequence: 2, message: assistantCall("call_1", { plan }) },
+        { sequence: 3, message: toolResult("call_1", false) },
+      ],
+    });
+    expect(beforeAccepted?.rejectedUpdate).toBeUndefined();
+
+    // A new accepted revision clears it, because it is what the refusal was asking for.
+    const corrected = deriveTaskPlanSnapshot({
+      runId: "run_1",
+      messages: [
+        ...accepted,
+        refusal(3, "Tool operation failed: PLAN_VERSION_REQUIRED."),
+        { sequence: 4, message: assistantCall("call_2", { plan }) },
+        { sequence: 5, message: toolResult("call_2", false) },
+      ],
+    });
+    expect(corrected?.rejectedUpdate).toBeUndefined();
+
+    // A refusal whose text this repository did not write yields a code, never an echoed payload.
+    const unreadable = deriveTaskPlanSnapshot({
+      runId: "run_1",
+      messages: [...accepted, refusal(3, "planVersion was missing for SENSITIVE_STEP_TEXT")],
+    });
+    expect(unreadable?.rejectedUpdate).toEqual({ reason: "REJECTED" });
+  });
+
   it("keeps a v1 plan readable after a v2 plan existed", () => {
     // A Run may accept a v2 plan and later a v1 one; the latest accepted snapshot wins and its own
     // version is reported, because the reader must not infer a shape from the Run's history.
@@ -408,5 +529,48 @@ describe("task plan projection", () => {
 
   it("leaves a block that already fits untouched", () => {
     expect(boundPlanBlock("short", 512)).toBe("short");
+  });
+
+  /**
+   * The two reminders the notice carries, and the order they are dropped in.
+   *
+   * ```text
+   * UPDATE_REJECTED   a later update was refused and discarded
+   * STALE             24+ accepted results since the revision and no newer plan
+   * always             identity and counts: a notice that loses them describes nothing
+   * dropped first     the pointer to the durable snapshot
+   * ```
+   */
+  it("reminds the model that an update was refused, and that a plan has gone stale", () => {
+    const notice = (
+      resultsSincePlan: number,
+      rejectedUpdate?: { readonly reason: string },
+    ): string =>
+      renderBoundedTaskPlanSections({
+        revision: "r",
+        planVersion: 2,
+        resultsSincePlan,
+        ...(rejectedUpdate === undefined ? {} : { rejectedUpdate }),
+        steps: [{ id: "a", step: "a", status: "in_progress" }],
+      }).notice;
+
+    expect(notice(TASK_PLAN_STALE_AFTER_RESULTS - 1)).not.toContain("STALE");
+    expect(notice(TASK_PLAN_STALE_AFTER_RESULTS)).toContain("STALE");
+    expect(notice(0, { reason: "PLAN_VERSION_REQUIRED" })).toContain(
+      "UPDATE_REJECTED PLAN_VERSION_REQUIRED",
+    );
+    // A reminder, never a gate: it does not re-state or edit the plan's own evidence.
+    expect(notice(400)).toContain("keep it if it still holds");
+    expect(notice(400)).not.toContain("independentEvidence");
+
+    // Both reminders and the counts fit the 512-byte budget; the snapshot pointer is what gives way.
+    const crowded = notice(400, { reason: "STEP_ID_DUPLICATE" });
+    expect(Buffer.byteLength(crowded, "utf8")).toBeLessThanOrEqual(512);
+    expect(crowded).toContain("STALE");
+    expect(crowded).toContain("UPDATE_REJECTED STEP_ID_DUPLICATE");
+    expect(crowded).toContain("accepted Tool results since plan: 400");
+    expect(crowded).not.toContain("Full snapshot reference");
+    // Whole lines only: a clipped reminder cannot be told apart from a complete one.
+    expect(crowded.endsWith("keep it if it still holds.")).toBe(true);
   });
 });

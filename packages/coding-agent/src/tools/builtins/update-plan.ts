@@ -1,6 +1,7 @@
 import type { CodingToolDefinition } from "../coding-tool-definition.js";
 import {
   parseTaskPlanInput,
+  renderTaskPlanRejection,
   TASK_PLAN_LIMITS,
   type TaskPlan,
 } from "../plan/task-plan-contract.js";
@@ -218,7 +219,15 @@ export function createUpdatePlanTool(): CodingToolDefinition {
     execute: async (input): Promise<AgentToolResult> => {
       const parsed = parseTaskPlanInput(input.args);
       if (!parsed.ok) {
-        return errorResult("INVALID_PLAN", `Tool operation failed: ${parsed.reason}.`);
+        /*
+         * A refusal has to be actionable.
+         *
+         * The reason code stays in the details for the host; the model gets the correction, because a
+         * plan it cannot resend correctly is a plan it will resend incorrectly. Nothing of the rejected
+         * payload is echoed: the fix names fields, and the size and content of this result are fixed
+         * before the call is made.
+         */
+        return errorResult("INVALID_PLAN", renderTaskPlanRejection(parsed.reason));
       }
       const plan = parsed.plan;
       const completed = plan.steps.filter((step) => step.status === "completed").length;

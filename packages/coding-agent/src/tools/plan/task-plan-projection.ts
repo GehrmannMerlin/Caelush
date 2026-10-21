@@ -46,6 +46,15 @@ export interface TaskPlanSnapshot {
    * and a verification is a different fact that only the verification records can supply.
    */
   readonly resultsSincePlan: number;
+  /**
+   * The most recent `update_plan` call that was refused *after* this revision was accepted.
+   *
+   * A refusal is not a plan: nothing was recorded and this snapshot is still the current one. It is
+   * carried anyway because a model that cannot see the refusal in its Context re-sends the same
+   * rejected shape, and a model that has forgotten the plan is stale keeps working against a list it
+   * outgrew. Both are reminders, not gates.
+   */
+  readonly rejectedUpdate?: { readonly reason: string };
 }
 
 /**
@@ -91,6 +100,7 @@ export function deriveTaskPlanSnapshot(input: {
   if (requested.size === 0) return undefined;
 
   let latest: TaskPlanSnapshot | undefined;
+  let acceptedAt = 0;
   for (const entry of input.messages) {
     const message = entry.message;
     if (message.type !== "TOOL_RESULT" || message.runId !== input.runId) continue;
@@ -100,6 +110,7 @@ export function deriveTaskPlanSnapshot(input: {
     const parsed = parseTaskPlanInput(call.input);
     if (!parsed.ok) continue;
     const plan = parsed.plan;
+    acceptedAt = entry.sequence;
     latest = Object.freeze({
       revision: message.id,
       ...(message.sourceStepId === undefined ? {} : { sourceStepId: message.sourceStepId }),
@@ -117,7 +128,53 @@ export function deriveTaskPlanSnapshot(input: {
       ).length,
     });
   }
-  return latest;
+  if (latest === undefined) return undefined;
+
+  /*
+   * A refusal that came *after* the accepted plan is an open question about the record.
+   *
+   * ```text
+   * before the accepted plan   the model already corrected it; the accepted revision is the answer
+   * after it                   the model tried to update the plan and the update was thrown away
+   * ```
+   *
+   * The reason is read from the durable result it was refused with, so the fact survives a restart and
+   * a compaction that keeps the Tool result. The pattern is the one this repository writes — a code,
+   * not a free sentence — and an unrecognised text yields `REJECTED` rather than an echoed payload.
+   */
+  const refusal = lastRefusedUpdate(input.messages, input.runId, acceptedAt);
+  if (refusal === undefined) return latest;
+  return Object.freeze({ ...latest, rejectedUpdate: refusal });
+}
+
+const REFUSAL_CODE = /^Tool operation failed: ([A-Z][A-Z0-9_]{2,60})\./u;
+
+/**
+ * The most recent refused `update_plan` result after the accepted revision, if any.
+ *
+ * Only the code is kept: the rest of the refusal is guidance the model has already read, and a
+ * projection that repeated it would make every Step's plan Section depend on prose.
+ */
+function lastRefusedUpdate(
+  messages: readonly {
+    readonly message: AgentMessage;
+    readonly sequence: number;
+  }[],
+  runId: string,
+  afterSequence: number,
+): { readonly reason: string } | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const entry = messages[index];
+    const message = entry?.message;
+    if (message === undefined) continue;
+    if (message.type !== "TOOL_RESULT" || message.runId !== runId) continue;
+    if (message.toolName !== "update_plan" || !message.isError) continue;
+    if (entry === undefined || entry.sequence <= afterSequence) return undefined;
+    const text = typeof message.projectedContent === "string" ? message.projectedContent.trim() : "";
+    const code = REFUSAL_CODE.exec(text)?.[1];
+    return { reason: code ?? "REJECTED" };
+  }
+  return undefined;
 }
 
 /** The plan's independent-evidence state. This projection can only ever report that none exists. */
@@ -195,6 +252,28 @@ export interface BoundedTaskPlanRender {
   readonly omittedCounts: Readonly<Record<string, number>>;
 }
 
+/**
+ * The same render, kept in the three blocks a Prompt Surface needs.
+ *
+ * ```text
+ * current  6 KiB   goal, current step, unresolved, next action, constraints, remaining work
+ * evidence 1.5 KiB what an independent check can say about the references the plan cited
+ * notice   0.5 KiB the volatile bookkeeping: completion count, accepted results, this revision
+ * ```
+ *
+ * A Prompt Surface Section changes as a whole, so the split is a cost decision, not a formatting
+ * one: a single 8 KiB block whose last line counts Tool results rewrites 8 KiB on every Step, while
+ * three blocks rewrite the 0.5 KiB notice. The volatile count lives in `notice` for exactly that
+ * reason and never in the stable body.
+ */
+export interface BoundedTaskPlanSectionsRender {
+  readonly current: string;
+  readonly evidence: string;
+  readonly notice: string;
+  readonly includedSections: readonly string[];
+  readonly omittedCounts: Readonly<Record<string, number>>;
+}
+
 export interface TaskPlanAvailableEvidenceRef {
   readonly reference: string;
   readonly description: string;
@@ -207,41 +286,66 @@ interface SemanticPlanSection {
   readonly budget: number;
 }
 
+/**
+ * The block shares, which sum to the 8 KiB the plan may occupy at the default budget.
+ *
+ * `current` carries the whole working record, so it gets the room; `evidence` is bounded because it
+ * is a summary of checks, not the checks; `notice` is small because it is bookkeeping the model reads
+ * to judge staleness, never work.
+ *
+ * A smaller total budget scales these shares, and the notice additionally keeps a floor of its two
+ * mandatory lines — the stable body is what gives up the difference, never the record's identity.
+ * The shares are therefore inputs to the planner, not guarantees about each block's final size.
+ */
+export const TASK_PLAN_BLOCK_BUDGETS = Object.freeze({
+  current: 6 * 1024,
+  evidence: 1_536,
+  notice: 512,
+});
+
 const SEMANTIC_PLAN_BUDGETS = Object.freeze({
-  header: 512,
-  meta: 768,
-  current: 1792,
-  unresolved: 1792,
-  next: 768,
-  evidence: 1024,
-  constraints: 1024,
-  remaining: 512,
+  meta: 512,
+  current: 1_792,
+  unresolved: 1_536,
+  next: 512,
+  constraints: 768,
+  remaining: 1_024,
 });
 
 /**
  * Section order, which is also the order that borrows unused capacity.
  *
  * ```text
- * meta current unresolved next evidence constraints remaining
+ * meta current unresolved next constraints remaining
  * ```
  *
- * Evidence sits above the discretionary tail on purpose. A step's recorded references are what lets
- * the next turn cite a check that exists instead of inventing one, so they must not be the first thing
- * a long plan clips away. The sum of the section budgets is exactly the 8 KiB block budget; the
- * header is outside it and is never expanded.
+ * Evidence is its own block above the discretionary tail on purpose. A step's recorded references are
+ * what lets the next turn cite a check that exists instead of inventing one, so they must not be the
+ * first thing a long plan clips away. The sum of these section budgets is exactly the `current` block
+ * budget, so borrowing can never push the block past its cap.
  */
 const SEMANTIC_PLAN_SECTION_ORDER = [
   "meta",
   "current",
   "unresolved",
   "next",
-  "evidence",
   "constraints",
   "remaining",
 ] as const;
 
 const MAX_EVIDENCE_ENTRIES = 4;
 const EVIDENCE_DESCRIPTION_BYTES = 80;
+
+/**
+ * How many accepted Tool results may arrive before the plan is called stale.
+ *
+ * A plan describes the work; it does not stop work happening without it. Twenty-four accepted results
+ * is a couple of Tool batches on a long task — far enough that the reminder is not noise, close enough
+ * that the model can re-record the plan cheaply while it still remembers why. The reminder is a
+ * prompt, never a gate: nothing forces a new revision, nothing marks a step verified because the plan
+ * was refreshed, and the count resets only when a new revision is accepted.
+ */
+export const TASK_PLAN_STALE_AFTER_RESULTS = 24;
 
 /**
  * Render the accepted plan under a byte budget while preserving the information the next action needs.
@@ -257,6 +361,22 @@ export function renderBoundedTaskPlan(
     readonly availableEvidenceRefs?: readonly TaskPlanAvailableEvidenceRef[];
   } = {},
 ): BoundedTaskPlanRender {
+  const blocks = renderBoundedTaskPlanSections(snapshot, options);
+  return Object.freeze({
+    text: [blocks.notice, blocks.current, blocks.evidence].filter(Boolean).join("\n"),
+    includedSections: blocks.includedSections,
+    omittedCounts: blocks.omittedCounts,
+  });
+}
+
+export function renderBoundedTaskPlanSections(
+  snapshot: TaskPlanSnapshot,
+  options: {
+    readonly maxBytes?: number;
+    readonly evidence?: readonly ResolvedTaskPlanEvidence[];
+    readonly availableEvidenceRefs?: readonly TaskPlanAvailableEvidenceRef[];
+  } = {},
+): BoundedTaskPlanSectionsRender {
   const maxBytes = options.maxBytes ?? 8 * 1024;
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 256) {
     throw new RangeError("Task plan render budget must be at least 256 bytes.");
@@ -264,6 +384,33 @@ export function renderBoundedTaskPlan(
   const ratio = Math.min(1, Math.max(0, (maxBytes - 8) / 8192));
   const budget = (key: keyof typeof SEMANTIC_PLAN_BUDGETS): number =>
     Math.floor(SEMANTIC_PLAN_BUDGETS[key] * ratio);
+  const blockBudget = (key: keyof typeof TASK_PLAN_BLOCK_BUDGETS): number =>
+    Math.floor(TASK_PLAN_BLOCK_BUDGETS[key] * ratio);
+  /*
+   * The three blocks are shares of one budget, not three independent caps.
+   *
+   * ```text
+   * notice    never below the two lines that say which plan this is and what it counts
+   * evidence  its share; a summary of checks, so it never grows into the notice's floor
+   * current   its share, less whatever the notice floor took above its own share
+   * ```
+   *
+   * Scaling each block by the same ratio and then joining them exceeded the total: at a 512-byte
+   * budget the notice's 31-byte share could not hold its mandatory lines, and the old rule kept them
+   * anyway, so the joined text was larger than the budget it promised. The notice floor is the one
+   * non-negotiable part — a notice without the revision it describes describes nothing — so the
+   * stable body absorbs the difference instead.
+   */
+  const separatorBytes = 2;
+  const noticeCap = Math.min(
+    maxBytes,
+    Math.max(blockBudget("notice"), noticeMandatoryBytes(snapshot)),
+  );
+  const evidenceCap = blockBudget("evidence");
+  const currentCap = Math.min(
+    blockBudget("current"),
+    Math.max(0, maxBytes - noticeCap - evidenceCap - separatorBytes),
+  );
   const marks: Record<TaskPlanStepStatus, string> = {
     completed: "[x]",
     in_progress: "[>]",
@@ -330,7 +477,6 @@ export function renderBoundedTaskPlan(
           ? []
           : [`Recorded goal (model's words): ${execution.goal}`]),
         ...(snapshot.explanation === undefined ? [] : [`Why it changed: ${snapshot.explanation}`]),
-        `报告完成 ${completed.length}/${snapshot.steps.length}; accepted tool results since plan: ${snapshot.resultsSincePlan}. Activity is not verification.`,
       ],
       budget: budget("meta"),
     },
@@ -358,7 +504,7 @@ export function renderBoundedTaskPlan(
       // The conclusion comes first so that clipping removes entries, never the judgement. A footer
       // the reader can lose is a footer that can contradict the step lines it was meant to explain.
       lines: [evidenceSummary, ...evidenceEntries],
-      budget: budget("evidence"),
+      budget: evidenceCap,
     },
     {
       id: "constraints",
@@ -383,15 +529,21 @@ export function renderBoundedTaskPlan(
   ];
 
   const rendered = sections.map((section) => renderSemanticSection(section, section.budget));
-  const header = `CURRENT PLAN v${snapshot.planVersion} — bounded accepted working projection; a completed mark is a report, not proof.\nFull snapshot reference: revision=${snapshot.revision}; sourceStep=${snapshot.sourceStepId ?? "unknown"}. The complete accepted plan remains in durable conversation history.`;
-  const headerBudget = budget("header");
-  const boundedHeader = truncateUtf8(header, Math.max(1, headerBudget), "header").text;
-  const joinText = (): string =>
-    [boundedHeader, ...rendered.map((entry) => entry.text).filter(Boolean)].join("\n");
-  let text = joinText();
+  const blockText = (id: string): string =>
+    rendered[sections.findIndex((section) => section.id === id)]?.text ?? "";
+  const joinCurrent = (): string =>
+    SEMANTIC_PLAN_SECTION_ORDER.map(blockText).filter(Boolean).join("\n");
+  const clipCurrent = (value: string): string =>
+    Buffer.byteLength(value, "utf8") <= currentCap
+      ? value
+      : truncateUtf8(value, currentCap, "current", SEMANTIC_PLAN_SECTION_ORDER.length).text;
+  // Section budgets exclude the newline that joins them, so the joined block is measured as a whole
+  // and clipped once if the separators pushed it over its cap.
+  let currentText = clipCurrent(joinCurrent());
   // Unused capacity in sparse sections is borrowed by the highest-priority sections first. Each
-  // section is re-rendered from the original source, so borrowing cannot stack lossy truncations.
-  let remaining = Math.max(0, maxBytes - Buffer.byteLength(text, "utf8"));
+  // section is re-rendered from the original source, so borrowing cannot stack lossy truncations, and
+  // the block cap is the hard bound: borrowing never makes the `current` block larger than its share.
+  let remaining = Math.max(0, currentCap - Buffer.byteLength(currentText, "utf8"));
   for (const id of SEMANTIC_PLAN_SECTION_ORDER) {
     if (remaining === 0) break;
     const index = sections.findIndex((section) => section.id === id);
@@ -404,24 +556,128 @@ export function renderBoundedTaskPlan(
     if (gained === 0) continue;
     rendered[index] = expanded;
     remaining -= gained;
-    text = joinText();
   }
-  if (Buffer.byteLength(text, "utf8") > maxBytes) {
-    text = truncateUtf8(text, maxBytes, "plan").text;
-  }
-  const includedSections = rendered
-    .filter((entry) => entry.text.length > 0)
-    .map((entry) => entry.id);
-  const omittedCounts = Object.fromEntries(
-    rendered
+  currentText = clipCurrent(joinCurrent());
+  const notice = renderTaskPlanNotice(snapshot, noticeCap);
+  const includedSections = [
+    ...SEMANTIC_PLAN_SECTION_ORDER.filter((id) => blockText(id).length > 0),
+    ...(blockText("evidence").length > 0 ? ["evidence"] : []),
+    ...(notice.text.length > 0 ? ["notice"] : []),
+  ];
+  const omittedCounts = Object.fromEntries([
+    ...rendered
       .filter((entry) => entry.omittedCount > 0)
-      .map((entry) => [entry.id, entry.omittedCount]),
-  );
+      .map((entry) => [entry.id, entry.omittedCount] as const),
+    ...(notice.omittedCount > 0 ? ([["notice", notice.omittedCount]] as const) : []),
+  ]);
   return Object.freeze({
-    text,
+    current: currentText,
+    evidence: blockText("evidence"),
+    notice: notice.text,
     includedSections: Object.freeze(includedSections),
     omittedCounts: Object.freeze(omittedCounts),
   });
+}
+
+/**
+ * The two lines the notice cannot do without, and the only part of it that is not optional.
+ *
+ * `identity` says which revision this Context describes; `counts` says how much work has been
+ * accepted since it was recorded and how much of it the model reports as done. Both are reports about
+ * the record. They are separate from the rest so that the budget planner can reserve their exact byte
+ * size before deciding how much room the stable body gets.
+ */
+function noticeMandatoryLines(snapshot: TaskPlanSnapshot): readonly string[] {
+  const completed = snapshot.steps.filter((step) => step.status === "completed").length;
+  return [
+    `CURRENT PLAN v${String(snapshot.planVersion)} — bounded accepted working projection; a completed mark is a report, not proof.`,
+    `报告完成 ${String(completed)}/${String(snapshot.steps.length)}; accepted Tool results since plan: ${String(snapshot.resultsSincePlan)}. Activity is not verification.`,
+  ];
+}
+
+function noticeMandatoryBytes(snapshot: TaskPlanSnapshot): number {
+  return Buffer.byteLength(noticeMandatoryLines(snapshot).join("\n"), "utf8");
+}
+
+/**
+ * The volatile block: which revision this is, what the completion count says, and what the record
+ * itself is missing.
+ *
+ * ```text
+ * identity             first      which revision this Context describes
+ * counts               second     reported completion, accepted work since
+ * UPDATE_REJECTED      when a later update_plan was refused and discarded
+ * STALE                when the work outgrew the plan without a new revision
+ * reference            when it fits: how to find the complete durable snapshot
+ * ```
+ *
+ * It exists so the stable body can stay byte-identical while those numbers move. Every line here is a
+ * report about the record, never a conclusion about the project, and nothing here marks a step done —
+ * a refreshed plan is still a report, and a stale one is still the last accepted list.
+ */
+function renderTaskPlanNotice(
+  snapshot: TaskPlanSnapshot,
+  maxBytes: number,
+): { readonly text: string; readonly omittedCount: number } {
+  const rejected = snapshot.rejectedUpdate;
+  const lines = [
+    ...noticeMandatoryLines(snapshot),
+    ...(rejected === undefined
+      ? []
+      : [
+          `UPDATE_REJECTED ${rejected.reason}: your last update_plan was refused, so nothing was recorded; the plan in this Context is still the current one.`,
+        ]),
+    ...(snapshot.resultsSincePlan < TASK_PLAN_STALE_AFTER_RESULTS
+      ? []
+      : [
+          `STALE: ${String(snapshot.resultsSincePlan)} accepted Tool results since this revision and no newer plan. Re-record it if the work moved on; keep it if it still holds.`,
+        ]),
+    `Full snapshot reference: revision=${snapshot.revision}; sourceStep=${snapshot.sourceStepId ?? "unknown"}. The complete accepted plan remains in durable conversation history.`,
+  ];
+  return assembleNotice(lines, maxBytes);
+}
+
+/**
+ * Fit the notice into its byte budget by dropping whole lines, never by cutting one.
+ *
+ * The first two lines are the record itself — which plan this is and what it counts — and they are
+ * kept ahead of everything else: a notice that loses the revision it describes is worse than no
+ * notice. The rest are added while they fit, in the order they change a decision, and the ones that
+ * do not fit are counted. A half-sentence ending is what the previous truncation produced, and a
+ * reader cannot tell a clipped reminder from a complete one.
+ *
+ * The budget is a hard bound, so when even the two mandatory lines do not fit — a budget the planner
+ * avoids by reserving their size up front, but which a direct caller can still ask for — the identity
+ * line survives as a marked truncation and everything else is counted as omitted.
+ */
+function assembleNotice(
+  lines: readonly string[],
+  maxBytes: number,
+): { readonly text: string; readonly omittedCount: number } {
+  const mandatory = Math.min(2, lines.length);
+  const kept: string[] = [];
+  let omittedCount = 0;
+  for (const [index, line] of lines.entries()) {
+    const candidate = [...kept, line].join("\n");
+    if (Buffer.byteLength(candidate, "utf8") <= maxBytes) {
+      kept.push(line);
+      continue;
+    }
+    /*
+     * The mandatory lines are privileged in the order they are offered, not beyond the budget: they
+     * are tried first and never dropped to make room for a later, optional line. If the budget cannot
+     * hold even the first one, the marked truncation below is the honest answer — silently exceeding
+     * the cap is not.
+     */
+    if (index < mandatory && kept.length === 0) {
+      return {
+        text: truncateUtf8(line, maxBytes, "notice", lines.length).text,
+        omittedCount: Math.max(1, lines.length - 1),
+      };
+    }
+    omittedCount += 1;
+  }
+  return { text: kept.join("\n"), omittedCount };
 }
 
 function uniqueReferences(references: readonly string[]): readonly string[] {

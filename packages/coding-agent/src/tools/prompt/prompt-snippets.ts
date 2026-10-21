@@ -108,7 +108,8 @@ const SNIPPET_SOURCE: Readonly<Record<string, SnippetSource>> = {
       '"acceptance":["observable result"],"evidenceRefs":["opaque ref"]}],' +
       '"execution":{"goal":"...","constraints":[],"discoveries":[],"decisions":[],' +
       '"unresolved":[],"nextAction":"..."}}. At most one in_progress; ids stay stable across ' +
-      "reordering and a split creates new ids. V1 without planVersion still works.",
+      "reordering and a split creates new ids. V1 without planVersion still works, but `id`, " +
+      "`acceptance`, `evidenceRefs` and `execution` are refused without `planVersion: 2`.",
     sideEffects: "None; it records intent, it does not execute anything.",
     safety:
       "Steps and evidenceRefs are your own report, not proof of completion, and not a verification.",

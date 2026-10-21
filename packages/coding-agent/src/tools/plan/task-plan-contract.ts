@@ -346,3 +346,182 @@ function readStringList(
 function byteLengthOf(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
+
+/**
+ * What a model should do about each rejection, and nothing about what it sent.
+ *
+ * ## Why the reason code alone is not enough
+ *
+ * A rejection is the one Tool result that costs the model an entire plan: the payload it composed is
+ * discarded, and it has to compose another. `Tool operation failed: PLAN_VERSION_REQUIRED.` tells it
+ * that something was wrong and leaves it guessing which field, so a real Run repeated the same
+ * rejected call until its budget ran out. The reason code is a fact for the host; the model needs the
+ * *correction*.
+ *
+ * ## Why nothing is echoed back
+ *
+ * The fix names fields, not values: `planVersion`, `id`, `plan[].status`. A rejected payload can
+ * contain anything the model saw — file paths, command output, user text — and a refusal is not a
+ * reason to re-print it into the conversation, into a log, or into a support bundle. The correction is
+ * a fixed sentence per code, so its size and its content are known before the call is made.
+ */
+const TASK_PLAN_REJECTION_GUIDANCE: Readonly<Record<string, TaskPlanRejectionGuidance>> = Object.freeze(
+  {
+    PLAN_ARGUMENTS_NOT_AN_OBJECT: {
+      problem: "The arguments were not a JSON object with a `plan` array.",
+      fix: 'Send `{ "plan": [ ... ] }`, optionally with `planVersion: 2`, `explanation` and `execution`.',
+    },
+    PLAN_TOO_LARGE: {
+      problem: `The argument object was larger than ${String(TASK_PLAN_LIMITS.maxTotalBytes)} bytes.`,
+      fix: "Shorten the step text, the acceptance items, the evidence references and the working record; the plan is a summary, not a document.",
+    },
+    PLAN_VERSION_UNSUPPORTED: {
+      problem: "`planVersion` was present and was not 2. A plain checklist is expressed by omitting it.",
+      fix: "Omit `planVersion` for a v1 checklist, or send exactly `planVersion: 2`.",
+    },
+    PLAN_VERSION_REQUIRED: {
+      problem:
+        "`id`, `acceptance`, `evidenceRefs` and a top-level `execution` are plan v2 fields, and this call did not declare `planVersion: 2`.",
+      fix: "Resend the complete plan with `planVersion: 2` at the top level and a unique `id` on every step.",
+    },
+    EXPLANATION_INVALID: {
+      problem: "`explanation` was not a string.",
+      fix: "Send one short sentence naming what changed, or omit the field.",
+    },
+    EXPLANATION_TOO_LONG: {
+      problem: `\`explanation\` was longer than ${String(TASK_PLAN_LIMITS.maxExplanationChars)} characters.`,
+      fix: "Reduce it to one sentence that names what changed.",
+    },
+    PLAN_NOT_A_LIST: {
+      problem: "`plan` was not an array.",
+      fix: "Send the complete step list as an array of step objects.",
+    },
+    PLAN_EMPTY: {
+      problem: "`plan` contained no steps.",
+      fix: "Send at least one step; a plan with no steps records nothing.",
+    },
+    PLAN_TOO_LONG: {
+      problem: `\`plan\` had more than ${String(TASK_PLAN_LIMITS.maxSteps)} steps.`,
+      fix: "Group related milestones so the list fits the step limit.",
+    },
+    STEP_NOT_AN_OBJECT: {
+      problem: "A step in `plan` was not an object.",
+      fix: 'Send each step as `{ "step": ..., "status": ... }` with the optional v2 fields.',
+    },
+    STEP_TEXT_INVALID: {
+      problem: `A step's \`step\` was empty, not a string, or longer than ${String(TASK_PLAN_LIMITS.maxStepChars)} characters.`,
+      fix: "Give the step one short, verifiable sentence.",
+    },
+    STEP_STATUS_INVALID: {
+      problem: "A step's `status` was not `pending`, `in_progress` or `completed`.",
+      fix: "Use exactly one of those three values.",
+    },
+    STEP_ID_INVALID: {
+      problem: `A step's \`id\` was empty, not a string, or longer than ${String(TASK_PLAN_LIMITS.maxStepIdChars)} characters.`,
+      fix: "Use a short stable handle such as `editor` or `tests`.",
+    },
+    STEP_ID_REQUIRED: {
+      problem: "A step in a v2 plan had no `id`.",
+      fix: "Give every step a unique `id`; ids are what keep a reordered list comparable.",
+    },
+    STEP_ID_DUPLICATE: {
+      problem: "Two steps declared the same `id`.",
+      fix: "Make every `id` unique within the plan.",
+    },
+    ACCEPTANCE_TOO_MANY: {
+      problem: `A step had more than ${String(TASK_PLAN_LIMITS.maxAcceptancePerStep)} acceptance items.`,
+      fix: "Keep at most three observable results per step.",
+    },
+    ACCEPTANCE_TOO_LONG: {
+      problem: `An acceptance item was longer than ${String(TASK_PLAN_LIMITS.maxAcceptanceChars)} characters.`,
+      fix: "Shorten it to the observable result that would make the step done.",
+    },
+    ACCEPTANCE_INVALID: {
+      problem: "`acceptance` was not an array of non-empty strings.",
+      fix: "Send an array of strings, or omit the field.",
+    },
+    EVIDENCE_REFS_TOO_MANY: {
+      problem: `A step cited more than ${String(TASK_PLAN_LIMITS.maxEvidenceRefsPerStep)} evidence references.`,
+      fix: "Cite at most four references per step.",
+    },
+    EVIDENCE_REF_TOO_LONG: {
+      problem: `An evidence reference was longer than ${String(TASK_PLAN_LIMITS.maxEvidenceRefChars)} characters.`,
+      fix: "Cite the reference token exactly as it was published, without commentary.",
+    },
+    EVIDENCE_REFS_INVALID: {
+      problem: "`evidenceRefs` was not an array of non-empty strings.",
+      fix: "Send an array of reference strings, or omit the field.",
+    },
+    MULTIPLE_IN_PROGRESS: {
+      problem: "More than one step was marked `in_progress`.",
+      fix: "Mark at most one step `in_progress` and mark the others `pending` or `completed`.",
+    },
+    EXECUTION_INVALID: {
+      problem: "`execution` was not an object.",
+      fix: "Send it as an object with the working record fields, or omit it.",
+    },
+    EXECUTION_GOAL_INVALID: {
+      problem: `\`execution.goal\` was not a string or was longer than ${String(TASK_PLAN_LIMITS.maxGoalChars)} characters.`,
+      fix: "Reduce it to a short statement of the goal.",
+    },
+    EXECUTION_LIST_TOO_LONG: {
+      problem: `An \`execution\` list had more than ${String(TASK_PLAN_LIMITS.maxWorkingItems)} items.`,
+      fix: "Keep only what the next action needs; the record is a snapshot, not a log.",
+    },
+    EXECUTION_ITEM_TOO_LONG: {
+      problem: `An \`execution\` item was longer than ${String(TASK_PLAN_LIMITS.maxWorkingItemChars)} characters.`,
+      fix: "Shorten the item to the fact itself.",
+    },
+    EXECUTION_ITEM_INVALID: {
+      problem: "An `execution` list item was not a non-empty string.",
+      fix: "Send each item as a non-empty string.",
+    },
+    EXECUTION_NEXT_ACTION_INVALID: {
+      problem: `\`execution.nextAction\` was not a string or was longer than ${String(TASK_PLAN_LIMITS.maxNextActionChars)} characters.`,
+      fix: "State the next concrete action in one sentence.",
+    },
+  },
+);
+
+export interface TaskPlanRejectionGuidance {
+  /** What was wrong, in terms of the contract's fields. */
+  readonly problem: string;
+  /** The exact next action that would be accepted. */
+  readonly fix: string;
+}
+
+/** The corrective guidance for a rejection code, with a safe fallback for an unknown one. */
+export function describeTaskPlanRejection(reason: string): TaskPlanRejectionGuidance {
+  const known = Object.hasOwn(TASK_PLAN_REJECTION_GUIDANCE, reason)
+    ? TASK_PLAN_REJECTION_GUIDANCE[reason]
+    : undefined;
+  if (known !== undefined) return known;
+  return {
+    problem: "The arguments did not match the `update_plan` contract.",
+    fix: "Resend the complete plan using the documented field names.",
+  };
+}
+
+/**
+ * Render a rejected plan as the text the model reads on its next turn.
+ *
+ * ```text
+ * Tool operation failed: PLAN_VERSION_REQUIRED.
+ * <what was wrong, named by field>
+ * Fix: <the correction that would be accepted>
+ * Nothing was recorded. The plan you recorded earlier, if any, is still the current one.
+ * ```
+ *
+ * The last line is the one that matters most after a rejection: the model does not know whether its
+ * call partially applied, so it may either resend a duplicate or assume its plan was lost. A refusal
+ * writes nothing, and saying so is what makes the next call a correction instead of a guess.
+ */
+export function renderTaskPlanRejection(reason: string): string {
+  const guidance = describeTaskPlanRejection(reason);
+  return [
+    `Tool operation failed: ${reason}.`,
+    guidance.problem,
+    `Fix: ${guidance.fix}`,
+    "Nothing was recorded. The plan you recorded earlier, if any, is still the current one.",
+  ].join("\n");
+}

@@ -3,6 +3,7 @@ import type { ResolvedTaskPlanEvidence } from "../src/tools/plan/task-plan-evide
 import {
   boundPlanBlock,
   renderBoundedTaskPlan,
+  renderBoundedTaskPlanSections,
   renderTaskPlanBlock,
   type TaskPlanSnapshot,
 } from "../src/tools/plan/task-plan-projection.js";
@@ -109,8 +110,7 @@ describe("task plan semantic budget", () => {
     expect(result.omittedCounts.remaining).toBeGreaterThan(0);
   });
 
-  it("bounds each evidence description to 80 UTF-8 bytes without splitting a character", () => {
-    const description = "汉".repeat(60);
+  it("bounds each evidence description to 80 UTF-8 bytes without splitting a character", () => {    const description = "汉".repeat(60);
     const result = renderBoundedTaskPlan(
       {
         revision: "plan-description",
@@ -134,5 +134,73 @@ describe("task plan semantic budget", () => {
     // 27 Chinese characters are 81 bytes: keeping them would break the bound.
     expect(result.text).not.toContain("汉".repeat(27));
     expect(result.text).toContain("汉".repeat(25));
+  });
+
+  /**
+   * The plan is rendered into three separately bounded blocks.
+   *
+   * ```text
+   * current  6 KiB   what the next action needs: goal, current step, unresolved, next, constraints
+   * evidence 1.5 KiB only what a check can prove, and only for the references the plan cited
+   * notice   0.5 KiB the volatile bookkeeping: how many results arrived, which revision this is
+   * ```
+   *
+   * The split exists because a Prompt Surface Section changes as a whole. One 8 KiB block whose last
+   * line counts Tool results rewrites 8 KiB every Step; three blocks rewrite 0.5 KiB.
+   */
+  it("bounds the current, evidence and notice blocks separately and keeps the volatile count out of the stable body", () => {
+    const snapshot = longPlan();
+    const first = renderBoundedTaskPlanSections(snapshot, { maxBytes: 8 * 1024 });
+
+    expect(Buffer.byteLength(first.current, "utf8")).toBeLessThanOrEqual(6 * 1024);
+    expect(Buffer.byteLength(first.evidence, "utf8")).toBeLessThanOrEqual(1_536);
+    expect(Buffer.byteLength(first.notice, "utf8")).toBeLessThanOrEqual(512);
+    expect(first.current).toContain("UNRESOLVED_SENTINEL");
+    expect(first.current).toContain("NEXT_ACTION_SENTINEL");
+    expect(first.notice).toContain("revision=plan-result-1");
+
+    // A hundred more accepted Tool results, and the same plan: the stable body must not move.
+    const later = renderBoundedTaskPlanSections(
+      { ...snapshot, resultsSincePlan: snapshot.resultsSincePlan + 100 },
+      { maxBytes: 8 * 1024 },
+    );
+    expect(later.current).toBe(first.current);
+    expect(later.evidence).toBe(first.evidence);
+    expect(later.notice).not.toBe(first.notice);
+    expect(later.notice).toContain("103");
+
+    // A real change to the plan does move the stable body.
+    const changed = renderBoundedTaskPlanSections(
+      {
+        ...snapshot,
+        revision: "plan-result-2",
+        steps: snapshot.steps.map((step, index) =>
+          index === 0 ? { ...step, step: "CHANGED_STEP_SENTINEL" } : step,
+        ),
+      },
+      { maxBytes: 8 * 1024 },
+    );
+    expect(changed.current).not.toBe(first.current);
+    expect(changed.current).toContain("CHANGED_STEP_SENTINEL");
+  });
+
+  it("keeps the volatile notice inside its own cap when the plan is long and Unicode-dense", () => {
+    const snapshot: TaskPlanSnapshot = {
+      ...longPlan(),
+      execution: {
+        ...longPlan().execution!,
+        goal: "目标".repeat(2_000),
+        unresolved: ["未解决".repeat(2_000)],
+        nextAction: "下一步".repeat(2_000),
+      },
+      resultsSincePlan: 99_999,
+    };
+    const rendered = renderBoundedTaskPlanSections(snapshot, { maxBytes: 8 * 1024 });
+    // Byte bounds, not character bounds: a split multi-byte sequence would be invalid UTF-8.
+    expect(Buffer.byteLength(rendered.current, "utf8")).toBeLessThanOrEqual(6 * 1024);
+    expect(Buffer.byteLength(rendered.evidence, "utf8")).toBeLessThanOrEqual(1_536);
+    expect(Buffer.byteLength(rendered.notice, "utf8")).toBeLessThanOrEqual(512);
+    expect(Buffer.from(rendered.current, "utf8").toString("utf8")).toBe(rendered.current);
+    expect(Buffer.from(rendered.notice, "utf8").toString("utf8")).toBe(rendered.notice);
   });
 });
