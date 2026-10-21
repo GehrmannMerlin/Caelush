@@ -173,6 +173,7 @@ export {
   orderContextHistoryUnits,
   planContext,
   Utf8HeuristicTokenEstimator,
+  UTF8_BYTES_PER_TOKEN,
 } from "./context/index.js";
 export type {
   ContextArtifactId,

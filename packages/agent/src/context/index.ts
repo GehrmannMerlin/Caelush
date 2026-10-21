@@ -411,6 +411,12 @@ export type {
 export {
   createUtf8HeuristicTokenEstimator,
   Utf8HeuristicTokenEstimator,
+  /**
+   * The one byte-per-token ratio the capacity accounting converts budgets with. Exported because a
+   * caller that has to *check* a byte bound against a token budget — a long-run acceptance, an
+   * operator - must use the same ratio the decision used, not a second copy of the number.
+   */
+  UTF8_BYTES_PER_TOKEN,
 } from "./token/context-token-estimator.js";
 export type { ContextTokenEstimatorPort } from "./token/context-token-estimator.js";
 

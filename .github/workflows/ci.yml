@@ -164,8 +164,28 @@ jobs:
             packages/coding-agent/test/task-plan-semantic-budget.test.ts \
             apps/daemon/test/task-plan-context.test.ts \
             apps/daemon/test/task-plan-evidence-e2e.test.ts \
+            apps/daemon/test/task-plan-feedback-e2e.test.ts \
             apps/daemon/test/reliability-feedback-e2e.test.ts \
             2>&1 | tee reliability-results/vitest.log
+
+      # The Context half of the same gate. These are separate from the list above because they assert a
+      # different failure vocabulary: a Run that cannot prepare its context must fail with a bounded,
+      # classifiable reason on a real daemon composition, not with a bare `RangeError` the presentation
+      # layer has to guess at. `context-budget-default-policy` is here for the same reason the long-run
+      # job exists: a policy default is only real if the create-run route produces it.
+      - name: Run the Context preparation and capacity paths
+        shell: bash
+        run: |
+          set -o pipefail
+          corepack pnpm@11.21.0 exec vitest run \
+            --pool=forks --maxWorkers=1 --testTimeout=600000 \
+            packages/core/test/run-context-preparation-diagnostic.test.ts \
+            apps/daemon/test/context-preparation-failure-e2e.test.ts \
+            apps/daemon/test/public-event-context-preparation.test.ts \
+            apps/daemon/test/context-budget-default-policy.test.ts \
+            apps/daemon/test/context-surface-churn.test.ts \
+            packages/storage/test/prompt-surface-rollover-production.test.ts \
+            2>&1 | tee reliability-results/context-vitest.log
 
       - name: Upload the reliability results
         if: always()
@@ -173,6 +193,188 @@ jobs:
         with:
           name: reliability-${{ matrix.os }}
           path: reliability-results/*
+          if-no-files-found: error
+
+  # The long-run layer of the same gate, and a different question from the job above.
+  #
+  # `reliability` asks whether a specific defect is still present. This job asks whether a Run that is
+  # simply *long* stays correct: ordered Tool history, a bounded request, an intact epoch chain, and
+  # durable compaction under the default policy or an intact capacity rollover under the legacy one.
+  #
+  # Both policies run because they bound different things, and a green default policy must never be
+  # read as a green rollover path — the production defect these tests exist for survived a 250-step
+  # suite precisely because that suite only ever exercised the compacting path. 250 and 400 therefore
+  # each appear twice, once per policy; the mapping below is enumerated rather than generated so no
+  # combination can be lost to an `exclude:` rule, and `fail-fast: false` keeps one slow failure from
+  # hiding the other nine.
+  #
+  # What a green run here does NOT mean: that a model completes a complex task. Every Step is scripted
+  # by step number, so a Run that recovered correctly and a Run that ignored all feedback reach the
+  # same status. The real-model layer is `scripts/reliability-real-model-eval.mjs`; it needs a
+  # configured provider, a fixed task set and a budget, it never runs in CI, and its honest value is
+  # `NOT_RUN` until someone runs it.
+  reliability-long-run:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The short end. Both bounds are already crossed by 75 Steps — the default policy compacts,
+          # the legacy policy rolls over — so a regression surfaces without waiting for the long cases.
+          - os: ubuntu-latest
+            label: linux-075-default
+            steps: 75
+            policy: default
+          - os: windows-latest
+            label: windows-075-legacy
+            steps: 75
+            policy: legacy
+          # The record-boundary neighbourhood: 130 Steps is just past the historical 128-record epoch,
+          # which is where a broken rollover used to be invisible.
+          - os: ubuntu-latest
+            label: linux-130-legacy
+            steps: 130
+            policy: legacy
+          - os: windows-latest
+            label: windows-130-default
+            steps: 130
+            policy: default
+          # 250 and 400: each policy, on the host where its failure mode was originally observed.
+          - os: ubuntu-latest
+            label: linux-250-default
+            steps: 250
+            policy: default
+          - os: ubuntu-latest
+            label: linux-250-legacy
+            steps: 250
+            policy: legacy
+          - os: windows-latest
+            label: windows-250-legacy
+            steps: 250
+            policy: legacy
+          - os: ubuntu-latest
+            label: linux-400-default
+            steps: 400
+            policy: default
+          - os: ubuntu-latest
+            label: linux-400-legacy
+            steps: 400
+            policy: legacy
+          - os: windows-latest
+            label: windows-400-default
+            steps: 400
+            policy: default
+    runs-on: ${{ matrix.os }}
+    name: reliability-long-run (${{ matrix.label }})
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: corepack pnpm@11.21.0 install --frozen-lockfile
+
+      - name: Build the composition dependency closure
+        run: >-
+          corepack pnpm@11.21.0 -r
+          --filter "@caelush/daemon..."
+          --if-present run build
+
+      - name: Record the environment under test
+        shell: bash
+        run: |
+          mkdir -p reliability-long-run
+          {
+            echo "commit=$(git rev-parse HEAD)"
+            echo "node=$(node -v)"
+            echo "pnpm=$(corepack pnpm@11.21.0 --version)"
+            echo "runner=${{ matrix.os }}"
+            echo "steps=${{ matrix.steps }}"
+            echo "policy=${{ matrix.policy }}"
+          } | tee reliability-long-run/environment.txt
+
+      - name: Run the long-run acceptance
+        shell: bash
+        env:
+          CAELUSH_LONGRUN_STEPS: ${{ matrix.steps }}
+          CAELUSH_LONGRUN_POLICY: ${{ matrix.policy }}
+          CAELUSH_RELIABILITY_METRICS_PATH: reliability-long-run/metrics.json
+        run: |
+          set -o pipefail
+          corepack pnpm@11.21.0 exec vitest run \
+            --pool=forks --maxWorkers=1 --testTimeout=1800000 \
+            apps/daemon/test/context-long-run-matrix-e2e.test.ts \
+            2>&1 | tee reliability-long-run/vitest.log
+
+      # A skipped or filtered suite also exits zero, and a job that measured nothing must not report a
+      # pass. The metrics file is written by the test after its durable assertions, so its absence is
+      # the honest signal that the Run did not finish the acceptance.
+      - name: Verify the Run that was actually measured
+        shell: bash
+        env:
+          EXPECTED_STEPS: ${{ matrix.steps }}
+          EXPECTED_POLICY: ${{ matrix.policy }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const path = "reliability-long-run/metrics.json";
+            if (!fs.existsSync(path)) {
+              console.error("::error::No metrics file: the long-run acceptance did not run.");
+              process.exit(1);
+            }
+            const metrics = JSON.parse(fs.readFileSync(path, "utf8"));
+            const problems = [];
+            if (String(metrics.steps) !== String(process.env.EXPECTED_STEPS)) {
+              problems.push(`steps=${metrics.steps} != ${process.env.EXPECTED_STEPS}`);
+            }
+            if (metrics.policy !== process.env.EXPECTED_POLICY) {
+              problems.push(`policy=${metrics.policy} != ${process.env.EXPECTED_POLICY}`);
+            }
+            if (metrics.mainModelRequests !== metrics.steps) {
+              problems.push(`requests=${metrics.mainModelRequests} != steps=${metrics.steps}`);
+            }
+            if (problems.length > 0) {
+              console.error(`::error::${problems.join("; ")}`);
+              process.exit(1);
+            }
+            console.log(
+              `${metrics.steps} steps, ${metrics.policy} policy: ` +
+                `${metrics.mainModelRequests} requests, ${metrics.compactionCalls} compactions, ` +
+                `${metrics.epochs} epochs (${metrics.resetReasons.join(", ")}).`,
+            );
+          '
+
+      # One line per verification layer, so the artifact says what it is evidence for. A reader who
+      # finds this file must not have to infer that a green infrastructure job says nothing about a
+      # model's ability to finish a complex task.
+      - name: Record what this job measured and what it did not
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "INFRASTRUCTURE_CAPACITY status=${{ job.status }} steps=${{ matrix.steps }} policy=${{ matrix.policy }} host=${{ matrix.os }}"
+            echo "FEEDBACK_PATH status=MEASURED_BY THE reliability JOB (failures, corrections, plan feedback)"
+            echo "REAL_MODEL_ADAPTATION status=NOT_RUN reason=needs a configured provider, a fixed task set and a budget"
+          } | tee reliability-long-run/verdict.txt
+
+      - name: Upload the long-run results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reliability-long-run-${{ matrix.label }}
+          path: reliability-long-run/*
           if-no-files-found: error
 
   check:

@@ -32,6 +32,16 @@ import {
   fixtureModelSource,
 } from "./ai-fixture.js";
 
+/**
+ * The Context budget policy a fixture Run is frozen against.
+ *
+ * `"DAEMON_DEFAULT"` asks the composed daemon's own resolver — the same authority `createRun` calls
+ * — for the policy it would stamp on a new Run. A test that writes `WORKING_SET_V2` by hand proves
+ * that a policy object can be persisted; it says nothing about what production chooses, so any
+ * assertion about the default has to go through the resolver.
+ */
+export type FixtureContextBudgetPolicy = ContextBudgetPolicySnapshot | "DAEMON_DEFAULT";
+
 export interface ReliabilityFixtureOptions {
   readonly adapter: ApiAdapter;
   readonly rootDirectory?: string;
@@ -39,7 +49,7 @@ export interface ReliabilityFixtureOptions {
   readonly resourcePolicy?: unknown;
   readonly permissionPreset?: "VIEW_ONLY" | "WORKSPACE_WRITE" | "FULL_ACCESS";
   readonly resourceCorrectionRecoveryPolicy?: ResourceCorrectionRecoveryPolicy | null;
-  readonly contextBudgetPolicy?: ContextBudgetPolicySnapshot;
+  readonly contextBudgetPolicy?: FixtureContextBudgetPolicy;
   /** Model limits for scenarios that must reproduce a large-window provider. */
   readonly modelLimits?: { readonly contextWindowTokens: number; readonly maxOutputTokens: number };
 }
@@ -141,7 +151,7 @@ export async function createReliabilityFixture(
       expectedVersion: 1,
       createdAt: new Date(now).toISOString(),
     });
-    const run = AgentRunSchema.parse({
+    const runDraft = AgentRunSchema.parse({
       id: createRunId(),
       sessionId,
       goal: "exercise the real daemon reliability path",
@@ -152,12 +162,16 @@ export async function createReliabilityFixture(
       permissionProfile: securityPolicy.permissionProfile,
       approvalPolicy: securityPolicy.approvalPolicy,
       securityPolicy,
-      contextBudgetPolicy: options.contextBudgetPolicy ?? { version: "LEGACY_FULL_OUTPUT_V1" },
       completionContract: "NATURAL_V1",
       limits,
       resourcePolicy,
       createdAt: now,
     });
+    const contextBudgetPolicy =
+      options.contextBudgetPolicy === "DAEMON_DEFAULT"
+        ? await composition.contextBudgetPolicyResolver.resolve(runDraft)
+        : (options.contextBudgetPolicy ?? { version: "LEGACY_FULL_OUTPUT_V1" });
+    const run = AgentRunSchema.parse({ ...runDraft, contextBudgetPolicy });
     await storage.runs.insert(run);
 
     let disposed = false;
