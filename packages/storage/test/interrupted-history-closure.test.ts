@@ -8,8 +8,10 @@ import {
   createTimestampMs,
   createToolInvocationId,
 } from "@caelush/protocol";
+import type { AgentRun, AgentSession, AgentStep } from "@caelush/protocol";
 import {
   createAgentMessageFactory,
+  createAgentMessageIdFactory,
   createRequestedToolInvocation,
   createToolObservation,
   createDeterministicConversationTurnIdFactory,
@@ -27,8 +29,9 @@ import {
   toolResultObservation,
   NO_TOOL_RESULT_OBSERVATION,
 } from "@caelush/agent";
-import type { AgentMessageRecordDraft } from "@caelush/agent";
-import { openCaelushStorage } from "../src/index.js";
+import type { AgentMessageRecord, AgentMessageRecordDraft } from "@caelush/agent";
+import { isTerminalRunStatus } from "@caelush/core";
+import { openCaelushStorage, type CaelushStorage } from "../src/index.js";
 import { makeRun, makeSession, makeStep } from "./support/fixtures.js";
 
 const turns = createDeterministicConversationTurnIdFactory();
@@ -568,6 +571,355 @@ describe("interrupted Tool history closure", () => {
       (await storage.messageRecords.listByRun(run.id)).map((record) => record.messageType),
     ).toEqual(["ASSISTANT"]);
     expect(await storage.eventReader.latestSequence(run.id)).toBe(0);
+    await storage.close();
+  });
+});
+
+/* ------------------------------------------------------------------------------------------------
+ * FAILED Runs are eligible for the same closure, and nothing else grew with them
+ * ---------------------------------------------------------------------------------------------- */
+
+type ClosureCommand = Parameters<CaelushStorage["execution"]["commitInterruptedHistoryClosure"]>[0];
+
+const FAILED_SUITE_CLOSURE_VERSION = 1;
+
+interface SeededRun {
+  readonly session: AgentSession;
+  readonly run: AgentRun;
+  readonly step: AgentStep;
+  readonly assistantRecord: AgentMessageRecord;
+  readonly callIds: readonly string[];
+}
+
+/**
+ * Seed a Run whose Assistant message has unanswered Tool calls.
+ *
+ * The gap is created directly as durable fact rather than by reproducing a product bug, so the test
+ * keeps meaning the same thing after the bug is fixed.
+ */
+async function seedInterruptedRun(
+  storage: CaelushStorage,
+  options: {
+    readonly status: AgentRun["status"];
+    readonly callIds?: readonly string[];
+    readonly stepStatus?: AgentStep["status"];
+  },
+): Promise<SeededRun> {
+  const callIds = options.callIds ?? ["call_failed"];
+  const terminal = options.status !== "RUNNING" && options.status !== "PENDING";
+  const session = makeSession();
+  const run = makeRun(session.id, {
+    status: options.status,
+    ...(terminal ? { finishedAt: createTimestampMs(200) } : { startedAt: createTimestampMs(100) }),
+  });
+  const step = makeStep(run.id, {
+    status: options.stepStatus ?? (terminal ? "FAILED" : "RUNNING"),
+    finishedAt: createTimestampMs(150),
+  });
+  await storage.sessions.insert(session);
+  await storage.runs.insert(run);
+  await storage.steps.insert(step);
+
+  const assistant = createAgentMessageFactory({
+    ids: createAgentMessageIdFactory(),
+    now: () => createTimestampMs(140),
+    turns,
+  }).createAssistant({
+    runId: run.id,
+    sessionId: session.id,
+    conversationTurnId: turns.forRun(run.id),
+    sourceStepId: step.id,
+    source: modelMessageSource("llm_failed_history"),
+    phase: "COMMENTARY",
+    content: callIds.map((toolCallId) => ({
+      type: "TOOL_CALL" as const,
+      toolCallId,
+      toolName: "read_file" as const,
+      input: { path: `${toolCallId}.txt` },
+    })),
+    model: {
+      kind: "MODEL_TURN",
+      callId: "llm_failed_history",
+      model: { provider: "fixture", model: "fixture-model" },
+      finishReason: "TOOL_CALLS",
+    },
+  });
+  const encoded = codecs.encode(assistant);
+  const [assistantRecord] = await storage.messageRecords.append(run.id, [
+    {
+      messageId: assistant.id,
+      sessionId: session.id,
+      conversationTurnId: assistant.conversationTurnId,
+      messageType: assistant.type,
+      schemaVersion: encoded.schemaVersion,
+      modelProjectionVersion: encoded.modelProjectionVersion,
+      sourceStepId: step.id,
+      createdAt: assistant.createdAt,
+      source: assistant.source,
+      audience: assistant.audience,
+      data: encoded.data,
+    },
+  ]);
+  if (assistantRecord === undefined) throw new Error("assistant fixture did not persist");
+  return { session, run, step, assistantRecord, callIds };
+}
+
+async function closureCommandFor(
+  seeded: SeededRun,
+  callIndex: number,
+  options: {
+    readonly classification?: ClosureCommand["classification"];
+    readonly expectedRunStatus?: "CANCELLED" | "FAILED";
+    readonly projectedContent?: string;
+  } = {},
+): Promise<ClosureCommand> {
+  const toolCallId = seeded.callIds[callIndex]!;
+  const classification = options.classification ?? "NOT_STARTED";
+  const messageId = deriveInterruptedToolResultMessageId({
+    sessionId: seeded.session.id,
+    sourceRunId: seeded.run.id,
+    assistantMessageId: seeded.assistantRecord.messageId,
+    toolCallId,
+    closureVersion: FAILED_SUITE_CLOSURE_VERSION,
+  });
+  const now = seeded.run.finishedAt ?? seeded.assistantRecord.createdAt;
+  const resultMessage = createAgentMessageFactory({
+    ids: createScriptedAgentMessageIdFactory([messageId]),
+    now: () => now,
+    turns,
+  }).createToolResult({
+    runId: seeded.run.id,
+    sessionId: seeded.session.id,
+    conversationTurnId: seeded.assistantRecord.conversationTurnId,
+    sourceStepId: seeded.step.id,
+    source: toolMessageSource(),
+    toolCallId,
+    toolName: "read_file",
+    observation: NO_TOOL_RESULT_OBSERVATION,
+    isError: false,
+    projectedContent:
+      options.projectedContent ??
+      "The tool call was not started because the previous run was interrupted. It may be requested again if still needed.",
+    projection: {
+      policy: toolFeedbackPolicySnapshot({
+        maxSingleObservationTokens: 1000,
+        maxObservationBatchTokens: 4000,
+      }),
+      fingerprint: "failed-history-fingerprint",
+      version: 1,
+    },
+  });
+  const encoded = codecs.encode(resultMessage);
+  const draft: AgentMessageRecordDraft = {
+    messageId: resultMessage.id,
+    sessionId: resultMessage.sessionId,
+    conversationTurnId: resultMessage.conversationTurnId,
+    messageType: resultMessage.type,
+    schemaVersion: encoded.schemaVersion,
+    modelProjectionVersion: encoded.modelProjectionVersion,
+    sourceStepId: seeded.step.id,
+    createdAt: resultMessage.createdAt,
+    source: resultMessage.source,
+    audience: resultMessage.audience,
+    data: encoded.data,
+  };
+  const messageEvent = createRunEventFactory().messageCommitted(
+    seeded.run,
+    {
+      messageId: draft.messageId,
+      conversationTurnId: draft.conversationTurnId,
+      messageType: "TOOL_RESULT",
+    },
+    createEventId(),
+    now,
+  );
+  return {
+    sessionId: seeded.session.id,
+    runId: seeded.run.id,
+    expectedAssistant: seeded.assistantRecord,
+    toolCallId,
+    toolName: "read_file",
+    batchToolCallIds: seeded.callIds,
+    callIndex,
+    closureVersion: FAILED_SUITE_CLOSURE_VERSION,
+    classification,
+    missingInvocationEvidence: "DURABLE_STARTUP_CONTRACT_VERIFIED",
+    message: draft,
+    messageEvent,
+    ...(options.expectedRunStatus === undefined
+      ? {}
+      : { expectedRunStatus: options.expectedRunStatus }),
+  };
+}
+
+describe("interrupted Tool history closure for a FAILED Run", () => {
+  it("appends the missing result when the caller states FAILED", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const seeded = await seedInterruptedRun(storage, { status: "FAILED" });
+
+    const command = await closureCommandFor(seeded, 0, { expectedRunStatus: "FAILED" });
+    const first = await storage.execution.commitInterruptedHistoryClosure(command);
+    const retry = await storage.execution.commitInterruptedHistoryClosure(command);
+
+    expect(first.kind).toBe("APPENDED");
+    expect(first.events.map((event) => event.type)).toEqual(["conversation.message.committed"]);
+    expect(retry.kind).toBe("ALREADY_PRESENT");
+    expect(retry.events).toEqual([]);
+    expect(
+      (await storage.messageRecords.listByRun(seeded.run.id)).map((record) => record.messageType),
+    ).toEqual(["ASSISTANT", "TOOL_RESULT"]);
+    expect(await storage.eventReader.latestSequence(seeded.run.id)).toBe(1);
+    // The Run is not revived: its terminal status is the same durable fact it was.
+    expect((await storage.runs.get(seeded.run.id))?.status).toBe("FAILED");
+    await storage.close();
+  });
+
+  it("still requires CANCELLED when the caller states no status", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const failed = await seedInterruptedRun(storage, { status: "FAILED" });
+
+    await expect(
+      storage.execution.commitInterruptedHistoryClosure(await closureCommandFor(failed, 0)),
+    ).rejects.toThrow();
+    expect(
+      (await storage.messageRecords.listByRun(failed.run.id)).map((record) => record.messageType),
+    ).toEqual(["ASSISTANT"]);
+    await storage.close();
+  });
+
+  it("refuses a stated status that disagrees with the durable Run", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const cancelled = await seedInterruptedRun(storage, { status: "CANCELLED" });
+    const failed = await seedInterruptedRun(storage, { status: "FAILED" });
+    const running = await seedInterruptedRun(storage, { status: "RUNNING" });
+
+    await expect(
+      storage.execution.commitInterruptedHistoryClosure(
+        await closureCommandFor(cancelled, 0, { expectedRunStatus: "FAILED" }),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      storage.execution.commitInterruptedHistoryClosure(
+        await closureCommandFor(failed, 0, { expectedRunStatus: "CANCELLED" }),
+      ),
+    ).rejects.toThrow();
+    // A FAILED claim cannot be used to close a Run that is still executing.
+    await expect(
+      storage.execution.commitInterruptedHistoryClosure(
+        await closureCommandFor(running, 0, { expectedRunStatus: "FAILED" }),
+      ),
+    ).rejects.toThrow();
+    await storage.close();
+  });
+
+  it("keeps the batch order rules for a FAILED Run", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const seeded = await seedInterruptedRun(storage, {
+      status: "FAILED",
+      callIds: ["call_a", "call_b", "call_c"],
+    });
+
+    // A later call cannot be closed while an earlier one is still missing.
+    await expect(
+      storage.execution.commitInterruptedHistoryClosure(
+        await closureCommandFor(seeded, 1, { expectedRunStatus: "FAILED" }),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      storage.execution.commitInterruptedHistoryClosure(
+        await closureCommandFor(seeded, 2, { expectedRunStatus: "FAILED" }),
+      ),
+    ).rejects.toThrow();
+
+    await expect(
+      storage.execution.commitInterruptedHistoryClosure(
+        await closureCommandFor(seeded, 0, { expectedRunStatus: "FAILED" }),
+      ),
+    ).resolves.toMatchObject({ kind: "APPENDED" });
+    // Index 2 is still out of order now that index 1 is missing again.
+    await expect(
+      storage.execution.commitInterruptedHistoryClosure(
+        await closureCommandFor(seeded, 2, { expectedRunStatus: "FAILED" }),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      storage.execution.commitInterruptedHistoryClosure(
+        await closureCommandFor(seeded, 1, { expectedRunStatus: "FAILED" }),
+      ),
+    ).resolves.toMatchObject({ kind: "APPENDED" });
+    await expect(
+      storage.execution.commitInterruptedHistoryClosure(
+        await closureCommandFor(seeded, 2, { expectedRunStatus: "FAILED" }),
+      ),
+    ).resolves.toMatchObject({ kind: "APPENDED" });
+
+    const records = await storage.messageRecords.listByRun(seeded.run.id);
+    expect(records.map((record) => record.messageType)).toEqual([
+      "ASSISTANT",
+      "TOOL_RESULT",
+      "TOOL_RESULT",
+      "TOOL_RESULT",
+    ]);
+    expect(records.slice(1).map((record) => record.data["toolCallId"])).toEqual([
+      "call_a",
+      "call_b",
+      "call_c",
+    ]);
+    await storage.close();
+  });
+
+  it("is idempotent under concurrent closure of the same FAILED gap", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const seeded = await seedInterruptedRun(storage, { status: "FAILED" });
+    const command = await closureCommandFor(seeded, 0, { expectedRunStatus: "FAILED" });
+
+    const results = await Promise.all([
+      storage.execution.commitInterruptedHistoryClosure(command),
+      storage.execution.commitInterruptedHistoryClosure(command),
+    ]);
+
+    expect(results.map((result) => result.kind).sort()).toEqual(["ALREADY_PRESENT", "APPENDED"]);
+    expect(await storage.eventReader.latestSequence(seeded.run.id)).toBe(1);
+    expect(await storage.messageRecords.listByRun(seeded.run.id)).toHaveLength(2);
+    await storage.close();
+  });
+
+  it("refuses a FAILED closure inside an archived Session", async () => {
+    const root = await mkdtemp(join(tmpdir(), "caelush-failed-closure-"));
+    const path = join(root, "archived.db");
+    const storage = await openCaelushStorage({ path, archivePolicy: { isTerminalRunStatus } });
+    try {
+      const seeded = await seedInterruptedRun(storage, { status: "FAILED" });
+      await storage.archives.archive(
+        { type: "SESSION", sessionId: seeded.session.id },
+        createTimestampMs(210),
+      );
+
+      await expect(
+        storage.execution.commitInterruptedHistoryClosure(
+          await closureCommandFor(seeded, 0, { expectedRunStatus: "FAILED" }),
+        ),
+      ).rejects.toThrow();
+      expect(await storage.messageRecords.listByRun(seeded.run.id)).toHaveLength(1);
+    } finally {
+      await storage.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to close a call that belongs to a different Assistant message", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const seeded = await seedInterruptedRun(storage, { status: "FAILED" });
+    const other = await seedInterruptedRun(storage, { status: "FAILED" });
+    const command = await closureCommandFor(seeded, 0, { expectedRunStatus: "FAILED" });
+
+    await expect(
+      storage.execution.commitInterruptedHistoryClosure({
+        ...command,
+        expectedAssistant: other.assistantRecord,
+      }),
+    ).rejects.toThrow();
+    expect(await storage.messageRecords.listByRun(seeded.run.id)).toHaveLength(1);
     await storage.close();
   });
 });

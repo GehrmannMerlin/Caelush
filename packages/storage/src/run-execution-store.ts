@@ -95,6 +95,16 @@ export interface InterruptedHistoryClosureCommit {
   readonly missingInvocationEvidence: MissingToolInvocationEvidence;
   readonly message: AgentMessageRecordDraft;
   readonly messageEvent: DurableRunEventDraft;
+  /**
+   * The terminal status this closure is allowed to append to.
+   *
+   * Absent means `CANCELLED`, which is what every pre-existing caller meant. A `FAILED` Run can
+   * leave the same protocol gap — an assistant message with calls and no results — and the *next*
+   * Run in the session cannot be built until that gap is closed. Eligible is still a closed set:
+   * a `PENDING`, `RUNNING` or `WAITING_*` Run can never be closed, so this is not a general
+   * "append to any Run" permission.
+   */
+  readonly expectedRunStatus?: "CANCELLED" | "FAILED";
 }
 
 export type InterruptedHistoryClosureCommitResult =
@@ -480,11 +490,12 @@ export class SqliteRunExecutionStore
   }
 
   /**
-   * Append one Tool Result to an already CANCELLED Run without reopening its execution state.
+   * Append one Tool Result to an already-terminal Run without reopening its execution state.
    *
    * This is intentionally separate from the normal Run commit: it can append exactly one matching
    * TOOL_RESULT plus its metadata-only commit event, and it cannot write Run, State, Step,
-   * Continuation, or Private Replay data.
+   * Continuation, or Private Replay data. Only a `CANCELLED` or `FAILED` Run is eligible, and the
+   * caller must name which one it believes the Run is.
    */
   async commitInterruptedHistoryClosure(
     command: InterruptedHistoryClosureCommit,
@@ -511,10 +522,10 @@ export class SqliteRunExecutionStore
       if (
         runRow === undefined ||
         runRow.session_id !== command.sessionId ||
-        runRow.status !== "CANCELLED"
+        runRow.status !== (command.expectedRunStatus ?? "CANCELLED")
       ) {
         throw new RunExecutionConflictError(
-          "Interrupted history closure requires its cancelled Run.",
+          "Interrupted history closure requires its eligible terminal Run.",
         );
       }
 

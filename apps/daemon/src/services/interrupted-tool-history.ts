@@ -200,7 +200,7 @@ export function createInterruptedToolHistoryService(options: {
         batch.calls.some((call) => call.classification !== "RESULT_COMMITTED"),
       );
       if (openBatches.length === 0) continue;
-      if (historicalRun.status !== "CANCELLED") {
+      if (!isClosableHistoryStatus(historicalRun.status)) {
         throw new SessionContinuationPreflightError("HISTORY_INTEGRITY_ERROR");
       }
       assertWorkspaceIdentity(session.workspaceId, currentRun);
@@ -445,10 +445,23 @@ export function createInterruptedToolHistoryService(options: {
         missingInvocationEvidence: DURABLE_STARTUP_EVIDENCE,
         message: append.draft,
         messageEvent,
+        // Name the status this repair was authorized for, so a Run that changed state between the
+        // read and the commit is refused inside the same transaction instead of being appended to.
+        expectedRunStatus: input.run.status === "FAILED" ? "FAILED" : "CANCELLED",
       });
       if (result.events.length > 0) options.events.notifyCommitted(result.events);
     }
   }
+}
+
+/**
+ * The terminal statuses whose unanswered Tool calls block the next Run in a Session.
+ *
+ * A cancelled Run and a failed Run leave the *same* protocol gap. Only those two are eligible: a
+ * Run that is still executing owns its own batch, and nothing here can revive either terminal Run.
+ */
+function isClosableHistoryStatus(status: AgentRun["status"]): boolean {
+  return status === "CANCELLED" || status === "FAILED";
 }
 
 function isRepairableConversationGap(error: unknown): boolean {
@@ -517,12 +530,10 @@ function resolveObservationPolicy(
   }
 
   const policy = hint ?? persistedPolicy;
-  if (
-    policy === undefined &&
-    missing.some((entry) => entry.classification === "OBSERVATION_COMMITTED")
-  ) {
-    throw new SessionContinuationPreflightError("HISTORY_INTEGRITY_ERROR");
-  }
+  // A batch whose only observed call never produced a result message carries no projection policy:
+  // the live turn projected nothing, so there is no earlier budget to contradict and the documented
+  // recovery default is the honest projection. Refusing here would leave the Session permanently
+  // unable to run again, which is the failure this repair exists to remove.
   return policy ?? DEFAULT_RECOVERY_OBSERVATION_POLICY;
 }
 
