@@ -1,4 +1,8 @@
-import type { ResolvedAgentTool, ToolArgumentNormalization } from "@caelush/agent";
+import {
+  cloneJsonValue,
+  type ResolvedAgentTool,
+  type ToolArgumentNormalization,
+} from "@caelush/agent";
 import type { JsonObject, JsonValue } from "@caelush/ai";
 
 /**
@@ -36,13 +40,23 @@ import type { JsonObject, JsonValue } from "@caelush/ai";
  * loosening of every Tool's contract.
  *
  * The value it returns is validated afterwards, like any other prepared payload.
+ *
+ * ## Why it converts a copy
+ *
+ * The Preparer hands this hook whatever the *previous* stage produced, and a previous stage may
+ * legitimately return a frozen object — `apply_patch` does, because canonicalizing `{input}` into
+ * `{patch}` should not leave a mutable buffer behind. Writing into that object turns a legitimate
+ * argument into an uncaught `TypeError` inside preparation, which the Preparer correctly classifies
+ * as an infrastructure failure and the RunController correctly fails the Run over. A compatibility
+ * hook must therefore never assume ownership of its input: it copies, converts the copy, and returns
+ * that. `normalizeToolArgumentsForCompatibility` is the one implementation of that copy-and-convert
+ * path, so the Tool registration hook and any direct caller cannot drift apart.
  */
 export function normalizeSchemaDeclaredNumericStrings(
   args: Readonly<JsonObject>,
   tool: ResolvedAgentTool,
 ): Readonly<JsonObject> {
-  normalizeValue(args as JsonValue, tool.tool.inputSchema as JsonObject);
-  return args;
+  return normalizeToolArgumentsForCompatibility(tool.tool, args);
 }
 
 /** The registration-level normalization a legacy Tool registration carries. */
@@ -54,13 +68,13 @@ export function createLegacyNumericArgumentNormalization(): ToolArgumentNormaliz
  * The same normalization, exposed for a caller that resolves a Tool itself.
  *
  * Returns a fresh value; it never mutates its input, which is what a caller holding model arguments
- * needs.
+ * needs — and what a caller holding another hook's frozen result needs just as much.
  */
 export function normalizeToolArgumentsForCompatibility(
   tool: { readonly inputSchema: JsonObject },
-  args: JsonObject,
+  args: Readonly<JsonObject>,
 ): JsonObject {
-  const copy = clone(args) as JsonObject;
+  const copy = cloneJsonValue(args as JsonValue) as JsonObject;
   normalizeValue(copy as JsonValue, tool.inputSchema);
   return copy;
 }
@@ -112,21 +126,4 @@ function asJsonObject(value: JsonValue | undefined): JsonObject | undefined {
 
 function isJsonObject(value: JsonValue | undefined): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function clone(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) return value.map((item) => clone(item));
-  if (value !== null && typeof value === "object") {
-    const copy = Object.create(null) as Record<string, JsonValue>;
-    for (const [key, nested] of Object.entries(value)) {
-      Object.defineProperty(copy, key, {
-        configurable: true,
-        enumerable: true,
-        value: clone(nested),
-        writable: true,
-      });
-    }
-    return copy;
-  }
-  return value;
 }

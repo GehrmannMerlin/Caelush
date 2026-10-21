@@ -7,6 +7,7 @@ import {
   CodingToolCatalogError,
   DEFAULT_MAX_CODING_TOOLS,
   createCodingToolCatalog,
+  createLegacyNumericArgumentNormalization,
   normalizeToolArgumentsForCompatibility,
   type CodingToolDefinition,
 } from "@caelush/coding-agent";
@@ -288,5 +289,70 @@ describe("Coding Tool numeric compatibility normalization", () => {
     );
 
     expect(normalized).toEqual({ cmd: "pnpm test", unknown_property: true });
+  });
+
+  /**
+   * The registration-level hook receives whatever the previous stage produced — which may already be
+   * frozen, and may be frozen more than one level deep. Conversion therefore happens on the hook's
+   * own copy, and the caller's value is left exactly as it arrived.
+   */
+  it("converts a deep-frozen input without writing to it", () => {
+    const frozen = Object.freeze({
+      cmd: "pnpm test",
+      yield_time_ms: Object.freeze("3000"),
+      ratio: "0.5",
+      nested: Object.freeze({ retries: "2" }),
+      items: Object.freeze([Object.freeze("1"), "2"]),
+    }) as unknown as JsonObject;
+
+    const { normalizeValue } = createLegacyNumericArgumentNormalization();
+    const normalized = normalizeValue(frozen, {
+      tool: { name: "shell_command", inputSchema: numericSchema },
+    } as never);
+
+    expect(normalized).not.toBe(frozen);
+    expect(normalized).toEqual({
+      cmd: "pnpm test",
+      yield_time_ms: 3000,
+      ratio: 0.5,
+      nested: { retries: 2 },
+      items: [1, 2],
+    });
+    // The original value is untouched, still frozen, and gained no keys.
+    expect(frozen).toEqual({
+      cmd: "pnpm test",
+      yield_time_ms: "3000",
+      ratio: "0.5",
+      nested: { retries: "2" },
+      items: ["1", "2"],
+    });
+    expect(Object.isFrozen(frozen)).toBe(true);
+    expect((frozen.nested as JsonObject).retries).toBe("2");
+    expect(frozen.items).toEqual(["1", "2"]);
+  });
+
+  it("leaves ambiguous and unsafe values alone in a frozen input", () => {
+    const frozen = Object.freeze({
+      cmd: "3",
+      yield_time_ms: "soon",
+      ratio: "3 seconds",
+      nested: Object.freeze({ retries: "9007199254740992" }),
+      items: Object.freeze(["0x10"]),
+      extra: "9",
+    }) as unknown as JsonObject;
+
+    const { normalizeValue } = createLegacyNumericArgumentNormalization();
+    const normalized = normalizeValue(frozen, {
+      tool: { name: "shell_command", inputSchema: numericSchema },
+    } as never);
+
+    expect(normalized).toEqual({
+      cmd: "3",
+      yield_time_ms: "soon",
+      ratio: "3 seconds",
+      nested: { retries: "9007199254740992" },
+      items: ["0x10"],
+      extra: "9",
+    });
   });
 });
