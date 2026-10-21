@@ -254,6 +254,15 @@ export interface RunControllerDependencies {
    */
   readonly toolTurn?: ToolTurnPipeline;
   readonly interruptedHistory?: InterruptedHistoryLifecyclePort;
+  /**
+   * Optional host sink for a bounded Tool failure diagnostic.
+   *
+   * The Run Layer classifies the caught exception into a stage and a closed reason code; the host
+   * decides where that goes (a log, a diagnostics file). The sink receives no exception, so it cannot
+   * become a second, unbounded reporting channel. Absent means the previous behaviour: the Run fails
+   * with its generic Tool error and nothing more is reported.
+   */
+  readonly failureDiagnostics?: import("./run-tool-failure-diagnostic.js").RunFailureDiagnosticsPort;
   readonly clock: { now(): import("@caelush/protocol").TimestampMs };
   readonly eventIdFactory: EventIdFactory;
   readonly approvals?: ApprovalResolutionPort;

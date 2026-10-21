@@ -178,6 +178,94 @@ describe("DefaultPublicEventProjector", () => {
     expect(JSON.stringify(projected)).not.toContain("private cause");
   });
 
+  it("projects only the Tool failure stage from a bounded reason code", () => {
+    const event = makeEvent("run.failed", {
+      error: {
+        code: "RUNTIME_ERROR",
+        message: "Tool execution infrastructure failed before a complete Tool Result batch",
+        retryable: false,
+        phase: "TOOL",
+        details: {
+          reasonCode: "TOOL_PREPARATION_FAILED",
+          causeKinds: ["ToolBatchInfrastructureError", "ToolPreparationInfrastructureError"],
+          patch: "*** Begin Patch\n*** Update File: C:\\repo\\secret.ts",
+          stdout: "raw handler output",
+          argumentBytes: 262_144,
+        },
+      },
+    });
+
+    const projected = projector.project(event);
+
+    expect(projected?.payload).toEqual({
+      error: {
+        code: "RUNTIME_ERROR",
+        message: "Tool execution infrastructure failed before a complete Tool Result batch",
+        retryable: false,
+        phase: "TOOL",
+        details: { reasonCode: "TOOL_PREPARATION_FAILED" },
+      },
+    });
+    expect(JSON.stringify(projected)).not.toContain("Begin Patch");
+    expect(JSON.stringify(projected)).not.toContain("secret.ts");
+    expect(JSON.stringify(projected)).not.toContain("raw handler output");
+  });
+
+  it("keeps both published error details when one event carries them", () => {
+    const event = makeEvent("run.failed", {
+      error: {
+        code: "MODEL_ERROR",
+        message: "provider output was truncated",
+        retryable: true,
+        phase: "LLM",
+        details: {
+          modelOutputFailure: "OUTPUT_TRUNCATED",
+          reasonCode: "TOOL_SETTLEMENT_FAILED",
+        },
+      },
+    });
+
+    const projected = projector.project(event);
+
+    expect(projected?.payload).toEqual({
+      error: {
+        code: "MODEL_ERROR",
+        message: "provider output was truncated",
+        retryable: true,
+        phase: "LLM",
+        details: {
+          modelOutputFailure: "OUTPUT_TRUNCATED",
+          reasonCode: "TOOL_SETTLEMENT_FAILED",
+        },
+      },
+    });
+  });
+
+  it("drops a reason code outside the closed vocabulary instead of relaying it", () => {
+    const event = makeEvent("run.failed", {
+      error: {
+        code: "RUNTIME_ERROR",
+        message: "Tool execution infrastructure failed",
+        retryable: false,
+        phase: "TOOL",
+        details: { reasonCode: "PREPARATION: ENOENT C:\\repo\\.env" },
+      },
+    });
+
+    const projected = projector.project(event);
+
+    expect(projected?.payload).toEqual({
+      error: {
+        code: "RUNTIME_ERROR",
+        message: "Tool execution infrastructure failed",
+        retryable: false,
+        phase: "TOOL",
+      },
+    });
+    expect(JSON.stringify(projected)).not.toContain("ENOENT");
+    expect(JSON.stringify(projected)).not.toContain("repo");
+  });
+
   it("projects approval actions with safe bounded fields instead of raw JSON", () => {
     const approval = ApprovalRequestSchema.parse({
       id: createApprovalRequestId(),

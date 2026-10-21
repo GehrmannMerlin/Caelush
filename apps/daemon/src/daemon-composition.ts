@@ -23,6 +23,7 @@ import type { ProviderStreamPolicy } from "./config.js";
 import type { AttachmentService } from "./attachments/attachment-service.js";
 import { AttachmentServiceError } from "./attachments/attachment-service.js";
 import { createInterruptedToolHistoryService } from "./services/interrupted-tool-history.js";
+import { createRunFailureDiagnostics } from "./services/run-failure-diagnostics.js";
 import { createLegacyPendingBatchAdapter } from "./execution/legacy-pending-batch-adapter.js";
 import {
   isInternalPromptCacheResetReason,
@@ -1235,6 +1236,17 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     events: eventNotifier,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
+  /**
+   * The host sink for bounded Tool failure diagnostics.
+   *
+   * Composed here so the Run Layer never learns how this deployment logs. Without a logger there is
+   * no sink and the Run still fails the same way: a diagnostic is an addition to the failure, never
+   * a condition of it.
+   */
+  const failureDiagnostics =
+    options.logger === undefined
+      ? undefined
+      : createRunFailureDiagnostics({ logger: options.logger });
   const controller = new RunController({
     agentExecution,
     modelTransportRecovery,
@@ -1247,6 +1259,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     messages,
     toolTurn,
     interruptedHistory,
+    ...(failureDiagnostics === undefined ? {} : { failureDiagnostics }),
     clock,
     eventIdFactory: { create: createEventId },
     approvals: options.storage.approvals,

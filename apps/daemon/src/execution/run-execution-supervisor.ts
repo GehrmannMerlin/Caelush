@@ -28,8 +28,18 @@ export interface RunApprovalReader {
   getById(id: ApprovalRequestId): Promise<ApprovalRequest | null>;
 }
 
+/**
+ * The daemon's single host logger.
+ *
+ * `error` is the background-operation channel: it receives a caught exception and a bounded context,
+ * and an implementation is free to log only the context. `toolFailure` is different in kind — the
+ * Run Layer has already turned a caught Tool exception into a bounded diagnostic, so what arrives
+ * here is the content to log, not an exception to inspect. Keeping both on one port means a
+ * deployment configures logging once.
+ */
 export interface RunExecutionSupervisorLogger {
   error?(error: unknown, context: { readonly operation: string; readonly runId: RunId }): void;
+  toolFailure?(entry: import("../services/run-failure-diagnostics.js").ToolFailureLogEntry): void;
 }
 
 export interface RunExecutionSupervisorOptions {

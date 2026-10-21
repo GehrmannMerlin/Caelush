@@ -134,8 +134,18 @@ export type {
   ResourceProgressTurnRecord,
 } from "./resource-progress.js";
 
-export { AgentErrorCodeSchema, AgentErrorPhaseSchema, AgentErrorSchema } from "./error.js";
-export type { AgentError, AgentErrorCode, AgentErrorPhase } from "./error.js";
+export {
+  AgentErrorCodeSchema,
+  AgentErrorPhaseSchema,
+  AgentErrorSchema,
+  ToolInfrastructureFailureReasonSchema,
+} from "./error.js";
+export type {
+  AgentError,
+  AgentErrorCode,
+  AgentErrorPhase,
+  ToolInfrastructureFailureReason,
+} from "./error.js";
 export {
   AttachmentDraftReadRequestSchema,
   AttachmentDraftResponseSchema,

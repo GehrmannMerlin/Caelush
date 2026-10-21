@@ -934,4 +934,14 @@ const safeSupervisorLogger = {
   error: (_error: unknown, context: { readonly operation: string; readonly runId: string }) => {
     console.error("Caelush background Run operation failed.", context);
   },
+  /**
+   * The diagnostic is the log content.
+   *
+   * There is no exception to drop here: the Run Layer classified the failure and handed over a
+   * bounded entry, so logging it verbatim is the whole point, and logging an Error instead would
+   * reintroduce exactly the unbounded channel the diagnostic replaced.
+   */
+  toolFailure: (entry: import("./services/run-failure-diagnostics.js").ToolFailureLogEntry) => {
+    console.error("Caelush Tool boundary failed.", entry);
+  },
 };

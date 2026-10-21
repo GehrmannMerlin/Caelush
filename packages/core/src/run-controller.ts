@@ -30,6 +30,7 @@ import {
   type AgentStep,
   type RunId,
   type StepId,
+  type ToolInfrastructureFailureReason,
   type RetryExhaustedEvent,
 } from "@caelush/protocol";
 import {
@@ -75,6 +76,7 @@ import { RunExecutionScopeRegistry } from "./run-execution-scope.js";
 import type { RunShutdownCheckpointResult } from "./run-shutdown.js";
 import { RunDeadlineRegistry } from "./run-deadline-registry.js";
 import { semanticEqual } from "./semantic-equality.js";
+import { classifyToolFailure } from "./run-tool-failure-diagnostic.js";
 import { deriveRunDeadline, isRunDeadlineExceeded } from "./run-deadline.js";
 import { resolveRunTerminationAuthority } from "./run-termination-authority.js";
 import { toAgentExecutionSnapshot } from "./run-execution-facts.js";
@@ -1702,6 +1704,16 @@ export class RunController {
                 "Tool execution infrastructure failed before a complete Tool Result batch was available.",
               retryable: false,
               phase: "TOOL" as const,
+              // One bounded stage, and nothing about the exception that produced it. A host can now
+              // tell preparation from admission, execution, result processing and settlement without
+              // the Run's durable error becoming a channel for the raw failure.
+              details: {
+                reasonCode: this.reportToolFailureDiagnostic(
+                  snapshot,
+                  directive.sourceStepId,
+                  error,
+                ),
+              },
             };
       // A Tool infrastructure exception is never turned into a model-facing Tool result: it is a
       // sanitized terminal failure for the Run, and the internal exception text stays out of it.
@@ -1927,6 +1939,39 @@ export class RunController {
     });
     this.notify(commit.events);
     return commit.snapshot;
+  }
+
+  /**
+   * Report one bounded Tool failure diagnostic, at most once per Tool boundary.
+   *
+   * ```text
+   * typed cause chain → classifyToolFailure → bounded diagnostic → optional host sink
+   * ```
+   *
+   * The sink is not an execution authority. A port that throws — a logger with a full disk, a host
+   * adapter with a bug — is swallowed here, because the Run's settlement was already decided by the
+   * lifecycle and changing it would let diagnostics become a second failure mode. The reason code is
+   * returned so the durable error can carry it; the diagnostic object itself is not persisted.
+   */
+  private reportToolFailureDiagnostic(
+    snapshot: RunExecutionSnapshot,
+    sourceStepId: StepId,
+    cause: unknown,
+  ): ToolInfrastructureFailureReason {
+    const diagnostic = classifyToolFailure({
+      runId: snapshot.run.id,
+      sourceStepId,
+      cause,
+    });
+    const sink = this.dependencies.failureDiagnostics;
+    if (sink !== undefined) {
+      try {
+        sink.recordToolFailure(diagnostic);
+      } catch {
+        // Diagnostics must not become a failure of their own.
+      }
+    }
+    return diagnostic.reasonCode;
   }
 
   private async failBoundaryLocked(

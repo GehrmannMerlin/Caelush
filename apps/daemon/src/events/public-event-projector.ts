@@ -1,5 +1,6 @@
 import {
   PublicRunEventSchema,
+  ToolInfrastructureFailureReasonSchema,
   getRunEventTypeDefinition,
   type JsonObject,
   type JsonValue,
@@ -470,14 +471,28 @@ function projectError(error: {
   readonly details?: Readonly<Record<string, unknown>> | undefined;
 }) {
   const modelOutputFailure = error.details?.["modelOutputFailure"];
+  /**
+   * Two details keys are publishable, and only these two.
+   *
+   * `modelOutputFailure` says the model's answer was cut off; `reasonCode` says which Tool stage
+   * broke. Both are closed enumerations, so relaying them reports a classification without relaying
+   * any of the data the classification was derived from. Everything else in `details` stays behind
+   * the boundary: it is free-form, and free-form is exactly where a message, a command line or a
+   * host path would travel.
+   */
+  const reasonCode = ToolInfrastructureFailureReasonSchema.safeParse(error.details?.["reasonCode"]);
+  const details = {
+    ...(modelOutputFailure === "OUTPUT_TRUNCATED"
+      ? { modelOutputFailure: "OUTPUT_TRUNCATED" as const }
+      : {}),
+    ...(reasonCode.success ? { reasonCode: reasonCode.data } : {}),
+  };
   return {
     code: error.code,
     message: nonEmptyText(error.message, "Operation failed"),
     retryable: error.retryable,
     ...(error.phase === undefined ? {} : { phase: error.phase }),
-    ...(modelOutputFailure === "OUTPUT_TRUNCATED"
-      ? { details: { modelOutputFailure: "OUTPUT_TRUNCATED" as const } }
-      : {}),
+    ...(Object.keys(details).length === 0 ? {} : { details }),
   };
 }
 

@@ -13,7 +13,9 @@ import {
   createVerificationPlanId,
   createWorkspaceId,
   type DurableRunEvent,
+  type SessionTurnPresentationResponseV3,
   type ToolPresentationItemV3,
+  type TurnPresentationItemV3,
 } from "@caelush/protocol";
 import {
   createAgentMessageFactory,
@@ -101,6 +103,47 @@ function event(sequence: number, type: string, payload: Record<string, unknown>)
     durability: { kind: "DURABLE", version: 1, sequence },
     payload,
   } as never;
+}
+
+/**
+ * The presentation of a failed Run whose only event is one recorded error.
+ *
+ * Only the error travels in: everything else is the same fixture, so a test that changes one detail
+ * of the recorded error is asserting about that detail and nothing else.
+ */
+async function presentFailure(
+  rawError: Record<string, unknown>,
+): Promise<SessionTurnPresentationResponseV3> {
+  const failedRun = AgentRunSchema.parse({
+    ...RUN,
+    status: "FAILED",
+    finishedAt: createTimestampMs(Number(NOW) + 10),
+  });
+  const service = new SessionPresentationService({
+    sessions: { get: async () => ({ id: SESSION_ID }) as never },
+    runs: { listBySession: async () => [failedRun] },
+    messageRecords: { listBySession: async () => [] },
+    codecs,
+    toolInvocations: { listByRun: async () => [] },
+    observations: { listByRun: async () => [] },
+    eventReader: {
+      latestSequence: async () => 1,
+      replay: async () => [event(1, "error", { error: rawError })],
+    },
+    toolPresentation: {
+      presentInvocation: () => ({ title: "使用工具", summary: "工具调用" }),
+      presentResult: () => ({ title: "使用工具", summary: "工具结果" }),
+      presentShellCommand: () => "执行命令",
+    },
+  });
+
+  return service.getPresentation(SESSION_ID, {});
+}
+
+function failureSummaryOf(
+  response: SessionTurnPresentationResponseV3,
+): TurnPresentationItemV3 | undefined {
+  return response.turns[0]!.items.find((item) => item.kind === "RUN_SUMMARY");
 }
 
 describe("SessionPresentationService", () => {
@@ -447,6 +490,95 @@ describe("SessionPresentationService", () => {
     expect(JSON.stringify(response)).not.toContain("credential-value");
     expect(JSON.stringify(response)).not.toContain("unbounded command output");
     expect(JSON.stringify(response)).not.toContain("C:\\\\host");
+  });
+
+  it("names the Tool failure stage without claiming an outcome it cannot see", async () => {
+    const response = await presentFailure({
+      code: "RUNTIME_ERROR",
+      message: "Tool execution infrastructure failed at C:\\Users\\han\\repo\\.env",
+      retryable: false,
+      phase: "TOOL",
+      details: {
+        reasonCode: "TOOL_RESULT_PIPELINE_FAILED",
+        causeKinds: ["ToolBatchInfrastructureError", "TypeError"],
+        patch: "*** Update File: src/secret.ts",
+      },
+    });
+
+    const summary = failureSummaryOf(response);
+    expect(summary).toMatchObject({
+      kind: "RUN_SUMMARY",
+      runStatus: "FAILED",
+      text: "工具结果处理阶段出现基础设施故障，工具可能已执行；Run 状态为失败。",
+    });
+    // A stage classification is not evidence about the workspace: the handler may have run, so the
+    // summary says which stage broke and never claims that nothing was written.
+    const published = JSON.stringify(summary);
+    expect(published).not.toContain("没有");
+    expect(published).not.toContain("未修改");
+    expect(JSON.stringify(response)).not.toContain("Users");
+    expect(JSON.stringify(response)).not.toContain("secret.ts");
+  });
+
+  it("maps every published Tool reason to its own stage wording", async () => {
+    const rendered = new Set<string>();
+    for (const [reasonCode, expected] of [
+      ["TOOL_PREPARATION_FAILED", "工具调用的参数准备阶段出现基础设施故障，Run 状态为失败。"],
+      ["TOOL_ADMISSION_FAILED", "工具调用在准入或安全检查阶段出现基础设施故障，Run 状态为失败。"],
+      [
+        "TOOL_EXECUTION_INFRASTRUCTURE_FAILED",
+        "工具执行阶段出现基础设施故障，工具可能已产生副作用；Run 状态为失败。",
+      ],
+      [
+        "TOOL_RESULT_PIPELINE_FAILED",
+        "工具结果处理阶段出现基础设施故障，工具可能已执行；Run 状态为失败。",
+      ],
+      ["TOOL_SETTLEMENT_FAILED", "工具结果未能可靠保存，Run 状态为失败。"],
+      ["TOOL_RECOVERY_FAILED", "恢复已保存的工具调用时出现基础设施故障，Run 状态为失败。"],
+      ["TOOL_INFRASTRUCTURE_FAILED", "工具基础设施故障，无法确定失败阶段；Run 状态为失败。"],
+    ] as const) {
+      const summary = failureSummaryOf(
+        await presentFailure({
+          code: "RUNTIME_ERROR",
+          message: "Tool execution infrastructure failed",
+          retryable: false,
+          phase: "TOOL",
+          details: { reasonCode },
+        }),
+      );
+      expect(summary).toMatchObject({ text: expected });
+      rendered.add(JSON.stringify(summary));
+    }
+    // Seven stages, seven distinguishable projections: a collapsed vocabulary would hide which stage
+    // broke, which is the one thing this projection exists to report.
+    expect(rendered.size).toBe(7);
+  });
+
+  it("keeps the legacy Tool wording for an error recorded before the reason code existed", async () => {
+    const summary = failureSummaryOf(
+      await presentFailure({
+        code: "RUNTIME_ERROR",
+        message: "Tool execution infrastructure failed",
+        retryable: false,
+        phase: "TOOL",
+      }),
+    );
+
+    expect(summary).toMatchObject({ text: "工具执行异常，Run 状态为失败。" });
+  });
+
+  it("does not invent a stage for a reason code outside the published set", async () => {
+    const summary = failureSummaryOf(
+      await presentFailure({
+        code: "RUNTIME_ERROR",
+        message: "Tool execution infrastructure failed",
+        retryable: false,
+        phase: "TOOL",
+        details: { reasonCode: "PREPARATION_ENOENT" },
+      }),
+    );
+
+    expect(summary).toMatchObject({ text: "工具执行异常，Run 状态为失败。" });
   });
 
   it("keeps a historical VERIFIED_COMPLETION distinguishable in the terminal projection", async () => {

@@ -641,6 +641,26 @@ function safeFailureReason(events: readonly DurableRunEvent[]): string {
     VERIFICATION_SETTLEMENT_ERROR: "校验结果未能可靠结算，无法得出结论；Run 状态为失败。",
     VERIFICATION_INTERRUPTED: "校验流程在完成前中断，无法得出结论；Run 状态为失败。",
   };
+  /**
+   * What a Tool failure reason may and may not say.
+   *
+   * Each line names the stage that broke and stops there. None of them claims the workspace is
+   * unchanged, because a stage classification does not prove that: a result-pipeline or settlement
+   * failure happens *after* the handler ran. Saying "no files were modified" would be a confident
+   * statement about something this projection cannot see, and the honest thing to publish after an
+   * infrastructure failure is which stage failed and that the outcome needs inspection.
+   */
+  const toolFailureReasons: Readonly<Record<string, string>> = {
+    TOOL_PREPARATION_FAILED: "工具调用的参数准备阶段出现基础设施故障，Run 状态为失败。",
+    TOOL_ADMISSION_FAILED: "工具调用在准入或安全检查阶段出现基础设施故障，Run 状态为失败。",
+    TOOL_EXECUTION_INFRASTRUCTURE_FAILED:
+      "工具执行阶段出现基础设施故障，工具可能已产生副作用；Run 状态为失败。",
+    TOOL_RESULT_PIPELINE_FAILED:
+      "工具结果处理阶段出现基础设施故障，工具可能已执行；Run 状态为失败。",
+    TOOL_SETTLEMENT_FAILED: "工具结果未能可靠保存，Run 状态为失败。",
+    TOOL_RECOVERY_FAILED: "恢复已保存的工具调用时出现基础设施故障，Run 状态为失败。",
+    TOOL_INFRASTRUCTURE_FAILED: "工具基础设施故障，无法确定失败阶段；Run 状态为失败。",
+  };
   for (const event of [...events].reverse()) {
     if (event.type !== "error") continue;
     const rawError = eventPayload(event)?.error;
@@ -668,6 +688,10 @@ function safeFailureReason(events: readonly DurableRunEvent[]): string {
       if (code === "PERMISSION_DENIED" || code === "APPROVAL_REJECTED") {
         return "工具执行被安全或审批策略阻止，Run 状态为失败。";
       }
+      const toolReason = reasonCode === undefined ? undefined : toolFailureReasons[reasonCode];
+      if (toolReason !== undefined) return toolReason;
+      // An error recorded before the reason vocabulary existed says nothing about its stage, so it
+      // keeps the wording it always had rather than being guessed into a specific one.
       return "工具执行异常，Run 状态为失败。";
     }
     if (phase === "RUNTIME") return "运行环境异常，Run 状态为失败。";

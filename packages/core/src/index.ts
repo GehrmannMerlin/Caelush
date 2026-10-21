@@ -266,6 +266,18 @@ export type {
   ToolTurnPipeline,
 } from "./run-controller-ports.js";
 /**
+ * Core's safe reading of a Tool infrastructure failure.
+ *
+ * The host receives a bounded stage/reason pair and a structural cause whitelist; it never receives
+ * the exception, its message, its stack or the arguments that produced it.
+ */
+export {
+  MAX_DIAGNOSTIC_CAUSE_LINKS,
+  classifyToolFailure,
+  type RunFailureDiagnosticsPort,
+  type RunToolFailureDiagnostic,
+} from "./run-tool-failure-diagnostic.js";
+/**
  * The Run Layer's direct Agent execution dependencies.
  *
  * The composition root supplies the frozen collaborator ports — a `ModelCatalog`, the host's

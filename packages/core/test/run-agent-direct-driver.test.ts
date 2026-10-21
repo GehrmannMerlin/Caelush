@@ -10,7 +10,13 @@ import type {
   PrivateReplayStorePort,
 } from "@caelush/agent";
 import { createModelToolFeedbackProjector, createToolResultBatchNormalizer } from "@caelush/agent";
+import {
+  ToolBatchInfrastructureError,
+  ToolExecutionInfrastructureError,
+  ToolPreparationInfrastructureError,
+} from "@caelush/agent";
 import { toContextObservationProjection } from "../src/agent-tool-batch.js";
+import type { RunToolFailureDiagnostic } from "../src/run-tool-failure-diagnostic.js";
 import { createUserMessageAppend } from "../src/run-message-materializer.js";
 import {
   AgentRunSchema,
@@ -901,6 +907,147 @@ describe("production ADVANCE_AGENT settlement", () => {
       "run.failed",
     ]);
     expect(h.notifications.map((event) => event.type)).not.toContain("retry.exhausted");
+  });
+
+  it("reports one bounded Tool failure diagnostic and keeps it out of the error's text", async () => {
+    const diagnostics: RunToolFailureDiagnostic[] = [];
+    const h = harness({
+      executor: toolThenAnswer(),
+      extra: {
+        failureDiagnostics: {
+          recordToolFailure: (diagnostic: RunToolFailureDiagnostic) => diagnostics.push(diagnostic),
+        },
+        toolTurn: {
+          batches: {
+            async execute(): Promise<never> {
+              throw new ToolBatchInfrastructureError("batch failed", {
+                cause: new ToolPreparationInfrastructureError("preparation failed", {
+                  cause: new TypeError(
+                    "Cannot assign to read only property 'patch' of 'C:/secret'",
+                  ),
+                  toolName: "apply_patch",
+                }),
+              });
+            },
+          },
+          feedback: createModelToolFeedbackProjector({
+            projection: toContextObservationProjection(),
+          }),
+          normalizer: createToolResultBatchNormalizer(),
+        },
+      },
+    });
+
+    const result = await h.controller.start(h.store.snapshot.run.id);
+
+    expect(result.run.status).toBe("FAILED");
+    // Reported exactly once, for the step that requested the batch.
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      runId: h.store.snapshot.run.id,
+      sourceStepId: h.allocatedSteps[0],
+      stage: "PREPARATION",
+      reasonCode: "TOOL_PREPARATION_FAILED",
+    });
+    expect(diagnostics[0]?.causeKinds).toEqual([
+      "ToolBatchInfrastructureError",
+      "ToolPreparationInfrastructureError",
+      "TypeError",
+    ]);
+
+    // The durable error carries the closed reason code and nothing else from the failure.
+    const errorEvent = h.notifications.find((event) => event.type === "error");
+    const errorPayload = (errorEvent?.payload as { error?: Record<string, unknown> }).error;
+    expect(errorPayload).toMatchObject({
+      code: "RUNTIME_ERROR",
+      phase: "TOOL",
+      retryable: false,
+      details: { reasonCode: "TOOL_PREPARATION_FAILED" },
+    });
+    expect(Object.keys(errorPayload?.details as object)).toEqual(["reasonCode"]);
+    const serialized = JSON.stringify(h.notifications);
+    expect(serialized).not.toContain("read only property");
+    expect(serialized).not.toContain("C:/secret");
+    expect(serialized).not.toContain("apply_patch");
+  });
+
+  it("keeps the Run settlement when the diagnostics sink itself fails", async () => {
+    const h = harness({
+      executor: toolThenAnswer(),
+      extra: {
+        failureDiagnostics: {
+          recordToolFailure: () => {
+            throw new Error("the diagnostics sink is broken");
+          },
+        },
+        toolTurn: {
+          batches: {
+            async execute(): Promise<never> {
+              throw new ToolBatchInfrastructureError("batch failed", {
+                cause: new ToolExecutionInfrastructureError("SETTLEMENT", "settlement failed"),
+              });
+            },
+          },
+          feedback: createModelToolFeedbackProjector({
+            projection: toContextObservationProjection(),
+          }),
+          normalizer: createToolResultBatchNormalizer(),
+        },
+      },
+    });
+
+    const result = await h.controller.start(h.store.snapshot.run.id);
+
+    expect(result.run.status).toBe("FAILED");
+    expect(h.notifications.filter((event) => event.type === "error")).toHaveLength(1);
+    const errorEvent = h.notifications.find((event) => event.type === "error");
+    expect((errorEvent?.payload as { error?: Record<string, unknown> }).error).toMatchObject({
+      details: { reasonCode: "TOOL_SETTLEMENT_FAILED" },
+    });
+    expect(JSON.stringify(h.notifications)).not.toContain("sink is broken");
+  });
+
+  it("does not reclassify a cancelled Tool batch as a Tool failure", async () => {
+    const diagnostics: RunToolFailureDiagnostic[] = [];
+    const enteredBatch = deferred<void>();
+    const releaseBatch = deferred<void>();
+    const h = harness({
+      executor: toolThenAnswer(),
+      extra: {
+        failureDiagnostics: {
+          recordToolFailure: (diagnostic: RunToolFailureDiagnostic) => diagnostics.push(diagnostic),
+        },
+        toolTurn: {
+          batches: {
+            async execute(): Promise<never> {
+              enteredBatch.resolve();
+              await releaseBatch.promise;
+              throw new ToolBatchInfrastructureError("batch failed", {
+                cause: new ToolPreparationInfrastructureError("preparation failed"),
+              });
+            },
+          },
+          feedback: createModelToolFeedbackProjector({
+            projection: toContextObservationProjection(),
+          }),
+          normalizer: createToolResultBatchNormalizer(),
+        },
+      },
+    });
+    const running = h.controller.start(h.store.snapshot.run.id);
+
+    await enteredBatch.promise;
+    // Begin the cancellation without awaiting it: it waits for the in-flight batch to settle.
+    const cancelling = h.controller.cancel(h.store.snapshot.run.id);
+    // Let the durable intent be recorded and the execution scope abort before the batch throws.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseBatch.resolve();
+    await cancelling;
+    await running;
+
+    // The cancellation and deadline authorities own this Run; a diagnostic would claim otherwise.
+    expect(h.store.snapshot.run.status).toBe("CANCELLED");
+    expect(diagnostics).toEqual([]);
   });
 
   it("reports a classifier rejection of a completed provider turn without claiming the provider failed", async () => {
