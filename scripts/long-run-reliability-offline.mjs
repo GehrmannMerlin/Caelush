@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* global Buffer, URL, console, process */
 /**
  * Offline long-run reliability harness.
  *
