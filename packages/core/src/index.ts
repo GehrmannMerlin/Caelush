@@ -278,6 +278,18 @@ export {
   type RunToolFailureDiagnostic,
 } from "./run-tool-failure-diagnostic.js";
 /**
+ * Core's safe reading of a Context preparation failure.
+ *
+ * The same shape of fact the Tool diagnostic carries, for the other local infrastructure the Run
+ * depends on: a closed stage, a closed reason code, the measured bound when one exists, and a
+ * structural cause whitelist. Never the exception.
+ */
+export {
+  classifyContextPreparationFailure,
+  contextPreparationAgentError,
+  type RunContextPreparationDiagnostic,
+} from "./run-context-preparation-diagnostic.js";
+/**
  * The Run Layer's direct Agent execution dependencies.
  *
  * The composition root supplies the frozen collaborator ports — a `ModelCatalog`, the host's

@@ -138,12 +138,18 @@ export {
   AgentErrorCodeSchema,
   AgentErrorPhaseSchema,
   AgentErrorSchema,
+  ContextPreparationDiagnosticSchema,
+  ContextPreparationFailureReasonSchema,
+  ContextPreparationStageSchema,
   ToolInfrastructureFailureReasonSchema,
 } from "./error.js";
 export type {
   AgentError,
   AgentErrorCode,
   AgentErrorPhase,
+  ContextPreparationDiagnostic,
+  ContextPreparationFailureReason,
+  ContextPreparationStage,
   ToolInfrastructureFailureReason,
 } from "./error.js";
 export {

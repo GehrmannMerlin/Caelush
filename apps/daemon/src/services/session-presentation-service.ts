@@ -661,6 +661,39 @@ function safeFailureReason(events: readonly DurableRunEvent[]): string {
     TOOL_RECOVERY_FAILED: "恢复已保存的工具调用时出现基础设施故障，Run 状态为失败。",
     TOOL_INFRASTRUCTURE_FAILED: "工具基础设施故障，无法确定失败阶段；Run 状态为失败。",
   };
+  /**
+   * What a Context preparation failure may and may not say.
+   *
+   * ```text
+   * surface_read          reading the recorded projection back failed
+   * surface_capacity      the projection does not fit the Surface's bounds
+   * surface_persistence   committing the projection failed
+   * pressure_accounting   the input budget could not be established
+   * compaction            reducing the context to fit failed
+   * unknown               a local failure whose stage could not be named
+   * ```
+   *
+   * None of them says the model refused, the provider rejected the request or the account is out of
+   * credit. Nothing about the provider was reached: this is the local step that builds the request,
+   * and calling it a model fault is how a user ends up debugging the wrong system. None of them
+   * claims the workspace is unchanged either — preparation happens before any Tool runs, so the
+   * honest statement is about the context, not about the project.
+   */
+  const contextPreparationReasons: Readonly<Record<string, string>> = {
+    CONTEXT_SURFACE_INTEGRITY_FAILED:
+      "整理任务上下文时失败：已保存的上下文记录无法原样读回，Run 状态为失败。",
+    CONTEXT_SURFACE_BASELINE_TOO_LARGE:
+      "整理任务上下文时失败：上下文投影本身超出可保存的上限，Run 状态为失败。",
+    CONTEXT_SURFACE_ROLLOVER_CONFLICT:
+      "整理任务上下文时失败：上下文切换与另一次写入冲突，Run 状态为失败。",
+    CONTEXT_SURFACE_ROLLOVER_FAILED: "整理任务上下文时失败：上下文切换未能完成，Run 状态为失败。",
+    CONTEXT_SURFACE_PERSISTENCE_FAILED: "整理任务上下文时失败：上下文记录未能保存，Run 状态为失败。",
+    CONTEXT_PRESSURE_ACCOUNTING_FAILED:
+      "整理任务上下文时失败：输入预算无法可靠估算，Run 状态为失败。",
+    CONTEXT_WINDOW_EXHAUSTED:
+      "整理任务上下文时失败：压缩后仍无法容纳在模型上下文窗口内，Run 状态为失败。",
+    CONTEXT_PREPARATION_FAILED: "整理任务上下文时失败，无法确定具体阶段，Run 状态为失败。",
+  };
   for (const event of [...events].reverse()) {
     if (event.type !== "error") continue;
     const rawError = eventPayload(event)?.error;
@@ -669,6 +702,24 @@ function safeFailureReason(events: readonly DurableRunEvent[]): string {
     const phase = stringValue(rawError.phase);
     const details = isRecord(rawError.details) ? rawError.details : undefined;
     const reasonCode = details === undefined ? undefined : stringValue(details.reasonCode);
+    /*
+     * The Context classification is read before the phase branches, because a context failure is not
+     * a member of any of them: it settles with `phase: "INTERNAL"`, and the generic INTERNAL wording
+     * ("Agent 内部执行错误") would hide the one fact that is actionable — which stage of preparation
+     * broke. An older Run has no such detail and keeps the wording it always had.
+     */
+    const contextPreparation =
+      details !== undefined && isRecord(details.contextPreparation)
+        ? details.contextPreparation
+        : undefined;
+    const contextReason =
+      contextPreparation === undefined ? undefined : stringValue(contextPreparation.reasonCode);
+    if (contextReason !== undefined) {
+      return (
+        contextPreparationReasons[contextReason] ??
+        "整理任务上下文时失败，无法确定具体阶段，Run 状态为失败。"
+      );
+    }
 
     if (phase === "VERIFICATION") {
       if (code === "VERIFICATION_FAILED") return "校验未通过，Run 状态为失败。";

@@ -77,6 +77,10 @@ import type { RunShutdownCheckpointResult } from "./run-shutdown.js";
 import { RunDeadlineRegistry } from "./run-deadline-registry.js";
 import { semanticEqual } from "./semantic-equality.js";
 import { classifyToolFailure } from "./run-tool-failure-diagnostic.js";
+import {
+  classifyContextPreparationFailure,
+  contextPreparationAgentError,
+} from "./run-context-preparation-diagnostic.js";
 import { deriveRunDeadline, isRunDeadlineExceeded } from "./run-deadline.js";
 import { resolveRunTerminationAuthority } from "./run-termination-authority.js";
 import { toAgentExecutionSnapshot } from "./run-execution-facts.js";
@@ -1974,6 +1978,48 @@ export class RunController {
     return diagnostic.reasonCode;
   }
 
+  /**
+   * Re-read one Context preparation failure into the Run's own vocabulary, and report it once.
+   *
+   * ```text
+   * Agent Loop      "context preparation failed"      (a fact, with a provider-shaped error)
+   *   → this        typed classification + closed stage/reason + safe correlation facts
+   *   → host sink   one log entry, isolated from the settlement
+   * ```
+   *
+   * The failure is settled as a local context failure, not as a model or provider error: no provider
+   * was entered, so `MODEL_ERROR` would send every reader — the user, the operator, the next
+   * debugging session — looking at the wrong system. The durable error carries the classification in
+   * `details.contextPreparation`, which is the same object the host sink receives.
+   *
+   * Every other effect is returned untouched, and the frozen result is never mutated: a new object
+   * is produced for this one case so that a caller holding the original still holds the truth the
+   * kernel returned.
+   */
+  private settleContextPreparationFailure(
+    snapshot: RunExecutionSnapshot,
+    result: AgentLoopAdvanceResult,
+    observation: AgentTurnObservation,
+  ): AgentLoopAdvanceResult {
+    const cause = observation.contextError;
+    if (cause === undefined || result.kind !== "FAILED") return result;
+    const diagnostic = classifyContextPreparationFailure({
+      runId: snapshot.run.id,
+      sourceStepId: result.turn.stepId,
+      cause,
+    });
+    const sink = this.dependencies.failureDiagnostics;
+    if (sink?.recordContextPreparationFailure !== undefined) {
+      try {
+        sink.recordContextPreparationFailure(diagnostic);
+      } catch {
+        // Diagnostics must not become a failure of their own. The settlement below is unaffected:
+        // it was decided by the classification, not by whether a host could log it.
+      }
+    }
+    return Object.freeze({ ...result, error: contextPreparationAgentError(diagnostic) });
+  }
+
   private async failBoundaryLocked(
     loaded: RunExecutionSnapshot,
     error: AgentError,
@@ -2798,9 +2844,12 @@ export class RunController {
   private async settle(
     before: RunExecutionSnapshot,
     directive: AdvanceAgentDirective,
-    result: AgentLoopAdvanceResult,
+    rawResult: AgentLoopAdvanceResult,
     observation: AgentTurnObservation,
   ): Promise<RunControllerResult> {
+    // Exactly one re-reading happens, and only for a preparation failure: the loop reports the
+    // *fact* that context preparation failed, and Core owns what that fact is called.
+    const result = this.settleContextPreparationFailure(before, rawResult, observation);
     const route = classifyAgentEffectSettlement({
       result,
       directive,

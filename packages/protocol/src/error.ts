@@ -65,6 +65,78 @@ export const ToolInfrastructureFailureReasonSchema = z.enum([
 ]);
 export type ToolInfrastructureFailureReason = z.infer<typeof ToolInfrastructureFailureReasonSchema>;
 
+/**
+ * Which part of Context preparation failed.
+ *
+ * ```text
+ * surface_read          the durable Prompt Surface could not be read back as recorded
+ * surface_capacity      the projection does not fit the Surface's byte/record bounds
+ * surface_persistence   a rollover or append could not be committed
+ * pressure_accounting   the input budget or its reservations could not be established
+ * compaction            reducing the context to fit failed
+ * unknown               a local failure whose stage could not be derived from its type
+ * ```
+ *
+ * Stages are a closed vocabulary for the same reason the Tool stages are: they say where a failure
+ * happened, never what it contained. They are lower case because they name a phase of preparation
+ * rather than a published error code, and the design that introduced them names them this way.
+ */
+export const ContextPreparationStageSchema = z.enum([
+  "surface_read",
+  "surface_capacity",
+  "surface_persistence",
+  "pressure_accounting",
+  "compaction",
+  "unknown",
+]);
+export type ContextPreparationStage = z.infer<typeof ContextPreparationStageSchema>;
+
+/**
+ * The bounded vocabulary for *why* Context preparation failed.
+ *
+ * Every value names the artifact that broke, not the model, the provider or the network. A consumer
+ * that receives one of these must not infer a provider rejection: a context that cannot be prepared
+ * is a local failure, and reporting it as "the model refused" is the misdiagnosis this vocabulary
+ * exists to prevent.
+ */
+export const ContextPreparationFailureReasonSchema = z.enum([
+  "CONTEXT_SURFACE_INTEGRITY_FAILED",
+  "CONTEXT_SURFACE_BASELINE_TOO_LARGE",
+  "CONTEXT_SURFACE_ROLLOVER_CONFLICT",
+  "CONTEXT_SURFACE_ROLLOVER_FAILED",
+  "CONTEXT_SURFACE_PERSISTENCE_FAILED",
+  "CONTEXT_PRESSURE_ACCOUNTING_FAILED",
+  "CONTEXT_WINDOW_EXHAUSTED",
+  "CONTEXT_PREPARATION_FAILED",
+]);
+export type ContextPreparationFailureReason = z.infer<
+  typeof ContextPreparationFailureReasonSchema
+>;
+
+/**
+ * The one object a Run error may publish about Context preparation.
+ *
+ * `dimension`, `observed` and `limit` come from the typed capacity error that raised the failure and
+ * are only present when it carried them: a byte bound that was measured, not a guess. They are
+ * non-negative safe integers and a short token, so the shape cannot carry a message, a path or a
+ * payload even if a future producer tried.
+ */
+export const ContextPreparationDiagnosticSchema = z
+  .object({
+    reasonCode: ContextPreparationFailureReasonSchema,
+    stage: ContextPreparationStageSchema,
+    dimension: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9_.:-]+$/u)
+      .optional(),
+    observed: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    limit: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  })
+  .strict();
+export type ContextPreparationDiagnostic = z.infer<typeof ContextPreparationDiagnosticSchema>;
+
 export const AgentErrorSchema = z
   .object({
     code: AgentErrorCodeSchema,

@@ -7,6 +7,15 @@ import {
 } from "@caelush/agent";
 import type { RunId, StepId, ToolInfrastructureFailureReason } from "@caelush/protocol";
 
+import type { RunContextPreparationDiagnostic } from "./run-context-preparation-diagnostic.js";
+import {
+  causeKindOf,
+  collectCauseChain,
+  MAX_DIAGNOSTIC_CAUSE_LINKS,
+} from "./run-failure-cause-chain.js";
+
+export { MAX_DIAGNOSTIC_CAUSE_LINKS };
+
 /**
  * Core's safe reading of a Tool infrastructure failure.
  *
@@ -50,13 +59,16 @@ export interface RunToolFailureDiagnostic {
  * Optional, and deliberately fire-and-forget: a host that wants to log a Tool failure provides one,
  * and a host that does not keeps the previous behaviour. The port receives no Error object, so it
  * cannot accidentally serialize one.
+ *
+ * `recordContextPreparationFailure` is separately optional because a host may have shipped a logger
+ * for Tool failures before Context preparation had a vocabulary. A missing method means "not
+ * interested", never "unable to record": the durable Run settlement carries the same classification
+ * either way, so nothing about the Run depends on a host implementing it.
  */
 export interface RunFailureDiagnosticsPort {
   recordToolFailure(diagnostic: RunToolFailureDiagnostic): void;
+  recordContextPreparationFailure?(diagnostic: RunContextPreparationDiagnostic): void;
 }
-
-/** The most cause links one diagnostic may describe. */
-export const MAX_DIAGNOSTIC_CAUSE_LINKS = 4;
 
 const REASON_BY_PHASE: Readonly<
   Record<ToolExecutionInfrastructurePhase, ToolInfrastructureFailureReason>
@@ -72,21 +84,16 @@ const REASON_BY_PHASE: Readonly<
 /**
  * The structural label vocabulary.
  *
- * Only these names can appear in a diagnostic. A custom error class is labelled `UNKNOWN_CAUSE`
+ * Only these names can appear in a diagnostic. A custom error class is labelled `UnknownCause`
  * rather than by its own name, so an application's naming cannot become a diagnostic surface.
+ * Subclasses come first: the Preparer's error *is* a Tool execution infrastructure error.
  */
-const BUILT_IN_CAUSE_KINDS: ReadonlySet<string> = new Set([
-  "Error",
-  "TypeError",
-  "RangeError",
-  "ReferenceError",
-  "SyntaxError",
-  "EvalError",
-  "URIError",
-  "AggregateError",
+const CAUSE_LABELS = Object.freeze([
+  { type: ToolPreparationInfrastructureError, label: "ToolPreparationInfrastructureError" },
+  { type: ToolExecutionInfrastructureError, label: "ToolExecutionInfrastructureError" },
+  { type: ToolBatchInfrastructureError, label: "ToolBatchInfrastructureError" },
+  { type: ToolExecutionUncertainError, label: "ToolExecutionUncertainError" },
 ]);
-
-const UNKNOWN_CAUSE_KIND = "UnknownCause";
 
 /**
  * Classify one caught Tool failure without reading any of its content.
@@ -115,57 +122,6 @@ export function classifyToolFailure(input: {
     sourceStepId: input.sourceStepId,
     stage,
     reasonCode,
-    causeKinds: Object.freeze(chain.map(causeKindOf)),
+    causeKinds: Object.freeze(chain.map((link) => causeKindOf(link, CAUSE_LABELS))),
   });
-}
-
-function collectCauseChain(cause: unknown): readonly unknown[] {
-  const chain: unknown[] = [];
-  const seen = new Set<unknown>();
-  let current = cause;
-  while (
-    current !== null &&
-    current !== undefined &&
-    chain.length < MAX_DIAGNOSTIC_CAUSE_LINKS &&
-    !seen.has(current)
-  ) {
-    seen.add(current);
-    chain.push(current);
-    current = readCause(current);
-  }
-  return chain;
-}
-
-/** Reading `cause` may hit an accessor that throws; a broken error must not mask the failure. */
-function readCause(value: unknown): unknown {
-  if (typeof value !== "object" || value === null) return undefined;
-  try {
-    return (value as { readonly cause?: unknown }).cause;
-  } catch {
-    return undefined;
-  }
-}
-
-function causeKindOf(value: unknown): string {
-  // Subclass first: the Preparer's error *is* a Tool execution infrastructure error.
-  if (value instanceof ToolPreparationInfrastructureError) {
-    return "ToolPreparationInfrastructureError";
-  }
-  if (value instanceof ToolExecutionInfrastructureError) return "ToolExecutionInfrastructureError";
-  if (value instanceof ToolBatchInfrastructureError) return "ToolBatchInfrastructureError";
-  if (value instanceof ToolExecutionUncertainError) return "ToolExecutionUncertainError";
-  const name = constructorNameOf(value);
-  return name !== undefined && BUILT_IN_CAUSE_KINDS.has(name) ? name : UNKNOWN_CAUSE_KIND;
-}
-
-function constructorNameOf(value: unknown): string | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  try {
-    const ctor = (value as { readonly constructor?: unknown }).constructor;
-    const name =
-      typeof ctor === "function" ? (ctor as { readonly name?: unknown }).name : undefined;
-    return typeof name === "string" && name.length > 0 && name.length <= 64 ? name : undefined;
-  } catch {
-    return undefined;
-  }
 }

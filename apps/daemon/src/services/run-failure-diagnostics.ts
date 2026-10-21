@@ -1,11 +1,17 @@
-import type { RunFailureDiagnosticsPort, RunToolFailureDiagnostic } from "@caelush/core";
+import type {
+  RunContextPreparationDiagnostic,
+  RunFailureDiagnosticsPort,
+  RunToolFailureDiagnostic,
+} from "@caelush/core";
 import {
+  ContextPreparationDiagnosticSchema,
   ToolInfrastructureFailureReasonSchema,
+  type ContextPreparationDiagnostic,
   type ToolInfrastructureFailureReason,
 } from "@caelush/protocol";
 
 /**
- * The daemon's sink for the Run Layer's bounded Tool failure diagnostics.
+ * The daemon's sink for the Run Layer's bounded failure diagnostics.
  *
  * ```text
  * RunController        classifies the caught exception into stage + reasonCode
@@ -33,9 +39,35 @@ export interface ToolFailureLogEntry {
   readonly causeKinds: readonly string[];
 }
 
+/**
+ * One Context preparation log entry.
+ *
+ * ```text
+ * stage        where preparation stopped: read, capacity, persistence, accounting, compaction
+ * reasonCode   which artifact broke, in a closed vocabulary
+ * dimension    which measured bound failed, with observed/limit, when it was a bound
+ * ```
+ *
+ * A log line says "the Prompt Surface could not be persisted" and stops there. It never says what
+ * the Section contained, which file was open, or which model was configured — the diagnostic has no
+ * field for any of those, and this adapter does not add one.
+ */
+export interface ContextPreparationFailureLogEntry {
+  readonly event: "run.context.preparation.failure";
+  readonly runId: RunContextPreparationDiagnostic["runId"];
+  readonly sourceStepId?: RunContextPreparationDiagnostic["sourceStepId"];
+  readonly stage: ContextPreparationDiagnostic["stage"];
+  readonly reasonCode: ContextPreparationDiagnostic["reasonCode"];
+  readonly dimension?: string;
+  readonly observed?: number;
+  readonly limit?: number;
+  readonly causeKinds: readonly string[];
+}
+
 /** The minimal host logger shape. Optional: a deployment without logging simply has no sink. */
 export interface RunFailureDiagnosticsLogger {
   toolFailure?(entry: ToolFailureLogEntry): void;
+  contextPreparationFailure?(entry: ContextPreparationFailureLogEntry): void;
 }
 
 export function createRunFailureDiagnostics(
@@ -47,6 +79,10 @@ export function createRunFailureDiagnostics(
       // Reading the sink late keeps the adapter stateless; a sink that throws is the Run Layer's
       // concern (it isolates diagnostic failures), so this adapter does not swallow anything itself.
       options.logger?.toolFailure?.(entry);
+    },
+    recordContextPreparationFailure(diagnostic: RunContextPreparationDiagnostic): void {
+      const entry = toContextPreparationLogEntry(diagnostic);
+      options.logger?.contextPreparationFailure?.(entry);
     },
   };
 }
@@ -61,6 +97,40 @@ export function toToolFailureLogEntry(diagnostic: RunToolFailureDiagnostic): Too
     reasonCode: reasonCode.success ? reasonCode.data : "TOOL_INFRASTRUCTURE_FAILED",
     // Bounded by the Run Layer; copied so a later mutation of the diagnostic cannot change a line
     // that was already handed to a logger.
+    causeKinds: Object.freeze([...diagnostic.causeKinds]),
+  });
+}
+
+/**
+ * Shape one Context preparation log entry, re-validating the classification at the boundary.
+ *
+ * The three measured fields are copied only when they are numbers: a `dimension` without `observed`
+ * is still a useful line ("the section-state bound failed"), and a bound the Run Layer could not
+ * defend never reaches a log. An unparsable classification degrades to the generic stage and reason
+ * rather than being published as itself.
+ */
+export function toContextPreparationLogEntry(
+  diagnostic: RunContextPreparationDiagnostic,
+): ContextPreparationFailureLogEntry {
+  const parsed = ContextPreparationDiagnosticSchema.safeParse({
+    reasonCode: diagnostic.reasonCode,
+    stage: diagnostic.stage,
+    ...(diagnostic.dimension === undefined ? {} : { dimension: diagnostic.dimension }),
+    ...(diagnostic.observed === undefined ? {} : { observed: diagnostic.observed }),
+    ...(diagnostic.limit === undefined ? {} : { limit: diagnostic.limit }),
+  });
+  const safe: ContextPreparationDiagnostic = parsed.success
+    ? parsed.data
+    : { reasonCode: "CONTEXT_PREPARATION_FAILED", stage: "unknown" };
+  return Object.freeze({
+    event: "run.context.preparation.failure" as const,
+    runId: diagnostic.runId,
+    ...(diagnostic.sourceStepId === undefined ? {} : { sourceStepId: diagnostic.sourceStepId }),
+    stage: safe.stage,
+    reasonCode: safe.reasonCode,
+    ...(safe.dimension === undefined ? {} : { dimension: safe.dimension }),
+    ...(safe.observed === undefined ? {} : { observed: safe.observed }),
+    ...(safe.limit === undefined ? {} : { limit: safe.limit }),
     causeKinds: Object.freeze([...diagnostic.causeKinds]),
   });
 }

@@ -1,4 +1,5 @@
 import {
+  ContextPreparationDiagnosticSchema,
   PublicRunEventSchema,
   ToolInfrastructureFailureReasonSchema,
   getRunEventTypeDefinition,
@@ -472,20 +473,30 @@ function projectError(error: {
 }) {
   const modelOutputFailure = error.details?.["modelOutputFailure"];
   /**
-   * Two details keys are publishable, and only these two.
+   * Three details keys are publishable, and only these three.
    *
    * `modelOutputFailure` says the model's answer was cut off; `reasonCode` says which Tool stage
-   * broke. Both are closed enumerations, so relaying them reports a classification without relaying
-   * any of the data the classification was derived from. Everything else in `details` stays behind
-   * the boundary: it is free-form, and free-form is exactly where a message, a command line or a
-   * host path would travel.
+   * broke; `contextPreparation` says which stage of building the task context broke, with the bound
+   * that was measured when there was one. All three are closed enumerations, so relaying them
+   * reports a classification without relaying any of the data the classification was derived from.
+   * Everything else in `details` stays behind the boundary: it is free-form, and free-form is
+   * exactly where a message, a command line or a host path would travel.
+   *
+   * `contextPreparation` is a nested object rather than three more top-level keys because the three
+   * Tool reason codes and the eight context reason codes are different vocabularies; a reader that
+   * saw `reasonCode: "CONTEXT_SURFACE_PERSISTENCE_FAILED"` on a Tool error would have to know which
+   * producer wrote it. The key says which one did.
    */
   const reasonCode = ToolInfrastructureFailureReasonSchema.safeParse(error.details?.["reasonCode"]);
+  const contextPreparation = ContextPreparationDiagnosticSchema.safeParse(
+    error.details?.["contextPreparation"],
+  );
   const details = {
     ...(modelOutputFailure === "OUTPUT_TRUNCATED"
       ? { modelOutputFailure: "OUTPUT_TRUNCATED" as const }
       : {}),
     ...(reasonCode.success ? { reasonCode: reasonCode.data } : {}),
+    ...(contextPreparation.success ? { contextPreparation: contextPreparation.data } : {}),
   };
   return {
     code: error.code,

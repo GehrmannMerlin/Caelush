@@ -581,6 +581,114 @@ describe("SessionPresentationService", () => {
     expect(summary).toMatchObject({ text: "工具执行异常，Run 状态为失败。" });
   });
 
+  /**
+   * A Context preparation failure is described as the local step it is.
+   *
+   * The wrong answer is easy and expensive: the failure settles as an internal error, so a generic
+   * INTERNAL reading ("Agent 内部执行错误") hides which stage broke, and a phase-based reading that
+   * treated it as `LLM` would say the model failed — sending the reader to the provider, the billing
+   * page or the model configuration while the fault is a local projection or storage condition.
+   */
+  it("maps every Context preparation stage to its own wording and never blames the model", async () => {
+    const rendered = new Set<string>();
+    for (const [reasonCode, expected] of [
+      [
+        "CONTEXT_SURFACE_INTEGRITY_FAILED",
+        "整理任务上下文时失败：已保存的上下文记录无法原样读回，Run 状态为失败。",
+      ],
+      [
+        "CONTEXT_SURFACE_BASELINE_TOO_LARGE",
+        "整理任务上下文时失败：上下文投影本身超出可保存的上限，Run 状态为失败。",
+      ],
+      [
+        "CONTEXT_SURFACE_ROLLOVER_CONFLICT",
+        "整理任务上下文时失败：上下文切换与另一次写入冲突，Run 状态为失败。",
+      ],
+      [
+        "CONTEXT_SURFACE_ROLLOVER_FAILED",
+        "整理任务上下文时失败：上下文切换未能完成，Run 状态为失败。",
+      ],
+      [
+        "CONTEXT_SURFACE_PERSISTENCE_FAILED",
+        "整理任务上下文时失败：上下文记录未能保存，Run 状态为失败。",
+      ],
+      [
+        "CONTEXT_PRESSURE_ACCOUNTING_FAILED",
+        "整理任务上下文时失败：输入预算无法可靠估算，Run 状态为失败。",
+      ],
+      [
+        "CONTEXT_WINDOW_EXHAUSTED",
+        "整理任务上下文时失败：压缩后仍无法容纳在模型上下文窗口内，Run 状态为失败。",
+      ],
+      [
+        "CONTEXT_PREPARATION_FAILED",
+        "整理任务上下文时失败，无法确定具体阶段，Run 状态为失败。",
+      ],
+    ] as const) {
+      const summary = failureSummaryOf(
+        await presentFailure({
+          code: "INTERNAL_ERROR",
+          message: "The task context could not be prepared for this step.",
+          retryable: false,
+          phase: "INTERNAL",
+          details: {
+            contextPreparation: {
+              reasonCode,
+              stage: "surface_capacity",
+              dimension: "SECTION_STATES",
+              observed: 2_049,
+              limit: 2_048,
+            },
+          },
+        }),
+      );
+      expect(summary).toMatchObject({ text: expected });
+      // The wording names the context step and never the model, the provider or the account.
+      expect(expected).not.toMatch(/模型执行|Provider|拒绝/u);
+      rendered.add(JSON.stringify(summary));
+    }
+    expect(rendered.size).toBe(8);
+  });
+
+  it("keeps the generic internal wording for a failure recorded before the context vocabulary", async () => {
+    const summary = failureSummaryOf(
+      await presentFailure({
+        code: "INTERNAL_ERROR",
+        message: "The model context could not be prepared.",
+        retryable: false,
+        phase: "INTERNAL",
+      }),
+    );
+
+    expect(summary).toMatchObject({ text: "Agent 内部执行错误，Run 状态为失败。" });
+  });
+
+  it("falls back to the generic context wording without echoing an unrecognized reason code", async () => {
+    const summary = failureSummaryOf(
+      await presentFailure({
+        code: "INTERNAL_ERROR",
+        message: "The task context could not be prepared for this step.",
+        retryable: false,
+        phase: "INTERNAL",
+        details: {
+          contextPreparation: {
+            reasonCode: "CONTEXT_CANARY_FAILURE: C:/Users/owner/.env",
+            stage: "surface_capacity",
+            observed: -1,
+            limit: 1.5,
+          },
+        },
+      }),
+    );
+
+    expect(summary).toMatchObject({
+      text: "整理任务上下文时失败，无法确定具体阶段，Run 状态为失败。",
+    });
+    const published = JSON.stringify(summary);
+    expect(published).not.toContain("CANARY");
+    expect(published).not.toContain("Users");
+  });
+
   it("keeps a historical VERIFIED_COMPLETION distinguishable in the terminal projection", async () => {
     const verifiedRun = AgentRunSchema.parse({
       ...RUN,

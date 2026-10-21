@@ -15,7 +15,9 @@ import {
   ToolExecutionInfrastructureError,
   ToolPreparationInfrastructureError,
 } from "@caelush/agent";
+import { PromptSurfaceCapacityError } from "@caelush/agent";
 import { toContextObservationProjection } from "../src/agent-tool-batch.js";
+import type { RunContextPreparationDiagnostic } from "../src/run-context-preparation-diagnostic.js";
 import type { RunToolFailureDiagnostic } from "../src/run-tool-failure-diagnostic.js";
 import { createUserMessageAppend } from "../src/run-message-materializer.js";
 import {
@@ -1003,6 +1005,149 @@ describe("production ADVANCE_AGENT settlement", () => {
     const errorEvent = h.notifications.find((event) => event.type === "error");
     expect((errorEvent?.payload as { error?: Record<string, unknown> }).error).toMatchObject({
       details: { reasonCode: "TOOL_SETTLEMENT_FAILED" },
+    });
+    expect(JSON.stringify(h.notifications)).not.toContain("sink is broken");
+  });
+
+  /**
+   * A Context preparation failure is a *local* failure, and the Run must say so.
+   *
+   * ```text
+   * before   "the model context could not be prepared" under a provider-shaped code → MODEL_ERROR
+   * after    stage + reason code under INTERNAL_ERROR → "preparing the task context failed"
+   * ```
+   *
+   * The user-facing consequence is the point: `MODEL_ERROR` sends the reader to the provider, the
+   * billing page or the model configuration, and the fault is none of them. No provider was entered
+   * — the assertion below checks that, too.
+   */
+  it("settles a Context preparation failure as a local context failure with a bounded diagnostic", async () => {
+    const canary = "CANARY-section-state-and-C:/Users/owner/.env";
+    const diagnostics: RunContextPreparationDiagnostic[] = [];
+    const call = fakeFrozenModelTurnExecutor(async () => turn());
+    const contextEngine = fakeContextEngine();
+    contextEngine.prepareFailure = new PromptSurfaceCapacityError(
+      {
+        reason: "SURFACE_PERSISTENCE_FAILED",
+        stage: "surface_persistence",
+        dimension: "SECTION_STATES",
+        observed: 2_049,
+        limit: 2_048,
+        cause: new Error(canary),
+      },
+      `The projection could not be committed: ${canary}`,
+    );
+    const h = harness({
+      executor: call,
+      contextEngine,
+      extra: {
+        failureDiagnostics: {
+          recordToolFailure: () => undefined,
+          recordContextPreparationFailure: (diagnostic: RunContextPreparationDiagnostic) =>
+            diagnostics.push(diagnostic),
+        },
+      },
+    });
+
+    const result = await h.controller.start(h.store.snapshot.run.id);
+
+    expect(result.run.status).toBe("FAILED");
+    // Reported exactly once, against the Step whose turn was being prepared.
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      runId: h.store.snapshot.run.id,
+      sourceStepId: h.allocatedSteps[0],
+      stage: "surface_persistence",
+      reasonCode: "CONTEXT_SURFACE_PERSISTENCE_FAILED",
+      dimension: "SECTION_STATES",
+      observed: 2_049,
+      limit: 2_048,
+    });
+    // The provider was never entered: this failure cost no model call and no money.
+    expect(call.callCount()).toBe(0);
+
+    const errorEvent = h.notifications.find((event) => event.type === "error");
+    const errorPayload = (errorEvent?.payload as { error?: Record<string, unknown> }).error;
+    expect(errorPayload).toMatchObject({
+      code: "INTERNAL_ERROR",
+      phase: "INTERNAL",
+      retryable: false,
+      details: {
+        contextPreparation: {
+          reasonCode: "CONTEXT_SURFACE_PERSISTENCE_FAILED",
+          stage: "surface_persistence",
+          dimension: "SECTION_STATES",
+          observed: 2_049,
+          limit: 2_048,
+        },
+      },
+    });
+    expect(Object.keys(errorPayload?.details as object)).toEqual(["contextPreparation"]);
+    const serialized = JSON.stringify(h.notifications);
+    expect(serialized).not.toContain("CANARY");
+    expect(serialized).not.toContain("Users");
+  });
+
+  it("never reports an unrecognized Context failure as a provider error", async () => {
+    const call = fakeFrozenModelTurnExecutor(async () => turn());
+    const contextEngine = fakeContextEngine();
+    // The generic branch the Agent Loop has to produce: no recognizable type, no recognizable code.
+    contextEngine.prepareFailure = new Error("the projection could not be built");
+    const h = harness({ executor: call, contextEngine });
+
+    const result = await h.controller.start(h.store.snapshot.run.id);
+
+    expect(result.run.status).toBe("FAILED");
+    const errorPayload = (
+      h.notifications.find((event) => event.type === "error")?.payload as {
+        error?: Record<string, unknown>;
+      }
+    ).error;
+    expect(errorPayload).toMatchObject({
+      code: "INTERNAL_ERROR",
+      phase: "INTERNAL",
+      details: {
+        contextPreparation: {
+          reasonCode: "CONTEXT_PREPARATION_FAILED",
+          stage: "unknown",
+        },
+      },
+    });
+    expect(JSON.stringify(h.notifications)).not.toContain("projection could not be built");
+  });
+
+  it("keeps the Run settlement when the Context diagnostic sink itself fails", async () => {
+    const call = fakeFrozenModelTurnExecutor(async () => turn());
+    const contextEngine = fakeContextEngine();
+    contextEngine.prepareFailure = new PromptSurfaceCapacityError(
+      { reason: "BASELINE_TOO_LARGE", stage: "surface_capacity" },
+      "does not fit",
+    );
+    const h = harness({
+      executor: call,
+      contextEngine,
+      extra: {
+        failureDiagnostics: {
+          recordToolFailure: () => undefined,
+          recordContextPreparationFailure: () => {
+            throw new Error("the context diagnostic sink is broken");
+          },
+        },
+      },
+    });
+
+    const result = await h.controller.start(h.store.snapshot.run.id);
+
+    expect(result.run.status).toBe("FAILED");
+    expect(h.notifications.filter((event) => event.type === "error")).toHaveLength(1);
+    expect(
+      (h.notifications.find((event) => event.type === "error")?.payload as {
+        error?: Record<string, unknown>;
+      }).error,
+    ).toMatchObject({
+      details: {
+        contextPreparation: { reasonCode: "CONTEXT_SURFACE_BASELINE_TOO_LARGE" },
+      },
     });
     expect(JSON.stringify(h.notifications)).not.toContain("sink is broken");
   });
