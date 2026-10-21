@@ -7,7 +7,11 @@ import {
   type ContextSourceProvider,
 } from "@caelush/agent";
 import type { ContextTokenEstimatorPort } from "@caelush/agent";
-import { deriveTaskPlanSnapshot, renderBoundedTaskPlan } from "@caelush/coding-agent";
+import {
+  deriveTaskPlanSnapshot,
+  renderBoundedTaskPlanSections,
+  TASK_PLAN_BLOCK_BUDGETS,
+} from "@caelush/coding-agent";
 import type { TaskPlanEvidenceResolverPort } from "./task-plan-evidence-adapter.js";
 
 const SOURCE_ID = createContextSourceId("daemon.task-plan");
@@ -20,8 +24,13 @@ const SOURCE_ID = createContextSourceId("daemon.task-plan");
  * describes the same accepted plan as v2 did, in a shape that cannot contradict itself. A Context
  * persisted by v2 is still a valid persisted Context, so recovery keeps its existing rule and does
  * not replay a non-replayable Hook to obtain a v3 rendering.
+ *
+ * `v4` splits that one 8 KiB item into three bounded items — `current`, `evidence`, `notice` — with
+ * the same content and the same total budget. A Prompt Surface Section is rewritten as a whole, so a
+ * single block whose last line counted accepted Tool results rewrote 8 KiB on every Step; the count
+ * now lives in the 512-byte notice and the stable body does not move.
  */
-const SOURCE_VERSION = "task-plan-v3";
+const SOURCE_VERSION = "task-plan-v4";
 
 /**
  * The rendered-plan budget, separate from the *input* budget the Tool enforces.
@@ -31,7 +40,8 @@ const SOURCE_VERSION = "task-plan-v3";
  * is repeated in every request. Pinning 32 KiB into every turn would make a long plan a permanent tax
  * on the whole Run.
  */
-const MAX_BLOCK_BYTES = 8 * 1024;
+const MAX_BLOCK_BYTES =
+  TASK_PLAN_BLOCK_BUDGETS.current + TASK_PLAN_BLOCK_BUDGETS.evidence + TASK_PLAN_BLOCK_BUDGETS.notice;
 
 /**
  * Publish the Run's current plan and working record as context.
@@ -91,35 +101,44 @@ export function createTaskPlanContextProvider(
               conversation: input.conversation,
             }),
       ]);
-      const rendered = renderBoundedTaskPlan(snapshot, {
+      const rendered = renderBoundedTaskPlanSections(snapshot, {
         maxBytes: MAX_BLOCK_BYTES,
         evidence,
         availableEvidenceRefs,
       });
-      const text = rendered.text;
+      const item = (
+        part: "current" | "evidence" | "notice",
+        text: string,
+        priorityClass: "HIGH" | "NORMAL" | "LOW",
+        whyLoaded: string,
+      ) =>
+        createContextSourceItem({
+          id: createContextItemId(`daemon.task-plan:${part}`),
+          type: "coding.runtime_fact",
+          source: {
+            providerId: SOURCE_ID,
+            sourceRef: `daemon:task-plan/${part}`,
+            version: SOURCE_VERSION,
+          },
+          scope: "RUN",
+          retention: "EPHEMERAL",
+          priorityClass,
+          tokenEstimate: tokenEstimator.estimateText(text, input.model),
+          cacheStability: "DYNAMIC",
+          freshness: "CURRENT",
+          sensitivity: "INTERNAL",
+          whyLoaded,
+          payload: { kind: "TEXT", text },
+        });
+      const items = [
+        item("current", rendered.current, "HIGH", `accepted update_plan snapshot v${String(snapshot.planVersion)}`),
+        item("evidence", rendered.evidence, "NORMAL", "independent evidence for the references the plan cited"),
+        item("notice", rendered.notice, "LOW", "accepted plan bookkeeping; changes every Step"),
+      ].filter((entry) => (entry.payload as { text?: string }).text !== "");
       return {
         providerId: SOURCE_ID,
         providerVersion: SOURCE_VERSION,
-        items: [
-          createContextSourceItem({
-            id: createContextItemId("daemon.task-plan:current"),
-            type: "coding.runtime_fact",
-            source: {
-              providerId: SOURCE_ID,
-              sourceRef: "daemon:task-plan",
-              version: SOURCE_VERSION,
-            },
-            scope: "RUN",
-            retention: "EPHEMERAL",
-            priorityClass: "HIGH",
-            tokenEstimate: tokenEstimator.estimateText(text, input.model),
-            cacheStability: "DYNAMIC",
-            freshness: "CURRENT",
-            sensitivity: "INTERNAL",
-            whyLoaded: `accepted update_plan snapshot v${String(snapshot.planVersion)}`,
-            payload: { kind: "TEXT", text },
-          }),
-        ],
+        items,
         diagnostics: [],
       };
     },

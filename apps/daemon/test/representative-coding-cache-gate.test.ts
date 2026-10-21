@@ -1434,8 +1434,23 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
     expect(surfaceSectionSets(surface.records ?? [], "src/utils.js")).toHaveLength(2);
     expect(surfaceSectionSets(surface.records ?? [], "src/styles.css")).toHaveLength(1);
     const workProgress = surfaceSectionSets(surface.records ?? [], "work progress");
-    expect(workProgress.length).toBeGreaterThanOrEqual(3);
-    expect(new Set(workProgress).size).toBeGreaterThanOrEqual(3);
+    /*
+     * Work progress is no longer rewritten once per Tool result.
+     *
+     * ```text
+     * ten completed Tools      one emission, byte for byte     the count is not information
+     * a real change            a new value                     a failure, a cancellation, a progress note
+     * an unchanged value       never re-emitted                the engine drops it as a NOOP
+     * ```
+     *
+     * Before, the block listed every validated observation, so each Step in this scenario rewrote it
+     * and the section had at least three distinct values. Those values differed only in which results
+     * had arrived — the one fact the conversation already shows. What must stay true is that a change
+     * is emitted once and an unchanged value is never re-sent.
+     */
+    expect(workProgress.length).toBeGreaterThanOrEqual(1);
+    expect(workProgress.length).toBeLessThanOrEqual(2);
+    expect(new Set(workProgress).size).toBe(workProgress.length);
     const projected = projectPromptSurface(surface);
     const visibleRecordCount = surface.records?.filter(({ kind }) => kind !== "NOOP").length ?? 0;
     expect(projected).toHaveLength(visibleRecordCount);

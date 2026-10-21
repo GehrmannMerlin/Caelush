@@ -72,12 +72,17 @@ export function createTaskPlanEvidenceResolver(input: {
       if (run === null || run.sessionId !== request.identity.sessionId) return [];
       const messages = conversationMessages(request.conversation, request.identity);
       const refs = new Map<string, string>();
-      for (const message of messages.slice(-MAX_EVIDENCE_REFS)) {
-        refs.set(
-          `message:${message.message.id}`,
-          `durable ${message.message.type.toLowerCase()} message`,
-        );
-      }
+      /*
+       * Only references an independent check can speak about: observations and verification checks.
+       *
+       * The newest messages used to be offered here as `message:<id>`, and that was wrong twice. A
+       * sliding window over the conversation rewrites this list on every Step, so the 1.5 KiB evidence
+       * Section changed on every Step for a set that had not become more informative; and a
+       * `message:` reference resolves to UNVERIFIED by construction, so citing one can never prove
+       * anything. A plan that cites only messages would read as "unchecked" no matter how much work
+       * it did. The plan may still cite a message it recorded itself — that is the plan's claim, and
+       * it stays printed as unverified — but the host does not recommend one.
+       */
       const messageByObservation = observationMessages(messages);
       for (const observation of observations.slice(-MAX_EVIDENCE_REFS)) {
         if (
@@ -87,6 +92,16 @@ export function createTaskPlanEvidenceResolver(input: {
         ) {
           const invocation = invocations.find((item) => item.id === observation.toolInvocationId);
           const outcome = projectProcessOutcome(observation.details);
+          /*
+           * A reference that can only ever resolve to "unchecked" is not evidence to recommend.
+           *
+           * A process observation carries an outcome and an error carries a fact; a file read, a patch
+           * or a plan update carries neither, so citing one can never prove anything and prints as
+           * `UNKNOWN` however many times it is cited. Offering those taught the model to cite its own
+           * bookkeeping. The tail window is also why this list used to change on every Step: it moved
+           * whenever any Tool ran. It now moves when something with an outcome happens.
+           */
+          if (outcome.kind === "UNKNOWN" && !observation.isError) continue;
           const label = `Tool ${invocation?.toolName ?? "unknown"}; outcome=${outcome.kind}${observation.isError ? "; isError=true" : ""}`;
           refs.set(`observation:${observation.id}`, label);
         }

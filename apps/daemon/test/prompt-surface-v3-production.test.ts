@@ -606,7 +606,11 @@ describe("Prompt Surface V3 production composition", () => {
       noop: 5,
       set: 31,
       clear: 0,
-      newModelVisibleContextBytes: 19_120,
+      // A characterisation, not a target: what this trajectory costs the model in replayed Section
+      // text. It fell by 599 bytes when the plan blocks stopped carrying volatile counts in their
+      // stable body and the evidence block stopped recommending `message:` references, which can only
+      // ever resolve to "unchecked".
+      newModelVisibleContextBytes: 18_521,
       projectedRuntimeMessages: 5,
       unchangedSectionReemissions: 0,
       loginSetVersions: 2,
@@ -616,9 +620,16 @@ describe("Prompt Surface V3 production composition", () => {
     });
     expect(loginState?.content).toContain("login-v2-cache-fixture");
     expect(loginState?.content).not.toContain("login-v1-cache-fixture");
+    // The progress block states what the newer observations mean instead of listing each one: the
+    // list was what made the Section change on every Step.
     expect(
-      fifth.prepared.messages.some((message) => message.content.includes("read_file: completed")),
+      fifth.prepared.messages.some((message) =>
+        message.content.includes("Newer validated observations all completed"),
+      ),
     ).toBe(true);
+    expect(
+      fifth.prepared.messages.some((message) => message.content.includes("- read_file: completed")),
+    ).toBe(false);
     expect(
       fifth.prepared.messages.some((message) => message.content.includes("Read login.html")),
     ).toBe(true);

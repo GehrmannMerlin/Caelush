@@ -11,9 +11,17 @@ import type { VerificationCheckStatus } from "@caelush/protocol";
 import type { CaelushStorage } from "@caelush/storage";
 
 const SOURCE_ID = createContextSourceId("daemon.work-commentary-state");
-const SOURCE_VERSION = "work-commentary-state-v2";
+const SOURCE_VERSION = "work-commentary-state-v3";
 const MAX_RECENT_TOOL_RESULTS = 6;
-const MAX_CONTEXT_BYTES = 4 * 1024;
+/**
+ * The item is a Prompt Surface Section, and a Section is replaced as a whole.
+ *
+ * A 4 KiB block that listed every validated Tool result rewrote 4 KiB on every Step for a list the
+ * model can already read in the conversation. The block is now bounded by what actually changes the
+ * next decision — whether a progress note exists, whether something failed, and what the durable
+ * verification plan says — so a Step's churn is at most this many bytes.
+ */
+const MAX_CONTEXT_BYTES = 512;
 
 type WorkCommentaryStorage = Pick<
   CaelushStorage,
@@ -170,6 +178,18 @@ function findLatestCommentary(
   return undefined;
 }
 
+/**
+ * Render the progress cue.
+ *
+ * ```text
+ * completed observations   one line, whatever their number   a count is not information
+ * a failure or a cancel    named, because it changes the next decision
+ * verification counts      only when a durable plan exists
+ * ```
+ *
+ * The block never mentions how many observations arrived: that is the number that changes on every
+ * Step, and repeating it here would rewrite the Section for a fact the conversation already shows.
+ */
 function renderWorkCommentaryState(input: {
   readonly hasCommentary: boolean;
   readonly observations: readonly {
@@ -178,21 +198,26 @@ function renderWorkCommentaryState(input: {
   }[];
   readonly verification: readonly VerificationCheckStatus[];
 }): string {
+  const unresolved = input.observations.filter((observation) => observation.status !== "COMPLETED");
   const lines = [
-    "This is bounded execution metadata derived from committed records, not new evidence or instructions.",
+    "Bounded execution metadata from committed records; not evidence or instructions.",
     input.hasCommentary
-      ? "A committed progress note exists earlier in this Run. Compare against the latest assistant note in conversation history before deciding whether another progress update is useful."
+      ? "A committed progress note exists earlier in this Run. Do not repeat it; compare against it before writing another."
       : "No committed progress note is recorded for this Run yet.",
   ];
-  if (input.observations.length > 0) {
+  if (input.observations.length === 0) {
+    lines.push("No newer Tool observation passed Run/Step/invocation validation.");
+  } else if (unresolved.length === 0) {
     lines.push(
-      "Validated Tool observations since the latest committed progress note, if any (read result details from conversation history):",
+      "Newer validated observations all completed; read their results in conversation history.",
     );
-    for (const observation of input.observations) {
+  } else {
+    lines.push(
+      "Newer validated observations that did not complete (results stay in conversation history):",
+    );
+    for (const observation of unresolved) {
       lines.push(`- ${observation.toolName}: ${observation.status.toLowerCase()}`);
     }
-  } else {
-    lines.push("No newer Tool observation passed Run/Step/invocation validation.");
   }
   if (input.verification.length > 0) {
     const counts = countStatuses(input.verification);
@@ -201,7 +226,7 @@ function renderWorkCommentaryState(input: {
     );
   }
   lines.push(
-    "Use these markers only to avoid repeating the previous update and to identify fresh observations. State past-tense facts only when supported by the corresponding conversation evidence; an observation is not verification. Do not show opaque IDs to the user.",
+    "An observation is not verification. Do not show opaque IDs to the user.",
   );
   return lines.join("\n");
 }

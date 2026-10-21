@@ -159,6 +159,85 @@ describe("Work Commentary semantic identity", () => {
     );
     expect(anotherRun.items[0]?.id).not.toBe(first.items[0]?.id);
   });
+
+  /**
+   * A completed observation is not news.
+   *
+   * The Section is replaced as a whole, so listing each validated result rewrote it on every Step for
+   * a list the model can already read in the conversation. Twenty more completions must leave the
+   * text byte-identical, and the block must stay small enough that a change it does make is cheap.
+   */
+  it("keeps the commentary byte-identical while completed observations accumulate", async () => {
+    const invocations = new Map<string, unknown>();
+    const observations = new Map<string, unknown>();
+    const results: { sequence: number; message: unknown }[] = [];
+    for (let index = 0; index < 20; index += 1) {
+      const invocation = ToolInvocationSchema.parse({
+        id: createToolInvocationId(),
+        runId,
+        stepId: stepCompleted,
+        externalCallId: `call_${String(index)}`,
+        toolName: "read_file",
+        args: { path: `file-${String(index)}.ts` },
+        riskLevel: "LOW",
+        status: "COMPLETED",
+        createdAt: 1,
+        finishedAt: 2,
+      });
+      const observation = ToolObservationSchema.parse({
+        id: `obs_0192f5b1-4d3a-7c2e-8a91-${String(index).padStart(12, "0")}`,
+        kind: "TOOL",
+        runId,
+        stepId: stepCompleted,
+        toolInvocationId: invocation.id,
+        content: `output ${String(index)}`,
+        isError: false,
+        createdAt: 2,
+      });
+      invocations.set(invocation.id, invocation);
+      observations.set(observation.id, observation);
+      results.push({
+        sequence: 2 + index,
+        message: toolResult(runId, stepCompleted, observation.id, "read_file"),
+      });
+    }
+    const provider = createWorkCommentaryContextProvider({
+      storage: {
+        observations: {
+          async get(id) {
+            return (observations.get(id) as never) ?? null;
+          },
+        },
+        toolInvocations: {
+          async get(id) {
+            return (invocations.get(id) as never) ?? null;
+          },
+        },
+        verification: {
+          async getLatestPlan() {
+            return null;
+          },
+        },
+      },
+    });
+    const commentary = {
+      type: "ASSISTANT",
+      runId,
+      phase: "COMMENTARY",
+      content: [{ type: "TEXT", text: "Started." }],
+    };
+
+    const early = await provider.collect(
+      input(stepCompleted, [{ sequence: 1, message: commentary }, ...results.slice(0, 1)]),
+    );
+    const late = await provider.collect(
+      input(stepCompleted, [{ sequence: 1, message: commentary }, ...results]),
+    );
+
+    expect(late.items[0]?.payload).toEqual(early.items[0]?.payload);
+    const text = late.items[0]?.payload.kind === "TEXT" ? late.items[0].payload.text : "";
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(512);
+  });
 });
 
 function input(

@@ -122,7 +122,18 @@ describe("daemon production composition E2E", () => {
       preset: { id: "FULL_ACCESS", expectedVersion: 1 },
       limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 10_000 },
     });
-    expect(run.contextBudgetPolicy).toEqual({ version: "LEGACY_FULL_OUTPUT_V1" });
+    // A Run created without a policy gets the bounded working set, frozen at creation.
+    expect(run.contextBudgetPolicy).toEqual({
+      version: "WORKING_SET_V2",
+      requestBudget: { version: "LEGACY_FULL_OUTPUT_V1" },
+      workingSet: {
+        targetTokens: 96_000,
+        triggerRatio: 0.75,
+        postCompactionRatio: 0.5,
+        allowCurrentTurnPrefix: true,
+        cooldownTurns: 5,
+      },
+    });
     await client.startRun(run.id);
 
     let settled = await client.getRun(run.id);

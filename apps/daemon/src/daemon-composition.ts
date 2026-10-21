@@ -1087,9 +1087,18 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     resolve: (run) => baseResolver.resolve(run),
   } satisfies RunExecutionConfigResolver;
   const contextRequestOverheadEstimator = createContextRequestOverheadEstimator();
+  /**
+   * The budget policy a *new* Run is frozen against.
+   *
+   * `WORKING_SET_V2` is the production default: it is the only policy that bounds how much context
+   * a long Run accumulates, and a Run is frozen once, at creation, so a Run started before this
+   * default keeps the policy it was created with. An explicit version stays selectable for a host
+   * that must reproduce an older behaviour.
+   */
+  const requestedContextBudgetPolicy = options.contextBudgetPolicyVersion ?? "WORKING_SET_V2";
   const contextBudgetPolicyResolver: RunContextBudgetPolicyResolver = {
     async resolve(run) {
-      if (options.contextBudgetPolicyVersion === "WORKING_SET_V2") {
+      if (requestedContextBudgetPolicy === "WORKING_SET_V2") {
         const model = ai.models.resolve(run.model);
         const requestOverheadTokens = contextRequestOverheadEstimator.estimate({
           model,
@@ -1118,7 +1127,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           }),
         });
       }
-      if (options.contextBudgetPolicyVersion !== "ADAPTIVE_V1") {
+      if (requestedContextBudgetPolicy !== "ADAPTIVE_V1") {
         return Object.freeze({ version: "LEGACY_FULL_OUTPUT_V1" as const });
       }
       const model = ai.models.resolve(run.model);
@@ -1237,7 +1246,12 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
   /**
-   * The host sink for bounded Tool failure diagnostics.
+   * The host sink for bounded failure diagnostics.
+   *
+   * ```text
+   * Tool failure            which Tool stage broke, and no argument or path
+   * Context preparation     which preparation stage broke, with the bound it measured
+   * ```
    *
    * Composed here so the Run Layer never learns how this deployment logs. Without a logger there is
    * no sink and the Run still fails the same way: a diagnostic is an addition to the failure, never

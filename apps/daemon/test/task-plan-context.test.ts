@@ -56,7 +56,7 @@ function acceptedResult(callId: string, runId = RUN_ID) {
 }
 
 function textOf(result: { items: readonly { payload?: { text?: string } }[] }): string {
-  return result.items[0]?.payload?.text ?? "";
+  return result.items.map((item) => item.payload?.text ?? "").join("\n");
 }
 
 describe("task plan context", () => {
@@ -95,7 +95,7 @@ describe("task plan context", () => {
       items: readonly { payload?: { text?: string }; tokenEstimate?: number }[];
     };
     const text = textOf(result);
-    expect(result.providerVersion).toBe("task-plan-v3");
+    expect(result.providerVersion).toBe("task-plan-v4");
     expect(text).toContain("CURRENT PLAN v2");
     expect(text).toContain("Why it changed: the endpoint rejects empty patches");
     expect(text).toContain("UNRESOLVED");
@@ -104,8 +104,9 @@ describe("task plan context", () => {
     expect(text).toContain(
       "refs: none; reportedStatus=in_progress; independentEvidence=UNVERIFIED",
     );
-    // The item's token estimate is derived from the text, not a constant.
-    expect(result.items[0]?.tokenEstimate).toBeGreaterThan(1);
+    // Each item's token estimate is derived from its own text, not a constant.
+    expect(result.items.length).toBe(3);
+    for (const item of result.items) expect(item.tokenEstimate).toBeGreaterThan(1);
   });
 
   it("ignores a plan recorded by a different Run in the same conversation", async () => {
@@ -141,5 +142,56 @@ describe("task plan context", () => {
     const text = textOf(result);
     expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8 * 1024);
     expect(text).toContain("summarized/truncated");
+  });
+
+  /**
+   * The reason the plan is three items and not one.
+   *
+   * A Prompt Surface Section is replaced as a whole, so anything volatile in the same item rewrites
+   * the whole item. A hundred accepted Tool results change only the notice; the stable body must be
+   * byte-identical or every Step pays 6 KiB of replay for a counter.
+   */
+  it("keeps the stable plan body byte-identical while the accepted-result count moves", async () => {
+    const provider = createTaskPlanContextProvider();
+    const planMessages = [
+      assistantCall("call_1", {
+        planVersion: 2,
+        plan: [{ id: "editor", step: "editor round-trip", status: "in_progress" }],
+        execution: { nextAction: "fix the validator" },
+      }),
+      acceptedResult("call_1"),
+    ];
+    const accepted = Array.from({ length: 100 }, (_unused, index) => ({
+      sequence: 10 + index,
+      message: {
+        type: "TOOL_RESULT",
+        runId: RUN_ID,
+        id: `msg_shell_${String(index)}`,
+        toolCallId: `call_shell_${String(index)}`,
+        toolName: "bash",
+        isError: false,
+      },
+    }));
+
+    const collect = async (messages: readonly { readonly message: unknown }[]) =>
+      (await provider.collect(sourceInput(messages))) as never as {
+        items: readonly { id: string; payload: { text: string } }[];
+      };
+    const partOf = (
+      result: { items: readonly { id: string; payload: { text: string } }[] },
+      part: string,
+    ) => result.items.find((item) => String(item.id).endsWith(part))?.payload.text ?? "";
+
+    const before = await collect(planMessages);
+    const after = await collect([...planMessages, ...accepted]);
+
+    expect(partOf(after, "current")).toBe(partOf(before, "current"));
+    expect(partOf(after, "evidence")).toBe(partOf(before, "evidence"));
+    expect(partOf(after, "notice")).not.toBe(partOf(before, "notice"));
+    expect(partOf(after, "notice")).toContain("100");
+    // Each part stays inside its own cap: a churn that grows without a bound is not a bound.
+    expect(Buffer.byteLength(partOf(after, "current"), "utf8")).toBeLessThanOrEqual(6 * 1024);
+    expect(Buffer.byteLength(partOf(after, "evidence"), "utf8")).toBeLessThanOrEqual(1_536);
+    expect(Buffer.byteLength(partOf(after, "notice"), "utf8")).toBeLessThanOrEqual(512);
   });
 });

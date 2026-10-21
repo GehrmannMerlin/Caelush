@@ -25,11 +25,16 @@ export const FIXTURE_API = "fixture-api";
 export const FIXTURE_ENDPOINT = "http://fixture.invalid/v1";
 
 /** The descriptor every daemon fixture resolves against. */
-export function fixtureDescriptor(): ModelDescriptor {
+export function fixtureDescriptor(
+  limits: { readonly contextWindowTokens: number; readonly maxOutputTokens: number } = {
+    contextWindowTokens: 128_000,
+    maxOutputTokens: 8_192,
+  },
+): ModelDescriptor {
   return {
     ref: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
     api: FIXTURE_API,
-    limits: { contextWindowTokens: 128_000, maxOutputTokens: 8_192 },
+    limits: { ...limits },
     capabilities: {
       streaming: "SUPPORTED",
       toolCalling: "SUPPORTED",
@@ -46,10 +51,12 @@ export function fixtureDescriptor(): ModelDescriptor {
 }
 
 /** The model metadata authority a daemon fixture composes with. */
-export function fixtureModelSource(): ModelDescriptorSourcePort & {
+export function fixtureModelSource(
+  limits?: { readonly contextWindowTokens: number; readonly maxOutputTokens: number },
+): ModelDescriptorSourcePort & {
   list(): readonly ModelDescriptor[];
 } {
-  const descriptor = fixtureDescriptor();
+  const descriptor = fixtureDescriptor(limits);
   return {
     id: "daemon-fixture",
     priority: 0,

@@ -40,6 +40,8 @@ export interface ReliabilityFixtureOptions {
   readonly permissionPreset?: "VIEW_ONLY" | "WORKSPACE_WRITE" | "FULL_ACCESS";
   readonly resourceCorrectionRecoveryPolicy?: ResourceCorrectionRecoveryPolicy | null;
   readonly contextBudgetPolicy?: ContextBudgetPolicySnapshot;
+  /** Model limits for scenarios that must reproduce a large-window provider. */
+  readonly modelLimits?: { readonly contextWindowTokens: number; readonly maxOutputTokens: number };
 }
 
 /** A real daemon composition and SQLite database with only its external model wire scripted. */
@@ -83,7 +85,7 @@ export async function createReliabilityFixture(
       composeDaemon({
         storage: storage!,
         providerBindings: [fixtureBinding()],
-        modelSources: [fixtureModelSource()],
+        modelSources: [fixtureModelSource(options.modelLimits)],
         adapterOverrides: [options.adapter],
         defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
         ...(recoveryPolicy === undefined
