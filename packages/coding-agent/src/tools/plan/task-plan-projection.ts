@@ -213,9 +213,35 @@ const SEMANTIC_PLAN_BUDGETS = Object.freeze({
   current: 1792,
   unresolved: 1792,
   next: 768,
+  evidence: 1024,
   constraints: 1024,
-  remaining: 1536,
+  remaining: 512,
 });
+
+/**
+ * Section order, which is also the order that borrows unused capacity.
+ *
+ * ```text
+ * meta current unresolved next evidence constraints remaining
+ * ```
+ *
+ * Evidence sits above the discretionary tail on purpose. A step's recorded references are what lets
+ * the next turn cite a check that exists instead of inventing one, so they must not be the first thing
+ * a long plan clips away. The sum of the section budgets is exactly the 8 KiB block budget; the
+ * header is outside it and is never expanded.
+ */
+const SEMANTIC_PLAN_SECTION_ORDER = [
+  "meta",
+  "current",
+  "unresolved",
+  "next",
+  "evidence",
+  "constraints",
+  "remaining",
+] as const;
+
+const MAX_EVIDENCE_ENTRIES = 4;
+const EVIDENCE_DESCRIPTION_BYTES = 80;
 
 /**
  * Render the accepted plan under a byte budget while preserving the information the next action needs.
@@ -246,22 +272,35 @@ export function renderBoundedTaskPlan(
   const evidenceByReference = new Map(
     (options.evidence ?? []).map((item) => [item.reference, item.state] as const),
   );
+  const evidenceLabels = new Map(
+    (options.availableEvidenceRefs ?? []).map(
+      (item) => [item.reference, item.description] as const,
+    ),
+  );
+  const evidenceStateOf = (step: TaskPlanStep): TaskPlanEvidenceState =>
+    aggregateTaskPlanEvidenceState(step.evidenceRefs, evidenceByReference);
+  /**
+   * One step line, with the three facts kept apart.
+   *
+   * ```text
+   * refs:               what the model recorded (deduplicated; a repeat cites nothing new)
+   * reportedStatus=     what the model says about its own step
+   * independentEvidence what the resolved facts say about the checks it cited
+   * ```
+   *
+   * They are printed on every step, including steps that cite nothing, because a line without an
+   * evidence clause would read as "not checked yet" on a step the model marked completed. Writing
+   * `independentEvidence=UNVERIFIED` says that explicitly.
+   */
   const stepLine = (step: TaskPlanStep): string => {
     const identity = step.id === undefined ? "" : `${step.id} `;
     const acceptance =
       step.acceptance === undefined || step.acceptance.length === 0
         ? ""
         : ` — accept: ${step.acceptance.join("; ")}`;
-    const evidence =
-      step.evidenceRefs === undefined || step.evidenceRefs.length === 0
-        ? ""
-        : ` [claimed evidence: ${step.evidenceRefs.join(", ")} — unverified]`;
-    const evidenceState = aggregateTaskPlanEvidenceState(step.evidenceRefs, evidenceByReference);
-    const evidenceSummary =
-      step.evidenceRefs === undefined || step.evidenceRefs.length === 0
-        ? ""
-        : ` — reportedStatus=${step.status}; independentEvidence=${evidenceState}`;
-    return `${marks[step.status]} ${identity}${step.step}${acceptance}${evidence}${evidenceSummary}`;
+    const refs = uniqueReferences(step.evidenceRefs ?? []);
+    const recorded = refs.length === 0 ? "refs: none" : `refs: ${refs.join(", ")}`;
+    return `${marks[step.status]} ${identity}${step.step}${acceptance} [${recorded}; reportedStatus=${step.status}; independentEvidence=${evidenceStateOf(step)}]`;
   };
   const active = snapshot.steps.filter((step) => step.status === "in_progress");
   const pending = snapshot.steps.filter((step) => step.status === "pending");
@@ -270,6 +309,18 @@ export function renderBoundedTaskPlan(
   const completed = snapshot.steps.filter((step) => step.status === "completed");
   const otherPending = pending.filter((step) => !currentSet.has(step));
   const execution = snapshot.execution;
+  const counts = countEvidenceStates(snapshot.steps, evidenceStateOf);
+  const citedReferences = new Set(snapshot.steps.flatMap((step) => step.evidenceRefs ?? []));
+  const evidenceEntries = selectEvidenceEntries({
+    current,
+    completed,
+    stateOf: evidenceStateOf,
+    evidenceByReference,
+    labels: evidenceLabels,
+    cited: citedReferences,
+    available: options.availableEvidenceRefs ?? [],
+  });
+  const evidenceSummary = evidenceSummaryLine(counts, citedReferences.size);
   const sections: SemanticPlanSection[] = [
     {
       id: "meta",
@@ -302,6 +353,14 @@ export function renderBoundedTaskPlan(
       budget: budget("next"),
     },
     {
+      id: "evidence",
+      title: `独立证据 — 仅覆盖所引用的检查 (计划引用 ${String(citedReferences.size)} 条去重引用)`,
+      // The conclusion comes first so that clipping removes entries, never the judgement. A footer
+      // the reader can lose is a footer that can contradict the step lines it was meant to explain.
+      lines: [evidenceSummary, ...evidenceEntries],
+      budget: budget("evidence"),
+    },
+    {
       id: "constraints",
       title: `Constraints (${execution?.constraints?.length ?? 0})`,
       lines: execution?.constraints ?? [],
@@ -316,18 +375,8 @@ export function renderBoundedTaskPlan(
         ...(completed.length > 4
           ? [`${completed.length - 4} earlier completed steps omitted`]
           : []),
-        ...(options.availableEvidenceRefs === undefined ||
-        options.availableEvidenceRefs.length === 0
-          ? []
-          : [
-              `可引用的真实证据引用（当前 Run 最近 ${Math.min(8, options.availableEvidenceRefs.length)} 条）:`,
-              ...options.availableEvidenceRefs
-                .slice(-8)
-                .map(({ reference, description }) => `- ${reference} — ${description}`),
-            ]),
         ...(execution?.discoveries ?? []).map((line) => `发现（报告）: ${line}`),
         ...(execution?.decisions ?? []).map((line) => `决定（报告）: ${line}`),
-        `独立证据: ${taskPlanEvidenceState()} — no check has been shown to pass; claimed references remain unverified.`,
       ],
       budget: budget("remaining"),
     },
@@ -343,7 +392,7 @@ export function renderBoundedTaskPlan(
   // Unused capacity in sparse sections is borrowed by the highest-priority sections first. Each
   // section is re-rendered from the original source, so borrowing cannot stack lossy truncations.
   let remaining = Math.max(0, maxBytes - Buffer.byteLength(text, "utf8"));
-  for (const id of ["meta", "current", "unresolved", "next", "constraints", "remaining"]) {
+  for (const id of SEMANTIC_PLAN_SECTION_ORDER) {
     if (remaining === 0) break;
     const index = sections.findIndex((section) => section.id === id);
     const current = rendered[index];
@@ -373,6 +422,144 @@ export function renderBoundedTaskPlan(
     includedSections: Object.freeze(includedSections),
     omittedCounts: Object.freeze(omittedCounts),
   });
+}
+
+function uniqueReferences(references: readonly string[]): readonly string[] {
+  return Object.freeze([...new Set(references)]);
+}
+
+function countEvidenceStates(
+  steps: readonly TaskPlanStep[],
+  stateOf: (step: TaskPlanStep) => TaskPlanEvidenceState,
+): Readonly<Record<TaskPlanEvidenceState, number>> {
+  const counts: Record<TaskPlanEvidenceState, number> = {
+    PASSED: 0,
+    FAILED: 0,
+    STALE: 0,
+    INCOMPLETE: 0,
+    UNKNOWN: 0,
+    UNVERIFIED: 0,
+  };
+  for (const step of steps) counts[stateOf(step)] += 1;
+  return counts;
+}
+
+/**
+ * The one sentence that says what the evidence covers.
+ *
+ * ```text
+ * cited nothing       counts, and the fact that every completed mark is only a report
+ * cited something     counts, whether any cited check has passed, and what the counts cover
+ * ```
+ *
+ * Neither branch concludes that the work is done. A count of PASSED steps is a statement about the
+ * checks the model chose to cite, not about the project: the projection cannot see requirements the
+ * plan never wrote down.
+ */
+function evidenceSummaryLine(
+  counts: Readonly<Record<TaskPlanEvidenceState, number>>,
+  distinctReferences: number,
+): string {
+  const perState = (["PASSED", "FAILED", "STALE", "INCOMPLETE", "UNKNOWN", "UNVERIFIED"] as const)
+    .map((state) => `${state} ${String(counts[state])}`)
+    .join(" / ");
+  if (distinctReferences === 0) {
+    return `按步骤统计: ${perState}. 计划未记录检查引用；completed 只是模型报告，不构成全部需求完成的结论.`;
+  }
+  const passNote =
+    counts.PASSED === 0
+      ? "；没有任何所引用检查通过"
+      : `；${String(counts.PASSED)} 个步骤的引用检查通过`;
+  return `按步骤统计: ${perState}${passNote}. 仅覆盖所引用的检查，不构成全部需求完成的结论.`;
+}
+
+/**
+ * Choose at most four references to print.
+ *
+ * ```text
+ * 1. what the current step cites                    what the next action is about to need
+ * 2. failed or stale references of completed steps  what must be repaired, not repeated
+ * 3. other completed steps' references             the evidence the plan already relies on
+ * 4. the most recent available real references      what the model can cite next
+ * ```
+ *
+ * Tier 3 exists because a plan that cites only passing checks would otherwise print a summary and no
+ * references at all — the section would be at its least useful exactly when the work is going well.
+ *
+ * Unknown references are printed as UNKNOWN rather than resolved by guessing an id from model prose,
+ * and the model's plan is never edited to add references it did not record.
+ */
+function selectEvidenceEntries(input: {
+  readonly current: readonly TaskPlanStep[];
+  readonly completed: readonly TaskPlanStep[];
+  readonly stateOf: (step: TaskPlanStep) => TaskPlanEvidenceState;
+  readonly evidenceByReference: ReadonlyMap<string, TaskPlanEvidenceState>;
+  readonly labels: ReadonlyMap<string, string>;
+  readonly cited: ReadonlySet<string>;
+  readonly available: readonly TaskPlanAvailableEvidenceRef[];
+}): readonly string[] {
+  const entries: string[] = [];
+  const included = new Set<string>();
+  const add = (reference: string): void => {
+    if (included.has(reference) || entries.length >= MAX_EVIDENCE_ENTRIES) return;
+    included.add(reference);
+    const label = input.labels.get(reference);
+    /**
+     * `- <reference> — <description> [<state>]`.
+     *
+     * The state is printed only when the plan cites the reference: an available reference the plan
+     * never cited has no state *for this plan*, and printing `[UNKNOWN]` there would claim a
+     * resolution was attempted and failed. The description is dropped rather than filled with a
+     * placeholder when the host has no label for it — the reference token, which is what the model
+     * copies into `evidenceRefs`, is the part that must stay intact.
+     */
+    const state = input.cited.has(reference)
+      ? (input.evidenceByReference.get(reference) ?? "UNKNOWN")
+      : undefined;
+    const description =
+      label === undefined ? "" : ` — ${clipUtf8(label, EVIDENCE_DESCRIPTION_BYTES)}`;
+    entries.push(
+      state === undefined
+        ? `- ${reference}${description}`
+        : `- ${reference}${description} [${state}]`,
+    );
+  };
+  for (const step of input.current) for (const reference of step.evidenceRefs ?? []) add(reference);
+  const needsRepair = input.completed.filter((step) => {
+    const state = input.stateOf(step);
+    return state === "FAILED" || state === "STALE";
+  });
+  const repaired = new Set(needsRepair);
+  for (const step of needsRepair) for (const reference of step.evidenceRefs ?? []) add(reference);
+  // Later steps are the more recent record of what the plan relies on.
+  for (const step of [...input.completed].reverse()) {
+    if (repaired.has(step)) continue;
+    for (const reference of step.evidenceRefs ?? []) add(reference);
+  }
+  // Most recent first: the adapter hands over ascending history, so the tail is the newest.
+  for (const item of [...input.available].reverse()) add(item.reference);
+  return Object.freeze(entries);
+}
+
+/**
+ * Clip to a byte budget without splitting a character, marking that something was removed.
+ *
+ * A budget that can be exceeded by one character is not a budget, and a description that lies about
+ * being complete is worse than one that ends in an ellipsis.
+ */
+function clipUtf8(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+  const ellipsis = "…";
+  const budget = Math.max(0, maxBytes - Buffer.byteLength(ellipsis, "utf8"));
+  let used = 0;
+  let end = 0;
+  for (const character of value) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (used + size > budget) break;
+    used += size;
+    end += character.length;
+  }
+  return `${value.slice(0, end)}${ellipsis}`;
 }
 
 interface RenderedSemanticSection {

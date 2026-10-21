@@ -90,12 +90,20 @@ describe("task plan context", () => {
         }),
         acceptedResult("call_1"),
       ]),
-    )) as never as { items: readonly { payload?: { text?: string }; tokenEstimate?: number }[] };
+    )) as never as {
+      providerVersion: string;
+      items: readonly { payload?: { text?: string }; tokenEstimate?: number }[];
+    };
     const text = textOf(result);
+    expect(result.providerVersion).toBe("task-plan-v3");
     expect(text).toContain("CURRENT PLAN v2");
     expect(text).toContain("Why it changed: the endpoint rejects empty patches");
     expect(text).toContain("UNRESOLVED");
     expect(text).toContain("fix the validator");
+    // A step that cites nothing still says so, instead of looking silently unchecked.
+    expect(text).toContain(
+      "refs: none; reportedStatus=in_progress; independentEvidence=UNVERIFIED",
+    );
     // The item's token estimate is derived from the text, not a constant.
     expect(result.items[0]?.tokenEstimate).toBeGreaterThan(1);
   });

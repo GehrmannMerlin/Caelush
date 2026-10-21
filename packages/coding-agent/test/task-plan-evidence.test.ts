@@ -3,8 +3,14 @@ import { projectProcessOutcome } from "../src/tools/operations/process-outcome.j
 import {
   aggregateTaskPlanEvidenceState,
   resolveTaskPlanEvidence,
+  type ResolvedTaskPlanEvidence,
   type TaskPlanEvidenceFact,
+  type TaskPlanEvidenceState,
 } from "../src/tools/plan/task-plan-evidence.js";
+import {
+  renderBoundedTaskPlan,
+  type TaskPlanSnapshot,
+} from "../src/tools/plan/task-plan-projection.js";
 
 const identity = { sessionId: "session-current", runId: "run-current" };
 
@@ -131,5 +137,157 @@ describe("task plan evidence", () => {
     expect(aggregateTaskPlanEvidenceState(["observation:successful-shell"], stateByReference)).toBe(
       "UNVERIFIED",
     );
+  });
+});
+
+/**
+ * What the rendered plan says about evidence.
+ *
+ * ```text
+ * step line     recorded references, the model's reportedStatus, the resolved state
+ * summary       per-step counts, which cover only the checks the steps cite
+ * footer        never claims "nothing passed" beside a step whose evidence did pass
+ * ```
+ *
+ * The plan is a report. Rendering a resolved PASSED reference and then closing with a fixed sentence
+ * that no check has passed is not a cautious summary — it is a contradiction, and the model reading it
+ * cannot tell which half is true.
+ */
+const PLAN_REVISION = "plan-result-1";
+
+function planWith(steps: TaskPlanSnapshot["steps"]): TaskPlanSnapshot {
+  return {
+    revision: PLAN_REVISION,
+    sourceStepId: "step-plan",
+    planVersion: 2,
+    steps,
+    execution: {
+      goal: "finish the reliability fix",
+      unresolved: ["the failure path is still unproven"],
+      nextAction: "run the acceptance suite",
+    },
+    resultsSincePlan: 2,
+  };
+}
+
+function renderWith(
+  steps: TaskPlanSnapshot["steps"],
+  evidence: readonly ResolvedTaskPlanEvidence[],
+): string {
+  return renderBoundedTaskPlan(planWith(steps), { evidence }).text;
+}
+
+interface EvidenceCase {
+  readonly state: TaskPlanEvidenceState;
+  readonly overrides: Partial<TaskPlanEvidenceFact>;
+}
+
+function resolvedFor(
+  reference: string,
+  overrides: Partial<TaskPlanEvidenceFact> = {},
+): readonly ResolvedTaskPlanEvidence[] {
+  return resolveTaskPlanEvidence({
+    identity,
+    refs: [reference],
+    facts: [fact({ reference, ...overrides })],
+  });
+}
+
+describe("rendered plan evidence", () => {
+  it("does not deny a check that it just rendered as PASSED", () => {
+    const verification = "verification:check-passed";
+    const text = renderWith(
+      [
+        {
+          id: "check",
+          step: "run the unit suite",
+          status: "completed",
+          acceptance: ["tests pass"],
+          evidenceRefs: [verification],
+        },
+        { id: "report", step: "report the result", status: "in_progress" },
+      ],
+      resolvedFor(verification, {
+        kind: "VERIFICATION",
+        outcome: "CHECK_PASSED",
+        dependenciesKnown: false,
+      }),
+    );
+
+    expect(text).toContain("independentEvidence=PASSED");
+    // The contradiction this replaces: a resolved pass beside a fixed "nothing passed" footer.
+    expect(text).not.toContain("no check has been shown to pass");
+    expect(text).toMatch(/PASSED 1/u);
+    // Coverage, not a completion verdict.
+    expect(text).toContain("不构成全部需求完成");
+  });
+
+  it.each<EvidenceCase>([
+    { state: "FAILED", overrides: { kind: "VERIFICATION", outcome: "CHECK_FAILED" } },
+    {
+      state: "STALE",
+      overrides: { kind: "VERIFICATION", outcome: "CHECK_PASSED", superseded: true },
+    },
+    { state: "INCOMPLETE", overrides: { kind: "VERIFICATION", outcome: "CHECK_INCOMPLETE" } },
+    { state: "UNKNOWN", overrides: { kind: "VERIFICATION", outcome: "CHECK_RUNNING" } },
+    { state: "UNVERIFIED", overrides: { kind: "MESSAGE", outcome: "UNVERIFIED" } },
+  ])("reports $state as $state and never as a pass", ({ state, overrides }) => {
+    const reference = overrides.kind === "MESSAGE" ? "message:msg-applied" : "verification:check-1";
+    const text = renderWith(
+      [
+        {
+          id: "check",
+          step: "run the unit suite",
+          status: "completed",
+          evidenceRefs: [reference],
+        },
+      ],
+      resolveTaskPlanEvidence({
+        identity,
+        refs: [reference],
+        facts: [fact({ reference, ...overrides })],
+      }),
+    );
+
+    expect(text).toContain(`independentEvidence=${state}`);
+    expect(text).toMatch(new RegExp(`${state} 1`, "u"));
+    if (state !== "PASSED") {
+      expect(text).not.toContain("independentEvidence=PASSED");
+    }
+  });
+
+  it("does not upgrade a plan whose steps cite no checks into a passed one", () => {
+    const text = renderWith(
+      [
+        { id: "build", step: "build the package", status: "completed" },
+        { id: "ship", step: "ship it", status: "completed" },
+      ],
+      [],
+    );
+
+    expect(text).toContain("independentEvidence=UNVERIFIED");
+    expect(text).not.toContain("independentEvidence=PASSED");
+    expect(text).toMatch(/PASSED 0/u);
+    expect(text).toContain("计划未记录检查引用");
+  });
+
+  it("counts steps, not references, so repeating one reference cannot look like more evidence", () => {
+    const shared = "verification:check-shared";
+    const evidence = resolvedFor(shared, {
+      kind: "VERIFICATION",
+      outcome: "CHECK_PASSED",
+      dependenciesKnown: false,
+    });
+    const text = renderWith(
+      [
+        { id: "a", step: "first claim", status: "completed", evidenceRefs: [shared, shared] },
+        { id: "b", step: "second claim", status: "completed", evidenceRefs: [shared] },
+      ],
+      evidence,
+    );
+
+    expect(text).toMatch(/PASSED 2/u);
+    // One distinct reference: once for each step that cites it, once in the evidence list.
+    expect(text.split(shared).length - 1).toBe(3);
   });
 });

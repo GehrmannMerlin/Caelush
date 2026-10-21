@@ -13,6 +13,7 @@ afterEach(async () => {
 class ProcessEvidenceAdapter implements ApiAdapter {
   readonly id = FIXTURE_API as ApiId;
   readonly requests: ApiAdapterStreamInput[] = [];
+  citedReference?: string;
 
   stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     this.requests.push(input);
@@ -44,6 +45,7 @@ class ProcessEvidenceAdapter implements ApiAdapter {
         yield* answer("No durable observation reference was exposed.");
         return;
       }
+      this.citedReference = reference;
       yield* toolCall("plan-2", "update_plan", {
         planVersion: 2,
         plan: [
@@ -89,8 +91,17 @@ describe("task plan evidence through the daemon and durable stores", () => {
       details: { status: "EXITED", exitCode: 2 },
     });
     expect(adapter.requests).toHaveLength(4);
-    expect(JSON.stringify(adapter.requests[3]?.request.messages)).toContain(
-      "reportedStatus=completed; independentEvidence=FAILED",
-    );
+    const planText = JSON.stringify(adapter.requests[3]?.request.messages);
+    expect(planText).toContain("reportedStatus=completed; independentEvidence=FAILED");
+    // The same resolved fact the step line carries is the one the summary counts and the list shows.
+    expect(planText).toContain("独立证据");
+    expect(planText).toMatch(/FAILED 1/u);
+    expect(adapter.citedReference).toBeDefined();
+    expect(planText).toContain(`- ${adapter.citedReference} — `);
+    expect(planText).toContain("[FAILED]");
+    // No fixed footer claiming that nothing passed beside a resolved state.
+    expect(planText).not.toContain("no check has been shown to pass");
+    // Coverage only: the projection never concludes that the whole task is verified.
+    expect(planText).toContain("不构成全部需求完成");
   }, 30_000);
 });

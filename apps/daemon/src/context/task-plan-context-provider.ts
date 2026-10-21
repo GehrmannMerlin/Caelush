@@ -11,7 +11,17 @@ import { deriveTaskPlanSnapshot, renderBoundedTaskPlan } from "@caelush/coding-a
 import type { TaskPlanEvidenceResolverPort } from "./task-plan-evidence-adapter.js";
 
 const SOURCE_ID = createContextSourceId("daemon.task-plan");
-const SOURCE_VERSION = "task-plan-v2";
+/**
+ * The projection version, and only that.
+ *
+ * `v3` marks the render that prints recorded references, reportedStatus and the resolved
+ * independentEvidence separately, counts evidence per step, and gives evidence its own section above
+ * the discretionary tail. The plan input protocol and the message schema did not change: a v3 item
+ * describes the same accepted plan as v2 did, in a shape that cannot contradict itself. A Context
+ * persisted by v2 is still a valid persisted Context, so recovery keeps its existing rule and does
+ * not replay a non-replayable Hook to obtain a v3 rendering.
+ */
+const SOURCE_VERSION = "task-plan-v3";
 
 /**
  * The rendered-plan budget, separate from the *input* budget the Tool enforces.
