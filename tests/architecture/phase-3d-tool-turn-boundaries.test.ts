@@ -208,16 +208,19 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     const settle = memberRegion(controller, "private async settleCanonicalToolTurn(");
     expect(settle.length).toBeGreaterThan(0);
     expect(settle).not.toContain("catch");
-    // Ordering is the contract: plan, materialize, commit, notify, then post-commit progress.
+    // Progress is derived from the accepted observation and committed atomically with the Run.
     const plan = at(settle, "this.transitionPlanner.plan(");
     const materialize = at(settle, "this.eventMaterializer.materialize(");
-    const commit = at(settle, "await this.commit(materialized)");
+    const progress = at(
+      settle,
+      "await this.projectToolTurnProgress(current, result, materialized)",
+    );
+    const commit = at(settle, "await this.commit(materialized, progress)");
     const notify = at(settle, "this.notify(committed.events)");
-    const progress = at(settle, "await this.recordToolTurnProgress(");
     expect(materialize).toBeGreaterThan(plan);
-    expect(commit).toBeGreaterThan(materialize);
+    expect(progress).toBeGreaterThan(materialize);
+    expect(commit).toBeGreaterThan(progress);
     expect(notify).toBeGreaterThan(commit);
-    expect(progress).toBeGreaterThan(notify);
   });
 
   it("keeps the frozen Tool request and result free of host facts", () => {
@@ -488,17 +491,17 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     expect(adapter).toContain("context.pendingDecision.toolRequests");
   });
 
-  it("keeps a Tool settlement CAS from advancing resource progress", () => {
+  it("commits Tool settlement and resource progress under one CAS", () => {
     const controller = executable("packages/core/src/run-controller.ts");
 
-    // Progress is recorded strictly after the commit and its notification.
+    // Accepted results and their progress projection enter the same authoritative transaction.
     const settle = memberRegion(controller, "private async settleCanonicalToolTurn(");
     expect(settle.length).toBeGreaterThan(0);
-    expect(at(settle, "await this.commit(materialized)")).toBeLessThan(
-      at(settle, "await this.recordToolTurnProgress("),
-    );
-    expect(at(settle, "this.notify(committed.events)")).toBeLessThan(
-      at(settle, "await this.recordToolTurnProgress("),
+    expect(
+      at(settle, "await this.projectToolTurnProgress(current, result, materialized)"),
+    ).toBeLessThan(at(settle, "await this.commit(materialized, progress)"));
+    expect(at(settle, "await this.commit(materialized, progress)")).toBeLessThan(
+      at(settle, "this.notify(committed.events)"),
     );
 
     // The loop drives the effect, reloads from the durable revision the Tool Layer left behind, and

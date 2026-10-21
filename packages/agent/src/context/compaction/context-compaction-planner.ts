@@ -39,6 +39,7 @@ function planCompaction(
     history,
     targetRecentTailTokens: policy.targetRecentTailTokens,
     minRecentTailTokens: policy.minRecentTailTokens,
+    allowCurrentTurnPrefix: policy.allowCurrentTurnPrefix === true,
   });
   if (candidate === null) return null;
 
@@ -104,6 +105,26 @@ function createRange(
                 String(splitMessage.conversationTurnId),
           );
           if (splitTurnIndex < 0) return [];
+          if (cut.preserveLeadingMessages === true) {
+            const firstCompactedProtocol = units.find(
+              (unit) =>
+                unit.kind === "TOOL_PROTOCOL" &&
+                unit.messages.some(
+                  (message) =>
+                    String(message.runId) === String(splitMessage.runId) &&
+                    String(message.conversationTurnId) ===
+                      String(splitMessage.conversationTurnId) &&
+                    message.sequence < cut.firstKeptSequence,
+                ),
+            );
+            const firstCompactedSequence = firstCompactedProtocol?.messages[0]?.sequence;
+            if (firstCompactedSequence === undefined) return [];
+            return primaryTurns[splitTurnIndex]!.messages.filter(
+              (message) =>
+                message.sequence >= firstCompactedSequence &&
+                message.sequence < cut.firstKeptSequence,
+            );
+          }
           return primaryTurns.flatMap((unit, index) => {
             if (index < splitTurnIndex) return unit.messages;
             if (index > splitTurnIndex) return [];

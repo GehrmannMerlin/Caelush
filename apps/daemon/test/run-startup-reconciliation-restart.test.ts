@@ -87,7 +87,9 @@ function makeRun(
     ...(options.status === undefined || options.status === "PENDING"
       ? {}
       : { startedAt: createTimestampMs(options.createdAt) }),
-    ...(options.status === "COMPLETED" ? { finishedAt: createTimestampMs(options.createdAt + 1) } : {}),
+    ...(options.status === "COMPLETED"
+      ? { finishedAt: createTimestampMs(options.createdAt + 1) }
+      : {}),
   });
 }
 
@@ -130,10 +132,7 @@ async function openDatabase(directory: string): Promise<CaelushStorage> {
 }
 
 /** Poll durable state until a predicate holds, so the test observes commits rather than guessing. */
-async function waitUntil(
-  predicate: () => Promise<boolean>,
-  timeoutMs = 10_000,
-): Promise<void> {
+async function waitUntil(predicate: () => Promise<boolean>, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (await predicate()) return;
@@ -143,7 +142,7 @@ async function waitUntil(
 }
 
 describe("Daemon startup stale-Run reconciliation across a real SQLite restart", () => {
-  it("reissues an output-free stale Step once, preserves Tool boundaries, and never reopens or auto-starts a Run", async () => {
+  it("fails closed on a stale in-flight model turn, preserves Tool boundaries, and never reopens or auto-starts a Run", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-startup-reconcile-"));
     await mkdir(path.join(directory, "project"));
 
@@ -205,8 +204,9 @@ describe("Daemon startup stale-Run reconciliation across a real SQLite restart",
 
     // ── generation 2 ────────────────────────────────────────────────────────────────────────────
     const second = await openDatabase(directory);
-    // The output-free Step is replay-safe: recovery may open the provider turn once, and it can
-    // finish the Run normally. The Tool-boundary Run must not send another provider turn.
+    // The durable `llm.started` event means the provider attempt may already have had an external
+    // effect. Recovery must fail the stale Step closed instead of silently sending it again. The
+    // Tool-boundary Run must remain parked without another provider turn.
     const recoveryExecutor = fakeFrozenModelTurnExecutor(() =>
       modelTurnResult({ text: "recovered", finishReason: "STOP" }),
     );
@@ -221,20 +221,18 @@ describe("Daemon startup stale-Run reconciliation across a real SQLite restart",
 
     // The enumeration saw exactly the two non-terminal Runs — never the terminal one, never PENDING.
     expect(summary.examined).toBe(2);
-    expect([...summary.scheduled].sort()).toEqual(
-      [runAwaitingTools.id, runMidTurn.id].sort(),
-    );
+    expect([...summary.scheduled].sort()).toEqual([runAwaitingTools.id, runMidTurn.id].sort());
     expect(summary.alreadyActive).toEqual([]);
     expect(summary.noopTerminal).toEqual([]);
     expect(summary.failed).toEqual([]);
 
-    // The provider Step with no durable assistant output is re-issued exactly once. The Run parked
-    // at its Tool boundary remains parked and does not add a provider call.
-    expect(recoveryExecutor.callCount()).toBe(1);
+    // The stale provider attempt is never reissued. The Run parked at its Tool boundary also remains
+    // parked and does not add a provider call.
+    expect(recoveryExecutor.callCount()).toBe(0);
 
-    // The stale Step is recorded as failed before the next Step completes the Run.
+    // The stale Step and Run are settled as failures at the unknown provider side-effect boundary.
     const settledMidTurn = await second.runs.get(runMidTurn.id);
-    expect(settledMidTurn?.status).toBe("COMPLETED");
+    expect(settledMidTurn?.status).toBe("FAILED");
     expect(settledMidTurn?.currentStepId).toBeUndefined();
     expect((await second.steps.get(staleStepId))?.status).toBe("FAILED");
 
@@ -247,7 +245,11 @@ describe("Daemon startup stale-Run reconciliation across a real SQLite restart",
       throw new Error("expected the parked Tool boundary to survive recovery");
     }
     expect(parkedSnapshot.continuation.pendingDecision.toolRequests).toEqual([
-      { externalCallId: "call_restart", toolName: "exec_command", args: { command: "npm run restart" } },
+      {
+        externalCallId: "call_restart",
+        toolName: "exec_command",
+        args: { command: "npm run restart" },
+      },
     ]);
     expect(parkedSnapshot.continuation.receivedResults).toBeUndefined();
 

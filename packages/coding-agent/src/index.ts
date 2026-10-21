@@ -17,9 +17,9 @@
  * product authority**:
  *
  * ```text
- * the ten Coding builtins              read_file · list_directory · find_files · search_text
- *                                       apply_patch · exec_command · write_stdin · stop_process
- *                                       git_status · git_diff
+ * the twelve Coding builtins           read_file · list_directory · find_files · search_text
+ *                                       apply_patch · update_plan · exec_command · write_stdin
+ *                                       stop_process · git_status · git_diff · read_attachment
  * the default order and composition     DEFAULT_CODING_TOOL_ORDER · createDefaultCodingTools
  * the narrow Operations ports           ReadFileOperations … GitOperations
  * the Runtime Operations adapters       the only code allowed to hold a RuntimeResolver
@@ -136,12 +136,16 @@ export {
   createApplyPatchTool,
   createUpdatePlanTool,
   boundPlanBlock,
+  aggregateTaskPlanEvidenceState,
   deriveTaskPlanSnapshot,
+  resolveTaskPlanEvidence,
   parseTaskPlanInput,
   renderAcceptedPlan,
+  renderBoundedTaskPlan,
   renderTaskPlanBlock,
   renderPlanSteps,
   TASK_PLAN_LIMITS,
+  TASK_PLAN_EVIDENCE_STATES,
   taskPlanEvidenceState,
   validatePlanSteps,
   createReadAttachmentTool,
@@ -207,6 +211,7 @@ export {
   projectGitStatusSecurityFacts,
   projectListDirectorySecurityFacts,
   projectPatchEffects,
+  projectProcessOutcome,
   projectReadFileEffect,
   projectReadFileSecurityFacts,
   projectReadAttachmentSecurityFacts,
@@ -239,6 +244,16 @@ export {
   AttachmentReadOperationError,
   readAttachmentInputSchema,
   WRITE_STDIN_PROMPT_SNIPPET,
+} from "./tools/index.js";
+export type { BoundedTaskPlanRender, TaskPlanAvailableEvidenceRef } from "./tools/index.js";
+export type {
+  ProcessOutcome,
+  ResolvedTaskPlanEvidence,
+  TaskPlanEvidenceFact,
+  TaskPlanEvidenceIdentity,
+  TaskPlanEvidenceKind,
+  TaskPlanEvidenceOutcome,
+  TaskPlanEvidenceState,
 } from "./tools/index.js";
 export type {
   CodingReadOnlyOperations,
@@ -333,4 +348,7 @@ export {
 } from "./messages/command-execution.js";
 export type { CodingCommandExecutionMessage } from "./messages/command-execution.js";
 
-export { CODING_EXECUTION_DISCIPLINE } from "./policy/coding-execution-policy.js";
+export {
+  CODING_EXECUTION_DISCIPLINE,
+  selectCodingExecutionDiscipline,
+} from "./policy/coding-execution-policy.js";

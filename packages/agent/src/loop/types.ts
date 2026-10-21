@@ -214,6 +214,13 @@ export interface ContextBuildReport {
   readonly contributions: readonly ContextBuildContribution[];
 }
 
+/** Selected Context item identities, without their contents, for verifiable host receipts. */
+export interface ContextSourceItemSelection {
+  readonly providerId: string;
+  readonly providerVersion: string;
+  readonly selectedItemIds: readonly string[];
+}
+
 /**
  * The observation policy a tool result must be projected under.
  *
@@ -264,6 +271,9 @@ export interface PreparedModelContext {
   /** Selected assistant provenance used only to fail closed on missing native replay. */
   readonly selectedAssistantReplaySources?: readonly SelectedAssistantReplaySource[];
 
+  /** The exact source items selected into this request, without their text or payload. */
+  readonly selectedContextSources?: readonly ContextSourceItemSelection[];
+
   readonly report: ContextBuildReport;
 
   readonly observationPolicy: ToolObservationPolicySnapshot;
@@ -273,6 +283,9 @@ export interface PreparedModelContext {
 
   /** A stable digest of the prepared context, for recovery comparisons. */
   readonly contextFingerprint?: string;
+
+  /** Identity of the Context artifact used for this request (checkpoint ID or fingerprint). */
+  readonly contextArtifactId?: string;
 }
 
 /** Safe provenance copied from Context-selected Assistant records; it contains no message body. */
@@ -297,6 +310,11 @@ export interface SelectedAssistantReplaySource {
  */
 export interface AgentLoopContextReceipt {
   readonly report: ContextBuildReport;
+
+  /** Stable identity of the prepared Context, and which source items actually entered it. */
+  readonly contextFingerprint?: string;
+  readonly contextArtifactId?: string;
+  readonly selectedContextSources?: readonly ContextSourceItemSelection[];
 
   readonly observationPolicy: ToolObservationPolicySnapshot;
 

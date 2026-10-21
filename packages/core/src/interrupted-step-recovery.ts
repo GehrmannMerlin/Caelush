@@ -11,9 +11,10 @@ import type { RunContinuationCheckpoint } from "./agent-continuation.js";
  * FAIL_CLOSED   the attempt may have changed the world; settle it as an error and never resend
  * ```
  *
- * ## The only two facts this decision is allowed to use
+ * ## The durable facts this decision is allowed to use
  *
  * ```text
+ * no `llm.started` event             provider I/O never began
  * no assistant record for the Step   the provider turn produced no durable answer
  * no continuation                   nothing else durable is waiting on this Step
  * ```
@@ -28,15 +29,17 @@ import type { RunContinuationCheckpoint } from "./agent-continuation.js";
  *
  * ## What this deliberately does not decide
  *
- * A provider turn that produced no durable record may still have been **billed**. Replaying it can
- * therefore cost a second request for one logical attempt. That is why the caller bounds the number
- * of replays per Run; this function answers "is it safe", not "is it free".
+ * The provider-start event is committed before provider I/O. Replaying is therefore allowed only
+ * when the durable Store explicitly proves that event is absent; a missing/unknown projection fails
+ * closed. The caller still bounds safe pre-provider reissues per Run to contain crash loops.
  */
 export type InterruptedStepDisposition = "REPLAY_SAFE" | "FAIL_CLOSED";
 
 export interface InterruptedStepFacts {
   readonly run: Pick<AgentRun, "status">;
   readonly activeStep?: Pick<AgentStep, "id"> | undefined;
+  /** Missing evidence is unknown, never proof that provider I/O did not start. */
+  readonly providerAttemptStarted?: boolean | undefined;
   readonly continuation?: RunContinuationCheckpoint | undefined;
   readonly conversationRecords: readonly Pick<AgentMessageRecord, "messageType" | "sourceStepId">[];
 }
@@ -48,6 +51,7 @@ export function classifyInterruptedStep(facts: InterruptedStepFacts): Interrupte
   // must keep the fail-closed settlement it already had.
   if (facts.run.status !== "RUNNING") return "FAIL_CLOSED";
   if (facts.continuation !== undefined) return "FAIL_CLOSED";
+  if (facts.providerAttemptStarted !== false) return "FAIL_CLOSED";
   const producedOutput = facts.conversationRecords.some(
     (record) => record.sourceStepId === step.id,
   );

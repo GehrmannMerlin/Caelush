@@ -20,6 +20,32 @@ import { z } from "zod";
 
 export const RESOURCE_PROGRESS_RECORD_VERSION = 1 as const;
 
+const ProgressMessageIdsSchema = z
+  .array(z.string().min(1).max(256))
+  .min(1)
+  .max(64)
+  .refine((messageIds) => new Set(messageIds).size === messageIds.length)
+  .readonly();
+
+/** A JSON-safe identity for one atomically accepted Core progress boundary. */
+export const ResourceProgressBoundarySchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("TOOL_RESULTS"),
+      sourceStepId: z.string().min(1).max(256),
+      messageIds: ProgressMessageIdsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("MODEL_TURN"),
+      sourceStepId: z.string().min(1).max(256),
+      messageIds: z.array(z.string().min(1).max(256)).length(1).readonly(),
+    })
+    .strict(),
+]);
+export type ResourceProgressBoundary = z.infer<typeof ResourceProgressBoundarySchema>;
+
 /** One declared field problem, reduced to a label a reminder may quote. */
 export interface ResourceProgressFieldRecord {
   readonly keyword: string;
@@ -47,6 +73,7 @@ export interface ResourceProgressTurnRecord {
 /** The active repeated-failure episode. */
 export interface ResourceActivePatternRecord {
   readonly key: string;
+  readonly episodeId?: string;
   readonly toolName: string;
   readonly code: string;
   /** The turn the current episode starts after; occurrences are counted from here. */
@@ -74,9 +101,7 @@ export interface ResourceActivePatternRecord {
 
 /** Where a correction is in its life. */
 export type ResourceCorrectionStageRecord =
-  | "INPUT_CORRECTION"
-  | "REVIEW_APPROACH"
-  | "REBUILD_WORK_STATE";
+  "INPUT_CORRECTION" | "REVIEW_APPROACH" | "REBUILD_WORK_STATE";
 
 /**
  * One corrective intervention that has been *prepared* and not yet *delivered*.
@@ -108,6 +133,25 @@ export interface ResourceCorrectionRecord {
   readonly guidance: string;
   /** The durable Step whose accepted results produced the evidence. */
   readonly sourceStepId: string;
+  /** Stable identity of the episode this intervention belongs to. */
+  readonly episodeId?: string;
+  /** The accepted result boundary which produced this intervention. */
+  readonly sourceBoundaryId?: string;
+}
+
+/** Proof that one specific pending correction entered a successful accepted model request. */
+export interface ResourceCorrectionDeliveryRecord {
+  readonly interventionId: string;
+  readonly episodeId: string;
+  readonly consumerStepId: string;
+  readonly contextArtifactId: string;
+  readonly contextFingerprint: string;
+  readonly selectedSourceItemId: string;
+  readonly selectedSourceProviderId: string;
+  readonly selectedSourceProviderVersion: string;
+  readonly callId: string;
+  readonly assistantMessageId: string;
+  readonly createdAt: number;
 }
 
 /** The whole window, as it is stored. */
@@ -122,6 +166,10 @@ export interface ResourceProgressRecordV1 {
    * to be said", which is the only safe reading of a ledger that has no opinion.
    */
   readonly correction?: ResourceCorrectionRecord;
+  /** The bounded audit trail of verified, atomically accepted correction deliveries. */
+  readonly deliveryReceipts?: readonly ResourceCorrectionDeliveryRecord[];
+  /** Old failures at or before this accepted turn cannot revive a resolved episode. */
+  readonly resolvedThroughTurnId?: string;
 }
 
 /** Bounds on the stored window. Exceeding them is a policy mismatch, not a silent truncation. */
@@ -174,6 +222,7 @@ const TurnSchema = z
 const ActiveSchema = z
   .object({
     key: z.string().regex(/^[a-f0-9]{64}$/),
+    episodeId: z.string().min(1).max(256).optional(),
     toolName: z.string().min(1).max(128),
     code: z.string().min(1).max(64),
     sinceTurnId: z.string().min(1).max(256).optional(),
@@ -198,6 +247,24 @@ const CorrectionSchema = z
     occurrences: z.number().int().min(0).max(RESOURCE_PROGRESS_LIMITS.maxTurns),
     guidance: z.string().min(1).max(RESOURCE_PROGRESS_LIMITS.maxCorrectionChars),
     sourceStepId: z.string().min(1).max(256),
+    episodeId: z.string().min(1).max(256).optional(),
+    sourceBoundaryId: z.string().min(1).max(256).optional(),
+  })
+  .strict();
+
+const CorrectionDeliverySchema = z
+  .object({
+    interventionId: z.string().min(1).max(160),
+    episodeId: z.string().min(1).max(256),
+    consumerStepId: z.string().min(1).max(256),
+    contextArtifactId: z.string().min(1).max(256),
+    contextFingerprint: z.string().regex(/^(?:sha256:)?[a-f0-9]{64}$/u),
+    selectedSourceItemId: z.string().min(1).max(512),
+    selectedSourceProviderId: z.string().min(1).max(128),
+    selectedSourceProviderVersion: z.string().min(1).max(64),
+    callId: z.string().min(1).max(256),
+    assistantMessageId: z.string().min(1).max(256),
+    createdAt: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -207,6 +274,8 @@ export const ResourceProgressRecordV1Schema = z
     turns: z.array(TurnSchema).max(RESOURCE_PROGRESS_LIMITS.maxTurns),
     active: ActiveSchema.optional(),
     correction: CorrectionSchema.optional(),
+    deliveryReceipts: z.array(CorrectionDeliverySchema).max(64).optional(),
+    resolvedThroughTurnId: z.string().min(1).max(256).optional(),
   })
   .strict()
   .superRefine((record, context) => {

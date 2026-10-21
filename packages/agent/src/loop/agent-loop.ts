@@ -397,6 +397,15 @@ function receipt(
 ): AgentLoopContextReceipt {
   return {
     report: context.report,
+    ...(context.contextFingerprint === undefined
+      ? {}
+      : { contextFingerprint: context.contextFingerprint }),
+    ...(context.contextArtifactId === undefined
+      ? {}
+      : { contextArtifactId: context.contextArtifactId }),
+    ...(context.selectedContextSources === undefined
+      ? {}
+      : { selectedContextSources: context.selectedContextSources }),
     observationPolicy: context.observationPolicy,
     recovery,
   };

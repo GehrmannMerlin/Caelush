@@ -109,6 +109,7 @@ import {
   resolveAdaptiveContextBudget,
   type ContextPlan,
   type ContextPolicyOptions,
+  type ContextWorkingSetPolicy,
 } from "../policy/context-policy.js";
 import {
   createContextReceiptBuilder,
@@ -141,11 +142,7 @@ import {
 import { AGENT_CONTEXT_SOURCE_IDS } from "../source/source-ids.js";
 import type { ContextCheckpointRef } from "../compaction/context-compaction-contracts.js";
 import { ContextExhaustedError } from "../planner/context-planning-errors.js";
-import type {
-  AgentExecutionIdentity,
-  AgentTurnRef,
-  ContextRequestBudget,
-} from "../../loop/types.js";
+import type { AgentExecutionIdentity, ContextRequestBudget } from "../../loop/types.js";
 import { createContextItemId } from "../item/context-item.js";
 import { createSourceResult, estimateContextTokens } from "../source/generic-provider-helpers.js";
 import { createContextCompactionCoordinator } from "../compaction/context-compaction-coordinator.js";
@@ -173,7 +170,6 @@ import { createSemanticSummaryValidator } from "../compaction/semantic-summary-v
 export interface ContextCompactionEventFactory {
   completed(input: {
     readonly identity: AgentExecutionIdentity;
-    readonly turn: AgentTurnRef;
     readonly checkpoint: import("../compaction/context-compaction-contracts.js").ContextCheckpointCreateInputV2;
     readonly reason: ContextCompactionReason;
     readonly tokensBefore: number;
@@ -194,7 +190,6 @@ export function createContextCompactionEventFactory(): ContextCompactionEventFac
         schemaVersion: 1,
         runId: input.identity.runId,
         sessionId: input.identity.sessionId,
-        stepId: input.turn.stepId,
         timestamp: input.timestamp,
         visibility: "SYSTEM" as const,
         durability: { kind: "DURABLE" as const, version: 1 as const },
@@ -220,6 +215,8 @@ export interface V2ContextEngineOptions {
   readonly modelSettings?: AIModelSettings;
   /** Persisted Run policy. Missing or legacy snapshots retain historical full-output behavior. */
   readonly requestBudget?: ContextRequestBudget;
+  /** V2 selection thresholds that leave request output reserves unchanged. */
+  readonly workingSet?: ContextWorkingSetPolicy;
   readonly promptSurfaceEpochIdFactory?: { create(): string };
   readonly sourceRegistry: ContextSourceRegistry;
   readonly checkpointRepository: ContextCheckpointRepositoryPort;
@@ -349,14 +346,16 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         input.mode === "FORCED_RECOVERY" && options.forcedObservationPolicy !== undefined
           ? { ...options.policy, ...options.forcedObservationPolicy }
           : options.policy;
-      const policyOptions =
-        adaptiveBudget === undefined
-          ? configuredPolicyOptions
+      const policyOptions = {
+        ...configuredPolicyOptions,
+        ...(adaptiveBudget === undefined
+          ? {}
           : {
-              ...configuredPolicyOptions,
               outputReserveTokens: adaptiveBudget.outputReserveTokens,
               safetyReserveTokens: adaptiveBudget.safetyReserveTokens,
-            };
+            }),
+        ...(options.workingSet === undefined ? {} : { workingSet: options.workingSet }),
+      };
       const policy = createContextPolicy({
         model: input.model,
         tools: input.tools,
@@ -447,10 +446,12 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         compactionCount: 0,
       });
       const estimatedInputTokens = initialProjection.audit.report.estimatedInputTokens;
-      const pressureRatio = estimatedInputTokens / policy.effectiveInputLimitTokens;
+      const schedulePressureRatio =
+        estimatedInputTokens /
+        (options.workingSet?.targetTokens ?? policy.effectiveInputLimitTokens);
       const emergency = estimatedInputTokens >= policy.emergencyCompactionTokens;
       const schedule = advanceContextCompactionSchedule(scheduleFor(String(input.identity.runId)), {
-        pressureRatio,
+        pressureRatio: schedulePressureRatio,
         emergency,
         forced: input.mode === "FORCED_RECOVERY",
         compacted: false,
@@ -465,6 +466,9 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         proactiveCompactionTokens: policy.proactiveCompactionTokens,
         emergencyCompactionTokens: policy.emergencyCompactionTokens,
         targetRecentTailTokens: policy.targetRecentTailTokens,
+        ...(policy.targetPostCompactionTokens === undefined
+          ? {}
+          : { targetPostCompactionTokens: policy.targetPostCompactionTokens }),
         minRecentTailTokens: policy.minRecentTailTokens,
         mode: input.mode,
         hasCompressibleHistory: activeCoverage.history.units.some(
@@ -496,7 +500,12 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           String(input.identity.runId),
           advanceContextCompactionSchedule(
             schedule,
-            { pressureRatio, emergency, forced: input.mode === "FORCED_RECOVERY", compacted: true },
+            {
+              pressureRatio: schedulePressureRatio,
+              emergency,
+              forced: input.mode === "FORCED_RECOVERY",
+              compacted: true,
+            },
             {
               rearmRatio: policy.proactiveCompaction.rearmRatio,
               cooldownTurns: policy.proactiveCompaction.cooldownTurns,
@@ -626,7 +635,6 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
               : [
                   options.compactionEvents.completed({
                     identity: request.identity,
-                    turn: input.turn,
                     checkpoint,
                     reason: request.reason,
                     tokensBefore: request.estimatedInputTokensBefore,
@@ -769,10 +777,23 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
             ];
           }),
         ),
+        selectedContextSources: Object.freeze(
+          finalProjection.audit.receipt.sources.map((source) =>
+            Object.freeze({
+              providerId: String(source.providerId),
+              providerVersion: source.providerVersion,
+              selectedItemIds: Object.freeze(source.selectedItemIds.map(String)),
+            }),
+          ),
+        ),
         report: finalProjection.audit.report,
         observationPolicy: finalPolicy.observationPolicy,
         ...checkpointReference(activeCheckpoint),
         contextFingerprint: finalProjection.audit.contextFingerprint,
+        contextArtifactId:
+          activeCheckpoint?.schemaVersion === 2
+            ? String(activeCheckpoint.checkpointId)
+            : finalProjection.audit.contextFingerprint,
       });
     },
   });

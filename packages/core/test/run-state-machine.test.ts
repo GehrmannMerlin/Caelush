@@ -38,13 +38,15 @@ describe("Core Run State Machine", () => {
     }
   });
 
-  it("requires verification before completion and rejects terminal reactivation", () => {
+  it("keeps natural completion legal and rejects terminal reactivation", () => {
     const canTransition = getFunction<TransitionPredicate>("canTransitionRunStatus");
     if (canTransition === undefined) {
       return;
     }
 
-    expect(canTransition("RUNNING", "COMPLETED")).toBe(false);
+    // The matrix cannot see the persisted Completion Authority contract. Storage accepts a normal
+    // completion only through its guarded NATURAL_V1 transaction; historical Runs still verify.
+    expect(canTransition("RUNNING", "COMPLETED")).toBe(true);
     expect(canTransition("COMPLETED", "RUNNING")).toBe(false);
     expect(canTransition("FAILED", "RUNNING")).toBe(false);
     expect(canTransition("CANCELLED", "RUNNING")).toBe(false);

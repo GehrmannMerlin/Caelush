@@ -21,7 +21,7 @@ import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
  * ```text
  * RuntimeResolver
  *   → the four Runtime Operations adapters      @caelush/coding-agent
- *   → createDefaultCodingTools(...)             the ten Coding Tool definitions
+ *   → createDefaultCodingTools(...)             the twelve Coding Tool definitions
  *   → DefaultAgentToolRegistryBuilder           the canonical AgentToolRegistry
  *   → CodingToolCatalogBuilder.forRegistry      the Coding overlay, aligned to that registry
  * ```

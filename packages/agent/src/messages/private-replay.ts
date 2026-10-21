@@ -1,4 +1,5 @@
 import type { AIProviderOpaqueState } from "@caelush/ai";
+import type { AIPrivateReplayResolver } from "@caelush/ai";
 
 /** Private execution contracts. Neither payload bytes nor these ports belong in public events. */
 export interface PrivateReplayIdentity {
@@ -27,11 +28,22 @@ export interface PrivateReplayWrite {
   readonly envelope: EncryptedPrivateReplay;
 }
 
+export interface PrivateReplayExecutionOptions {
+  readonly signal?: AbortSignal;
+}
+
+/** A key-bearing capability scoped to one selected model execution. */
+export interface ReplayProtectionExecutionPort {
+  open(identity: PrivateReplayIdentity, envelope: EncryptedPrivateReplay): Promise<Uint8Array>;
+  dispose(): void;
+}
+
 /** Injected by the host; Storage never receives a key provider or owns key material. */
 export interface ReplayProtectionPort {
   seal(identity: PrivateReplayIdentity, content: Uint8Array): Promise<EncryptedPrivateReplay>;
   open(identity: PrivateReplayIdentity, envelope: EncryptedPrivateReplay): Promise<Uint8Array>;
   verify(identity: PrivateReplayIdentity, envelope: EncryptedPrivateReplay): Promise<void>;
+  openExecution(options?: PrivateReplayExecutionOptions): Promise<ReplayProtectionExecutionPort>;
 }
 
 /** A host capability for exactly the messages selected for one execution. */
@@ -46,14 +58,26 @@ export interface PrivateReplayReadScope {
   readonly selectedAssistantMessageIds?: readonly string[];
 }
 
-export interface PrivateReplayReader {
+export interface PrivateReplayExecutionReader {
   read(identity: PrivateReplayIdentity): Promise<Uint8Array>;
+  dispose(): void | Promise<void>;
+}
+
+/** Resolves Provider replay through a bounded, disposable execution reader. */
+export interface PrivateReplayResolverExecution {
+  readonly resolver: AIPrivateReplayResolver;
+  dispose(): void | Promise<void>;
 }
 
 /** No standalone durable write or unscoped plaintext lookup. Commit owns persistence. */
 export interface PrivateReplayStorePort {
   prepare(identity: PrivateReplayIdentity, content: Uint8Array): Promise<PrivateReplayWrite>;
-  forExecution(scope: PrivateReplayReadScope): PrivateReplayReader;
+  openExecution(
+    scope: PrivateReplayReadScope,
+    options?: PrivateReplayExecutionOptions,
+  ): Promise<PrivateReplayExecutionReader>;
+  /** @deprecated Compatibility reader. Model-turn execution must use openExecution(). */
+  forExecution(scope: PrivateReplayReadScope): Omit<PrivateReplayExecutionReader, "dispose">;
 }
 
 export class PrivateReplayError extends Error {

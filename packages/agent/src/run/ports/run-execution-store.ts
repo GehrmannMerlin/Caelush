@@ -62,6 +62,12 @@ export interface RunExecutionSnapshot {
   readonly stateRevision?: number;
   /** A Step that was committed as RUNNING and not yet settled. */
   readonly activeStep?: AgentStep;
+  /**
+   * Whether the durable event log contains `llm.started` for the active Step. False proves recovery
+   * stopped before provider I/O; true means the provider turn may have had an external effect. An
+   * absent value is unknown and must fail closed.
+   */
+  readonly activeStepProviderStarted?: boolean;
   readonly conversationRecords: readonly AgentMessageRecord[];
   readonly continuation?: RunContinuationCheckpoint;
   readonly continuationRevision?: number;

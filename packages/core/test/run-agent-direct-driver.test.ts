@@ -722,6 +722,14 @@ describe("production ADVANCE_AGENT settlement", () => {
           },
         };
       },
+      async openExecution() {
+        return {
+          async read() {
+            throw new Error("unused");
+          },
+          dispose() {},
+        };
+      },
       forExecution() {
         return {
           async read() {
@@ -1146,9 +1154,8 @@ describe("production ADVANCE_AGENT settlement", () => {
   });
 
   it("replays a stale RUNNING Step that produced no durable output", async () => {
-    // The crash the boundary exists for: the open-Step commit succeeded, then the process stopped
-    // before any effect settlement. Nothing about that attempt is durable, so recovery settles the
-    // Step and re-issues the same turn instead of destroying the Run.
+    // The open-Step commit succeeded, then the process stopped before the durable `llm.started`
+    // provider boundary. The store proves no provider I/O began, so recovery may safely continue.
     const run = makeRun({ status: "RUNNING", startedAt: createTimestampMs(1) });
     const step = {
       id: "stp_0195f3a0-0000-7000-8000-0000000000ff" as StepId,
@@ -1182,6 +1189,7 @@ describe("production ADVANCE_AGENT settlement", () => {
           currentStepId: step.id,
         },
         activeStep: step,
+        activeStepProviderStarted: false,
         stateRevision: 1,
       },
     });

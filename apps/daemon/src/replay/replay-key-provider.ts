@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { link, lstat, mkdir, open, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { PrivateReplayError } from "@caelush/agent";
-import type { ReplayKey, ReplayKeyProvider } from "@caelush/security";
+import type { ReplayKey, ReplayKeyLookupOptions, ReplayKeyProvider } from "@caelush/security";
 import { windowsDpapi } from "./windows-dpapi.js";
 
 interface ProtectedKeyFile {
@@ -71,12 +71,14 @@ export function createWindowsReplayKeyProvider(keyFile: string): ReplayKeyProvid
     }
   }
 
-  async function unprotect(record: ProtectedKeyFile): Promise<ReplayKey> {
-    const bytes = await windowsDpapi(
-      "unprotect",
-      record.keyId,
-      Buffer.from(record.protectedKey, "base64"),
-    );
+  async function unprotect(record: ProtectedKeyFile, signal?: AbortSignal): Promise<ReplayKey> {
+    const protectedBytes = Buffer.from(record.protectedKey, "base64");
+    let bytes: Buffer;
+    try {
+      bytes = await windowsDpapi("unprotect", record.keyId, protectedBytes, signal);
+    } finally {
+      protectedBytes.fill(0);
+    }
     if (bytes.length !== 32) {
       bytes.fill(0);
       throw new PrivateReplayError();
@@ -132,10 +134,14 @@ export function createWindowsReplayKeyProvider(keyFile: string): ReplayKeyProvid
         throw new PrivateReplayError();
       }
     },
-    async get(keyId: string): Promise<ReplayKey | undefined> {
+    async get(keyId: string, options?: ReplayKeyLookupOptions): Promise<ReplayKey | undefined> {
       try {
+        if (options?.signal?.aborted) throw new PrivateReplayError();
         const saved = await read();
-        return saved === undefined || saved.keyId !== keyId ? undefined : await unprotect(saved);
+        if (options?.signal?.aborted) throw new PrivateReplayError();
+        return saved === undefined || saved.keyId !== keyId
+          ? undefined
+          : await unprotect(saved, options?.signal);
       } catch {
         throw new PrivateReplayError();
       }

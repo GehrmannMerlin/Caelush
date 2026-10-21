@@ -3,7 +3,7 @@
  *
  * ```text
  * @caelush/agent          AgentTool, AgentToolRegistry, ToolCallPreparer, canonical Tool pipeline
- * @caelush/coding-agent   the ten Coding builtins, their narrow Operations ports, Runtime adapters,
+ * @caelush/coding-agent   the twelve Coding builtins, their narrow Operations ports, Runtime adapters,
  *                         security metadata and facts, approval identity, effects, presentation and
  *                         prompt snippets
  * ```
@@ -119,11 +119,31 @@ export {
 export {
   boundPlanBlock,
   deriveTaskPlanSnapshot,
+  renderBoundedTaskPlan,
   renderTaskPlanBlock,
   taskPlanEvidenceState,
-  type TaskPlanEvidenceState,
   type TaskPlanSnapshot,
 } from "./plan/task-plan-projection.js";
+export {
+  aggregateTaskPlanEvidenceState,
+  resolveTaskPlanEvidence,
+  TASK_PLAN_EVIDENCE_STATES,
+} from "./plan/task-plan-evidence.js";
+export type {
+  ResolvedTaskPlanEvidence,
+  TaskPlanEvidenceFact,
+  TaskPlanEvidenceIdentity,
+  TaskPlanEvidenceKind,
+  TaskPlanEvidenceOutcome,
+} from "./plan/task-plan-evidence.js";
+export type { TaskPlanEvidenceState } from "./plan/task-plan-evidence.js";
+export type {
+  BoundedTaskPlanRender,
+  TaskPlanAvailableEvidenceRef,
+} from "./plan/task-plan-projection.js";
+
+export { projectProcessOutcome } from "./operations/process-outcome.js";
+export type { ProcessOutcome } from "./operations/process-outcome.js";
 export { createExecCommandTool, execCommandInputSchema } from "./builtins/exec-command.js";
 export { createWriteStdinTool, writeStdinInputSchema } from "./builtins/write-stdin.js";
 export { createStopProcessTool, stopProcessInputSchema } from "./builtins/stop-process.js";

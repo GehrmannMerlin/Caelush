@@ -7,6 +7,7 @@ import {
   createSessionId,
   createTimestampMs,
   createWorkspaceId,
+  computeSecurityPolicyDigest,
   type StepId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
@@ -23,6 +24,7 @@ import type {
   RunExecutionSnapshot,
   RunExecutionStorePort,
 } from "../src/run-execution-store.js";
+import type { ResourceGovernanceState } from "../src/resource-governance-port.js";
 import type { RunContinuationCheckpoint } from "../src/agent-continuation.js";
 import type { AgentToolCallsDecision } from "../src/agent-decision.js";
 import type { RunAgentExecutionContextFactory } from "../src/run-agent-execution.js";
@@ -583,7 +585,41 @@ describe("RunController Tool resume provenance", () => {
   });
 
   it("keeps the request Step across a resource resume", async () => {
-    const run = makeRun();
+    const securityPolicy = {
+      schemaVersion: 1 as const,
+      preset: { id: "WORKSPACE_WRITE" as const, version: 1 },
+      permissionProfile: "PROJECT_ACCESS" as const,
+      approvalPolicy: "ON_BOUNDARY" as const,
+      filesystemBoundary: "WORKSPACE_READ_WRITE" as const,
+      processBoundary: "WORKSPACE_WRITE" as const,
+      requiredEnforcement: "OS_RESTRICTED" as const,
+      hardSafetyPolicyVersion: "hard-safety@1",
+      commandPolicyVersion: "command-policy@1",
+      secretPolicyVersion: "secret-policy@1",
+      createdAt: new Date(1).toISOString(),
+    };
+    const run = AgentRunSchema.parse({
+      ...makeRun(),
+      permissionProfile: securityPolicy.permissionProfile,
+      approvalPolicy: securityPolicy.approvalPolicy,
+      securityPolicy: {
+        ...securityPolicy,
+        policyDigest: computeSecurityPolicyDigest(securityPolicy),
+      },
+      resourcePolicy: {
+        mode: "ADAPTIVE",
+        operationalLease: { maxAgentTurns: 24, maxToolOperations: 64 },
+        batch: { maxToolCallsPerTurn: 16 },
+        progress: {
+          windowTurns: 8,
+          identicalCallNudgeThreshold: 3,
+          noProgressTurnsBeforeReplan: 4,
+          replansBeforePause: 2,
+        },
+        hardLimits: {},
+        inactivity: {},
+      },
+    });
     const store = new SeededStore({
       run: AgentRunSchema.parse({
         ...run,
@@ -603,7 +639,54 @@ describe("RunController Tool resume provenance", () => {
       continuationRevision: 1,
     });
 
-    await controllerFor(store, []).continueResourceGuard(run.id);
+    const initialProgress: ResourceGovernanceState = {
+      runId: run.id,
+      policyVersion: "adaptive-resource-governance.v1",
+      mode: "ADAPTIVE",
+      leaseEpoch: 1,
+      leaseStartAgentTurns: 0,
+      leaseStartToolCalls: 0,
+      agentTurnsConsumed: 0,
+      toolOperationsConsumed: 0,
+      consecutiveNoProgressTurns: 3,
+      replanCount: 1,
+      resourceGuardState: "WAITING_RESOURCE",
+      recentFingerprints: [],
+      revision: 0,
+      createdAt: createTimestampMs(1),
+      updatedAt: createTimestampMs(1),
+    };
+    let progress = initialProgress;
+    const resourceGovernance = {
+      get: async () => progress,
+      createOrGet: async () => progress,
+      compareAndSwap: async (_runId: unknown, _revision: number, next: ResourceGovernanceState) => {
+        progress = next;
+        return next;
+      },
+    };
+
+    await controllerFor(store, [], {
+      legacyPendingBatchInspection: {
+        inspect: async ({
+          calls,
+        }: {
+          calls: readonly { externalCallId: string; toolName: string }[];
+        }) => calls.map((call) => ({ ...call, kind: "NOT_DISPATCHED" as const })),
+      },
+      resourceGovernance,
+      resourceCorrectionRecoveryPolicy: { authority: "DAEMON_AUTO_CORRECTION_V1" },
+      toolTurn: {},
+      progressPersistence: {
+        commitExecutionWithProgress: async (input: {
+          readonly execution: unknown;
+          readonly nextProgress: ResourceGovernanceState;
+        }) => {
+          progress = input.nextProgress;
+          return store.commit(input.execution as never);
+        },
+      },
+    }).continueResourceGuard(run.id);
 
     // The wait is over, and it ended by *closing* the batch rather than re-running it: the calls were
     // never dispatched, so re-admitting them would have re-asked a question the Run had already
@@ -620,5 +703,6 @@ describe("RunController Tool resume provenance", () => {
     // Every requested call got exactly one result, in assistant source order: the batch stays
     // cardinality- and order-preserving even when nothing ran.
     expect(closedResults.map((record) => record.data["toolCallId"])).toEqual(["call_a"]);
+    expect(progress.lastAcceptedBoundary?.sourceStepId).toBe(ORIGINAL_TOOL_STEP);
   });
 });

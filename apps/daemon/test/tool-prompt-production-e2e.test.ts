@@ -136,13 +136,14 @@ describe("Phase 4E prompt production E2E", () => {
     expect(provider.turns.length).toBeGreaterThan(0);
 
     const turn = provider.turns[0]!;
-    // The eleven default Tools reach the model, in the frozen order.
+    // The twelve default Tools reach the model, in the frozen order.
     expect(turn.tools.map((tool) => tool.name)).toEqual([
       "read_file",
       "list_directory",
       "find_files",
       "search_text",
       "apply_patch",
+      "update_plan",
       "exec_command",
       "write_stdin",
       "stop_process",
@@ -202,6 +203,7 @@ describe("Phase 4E prompt production E2E", () => {
       "find_files",
       "search_text",
       "apply_patch",
+      "update_plan",
       "exec_command",
       "write_stdin",
       "stop_process",

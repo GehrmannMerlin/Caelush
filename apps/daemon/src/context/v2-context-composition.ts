@@ -55,7 +55,9 @@ import { createBudgetedContextSummarizer } from "./context-compaction-compositio
 import { createDeterministicCompactionFactsProvider } from "./deterministic-compaction-facts-adapter.js";
 import { createWorkCommentaryContextProvider } from "./work-commentary-context-provider.js";
 import { createTaskPlanContextProvider } from "./task-plan-context-provider.js";
-import { projectModelResourceGovernance } from "./resource-governance-context.js";
+import { createTaskPlanEvidenceResolver } from "./task-plan-evidence-adapter.js";
+import { createResourceGovernanceContextProvider } from "./resource-governance-context-provider.js";
+import { projectModelResourceSummary } from "./resource-governance-context.js";
 
 export interface DaemonV2ContextCompositionOptions {
   readonly input: RunAgentContextEngineInput;
@@ -116,15 +118,15 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
   return createV2ContextEngine({
     promptSurfaceStore: options.promptSurfaceStore,
     ...(input.modelSettings === undefined ? {} : { modelSettings: input.modelSettings }),
-    ...(input.run.contextBudgetPolicy?.version !== "ADAPTIVE_V1"
+    ...(input.run.contextBudgetPolicy?.version === "ADAPTIVE_V1"
+      ? { requestBudget: input.run.contextBudgetPolicy }
+      : input.run.contextBudgetPolicy?.version === "WORKING_SET_V2" &&
+          input.run.contextBudgetPolicy.requestBudget.version === "ADAPTIVE_V1"
+        ? { requestBudget: input.run.contextBudgetPolicy.requestBudget }
+        : {}),
+    ...(input.run.contextBudgetPolicy?.version !== "WORKING_SET_V2"
       ? {}
-      : {
-          requestBudget: {
-            version: input.run.contextBudgetPolicy.version,
-            outputReserveTokens: input.run.contextBudgetPolicy.outputReserveTokens,
-            safetyReserveTokens: input.run.contextBudgetPolicy.safetyReserveTokens,
-          },
-        }),
+      : { workingSet: input.run.contextBudgetPolicy.workingSet }),
     sourceRegistry: sources,
     checkpointRepository: options.storage.contextCheckpointsV2,
     authorityProvider,
@@ -237,9 +239,17 @@ function createSourceRegistry(options: {
     "REQUIRED",
   );
   register(createWorkCommentaryContextProvider({ storage: options.storage }), 5, "OPTIONAL");
+  register(createResourceGovernanceContextProvider({ storage: options.storage }), 4, "OPTIONAL");
   // The model's own step list, re-derived from its accepted update_plan call. Optional and cheap:
   // a Run that never plans contributes nothing.
-  register(createTaskPlanContextProvider(), 6, "OPTIONAL");
+  register(
+    createTaskPlanContextProvider({
+      tokenEstimator: options.tokenEstimator,
+      evidenceResolver: createTaskPlanEvidenceResolver({ storage: options.storage }),
+    }),
+    6,
+    "OPTIONAL",
+  );
   register(createConversationContextSourceProvider(), 10, "REQUIRED");
   register(
     createCheckpointContextSourceProvider({
@@ -442,7 +452,7 @@ function createAuthorityProvider(options: {
         plan === null
           ? "NO_VERIFICATION_PLAN"
           : `plan=${plan.id} checks=${plan.checks.map((check) => `${check.spec.kind}:${check.status}`).join(",")}`;
-      const resourceGovernance = projectModelResourceGovernance(resources);
+      const resourceGovernance = projectModelResourceSummary(resources);
       return {
         goal: options.input.identity.goal,
         changedFiles,

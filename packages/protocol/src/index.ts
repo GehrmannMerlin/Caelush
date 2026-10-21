@@ -113,14 +113,22 @@ export type { TimestampMs } from "./primitives/time.js";
 export {
   RESOURCE_PROGRESS_LIMITS,
   RESOURCE_PROGRESS_RECORD_VERSION,
+  ResourceProgressBoundarySchema,
   ResourceProgressRecordV1Schema,
   parseResourceProgressRecordV1,
 } from "./resource-progress.js";
+export {
+  RunCorrectionRecoveryRecordV1Schema,
+  parseRunCorrectionRecoveryRecordV1,
+} from "./resource-correction-recovery.js";
+export type { RunCorrectionRecoveryRecordV1 } from "./resource-correction-recovery.js";
 export type {
   ResourceActivePatternRecord,
   ResourceCorrectionRecord,
+  ResourceCorrectionDeliveryRecord,
   ResourceCorrectionStageRecord,
   ResourceProgressFieldRecord,
+  ResourceProgressBoundary,
   ResourceProgressPatternRecord,
   ResourceProgressRecordV1,
   ResourceProgressTurnRecord,
@@ -398,18 +406,22 @@ export type { AgentSession } from "./session.js";
 export {
   AgentRunSchema,
   ContextBudgetPolicySnapshotSchema,
+  ContextRequestBudgetSnapshotSchema,
   CurrentAgentRunSchema,
   NormalRunFinalResultSchema,
   RunCompletionContractSchema,
   RunStatusSchema,
+  WorkingSetPolicyV2Schema,
 } from "./run.js";
 export type {
   AgentRun,
   ContextBudgetPolicySnapshot,
+  ContextRequestBudgetSnapshot,
   CurrentAgentRun,
   NormalRunFinalResult,
   RunCompletionContract,
   RunStatus,
+  WorkingSetPolicyV2,
 } from "./run.js";
 export { RunCancellationCauseSchema, RunCancellationIntentSchema } from "./cancellation.js";
 export type { RunCancellationCause, RunCancellationIntent } from "./cancellation.js";

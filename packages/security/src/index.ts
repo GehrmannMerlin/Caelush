@@ -157,4 +157,4 @@ export {
   createInjectedReplayKeyProvider,
   MAX_PRIVATE_REPLAY_BYTES,
 } from "./private-replay.js";
-export type { ReplayKey, ReplayKeyProvider } from "./private-replay.js";
+export type { ReplayKey, ReplayKeyLookupOptions, ReplayKeyProvider } from "./private-replay.js";

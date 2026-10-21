@@ -32,7 +32,7 @@ export const RunCompletionContractSchema = z.literal("NATURAL_V1");
 export type RunCompletionContract = z.infer<typeof RunCompletionContractSchema>;
 
 /** Immutable per-Run input/output reserve policy used by the Agent Context Engine. */
-export const ContextBudgetPolicySnapshotSchema = z
+export const ContextRequestBudgetSnapshotSchema = z
   .object({
     version: z.literal("ADAPTIVE_V1"),
     outputReserveTokens: z.number().int().safe().positive(),
@@ -40,7 +40,29 @@ export const ContextBudgetPolicySnapshotSchema = z
   })
   .strict()
   .or(z.object({ version: z.literal("LEGACY_FULL_OUTPUT_V1") }).strict());
+
+export const WorkingSetPolicyV2Schema = z
+  .object({
+    targetTokens: z.number().int().safe().positive().max(96_000),
+    triggerRatio: z.number().finite().gt(0).lt(1),
+    postCompactionRatio: z.number().finite().gt(0).lt(1),
+    allowCurrentTurnPrefix: z.boolean(),
+    cooldownTurns: z.number().int().safe().nonnegative().max(100),
+  })
+  .strict();
+
+export const ContextBudgetPolicySnapshotSchema = ContextRequestBudgetSnapshotSchema.or(
+  z
+    .object({
+      version: z.literal("WORKING_SET_V2"),
+      requestBudget: ContextRequestBudgetSnapshotSchema,
+      workingSet: WorkingSetPolicyV2Schema,
+    })
+    .strict(),
+);
 export type ContextBudgetPolicySnapshot = z.infer<typeof ContextBudgetPolicySnapshotSchema>;
+export type ContextRequestBudgetSnapshot = z.infer<typeof ContextRequestBudgetSnapshotSchema>;
+export type WorkingSetPolicyV2 = z.infer<typeof WorkingSetPolicyV2Schema>;
 
 /**
  * A normal execution result. It records the exact final text and the model Step that produced it;

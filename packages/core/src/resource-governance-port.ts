@@ -1,4 +1,10 @@
-import type { RunId, RunResourcePolicy, TimestampMs } from "@caelush/protocol";
+import type {
+  ResourceProgressBoundary,
+  RunCorrectionRecoveryRecordV1,
+  RunId,
+  RunResourcePolicy,
+  TimestampMs,
+} from "@caelush/protocol";
 
 import type { ResourceSemanticProgress } from "./resource-progress-projection.js";
 
@@ -23,10 +29,15 @@ export interface ResourceGovernanceState {
    * missing projection means "no semantic evidence", never "no failures happened".
    */
   readonly semanticProgress?: ResourceSemanticProgress | undefined;
+  /** The last result boundary folded into this projection, persisted with its accepted messages. */
+  readonly lastAcceptedBoundary?: ResourceProgressBoundary | undefined;
+  readonly correctionRecovery?: RunCorrectionRecoveryRecordV1 | undefined;
   readonly revision: number;
   readonly createdAt: TimestampMs;
   readonly updatedAt: TimestampMs;
 }
+
+export type { ResourceProgressBoundary } from "@caelush/protocol";
 
 export interface ResourceGovernancePort {
   get(runId: RunId): Promise<ResourceGovernanceState | null>;

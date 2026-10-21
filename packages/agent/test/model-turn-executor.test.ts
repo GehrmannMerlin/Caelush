@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createModelTurnExecutor } from "../src/loop/turn/model-turn-executor.js";
 import { toAgentError } from "../src/index.js";
 import type {
@@ -287,7 +287,10 @@ describe("ModelTurnExecutor frozen result contract", () => {
       );
       const executor = createModelTurnExecutor({
         gateway: fake.gateway,
-        privateReplayResolverFactory: () => ({ resolve: async () => undefined }),
+        privateReplayResolverFactory: async () => ({
+          resolver: { resolve: async () => undefined },
+          dispose: () => undefined,
+        }),
       });
       let sinkCalled = false;
 
@@ -335,11 +338,12 @@ describe("ModelTurnExecutor frozen result contract", () => {
     const fake = gateway(textTurn("answer"));
     const selectedScopes: unknown[] = [];
     const resolver = { resolve: async () => undefined };
+    const dispose = vi.fn();
     const executor = createModelTurnExecutor({
       gateway: fake.gateway,
-      privateReplayResolverFactory: (scope) => {
+      privateReplayResolverFactory: async (scope) => {
         selectedScopes.push(scope);
-        return resolver;
+        return { resolver, dispose };
       },
     });
 
@@ -377,13 +381,17 @@ describe("ModelTurnExecutor frozen result contract", () => {
       selectedAssistantMessageIds: ["selected-assistant"],
     });
     expect(fake.options()[0]?.privateReplayResolver).not.toBe(resolver);
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("fails before provider I/O when a selected same-model Assistant lacks required replay", async () => {
     const fake = gateway(textTurn("answer"));
     const executor = createModelTurnExecutor({
       gateway: fake.gateway,
-      privateReplayResolverFactory: () => ({ resolve: async () => undefined }),
+      privateReplayResolverFactory: async () => ({
+        resolver: { resolve: async () => undefined },
+        dispose: () => undefined,
+      }),
     });
     const result = await executor.execute(
       input({
@@ -418,11 +426,14 @@ describe("ModelTurnExecutor frozen result contract", () => {
     const rawReplayFailure = "PRIVATE_REPLAY_STORAGE_PATH_SECRET";
     const executor = createModelTurnExecutor({
       gateway: fake.gateway,
-      privateReplayResolverFactory: () => ({
-        selectedAssistantMessageIds: ["old-assistant"],
-        resolve: async () => {
-          throw new Error(rawReplayFailure);
+      privateReplayResolverFactory: async () => ({
+        resolver: {
+          selectedAssistantMessageIds: ["old-assistant"],
+          resolve: async () => {
+            throw new Error(rawReplayFailure);
+          },
         },
+        dispose: () => undefined,
       }),
     });
     const providerState = {
@@ -479,6 +490,150 @@ describe("ModelTurnExecutor frozen result contract", () => {
     expect(JSON.stringify(result)).not.toContain(rawReplayFailure);
   });
 
+  it("wipes selected replay bytes and disposes the reader after a provider failure", async () => {
+    const fake = gateway([start(), errorEvent("AI_PROVIDER_ERROR", false)]);
+    const replayBytes = new TextEncoder().encode("private reasoning bytes");
+    const dispose = vi.fn();
+    const providerState = {
+      providerId: "deepseek",
+      api: "openai-compatible-chat",
+      version: 1,
+      payload: {
+        kind: "caelush.private-replay.v1",
+        replayId: "old-assistant",
+        sessionId: IDENTITY.sessionId,
+        runId: "run-previous",
+        callId: "previous-call",
+        model: "deepseek-reasoner",
+        replayVersion: 1,
+      },
+    } as never;
+    const executor = createModelTurnExecutor({
+      gateway: fake.gateway,
+      privateReplayResolverFactory: async () => ({
+        resolver: { resolve: async () => replayBytes },
+        dispose,
+      }),
+    });
+
+    const result = await executor.execute(
+      input({
+        request: {
+          ...REPLAY_REQUEST,
+          messages: [
+            { role: "assistant", content: [{ type: "text", text: "previous" }], providerState },
+            { role: "user", content: "continue" },
+          ],
+        },
+        model: REPLAY_MODEL,
+        selectedMessageIds: ["old-assistant"],
+        selectedAssistantReplaySources: [
+          {
+            messageId: "old-assistant",
+            runId: "run-previous",
+            callId: "previous-call",
+            providerId: "deepseek",
+            model: "deepseek-reasoner",
+            api: "openai-compatible-chat",
+            hasProviderState: true,
+          },
+        ],
+      }),
+    );
+
+    expect(result.kind).toBe("FAILED");
+    expect(fake.callCount()).toBe(1);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(replayBytes.every((byte) => byte === 0)).toBe(true);
+  });
+
+  it("cancels between selected replay reads and disposes the execution lease", async () => {
+    const fake = gateway(textTurn("unreachable"));
+    const controller = new AbortController();
+    const first = new TextEncoder().encode("first private replay");
+    const second = new TextEncoder().encode("second private replay");
+    const dispose = vi.fn();
+    const states = ["old-assistant-1", "old-assistant-2"].map((messageId, index) => ({
+      providerId: "deepseek",
+      api: "openai-compatible-chat",
+      version: 1,
+      payload: {
+        kind: "caelush.private-replay.v1",
+        replayId: messageId,
+        sessionId: IDENTITY.sessionId,
+        runId: "run-previous",
+        callId: `previous-call-${index + 1}`,
+        model: "deepseek-reasoner",
+        replayVersion: 1,
+      },
+    }));
+    let read = 0;
+    const executor = createModelTurnExecutor({
+      gateway: fake.gateway,
+      privateReplayResolverFactory: async () => ({
+        resolver: {
+          resolve: async () => {
+            read += 1;
+            if (read === 2) controller.abort();
+            return read === 1 ? first : second;
+          },
+        },
+        dispose,
+      }),
+    });
+
+    const result = await executor.execute(
+      input({
+        signal: controller.signal,
+        request: {
+          ...REPLAY_REQUEST,
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "one" }],
+              providerState: states[0] as never,
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "two" }],
+              providerState: states[1] as never,
+            },
+            { role: "user", content: "continue" },
+          ],
+        },
+        model: REPLAY_MODEL,
+        selectedMessageIds: ["old-assistant-1", "old-assistant-2"],
+        selectedAssistantReplaySources: [
+          {
+            messageId: "old-assistant-1",
+            runId: "run-previous",
+            callId: "previous-call-1",
+            providerId: "deepseek",
+            model: "deepseek-reasoner",
+            api: "openai-compatible-chat",
+            hasProviderState: true,
+          },
+          {
+            messageId: "old-assistant-2",
+            runId: "run-previous",
+            callId: "previous-call-2",
+            providerId: "deepseek",
+            model: "deepseek-reasoner",
+            api: "openai-compatible-chat",
+            hasProviderState: true,
+          },
+        ],
+      }),
+    );
+
+    expect(result).toEqual({ kind: "CANCELLED" });
+    expect(fake.callCount()).toBe(0);
+    expect(read).toBe(2);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(first.every((byte) => byte === 0)).toBe(true);
+    expect(second.every((byte) => byte === 0)).toBe(true);
+  });
+
   it("does not require DeepSeek native replay for providers without that capability", async () => {
     const fake = gateway(textTurn("answer"));
     const executor = createModelTurnExecutor({ gateway: fake.gateway });
@@ -525,7 +680,10 @@ describe("ModelTurnExecutor frozen result contract", () => {
       const fake = gateway(textTurn("answer"));
       const executor = createModelTurnExecutor({
         gateway: fake.gateway,
-        privateReplayResolverFactory: () => ({ resolve: async () => undefined }),
+        privateReplayResolverFactory: async () => ({
+          resolver: { resolve: async () => undefined },
+          dispose: () => undefined,
+        }),
       });
       const result = await executor.execute(
         input({

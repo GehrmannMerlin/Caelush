@@ -126,7 +126,7 @@ describe("RunLivenessSweeper", () => {
     expect(h.recovered).toEqual([]);
   });
 
-  it("leaves PENDING, WAITING_RESOURCE and terminal Runs alone", async () => {
+  it("recovers WAITING_RESOURCE while leaving PENDING and terminal Runs alone", async () => {
     const pending = createRunId();
     const resource = createRunId();
     const completed = createRunId();
@@ -142,8 +142,9 @@ describe("RunLivenessSweeper", () => {
 
     const summary = await h.sweeper.sweepOnce();
 
-    expect(summary.ineligible).toBe(3);
-    expect(h.recovered).toEqual([]);
+    expect(summary.ineligible).toBe(2);
+    expect(summary.recovered).toEqual([resource]);
+    expect(h.recovered).toEqual([resource]);
   });
 
   it("uses a longer silence window for a legitimately pending approval", async () => {

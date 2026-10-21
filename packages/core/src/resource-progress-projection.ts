@@ -1,5 +1,6 @@
 import type {
   ResourceActivePatternRecord,
+  ResourceCorrectionDeliveryRecord,
   ResourceProgressRecordV1,
   RunResourcePolicy,
 } from "@caelush/protocol";
@@ -167,16 +168,26 @@ export function applyResourceProgressTurn(
   const turns = Object.freeze([...progress.turns, turn].slice(-policy.windowTurns));
   const active = progress.active;
   if (active === undefined) {
-    const candidate = mostFrequentPattern(turns);
+    const candidate = mostFrequentPattern(
+      turnsAfterWatermark(turns, progress.resolvedThroughTurnId),
+    );
     if (candidate === undefined || candidate.occurrences < policy.nudgeAfterOccurrences) {
-      return Object.freeze({ version: 1 as const, turns, ...pending });
+      return Object.freeze({ ...progress, version: 1 as const, turns, ...pending });
     }
+    const episodeEvidence = turnsAfterWatermark(turns, progress.resolvedThroughTurnId);
+    const episodeStart = episodeEvidence.find((candidateTurn) =>
+      candidateTurn.patterns.some((pattern) => pattern.key === candidate.pattern.key),
+    );
     return Object.freeze({
+      ...progress,
       version: 1 as const,
       turns,
       ...pending,
       active: Object.freeze({
         key: candidate.pattern.key,
+        ...(episodeStart === undefined
+          ? {}
+          : { episodeId: `${candidate.pattern.key}:${episodeStart.turnId}` }),
         toolName: candidate.pattern.toolName,
         code: candidate.pattern.code,
         replans: 0,
@@ -190,18 +201,35 @@ export function applyResourceProgressTurn(
   if (start === undefined) {
     // The episode's starting point fell out of the window: the pattern is no longer recent enough to
     // escalate, so the episode ends instead of counting forever.
-    return Object.freeze({ version: 1 as const, turns, ...pending });
+    return closeProgressEpisode(progress, turns, turn.turnId);
   }
   if (countPattern(turns, active) === 0) {
     // The pattern itself has fallen out of the window. Keeping the episode alive would let an old
     // mistake escalate on evidence nobody can see any more.
-    return Object.freeze({ version: 1 as const, turns, ...pending });
+    return closeProgressEpisode(progress, turns, turn.turnId);
   }
   const resolved = turns
     .slice(start)
     .some((candidate) => candidate.succeededTools.includes(active.toolName));
-  if (resolved) return Object.freeze({ version: 1 as const, turns, ...pending });
-  return Object.freeze({ version: 1 as const, turns, ...pending, active });
+  if (resolved) {
+    return closeProgressEpisode(progress, turns, turn.turnId);
+  }
+  return Object.freeze({ ...progress, version: 1 as const, turns, ...pending, active });
+}
+
+function closeProgressEpisode(
+  progress: ResourceSemanticProgress,
+  turns: readonly ResourceProgressTurn[],
+  resolvedThroughTurnId: string,
+): ResourceSemanticProgress {
+  return Object.freeze({
+    version: 1 as const,
+    turns,
+    ...(progress.deliveryReceipts === undefined
+      ? {}
+      : { deliveryReceipts: progress.deliveryReceipts }),
+    resolvedThroughTurnId,
+  });
 }
 
 /**
@@ -329,14 +357,15 @@ export function deliveredInterventionsOf(active: ResourceActivePattern): number 
  */
 export function recordResourceNudgeDelivery(
   progress: ResourceSemanticProgress,
-  deliveredInterventionId?: string,
+  receipt: ResourceCorrectionDeliveryRecord,
 ): ResourceSemanticProgress {
   const active = progress.active;
   if (active === undefined) return progress;
   if (
-    deliveredInterventionId !== undefined &&
-    progress.correction !== undefined &&
-    progress.correction.interventionId !== deliveredInterventionId
+    progress.correction === undefined ||
+    progress.correction.interventionId !== receipt.interventionId ||
+    (progress.correction.episodeId !== undefined &&
+      progress.correction.episodeId !== receipt.episodeId)
   ) {
     return progress;
   }
@@ -344,6 +373,10 @@ export function recordResourceNudgeDelivery(
   return Object.freeze({
     version: 1 as const,
     turns: progress.turns,
+    ...(progress.resolvedThroughTurnId === undefined
+      ? {}
+      : { resolvedThroughTurnId: progress.resolvedThroughTurnId }),
+    deliveryReceipts: Object.freeze([...(progress.deliveryReceipts ?? []), receipt].slice(-64)),
     active: Object.freeze({
       ...active,
       nudged: true,
@@ -370,6 +403,12 @@ export function acknowledgeV1ResourceNudge(
   return Object.freeze({
     version: 1 as const,
     turns: progress.turns,
+    ...(progress.resolvedThroughTurnId === undefined
+      ? {}
+      : { resolvedThroughTurnId: progress.resolvedThroughTurnId }),
+    ...(progress.deliveryReceipts === undefined
+      ? {}
+      : { deliveryReceipts: progress.deliveryReceipts }),
     ...(progress.correction === undefined ? {} : { correction: progress.correction }),
     active: Object.freeze({ ...active, nudged: true }),
   });
@@ -385,6 +424,12 @@ export function acknowledgeResourceReplan(
   return Object.freeze({
     version: 1 as const,
     turns: progress.turns,
+    ...(progress.resolvedThroughTurnId === undefined
+      ? {}
+      : { resolvedThroughTurnId: progress.resolvedThroughTurnId }),
+    ...(progress.deliveryReceipts === undefined
+      ? {}
+      : { deliveryReceipts: progress.deliveryReceipts }),
     active: Object.freeze({
       ...active,
       ...(lastTurnId === undefined ? {} : { sinceTurnId: lastTurnId }),
@@ -474,4 +519,14 @@ function mostFrequentPattern(
     }
   }
   return best === undefined ? undefined : { pattern: best.pattern, occurrences: best.count };
+}
+
+function turnsAfterWatermark(
+  turns: readonly ResourceProgressTurn[],
+  watermark: string | undefined,
+): readonly ResourceProgressTurn[] {
+  if (watermark === undefined) return turns;
+  const index = turns.findIndex((turn) => turn.turnId === watermark);
+  // If the watermark has rolled out of the bounded window, every retained turn is newer.
+  return index < 0 ? turns : turns.slice(index + 1);
 }

@@ -265,10 +265,10 @@ describe("package boundaries", () => {
         /(?:fetch\s*\(|node:(?:http|https)|child_process)/,
       );
     }
-    // The pattern targets real annotations; a bare word boundary also matched the
-    // English word "any" inside a comment.
-    expect(core, "Core contains explicit any").not.toMatch(explicitAnyPattern);
-    expect(storage, "Storage contains explicit any").not.toMatch(explicitAnyPattern);
+    expect(executableSource(core), "Core contains explicit any").not.toMatch(explicitAnyPattern);
+    expect(executableSource(storage), "Storage contains explicit any").not.toMatch(
+      explicitAnyPattern,
+    );
   });
 
   it("keeps the Phase 6B loop above Context and narrow LLM contracts", async () => {

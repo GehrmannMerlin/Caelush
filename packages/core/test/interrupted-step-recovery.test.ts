@@ -12,6 +12,7 @@ function facts(overrides: Partial<InterruptedStepFacts> = {}): InterruptedStepFa
   return {
     run: { status: "RUNNING" },
     activeStep: { id: stepId },
+    providerAttemptStarted: false,
     conversationRecords: [],
     ...overrides,
   };
@@ -30,6 +31,13 @@ describe("classifyInterruptedStep", () => {
         }),
       ),
     ).toBe("FAIL_CLOSED");
+  });
+
+  it("fails closed when provider I/O started or its boundary is unknown", () => {
+    expect(classifyInterruptedStep(facts({ providerAttemptStarted: true }))).toBe("FAIL_CLOSED");
+    expect(classifyInterruptedStep(facts({ providerAttemptStarted: undefined }))).toBe(
+      "FAIL_CLOSED",
+    );
   });
 
   it("ignores records that belong to another Step", () => {

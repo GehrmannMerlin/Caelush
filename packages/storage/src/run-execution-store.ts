@@ -8,6 +8,7 @@ import {
   deriveInterruptedToolResultMessageId,
 } from "@caelush/agent";
 import { createHash } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { SqlitePrivateReplayStore, PRIVATE_REPLAY_COMMIT } from "./private-replay-store.js";
 import {
@@ -38,12 +39,14 @@ import {
   type AgentStep,
   type RunId,
   type RunCancellationIntent,
+  type ResourceProgressBoundary,
   type VerificationPlan,
   type VerificationPlanId,
   type ToolInvocation,
   ToolInvocationSchema,
 } from "@caelush/protocol";
 import type { CaelushDatabase } from "./database.js";
+import type { ResourceGovernanceState } from "./resource-governance-repository.js";
 import { decodeProtocol, encodeProtocol } from "./codec.js";
 import { StorageConflictError, StorageError } from "./errors.js";
 import {
@@ -70,6 +73,7 @@ import {
   hasUnassignedRunInputsInTransaction,
 } from "./run-input-store.js";
 import { withAuthoritativeTransaction } from "./transaction-guard.js";
+import { writeResourceGovernanceStateInTransaction } from "./resource-governance-repository.js";
 import {
   loadVerificationPlanInTransaction,
   writeVerificationPlanInTransaction,
@@ -827,6 +831,16 @@ export class SqliteRunExecutionStore
     const conversationRecords = await this.messageRecords.listByRun(runId);
     const loadedActiveStep =
       run.currentStepId === undefined ? undefined : await this.steps.get(run.currentStepId);
+    const activeStepProviderStarted =
+      loadedActiveStep === undefined || loadedActiveStep === null
+        ? undefined
+        : this.database.client
+            .prepare(
+              `SELECT 1 FROM agent_events
+                 WHERE run_id = ? AND step_id = ? AND event_type = ?
+                 LIMIT 1`,
+            )
+            .get(runId, loadedActiveStep.id, "llm.started") !== undefined;
     // Phase 3E: a general Run snapshot carries no verification plan. The plan lives behind the
     // Core-private completion persistence port, which is the only boundary that reads it, and it is
     // written in the same transaction as the `VERIFYING` boundary that names it.
@@ -836,6 +850,7 @@ export class SqliteRunExecutionStore
       ...(loadedActiveStep === undefined || loadedActiveStep === null
         ? {}
         : { activeStep: loadedActiveStep }),
+      ...(activeStepProviderStarted === undefined ? {} : { activeStepProviderStarted }),
       conversationRecords,
       ...(continuation === undefined || continuation === null
         ? {}
@@ -864,6 +879,24 @@ export class SqliteRunExecutionStore
   }
 
   async commit(command: RunExecutionCommitView): Promise<RunExecutionCommitResult> {
+    return this.commitInternal(command);
+  }
+
+  async commitExecutionWithProgress(input: {
+    readonly execution: RunExecutionCommitView;
+    readonly expectedProgressRevision: number | null;
+    readonly nextProgress: ResourceGovernanceState;
+  }): Promise<RunExecutionCommitResult> {
+    return this.commitInternal(input.execution, input);
+  }
+
+  private async commitInternal(
+    command: RunExecutionCommitView,
+    progress?: {
+      readonly expectedProgressRevision: number | null;
+      readonly nextProgress: ResourceGovernanceState;
+    },
+  ): Promise<RunExecutionCommitResult> {
     const normalFinalResult = assertNormalCompletionCommit(command);
     const privateReplayWrites = await this.privateReplay.validateWrites(
       command.privateReplayWrites ?? [],
@@ -1032,6 +1065,21 @@ export class SqliteRunExecutionStore
             client,
             command.run.id,
             command.expectedContinuationRevision,
+          );
+        }
+        if (progress !== undefined) {
+          const boundary = progress.nextProgress.lastAcceptedBoundary;
+          if (boundary === undefined || progress.nextProgress.runId !== command.run.id) {
+            throw new RunExecutionInvariantError(
+              "Accepted Run progress requires a matching boundary identity.",
+            );
+          }
+          assertProgressBoundaryInTransaction(client, command.run.id, boundary);
+          writeResourceGovernanceStateInTransaction(
+            this.database,
+            command.run.id,
+            progress.expectedProgressRevision,
+            progress.nextProgress,
           );
         }
         const events = appendDurableEventsInTransaction(client, command.events);
@@ -1240,6 +1288,21 @@ export class SqliteRunExecutionStore
         command.messagesToAppend.map((entry) => entry.draft),
         PRIVATE_REPLAY_COMMIT,
       );
+      if (command.progress !== undefined) {
+        const boundary = command.progress.nextProgress.lastAcceptedBoundary;
+        if (boundary === undefined || command.progress.nextProgress.runId !== parsedRun.id) {
+          throw new RunExecutionInvariantError(
+            "Accepted Run progress requires a matching boundary identity.",
+          );
+        }
+        assertProgressBoundaryInTransaction(client, parsedRun.id, boundary);
+        writeResourceGovernanceStateInTransaction(
+          this.database,
+          parsedRun.id,
+          command.progress.expectedProgressRevision,
+          command.progress.nextProgress,
+        );
+      }
       this.privateReplay.writeInTransaction(
         parsedRun.id,
         privateReplayWrites,
@@ -1289,5 +1352,42 @@ export class SqliteRunExecutionStore
       throw new RunExecutionInvariantError("VERIFYING Run has no matching VerificationPlan");
     }
     return plan;
+  }
+}
+
+function assertProgressBoundaryInTransaction(
+  client: DatabaseSync,
+  runId: RunId,
+  boundary: ResourceProgressBoundary,
+): void {
+  const step = client
+    .prepare("SELECT run_id FROM agent_steps WHERE id = ?")
+    .get(boundary.sourceStepId) as { readonly run_id: string } | undefined;
+  if (step === undefined || step.run_id !== runId) {
+    throw new RunExecutionInvariantError("Progress boundary Step does not belong to its Run.");
+  }
+  const records = listAgentMessageRecordsByRunInTransaction(client, runId);
+  const accepted = boundary.messageIds.map((id) =>
+    records.find((record) => record.messageId === id),
+  );
+  if (accepted.some((record) => record === undefined)) {
+    throw new RunExecutionInvariantError("Progress boundary does not name accepted messages.");
+  }
+  for (const record of accepted) {
+    if (record?.sourceStepId !== boundary.sourceStepId) {
+      throw new RunExecutionInvariantError("Progress boundary message has another source Step.");
+    }
+    if (
+      (boundary.kind === "TOOL_RESULTS" && record?.messageType !== "TOOL_RESULT") ||
+      (boundary.kind === "MODEL_TURN" && record?.messageType !== "ASSISTANT")
+    ) {
+      throw new RunExecutionInvariantError("Progress boundary message type is invalid.");
+    }
+  }
+  if (
+    (boundary.kind === "TOOL_RESULTS" && boundary.messageIds.length === 0) ||
+    (boundary.kind === "MODEL_TURN" && boundary.messageIds.length !== 1)
+  ) {
+    throw new RunExecutionInvariantError("Progress boundary has an invalid message cardinality.");
   }
 }

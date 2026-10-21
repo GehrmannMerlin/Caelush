@@ -175,7 +175,7 @@ describe("committed storage migrations", () => {
       // Message V2, Workspace Registry, Runtime AI Management, durable archives, and conversation
       // attachment metadata are in the published migration ledger.
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 28,
+        count: 29,
       });
 
       const providerUsageColumns = sqlite
@@ -268,7 +268,8 @@ describe("committed storage migrations", () => {
         entry.name === "20261008160000_provider_invocation_usage" ||
         entry.name === "20261014170000_provider_invocation_step_identity" ||
         entry.name === "20261016120000_archive_management" ||
-        entry.name === "20261018120000_conversation_attachments"
+        entry.name === "20261018120000_conversation_attachments" ||
+        entry.name === "20261020100000_resource_correction_recovery"
       )
         continue;
       await cp(
@@ -345,7 +346,7 @@ describe("committed storage migrations", () => {
         ]),
       );
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 28,
+        count: 29,
       });
       expect(
         sqlite

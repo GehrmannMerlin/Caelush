@@ -1,5 +1,7 @@
 import {
   RunResourcePolicySchema,
+  createApprovalRequestId,
+  createToolInvocationId,
   type RunResourcePolicy,
   type TimestampMs,
 } from "@caelush/protocol";
@@ -260,7 +262,10 @@ describe("Phase 3D resource admission", () => {
       ),
       script: (call) =>
         call === 0 ? toolTurn([{ id: "call_a", name: "read_file" }]) : answerTurn("reconsidered"),
-      extra: { resourceGovernance: ledger.port, toolTurn: stubToolTurnPipeline(batches) },
+      extra: {
+        resourceGovernance: ledger.port,
+        toolTurn: stubToolTurnPipeline(batches),
+      },
     });
 
     const parked = await h.controller.start(h.store.snapshot.run.id);
@@ -269,7 +274,8 @@ describe("Phase 3D resource admission", () => {
     expect(batches.physicalExecutions).toBe(0);
     const stepsBefore = h.allocatedSteps.length;
 
-    const continued = await h.controller.continueResourceGuard(h.store.snapshot.run.id);
+    enableLegacyCorrectionRecovery(h);
+    const continued = await h.controller.recover(h.store.snapshot.run.id);
 
     // The point of the whole change: continuing produced a *new* model turn, not another visit to the
     // same admission decision.
@@ -314,16 +320,166 @@ describe("Phase 3D resource admission", () => {
       ),
       script: (call) =>
         call === 0 ? toolTurn([{ id: "call_a", name: "read_file" }]) : answerTurn("reconsidered"),
-      extra: { resourceGovernance: ledger.port, toolTurn: stubToolTurnPipeline(batches) },
+      extra: {
+        resourceGovernance: ledger.port,
+        toolTurn: stubToolTurnPipeline(batches),
+      },
     });
 
     await h.controller.start(h.store.snapshot.run.id);
-    await h.controller.continueResourceGuard(h.store.snapshot.run.id);
+    enableLegacyCorrectionRecovery(h);
+    await h.controller.recover(h.store.snapshot.run.id);
     const turnsAfterFirst = h.turns.length;
     // A double click, a retried request or a reconnected client must not append a second set of
     // results or start a second turn for the same boundary.
-    await h.controller.continueResourceGuard(h.store.snapshot.run.id);
+    await h.controller.recover(h.store.snapshot.run.id);
     expect(h.turns.length).toBe(turnsAfterFirst);
+    expect(batches.physicalExecutions).toBe(0);
+  });
+
+  it("cancels a historical REQUESTED invocation through the Tool lifecycle before model recovery", async () => {
+    const ledger = resourceLedger({ consecutiveNoProgressTurns: 3, replanCount: 2 });
+    const batches = stubToolBatches([completeAnswer()]);
+    let requested = true;
+    let cancelled = 0;
+    const h = harness3e({
+      run: makePolicyRun(
+        policy({
+          progress: {
+            windowTurns: 8,
+            noProgressTurnsBeforeReplan: 2,
+            replansBeforePause: 2,
+            identicalCallNudgeThreshold: 1,
+          },
+        }),
+      ),
+      script: (call) =>
+        call === 0 ? toolTurn([{ id: "call_a", name: "read_file" }]) : answerTurn("recovered"),
+      extra: {
+        resourceGovernance: ledger.port,
+        legacyPendingBatchInspection: {
+          inspect: async ({
+            calls,
+          }: {
+            readonly calls: readonly { externalCallId: string; toolName: string }[];
+          }) =>
+            calls.map((call) => ({
+              ...call,
+              kind: requested ? ("REQUESTED" as const) : ("NOT_DISPATCHED" as const),
+            })),
+        },
+        legacyPendingBatchDispatcher: {
+          cancelUnstarted: async () => {
+            cancelled += 1;
+            requested = false;
+          },
+        },
+        toolTurn: stubToolTurnPipeline(batches),
+      },
+    });
+
+    const parked = await h.controller.start(h.store.snapshot.run.id);
+    expect(parked.status).toBe("WAITING_RESOURCE");
+    enableLegacyCorrectionRecovery(h);
+    const recovered = await h.controller.recover(h.store.snapshot.run.id);
+
+    expect(cancelled).toBe(1);
+    expect(recovered.run.status).toBe("COMPLETED");
+    expect(batches.physicalExecutions).toBe(0);
+    expect(h.turns).toHaveLength(2);
+  });
+
+  it("returns a verified pending ApprovalRequest to the existing approval flow", async () => {
+    const ledger = resourceLedger({ consecutiveNoProgressTurns: 3, replanCount: 2 });
+    const batches = stubToolBatches([completeAnswer()]);
+    const approvalId = createApprovalRequestId();
+    const invocationId = createToolInvocationId();
+    let approvalPending = false;
+    const h = harness3e({
+      run: makePolicyRun(
+        policy({
+          progress: {
+            windowTurns: 8,
+            noProgressTurnsBeforeReplan: 2,
+            replansBeforePause: 2,
+            identicalCallNudgeThreshold: 1,
+          },
+        }),
+      ),
+      script: (call) =>
+        call === 0 ? toolTurn([{ id: "call_a", name: "read_file" }]) : answerTurn("recovered"),
+      extra: {
+        resourceGovernance: ledger.port,
+        legacyPendingBatchInspection: {
+          inspect: async ({
+            calls,
+          }: {
+            readonly calls: readonly { externalCallId: string; toolName: string }[];
+          }) =>
+            calls.map((call) =>
+              approvalPending
+                ? {
+                    ...call,
+                    kind: "WAITING_APPROVAL" as const,
+                    invocationId,
+                    approvalId,
+                  }
+                : { ...call, kind: "NOT_DISPATCHED" as const },
+            ),
+        },
+        toolTurn: stubToolTurnPipeline(batches),
+      },
+    });
+
+    const parked = await h.controller.start(h.store.snapshot.run.id);
+    expect(parked.status).toBe("WAITING_RESOURCE");
+    approvalPending = true;
+    enableLegacyCorrectionRecovery(h);
+    const recovered = await h.controller.recover(h.store.snapshot.run.id);
+
+    expect(recovered.run.status).toBe("WAITING_APPROVAL");
+    expect(recovered.status).toBe("WAITING_APPROVAL");
+    expect(recovered).toMatchObject({ approvalId, invocationId, externalCallId: "call_a" });
+    expect(h.turns).toHaveLength(1);
+    expect(batches.physicalExecutions).toBe(0);
+  });
+
+  it("fails closed for an unknown in-flight side-effect boundary", async () => {
+    const ledger = resourceLedger({ consecutiveNoProgressTurns: 3, replanCount: 2 });
+    const batches = stubToolBatches([completeAnswer()]);
+    const h = harness3e({
+      run: makePolicyRun(
+        policy({
+          progress: {
+            windowTurns: 8,
+            noProgressTurnsBeforeReplan: 2,
+            replansBeforePause: 2,
+            identicalCallNudgeThreshold: 1,
+          },
+        }),
+      ),
+      script: (call) =>
+        call === 0 ? toolTurn([{ id: "call_a", name: "read_file" }]) : answerTurn("must not run"),
+      extra: {
+        resourceGovernance: ledger.port,
+        legacyPendingBatchInspection: {
+          inspect: async ({
+            calls,
+          }: {
+            readonly calls: readonly { externalCallId: string; toolName: string }[];
+          }) => calls.map((call) => ({ ...call, kind: "RUNNING_UNKNOWN" as const })),
+        },
+        toolTurn: stubToolTurnPipeline(batches),
+      },
+    });
+
+    await h.controller.start(h.store.snapshot.run.id);
+    enableLegacyCorrectionRecovery(h);
+    await expect(h.controller.recover(h.store.snapshot.run.id)).rejects.toThrow(
+      "the call was not resent",
+    );
+    expect(h.store.snapshot.run.status).toBe("WAITING_RESOURCE");
+    expect(h.turns).toHaveLength(1);
     expect(batches.physicalExecutions).toBe(0);
   });
 
@@ -355,7 +511,9 @@ describe("Phase 3D resource admission", () => {
           },
         }),
       ),
-      script: (call) => (call < 4 ? toolTurn([{ id: "call_a", name: "apply_patch" }]) : answerTurn()),
+      script: (call) =>
+        call < 4 ? toolTurn([{ id: "call_a", name: "apply_patch" }]) : answerTurn(),
+      selectPendingCorrection: true,
       extra: { resourceGovernance: ledger.port, toolTurn: stubToolTurnPipeline(batches) },
     });
 
@@ -370,11 +528,107 @@ describe("Phase 3D resource admission", () => {
     // ladder advanced from INPUT_CORRECTION to REVIEW_APPROACH, which only a delivery can do.
     const semantic = ledger.current().semanticProgress;
     expect(semantic?.active?.deliveredInterventions).toBe(1);
+    expect(
+      h.turns.some(({ request }) =>
+        request.messages.some(
+          (message) => message.role === "system" && message.content.includes("PENDING_CORRECTION"),
+        ),
+      ),
+    ).toBe(true);
+    expect(semantic?.deliveryReceipts?.at(-1)).toMatchObject({
+      callId: expect.any(String),
+      consumerStepId: expect.any(String),
+      assistantMessageId: expect.any(String),
+      selectedSourceItemId: expect.stringContaining("daemon.resource-governance:correction:"),
+    });
     // Advice prepared by the last batch has no following request to carry it, so it is still pending —
     // and it is the *next* rung, not a repeat of the one already delivered.
     if (semantic?.correction !== undefined) {
       expect(semantic.correction.stage).toBe("REVIEW_APPROACH");
     }
+  });
+
+  it("does not record a correction delivery when the settled request had no advice", async () => {
+    const ledger = resourceLedger();
+    const rejected = {
+      kind: "COMPLETED" as const,
+      items: [
+        rejectedItem({
+          externalCallId: "call_a",
+          toolName: "apply_patch",
+          content: "Arguments do not match the input schema: missing required patch.",
+        }),
+      ],
+    };
+    const batches = stubToolBatches([rejected, rejected, rejected, rejected]);
+    const h = harness3e({
+      run: makePolicyRun(
+        policy({
+          correctionVersion: "AUTONOMOUS_CORRECTION_V2",
+          progress: {
+            windowTurns: 8,
+            identicalCallNudgeThreshold: 2,
+            noProgressTurnsBeforeReplan: 3,
+            replansBeforePause: 2,
+          },
+        }),
+      ),
+      script: (call) =>
+        call < 4 ? toolTurn([{ id: "call_a", name: "apply_patch" }]) : answerTurn("done"),
+      extra: { resourceGovernance: ledger.port, toolTurn: stubToolTurnPipeline(batches) },
+    });
+
+    await h.controller.start(h.store.snapshot.run.id);
+
+    expect(JSON.stringify(h.turns).includes("PENDING_CORRECTION")).toBe(false);
+    expect(ledger.current().semanticProgress?.active?.deliveredInterventions ?? 0).toBe(0);
+    expect(ledger.current().semanticProgress?.correction).toBeDefined();
+  });
+
+  it("does not record a correction delivery when the provider turn fails", async () => {
+    const ledger = resourceLedger();
+    const rejected = {
+      kind: "COMPLETED" as const,
+      items: [
+        rejectedItem({
+          externalCallId: "call_a",
+          toolName: "apply_patch",
+          content: "Arguments do not match the input schema: missing required patch.",
+        }),
+      ],
+    };
+    const batches = stubToolBatches([rejected, rejected, rejected, rejected]);
+    const h = harness3e({
+      run: makePolicyRun(
+        policy({
+          correctionVersion: "AUTONOMOUS_CORRECTION_V2",
+          progress: {
+            windowTurns: 8,
+            identicalCallNudgeThreshold: 2,
+            noProgressTurnsBeforeReplan: 3,
+            replansBeforePause: 2,
+          },
+        }),
+      ),
+      script: (call) =>
+        call < 4
+          ? toolTurn([{ id: "call_a", name: "apply_patch" }])
+          : {
+              kind: "FAILED",
+              error: {
+                code: "AUTHENTICATION",
+                message: "The model provider rejected the request.",
+                retryable: false,
+              },
+            },
+      extra: { resourceGovernance: ledger.port, toolTurn: stubToolTurnPipeline(batches) },
+    });
+
+    const result = await h.controller.start(h.store.snapshot.run.id);
+
+    expect(result.run.status).toBe("FAILED");
+    expect(ledger.current().semanticProgress?.active?.deliveredInterventions ?? 0).toBe(0);
+    expect(ledger.current().semanticProgress?.correction).toBeDefined();
   });
 
   it("hard-stops the batch as a budget refusal with the exact accounting", async () => {
@@ -420,6 +674,17 @@ describe("Phase 3D resource admission", () => {
     expect(eventTypes(h.notifications)).not.toContain("run.failed");
   });
 });
+
+function enableLegacyCorrectionRecovery(h: ReturnType<typeof harness3e>): void {
+  const controller = h.controller as unknown as {
+    readonly dependencies: {
+      resourceCorrectionRecoveryPolicy?: { readonly authority: "DAEMON_AUTO_CORRECTION_V1" };
+    };
+  };
+  controller.dependencies.resourceCorrectionRecoveryPolicy = {
+    authority: "DAEMON_AUTO_CORRECTION_V1",
+  };
+}
 
 /**
  * A Run carrying the resource policy under test.

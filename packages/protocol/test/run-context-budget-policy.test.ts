@@ -103,4 +103,49 @@ describe("Run context budget policy snapshot", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("accepts a strictly frozen WORKING_SET_V2 snapshot around the unchanged request budget", () => {
+    const snapshot = {
+      version: "WORKING_SET_V2",
+      requestBudget: { version: "LEGACY_FULL_OUTPUT_V1" },
+      workingSet: {
+        targetTokens: 96_000,
+        triggerRatio: 0.75,
+        postCompactionRatio: 0.5,
+        allowCurrentTurnPrefix: true,
+        cooldownTurns: 5,
+      },
+    } as const;
+    expect(
+      CurrentAgentRunSchema.safeParse({ ...baseRun, contextBudgetPolicy: snapshot }).success,
+    ).toBe(true);
+    expect(
+      CurrentAgentRunSchema.safeParse({
+        ...baseRun,
+        contextBudgetPolicy: {
+          ...snapshot,
+          workingSet: { ...snapshot.workingSet, triggerRatio: 1 },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      CurrentAgentRunSchema.safeParse({
+        ...baseRun,
+        contextBudgetPolicy: { ...snapshot, unknown: true },
+      }).success,
+    ).toBe(false);
+    expect(
+      CurrentAgentRunSchema.safeParse({
+        ...baseRun,
+        contextBudgetPolicy: {
+          ...snapshot,
+          requestBudget: {
+            version: "ADAPTIVE_V1",
+            outputReserveTokens: 16_384,
+            safetyReserveTokens: 4_096,
+          },
+        },
+      }).success,
+    ).toBe(true);
+  });
 });

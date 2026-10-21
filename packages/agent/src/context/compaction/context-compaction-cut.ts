@@ -14,6 +14,8 @@ export interface ProtocolSafeSplitCut {
   readonly kind: "PROTOCOL_SAFE_SPLIT";
   readonly conversationTurnId: ConversationTurnId;
   readonly originalUserMessageId: AgentMessageId;
+  /** Current-turn working set cuts preserve all leading user authority messages byte-for-byte. */
+  readonly preserveLeadingMessages?: true;
   readonly firstKeptProtocolUnitId: string;
   readonly firstKeptMessageId: AgentMessageId;
   readonly firstKeptSequence: number;
@@ -34,6 +36,7 @@ export interface ContextCutPointSelector {
     readonly history: ContextHistoryIndex;
     readonly targetRecentTailTokens: number;
     readonly minRecentTailTokens: number;
+    readonly allowCurrentTurnPrefix?: boolean;
   }): ContextCompactionCutCandidate | null;
 }
 

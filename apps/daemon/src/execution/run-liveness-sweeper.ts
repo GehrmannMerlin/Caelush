@@ -126,14 +126,15 @@ interface Observation {
 /**
  * Statuses this sweeper may hand to recovery.
  *
- * `WAITING_RESOURCE` is deliberately absent: that is a decision the Run is waiting for **from the
- * user**, and re-driving it would poll a human. `PENDING` is absent because starting is an explicit
- * action, and terminal statuses are settled forever.
+ * `WAITING_RESOURCE` is recoverable through the existing Core authority, which validates the durable
+ * boundary and either advances ordinary correction or leaves a concrete failure. `PENDING` is absent
+ * because starting remains explicit, and terminal statuses are settled forever.
  */
 const SWEPT_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
   "RUNNING",
   "VERIFYING",
   "WAITING_APPROVAL",
+  "WAITING_RESOURCE",
 ]);
 
 export class RunLivenessSweeper {

@@ -109,6 +109,7 @@ const CODING_BUILTINS = [
   "find_files",
   "search_text",
   "apply_patch",
+  "update_plan",
   "exec_command",
   "write_stdin",
   "stop_process",
@@ -118,7 +119,7 @@ const CODING_BUILTINS = [
 ] as const;
 
 describe("Phase 4E guard — builtin ownership", () => {
-  it("declares all eleven builtins in @caelush/coding-agent, one file each", async () => {
+  it("declares all twelve builtins in @caelush/coding-agent, one file each", async () => {
     const files = await filesUnder("packages/coding-agent/src/tools/builtins");
 
     for (const name of CODING_BUILTINS) {
@@ -132,7 +133,7 @@ describe("Phase 4E guard — builtin ownership", () => {
       expect(text, name).toContain("defineCodingTool({");
     }
 
-    // The default set composes exactly those eleven, in the frozen order.
+    // The default set composes exactly those twelve, in the frozen order.
     const defaultTools = code(
       await read("packages/coding-agent/src/tools/builtins/default-tools.ts"),
     );
@@ -140,7 +141,7 @@ describe("Phase 4E guard — builtin ownership", () => {
     expect(order).toEqual([...CODING_BUILTINS]);
   });
 
-  it("declares the eleven builtins in exactly one place in production source", async () => {
+  it("declares the twelve builtins in exactly one place in production source", async () => {
     // Which package declares each Tool's provider-visible name, and how many times. Tests are excluded:
     // a fixture may construct a Tool, and that is not a second implementation of a Coding builtin.
     const declarations = new Map<string, string[]>(CODING_BUILTINS.map((name) => [name, []]));
@@ -158,7 +159,7 @@ describe("Phase 4E guard — builtin ownership", () => {
       ]);
     }
 
-    // The default set composes exactly those eleven, in the frozen order.
+    // The default set composes exactly those twelve, in the frozen order.
     const defaultTools = code(
       await read("packages/coding-agent/src/tools/builtins/default-tools.ts"),
     );
@@ -183,7 +184,7 @@ describe("Phase 4E guard — builtin ownership", () => {
     }
   });
 
-  it("declares each of the eleven Coding factories exactly once", async () => {
+  it("declares each Coding factory exactly once", async () => {
     const expected: readonly (readonly [string, string])[] = [
       ["createReadFileTool", "read-file.ts"],
       ["createListDirectoryTool", "list-directory.ts"],

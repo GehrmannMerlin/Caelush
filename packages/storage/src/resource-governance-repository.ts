@@ -2,7 +2,10 @@ import {
   RunIdSchema,
   TimestampMsSchema,
   parseResourceProgressRecordV1,
+  parseRunCorrectionRecoveryRecordV1,
+  type ResourceProgressBoundary,
   type ResourceProgressRecordV1,
+  type RunCorrectionRecoveryRecordV1,
   type RunId,
   type RunResourcePolicy,
   type TimestampMs,
@@ -31,6 +34,8 @@ export interface ResourceGovernanceState {
    * A missing value means "no semantic evidence", never "no failures happened".
    */
   readonly semanticProgress?: ResourceProgressRecordV1 | undefined;
+  readonly lastAcceptedBoundary?: ResourceProgressBoundary | undefined;
+  readonly correctionRecovery?: RunCorrectionRecoveryRecordV1 | undefined;
   readonly revision: number;
   readonly createdAt: TimestampMs;
   readonly updatedAt: TimestampMs;
@@ -74,6 +79,12 @@ export const ResourceGovernanceStateSchema = {
       ...(value.semanticProgress === undefined
         ? {}
         : { semanticProgress: parseResourceProgressRecordV1(value.semanticProgress) }),
+      ...(value.lastAcceptedBoundary === undefined
+        ? {}
+        : { lastAcceptedBoundary: progressBoundary(value.lastAcceptedBoundary) }),
+      ...(value.correctionRecovery === undefined
+        ? {}
+        : { correctionRecovery: parseRunCorrectionRecoveryRecordV1(value.correctionRecovery) }),
       revision: nonNegativeInteger(value.revision, "revision"),
       createdAt: TimestampMsSchema.parse(value.createdAt),
       updatedAt: TimestampMsSchema.parse(value.updatedAt),
@@ -126,6 +137,7 @@ interface ResourceRow {
   recent_fingerprints_json: string;
   created_at_ms: number;
   updated_at_ms: number;
+  correction_recovery_json: string | null;
 }
 
 export class SqliteResourceGovernanceRepository implements ResourceGovernanceRepository {
@@ -172,8 +184,9 @@ export class SqliteResourceGovernanceRepository implements ResourceGovernanceRep
             (run_id, policy_version, mode, lease_epoch, lease_start_agent_turns,
              lease_start_tool_calls, agent_turns_consumed, tool_operations_consumed,
              last_progress_at_ms, consecutive_no_progress_turns, replan_count,
-             resource_guard_state, revision, recent_fingerprints_json, created_at_ms, updated_at_ms)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             resource_guard_state, revision, recent_fingerprints_json, created_at_ms, updated_at_ms,
+             correction_recovery_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           state.runId,
@@ -192,6 +205,7 @@ export class SqliteResourceGovernanceRepository implements ResourceGovernanceRep
           encodeRecentLedger(state),
           state.createdAt,
           state.updatedAt,
+          null,
         );
     } catch (error) {
       if (String(error).includes("UNIQUE") || String(error).includes("PRIMARY KEY")) {
@@ -208,40 +222,74 @@ export class SqliteResourceGovernanceRepository implements ResourceGovernanceRep
     expectedRevision: number,
     next: ResourceGovernanceState,
   ): Promise<ResourceGovernanceState> {
-    const parsed = ResourceGovernanceStateSchema.parse(next);
-    if (parsed.runId !== runId || parsed.revision !== expectedRevision + 1) {
-      throw new ResourceGovernanceConflictError(runId);
-    }
-    const result = this.database.client
+    return writeResourceGovernanceStateInTransaction(this.database, runId, expectedRevision, next);
+  }
+}
+
+/** Write progress inside a caller-owned SQLite transaction. This function never begins or commits. */
+export function writeResourceGovernanceStateInTransaction(
+  database: CaelushDatabase,
+  runId: RunId,
+  expectedRevision: number | null,
+  next: ResourceGovernanceState,
+): ResourceGovernanceState {
+  const parsed = ResourceGovernanceStateSchema.parse(next);
+  if (
+    parsed.runId !== runId ||
+    parsed.revision !== (expectedRevision === null ? 0 : expectedRevision + 1)
+  ) {
+    throw new ResourceGovernanceConflictError(runId);
+  }
+  const client = database.client;
+  const existing = client
+    .prepare("SELECT revision FROM run_resource_states WHERE run_id = ?")
+    .get(runId) as { readonly revision: number } | undefined;
+  if ((existing?.revision ?? null) !== expectedRevision) {
+    throw new ResourceGovernanceConflictError(runId);
+  }
+  const values = [
+    parsed.policyVersion,
+    parsed.mode,
+    parsed.leaseEpoch,
+    parsed.leaseStartAgentTurns,
+    parsed.leaseStartToolCalls,
+    parsed.agentTurnsConsumed,
+    parsed.toolOperationsConsumed,
+    parsed.lastProgressAt ?? null,
+    parsed.consecutiveNoProgressTurns,
+    parsed.replanCount,
+    parsed.resourceGuardState,
+    parsed.revision,
+    encodeRecentLedger(parsed),
+    parsed.createdAt,
+    parsed.updatedAt,
+    parsed.correctionRecovery === undefined ? null : JSON.stringify(parsed.correctionRecovery),
+  ] as const;
+  if (expectedRevision === null) {
+    client
+      .prepare(
+        `INSERT INTO run_resource_states
+          (policy_version, mode, lease_epoch, lease_start_agent_turns, lease_start_tool_calls,
+           agent_turns_consumed, tool_operations_consumed, last_progress_at_ms,
+           consecutive_no_progress_turns, replan_count, resource_guard_state, revision,
+           recent_fingerprints_json, created_at_ms, updated_at_ms, correction_recovery_json, run_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(...values, runId);
+  } else {
+    const result = client
       .prepare(
         `UPDATE run_resource_states SET policy_version = ?, mode = ?, lease_epoch = ?,
           lease_start_agent_turns = ?, lease_start_tool_calls = ?, agent_turns_consumed = ?,
           tool_operations_consumed = ?, last_progress_at_ms = ?, consecutive_no_progress_turns = ?,
           replan_count = ?, resource_guard_state = ?, revision = ?, recent_fingerprints_json = ?,
-          created_at_ms = ?, updated_at_ms = ? WHERE run_id = ? AND revision = ?`,
+          created_at_ms = ?, updated_at_ms = ?, correction_recovery_json = ?
+          WHERE run_id = ? AND revision = ?`,
       )
-      .run(
-        parsed.policyVersion,
-        parsed.mode,
-        parsed.leaseEpoch,
-        parsed.leaseStartAgentTurns,
-        parsed.leaseStartToolCalls,
-        parsed.agentTurnsConsumed,
-        parsed.toolOperationsConsumed,
-        parsed.lastProgressAt ?? null,
-        parsed.consecutiveNoProgressTurns,
-        parsed.replanCount,
-        parsed.resourceGuardState,
-        parsed.revision,
-        encodeRecentLedger(parsed),
-        parsed.createdAt,
-        parsed.updatedAt,
-        runId,
-        expectedRevision,
-      );
+      .run(...values, runId, expectedRevision);
     if (result.changes !== 1) throw new ResourceGovernanceConflictError(runId);
-    return parsed;
   }
+  return parsed;
 }
 
 function decodeRow(row: ResourceRow): ResourceGovernanceState {
@@ -271,6 +319,16 @@ function decodeRow(row: ResourceRow): ResourceGovernanceState {
       ...(ledger.semanticProgress === undefined
         ? {}
         : { semanticProgress: ledger.semanticProgress }),
+      ...(ledger.lastAcceptedBoundary === undefined
+        ? {}
+        : { lastAcceptedBoundary: ledger.lastAcceptedBoundary }),
+      ...(row.correction_recovery_json === null
+        ? {}
+        : {
+            correctionRecovery: parseRunCorrectionRecoveryRecordV1(
+              JSON.parse(row.correction_recovery_json),
+            ),
+          }),
       revision: row.revision,
       createdAt: row.created_at_ms,
       updatedAt: row.updated_at_ms,
@@ -297,6 +355,8 @@ const stateKeys = new Set([
   "resourceGuardState",
   "recentFingerprints",
   "semanticProgress",
+  "lastAcceptedBoundary",
+  "correctionRecovery",
   "revision",
   "createdAt",
   "updatedAt",
@@ -347,7 +407,8 @@ function fingerprints(value: unknown): readonly ResourceFingerprint[] {
  *
  * ```text
  * legacy   [ {request, result}, ... ]                     written before this version
- * current  { version: 2, fingerprints, semantic? }        written from this version on
+ * current  { version: 2, fingerprints, semantic? }        semantic progress
+ * current  { version: 3, fingerprints, semantic?, boundary? } accepted boundary
  * ```
  *
  * The column already holds one bounded JSON ledger per Run, so the semantic window rides beside the
@@ -357,18 +418,22 @@ function fingerprints(value: unknown): readonly ResourceFingerprint[] {
  */
 function encodeRecentLedger(state: ResourceGovernanceState): string {
   return JSON.stringify({
-    version: 2,
+    version: 3,
     fingerprints: state.recentFingerprints,
     ...(state.semanticProgress === undefined ? {} : { semantic: state.semanticProgress }),
+    ...(state.lastAcceptedBoundary === undefined
+      ? {}
+      : { lastAcceptedBoundary: state.lastAcceptedBoundary }),
   });
 }
 
 function decodeRecentLedger(value: unknown): {
   readonly recentFingerprints: readonly ResourceFingerprint[];
   readonly semanticProgress?: ResourceProgressRecordV1;
+  readonly lastAcceptedBoundary?: ResourceProgressBoundary;
 } {
   if (Array.isArray(value)) return { recentFingerprints: fingerprints(value) };
-  if (!isRecord(value) || value.version !== 2) {
+  if (!isRecord(value) || (value.version !== 2 && value.version !== 3)) {
     throw new TypeError("resource governance ledger version is unsupported");
   }
   return {
@@ -376,5 +441,32 @@ function decodeRecentLedger(value: unknown): {
     ...(value.semantic === undefined
       ? {}
       : { semanticProgress: parseResourceProgressRecordV1(value.semantic) }),
+    ...(value.version !== 3 || value.lastAcceptedBoundary === undefined
+      ? {}
+      : { lastAcceptedBoundary: progressBoundary(value.lastAcceptedBoundary) }),
   };
+}
+
+function progressBoundary(value: unknown): ResourceProgressBoundary {
+  if (!isRecord(value)) throw new TypeError("resource progress boundary is invalid");
+  if (value.kind !== "TOOL_RESULTS" && value.kind !== "MODEL_TURN") {
+    throw new TypeError("resource progress boundary kind is invalid");
+  }
+  if (typeof value.sourceStepId !== "string" || value.sourceStepId.length === 0) {
+    throw new TypeError("resource progress boundary source Step is invalid");
+  }
+  if (
+    !Array.isArray(value.messageIds) ||
+    value.messageIds.length === 0 ||
+    value.messageIds.length > 64 ||
+    value.messageIds.some((id) => typeof id !== "string" || id.length === 0) ||
+    new Set(value.messageIds).size !== value.messageIds.length
+  ) {
+    throw new TypeError("resource progress boundary message IDs are invalid");
+  }
+  return Object.freeze({
+    kind: value.kind,
+    sourceStepId: value.sourceStepId,
+    messageIds: Object.freeze([...value.messageIds]),
+  });
 }

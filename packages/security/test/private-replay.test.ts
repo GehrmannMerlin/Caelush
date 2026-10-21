@@ -92,4 +92,72 @@ describe("private replay authenticated encryption", () => {
       "Private replay unavailable.",
     );
   });
+
+  it.each([76, 250])(
+    "opens %i envelopes through one lease per key and authenticates each one",
+    async (count) => {
+      const sourceKeys = new Map([
+        ["key-1", randomBytes(32)],
+        ["key-2", randomBytes(32)],
+      ]);
+      const returnedKeys: Uint8Array[] = [];
+      const lookups = new Map<string, number>();
+      let sealed = 0;
+      const provider = {
+        current: async () => {
+          const keyId = sealed++ % 2 === 0 ? "key-1" : "key-2";
+          return { keyId, bytes: Uint8Array.from(sourceKeys.get(keyId)!) };
+        },
+        get: async (keyId: string) => {
+          lookups.set(keyId, (lookups.get(keyId) ?? 0) + 1);
+          const sourceKey = sourceKeys.get(keyId);
+          if (sourceKey === undefined) return undefined;
+          const bytes = Uint8Array.from(sourceKey);
+          returnedKeys.push(bytes);
+          return { keyId, bytes };
+        },
+      };
+      const protection = createReplayProtection(provider);
+      const entries = await Promise.all(
+        Array.from({ length: count }, async (_, index) => {
+          const entryIdentity = { ...identity, messageId: `message-${index}` };
+          const content = new TextEncoder().encode(`private-${index}`);
+          return {
+            entryIdentity,
+            content,
+            envelope: await protection.seal(entryIdentity, content),
+          };
+        }),
+      );
+      const execution = await protection.openExecution();
+      try {
+        for (const entry of entries) {
+          const plaintext = await execution.open(entry.entryIdentity, entry.envelope);
+          expect(Buffer.from(plaintext)).toEqual(Buffer.from(entry.content));
+          plaintext.fill(0);
+        }
+        expect([...lookups.entries()].sort()).toEqual([
+          ["key-1", 1],
+          ["key-2", 1],
+        ]);
+        expect(returnedKeys).toHaveLength(2);
+        expect(returnedKeys.every((key) => key.every((byte) => byte === 0))).toBe(true);
+        const damaged = {
+          ...entries[0]!.envelope,
+          ciphertext: `${entries[0]!.envelope.ciphertext}A`,
+        };
+        await expect(execution.open(entries[0]!.entryIdentity, damaged)).rejects.toThrow(
+          "Private replay unavailable.",
+        );
+        expect([...lookups.values()].every((lookupCount) => lookupCount === 1)).toBe(true);
+      } finally {
+        await execution.dispose();
+        for (const entry of entries) entry.content.fill(0);
+        for (const sourceKey of sourceKeys.values()) sourceKey.fill(0);
+      }
+      await expect(execution.open(entries[0]!.entryIdentity, entries[0]!.envelope)).rejects.toThrow(
+        "Private replay unavailable.",
+      );
+    },
+  );
 });

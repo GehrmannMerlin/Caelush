@@ -354,7 +354,7 @@ async function withDatabase(
 }
 
 describe("Phase 3F durable recovery boundaries", () => {
-  it("leaves a WAITING_RESOURCE Run parked across a reopen, with its progress intact", async () => {
+  it("fails closed when historical NO_PROGRESS recovery authorities are not composed", async () => {
     const providerCalls = { count: 0 };
     await withDatabase("caelush-resource-recovery-", async (open) => {
       const first = await open();
@@ -387,15 +387,18 @@ describe("Phase 3F durable recovery boundaries", () => {
       /* A second storage generation, over the same file, with a brand-new controller. */
       const second = await open();
       const toolBatches = recordingToolBatches();
-      const result = await controllerOver(second, {
+      const controller = controllerOver(second, {
         now: () => createTimestampMs(100),
         providerCalls,
         toolBatches,
-      }).recover(run.id);
+      });
 
-      // Recovery does not resume it: a resource decision is an external resolution, so the Run stays
-      // parked and nothing is executed on its behalf.
-      expect(result.status).toBe("WAITING_RESOURCE");
+      // Ordinary correction recovery requires the daemon's read-only Tool inspection and durable
+      // progress authorities. This storage-only harness must refuse to infer that the old batch is
+      // safe to re-enter when those authorities are absent.
+      await expect(controller.recover(run.id)).rejects.toThrow(
+        "Historical ordinary correction recovery requires durable Tool inspection and progress storage.",
+      );
       expect(providerCalls.count).toBe(0);
       expect(toolBatches.requests()).toHaveLength(0);
 
@@ -409,20 +412,8 @@ describe("Phase 3F durable recovery boundaries", () => {
       expect(continuation.replanCount).toBe(2);
       expect(continuation.reason).toBe("NO_PROGRESS");
       expect(continuation.pendingDecision.toolRequests).toEqual(TOOL_DECISION.toolRequests);
-      expect(continuation.sourceStepId).toBeDefined();
+      expect(continuation.sourceStepId).toBe(ids.sourceStepId);
       expect(reloaded.state?.usage.steps).toBe(2);
-      void ids;
-
-      // And the explicit Continue does move it, on the same Run, without re-running a Tool: the batch
-      // it resumes is the one it was already waiting on, so no handler runs twice.
-      const continued = await controllerOver(second, {
-        now: () => createTimestampMs(200),
-        providerCalls,
-        toolBatches,
-      }).continueResourceGuard(run.id);
-      expect(continued.run.id).toBe(run.id);
-      expect(toolBatches.requests()).toHaveLength(1);
-      expect(providerCalls.count).toBe(1);
     });
   });
 

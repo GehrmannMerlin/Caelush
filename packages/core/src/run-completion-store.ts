@@ -8,6 +8,7 @@ import type {
 } from "@caelush/protocol";
 import type { DurableEventDraft, RunExecutionCommitResult } from "./run-execution-store.js";
 import type { RunContinuationCheckpoint } from "./agent-continuation.js";
+import type { RunProgressWrite } from "./run-progress-store.js";
 
 /**
  * The Core-private completion persistence boundary.
@@ -71,6 +72,7 @@ export interface RunCompletionPersistencePort {
 
 /** The one atomic transition that opens a candidate's verification boundary. */
 export interface RunCandidateBoundaryCommit {
+  readonly progress?: RunProgressWrite;
   readonly privateReplayWrites?: import("@caelush/agent").RunExecutionCommit["privateReplayWrites"];
   readonly run: AgentRun;
   readonly state: AgentState;

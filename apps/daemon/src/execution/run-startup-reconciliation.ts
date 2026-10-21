@@ -32,7 +32,7 @@ import type {
  * terminal           COMPLETED / FAILED / CANCELLED / TIMEOUT / MAX_STEPS_REACHED / BUDGET_EXCEEDED
  *                    are settled forever and are never reopened
  * WAITING_APPROVAL   recovery restores the *same* wait; it never approves for the user
- * WAITING_RESOURCE   same
+ * WAITING_RESOURCE   re-enter Core's ordinary correction recovery or report its durable blocker
  * ```
  *
  * A side-effectful Tool is never replayed. A stale active Step is a durable *uncertain* boundary,

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   AgentBudgetBlock,
   AgentToolResult,
@@ -25,6 +26,7 @@ import {
 } from "@caelush/protocol";
 import type { AttachmentModelContentReference } from "@caelush/protocol";
 import type { AgentRun, AgentState, TimestampMs } from "@caelush/protocol";
+import type { ResourceCorrectionDeliveryRecord } from "@caelush/protocol";
 
 import type { AgentToolCallsDecision } from "./agent-decision.js";
 import type { RunContinuationCheckpoint } from "./agent-continuation.js";
@@ -34,6 +36,7 @@ import { fingerprintToolBatch, fingerprintToolResultBatch } from "./resource-fin
 import type {
   ResourceGovernancePort,
   ResourceGovernanceState,
+  ResourceProgressBoundary,
 } from "./resource-governance-port.js";
 import type { RunExecutionSnapshotView as RunExecutionSnapshot } from "./run-execution-store.js";
 import type { RunToolFeedbackProjection } from "./run-message-materializer.js";
@@ -54,6 +57,16 @@ import {
   type ResourceCorrectionStage,
   type ResourceSemanticProgress,
 } from "./resource-progress-projection.js";
+import {
+  RESOURCE_GOVERNANCE_CORRECTION_PROVIDER_ID,
+  RESOURCE_GOVERNANCE_CORRECTION_PROVIDER_VERSION,
+  resourceGovernanceCorrectionContextItemId,
+} from "./resource-governance-context-identity.js";
+import {
+  assertCorrectionRecoveryBelongsToRun,
+  createLegacyCorrectionRecoveryRecord,
+  type ResourceCorrectionRecoveryPolicy,
+} from "./legacy-correction-recovery.js";
 import { RunControllerInvariantError } from "./run-controller-errors.js";
 import { toTextOnlyAIToolResultContent } from "./ai-message-content.js";
 import type { ToolFeedbackContributionApplier } from "./run-controller-ports.js";
@@ -104,6 +117,8 @@ import { createToolSecurityContext } from "./tool-security-context.js";
 export interface RunToolTurnFacts {
   readonly run: AgentRun;
   readonly state: AgentState;
+  readonly stateRevision: number;
+  readonly continuationRevision: number;
   readonly continuation: Extract<
     RunContinuationCheckpoint,
     { readonly type: "WAITING_TOOL_RESULTS" }
@@ -159,6 +174,7 @@ export interface RunToolTurnDriverDependencies {
   readonly feedbackContributions?: ToolFeedbackContributionApplier;
   /** The durable resource ledger, when this Run's host configured a resource policy. */
   readonly resourceGovernance?: ResourceGovernancePort | undefined;
+  readonly resourceCorrectionRecoveryPolicy?: ResourceCorrectionRecoveryPolicy | undefined;
   readonly clock: { now(): TimestampMs };
   /**
    * The Run's own cancellation signal.
@@ -224,6 +240,8 @@ export function captureRunToolTurnFacts(input: {
   return {
     run: input.snapshot.run,
     state,
+    stateRevision: input.snapshot.stateRevision ?? 0,
+    continuationRevision: input.snapshot.continuationRevision ?? 0,
     continuation,
     pendingDecision: continuation.pendingDecision,
     observationPolicy: resolveToolObservationPolicy(continuation, input.hostObservationPolicy),
@@ -613,12 +631,41 @@ async function admitResource(
   const repository = dependencies.resourceGovernance;
   if (policy === undefined || repository === undefined) return { kind: undefined };
 
-  const progressPolicy = resourceProgressPolicyFrom(policy);
-  const state = await repository.createOrGet(context.run.id, {
-    policyVersion: "adaptive-resource-governance.v1",
+  let effectivePolicy = policy;
+  const canUpgradeHistoricalPolicy =
+    policy.correctionVersion !== "AUTONOMOUS_CORRECTION_V2" &&
+    dependencies.resourceCorrectionRecoveryPolicy !== undefined;
+  let state = await repository.createOrGet(context.run.id, {
+    policyVersion:
+      policy.correctionVersion === "AUTONOMOUS_CORRECTION_V2" || canUpgradeHistoricalPolicy
+        ? "adaptive-resource-governance.v2"
+        : "adaptive-resource-governance.v1",
     mode: policy.mode,
     now: dependencies.clock.now(),
   });
+  if (state.correctionRecovery !== undefined) {
+    assertCorrectionRecoveryBelongsToRun(context.run.id, state.correctionRecovery);
+    effectivePolicy = { ...policy, correctionVersion: "AUTONOMOUS_CORRECTION_V2" };
+  } else if (canUpgradeHistoricalPolicy) {
+    const now = dependencies.clock.now();
+    const recovery = createLegacyCorrectionRecoveryRecord({
+      runId: context.run.id,
+      sourceStepId: String(context.continuation.sourceStepId),
+      stateRevision: context.stateRevision,
+      continuationRevision: context.continuationRevision,
+      committedAt: now,
+      authority: dependencies.resourceCorrectionRecoveryPolicy!.authority,
+    });
+    state = await repository.compareAndSwap(context.run.id, state.revision, {
+      ...state,
+      policyVersion: "adaptive-resource-governance.v2",
+      correctionRecovery: recovery,
+      revision: state.revision + 1,
+      updatedAt: now,
+    });
+    effectivePolicy = { ...policy, correctionVersion: "AUTONOMOUS_CORRECTION_V2" };
+  }
+  const progressPolicy = resourceProgressPolicyFrom(effectivePolicy);
   const noProgress = state.consecutiveNoProgressTurns;
   const semantic = state.semanticProgress;
   const semanticDecision = decideResourceSemanticIntervention(
@@ -627,15 +674,15 @@ async function admitResource(
   );
   const progressLevel = semanticProgressLevel(
     semanticDecision,
-    noProgress >= policy.progress.noProgressTurnsBeforeReplan
+    noProgress >= effectivePolicy.progress.noProgressTurnsBeforeReplan
       ? "FORCED_REPLAN"
-      : noProgress >= policy.progress.identicalCallNudgeThreshold
+      : noProgress >= effectivePolicy.progress.identicalCallNudgeThreshold
         ? "NUDGE"
         : "HEALTHY",
   );
   const semanticGuidance =
     semanticDecision.kind === "NUDGE" ? semanticGuidanceFor(semanticDecision, semantic) : undefined;
-  const decision = new ResourceGovernor(policy).evaluateToolBatch({
+  const decision = new ResourceGovernor(effectivePolicy).evaluateToolBatch({
     cumulativeAgentTurns: context.state.usage.steps,
     cumulativeToolOperations: state.toolOperationsConsumed,
     turnsInLease: leaseDelta(context.state.usage.steps, state.leaseStartAgentTurns),
@@ -645,9 +692,7 @@ async function admitResource(
     replanCount: state.replanCount,
     currentLeaseEpoch: state.leaseEpoch,
     ...(semanticGuidance === undefined ? {} : { guidance: semanticGuidance }),
-    ...(semanticDecision.kind === "NUDGE"
-      ? { correctionStage: semanticDecision.stage }
-      : {}),
+    ...(semanticDecision.kind === "NUDGE" ? { correctionStage: semanticDecision.stage } : {}),
   });
   const correction = await recordCorrectionAtAdmission({
     dependencies,
@@ -746,12 +791,20 @@ async function recordCorrectionAtAdmission(input: {
   // dispatched nothing, and recording advice for a batch that never ran would describe work nobody did.
   if (input.decision.kind !== "ALLOW_WITH_NUDGE") return undefined;
   const decision = input.semanticDecision;
-  const interventionId = [
-    decision.patternKey,
-    decision.stage,
-    String(decision.deliveredInterventions),
-    input.sourceStepId,
-  ].join(":");
+  const episodeId =
+    input.semantic?.active?.episodeId ??
+    `${decision.patternKey}:${input.semantic?.turns.at(-1)?.turnId ?? input.sourceStepId}`;
+  const interventionId = createHash("sha256")
+    .update(
+      JSON.stringify([
+        episodeId,
+        decision.stage,
+        decision.deliveredInterventions,
+        input.sourceStepId,
+      ]),
+      "utf8",
+    )
+    .digest("hex");
   const correction: RunToolCorrection = Object.freeze({
     interventionId,
     stage: decision.stage,
@@ -778,6 +831,8 @@ async function recordCorrectionAtAdmission(input: {
         occurrences: decision.occurrences,
         guidance: input.guidance,
         sourceStepId: input.sourceStepId,
+        episodeId,
+        sourceBoundaryId: input.sourceStepId,
       },
     }),
     revision: input.state.revision + 1,
@@ -1110,39 +1165,76 @@ async function settleObservation(
 
 /* ---------------------------------------------------- post-commit progress */
 
-/**
- * Record the progress observation of one settled Tool batch.
- *
- * ```text
- * PLAN -> MATERIALIZE -> COMMIT -> NOTIFY -> this
- * ```
- *
- * It runs **after** the Run continuation is durable, and that ordering is the point: resource progress
- * accounts for work the Run *accepted*, so a settlement whose commit lost its compare-and-swap must
- * not have advanced it. The durable Tool invocations remain the recovery authority, and a later
- * recovery reads them instead of replaying a handler.
- */
-export async function recordRunToolTurnProgress(input: {
+/** Project progress from the exact batch the same Run transaction is about to accept. */
+export async function projectRunToolTurnProgress(input: {
   readonly dependencies: RunToolTurnDriverDependencies;
   readonly facts: RunToolTurnFacts;
   /** The durable identity of this batch: the Step that requested it. */
   readonly turnId: string;
+  readonly boundary: ResourceProgressBoundary;
+  readonly replan: boolean;
+  /** A transactionally staged ledger row, for callers accepting a first legacy-upgrade boundary. */
+  readonly baseProgress?: ResourceGovernanceState | undefined;
   readonly results: readonly {
     readonly toolName: string;
     readonly isError: boolean;
     readonly content?: string;
     readonly preparationFailure?: ToolPreparationFailureFact | undefined;
   }[];
-}): Promise<void> {
+}): Promise<
+  | {
+      readonly expectedProgressRevision: number | null;
+      readonly nextProgress: ResourceGovernanceState;
+    }
+  | undefined
+> {
   const repository = input.dependencies.resourceGovernance;
   const policy = input.facts.run.resourcePolicy;
-  if (repository === undefined || policy === undefined) return;
-  const progressPolicy = resourceProgressPolicyFrom(policy);
-  const current = await repository.createOrGet(input.facts.run.id, {
-    policyVersion: "adaptive-resource-governance.v1",
-    mode: policy.mode,
-    now: input.dependencies.clock.now(),
-  });
+  if (repository === undefined || policy === undefined) return undefined;
+  const loaded = input.baseProgress ?? (await repository.get(input.facts.run.id));
+  if (loaded?.correctionRecovery !== undefined) {
+    assertCorrectionRecoveryBelongsToRun(input.facts.run.id, loaded.correctionRecovery);
+  }
+  const progressPolicy = resourceProgressPolicyFrom(
+    loaded?.correctionRecovery === undefined
+      ? policy
+      : { ...policy, correctionVersion: "AUTONOMOUS_CORRECTION_V2" },
+  );
+  const now = input.dependencies.clock.now();
+  const current: ResourceGovernanceState =
+    loaded ??
+    Object.freeze({
+      runId: input.facts.run.id,
+      policyVersion:
+        policy.correctionVersion === "AUTONOMOUS_CORRECTION_V2"
+          ? "adaptive-resource-governance.v2"
+          : "adaptive-resource-governance.v1",
+      mode: policy.mode,
+      leaseEpoch: 1,
+      leaseStartAgentTurns: 0,
+      leaseStartToolCalls: 0,
+      agentTurnsConsumed: 0,
+      toolOperationsConsumed: 0,
+      consecutiveNoProgressTurns: 0,
+      replanCount: 0,
+      resourceGuardState: "NONE",
+      recentFingerprints: Object.freeze([]),
+      revision: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+  if (
+    current.lastAcceptedBoundary?.sourceStepId === input.boundary.sourceStepId &&
+    current.lastAcceptedBoundary.kind === input.boundary.kind
+  ) {
+    const sameMessages =
+      JSON.stringify(current.lastAcceptedBoundary.messageIds) ===
+      JSON.stringify(input.boundary.messageIds);
+    if (!sameMessages) {
+      throw new RunControllerInvariantError("Accepted progress boundary identity was reused.");
+    }
+    return undefined;
+  }
   const requestFingerprint = fingerprintToolBatch(input.facts.pendingDecision.toolRequests);
   const resultFingerprint = fingerprintToolResultBatch(
     input.results.map((result) => ({
@@ -1179,9 +1271,9 @@ export async function recordRunToolTurnProgress(input: {
       ? acknowledgeV1ResourceNudge(semantic)
       : semantic;
 
-  const now = input.dependencies.clock.now();
-  await updateResourceState(input.dependencies, current, {
+  const nextProgress: ResourceGovernanceState = {
     ...current,
+    lastAcceptedBoundary: input.boundary,
     agentTurnsConsumed: input.facts.state.usage.steps,
     toolOperationsConsumed: input.facts.state.usage.toolCalls,
     ...(exactRepeat ? {} : { lastProgressAt: now }),
@@ -1192,8 +1284,13 @@ export async function recordRunToolTurnProgress(input: {
       { request: requestFingerprint, result: resultFingerprint },
     ].slice(-64),
     ...(withAcknowledgement === undefined ? {} : { semanticProgress: withAcknowledgement }),
-    revision: current.revision + 1,
+    replanCount: current.replanCount + (input.replan ? 1 : 0),
+    revision: loaded === null ? 0 : current.revision + 1,
     updatedAt: now,
+  };
+  return Object.freeze({
+    expectedProgressRevision: loaded?.revision ?? null,
+    nextProgress: Object.freeze(nextProgress),
   });
 }
 
@@ -1220,27 +1317,6 @@ function semanticGuardState(
  * `REPLAN` writes no Tool invocation at all, so the ledger entry is the *only* durable trace of the
  * decision — and it is what a later `WAITING_RESOURCE` checkpoint reports as `replanCount`.
  */
-export async function recordRunToolTurnReplan(input: {
-  readonly dependencies: RunToolTurnDriverDependencies;
-  readonly facts: RunToolTurnFacts;
-}): Promise<void> {
-  const repository = input.dependencies.resourceGovernance;
-  const policy = input.facts.run.resourcePolicy;
-  if (repository === undefined || policy === undefined) return;
-  const current = await repository.createOrGet(input.facts.run.id, {
-    policyVersion: "adaptive-resource-governance.v1",
-    mode: policy.mode,
-    now: input.dependencies.clock.now(),
-  });
-  await updateResourceState(input.dependencies, current, {
-    ...current,
-    replanCount: current.replanCount + 1,
-    resourceGuardState: "REPLAN_REQUIRED",
-    revision: current.revision + 1,
-    updatedAt: input.dependencies.clock.now(),
-  });
-}
-
 /**
  * Record that one model turn settled with a corrective intervention in its Context.
  *
@@ -1259,26 +1335,84 @@ export async function recordRunToolTurnReplan(input: {
  * Step S, so only a *later* Step's settlement can be the request that carried it. A settlement of S
  * itself (which cannot happen after admission, but is cheap to exclude) is not a delivery.
  */
-export async function recordRunResourceCorrectionDelivery(input: {
-  readonly dependencies: RunToolTurnDriverDependencies;
+export async function projectRunResourceCorrectionDelivery(input: {
+  readonly repository: ResourceGovernancePort | undefined;
   readonly run: AgentRun;
-  readonly settledStepId: string;
-}): Promise<void> {
-  const repository = input.dependencies.resourceGovernance;
+  readonly result: Extract<
+    import("@caelush/agent").AgentLoopAdvanceResult,
+    { readonly kind: "TOOL_REQUESTS" | "FINAL_CANDIDATE" }
+  >;
+  readonly assistantMessageId: string;
+  readonly now: TimestampMs;
+}): Promise<
+  | {
+      readonly expectedProgressRevision: number | null;
+      readonly nextProgress: ResourceGovernanceState;
+    }
+  | undefined
+> {
+  const repository = input.repository;
   const policy = input.run.resourcePolicy;
-  if (repository === undefined || policy === undefined) return;
+  if (repository === undefined || policy === undefined) return undefined;
   const current = await repository.get(input.run.id);
-  if (current === null) return;
-  const semantic = current.semanticProgress;
-  const correction = semantic?.correction;
-  if (semantic === undefined || correction === undefined) return;
-  if (correction.sourceStepId === input.settledStepId) return;
-  if (correction.guidance.length === 0) return;
-  await updateResourceState(input.dependencies, current, {
-    ...current,
-    semanticProgress: recordResourceNudgeDelivery(semantic, correction.interventionId),
-    revision: current.revision + 1,
-    updatedAt: input.dependencies.clock.now(),
+  const correction = current?.semanticProgress?.correction;
+  const sources = input.result.context.selectedContextSources ?? [];
+  const provider = sources.find(
+    (source) =>
+      source.providerId === RESOURCE_GOVERNANCE_CORRECTION_PROVIDER_ID &&
+      source.providerVersion === RESOURCE_GOVERNANCE_CORRECTION_PROVIDER_VERSION,
+  );
+  if (
+    current === null ||
+    correction === undefined ||
+    correction.guidance.length === 0 ||
+    correction.sourceStepId === String(input.result.turn.stepId) ||
+    provider === undefined ||
+    input.result.context.contextFingerprint === undefined ||
+    !/^(?:sha256:)?[a-f0-9]{64}$/u.test(input.result.context.contextFingerprint)
+  ) {
+    return undefined;
+  }
+  const selectedSourceItemId = resourceGovernanceCorrectionContextItemId(correction.interventionId);
+  if (!provider.selectedItemIds.includes(selectedSourceItemId)) return undefined;
+  const contextArtifactId =
+    input.result.context.contextArtifactId ?? input.result.context.contextFingerprint;
+  if (contextArtifactId.length === 0 || contextArtifactId.length > 256) return undefined;
+
+  const receipt: ResourceCorrectionDeliveryRecord = Object.freeze({
+    interventionId: correction.interventionId,
+    episodeId:
+      correction.episodeId ??
+      `${correction.patternKey}:${correction.sourceBoundaryId ?? correction.sourceStepId}`,
+    consumerStepId: String(input.result.turn.stepId),
+    contextArtifactId,
+    contextFingerprint: input.result.context.contextFingerprint,
+    selectedSourceItemId,
+    selectedSourceProviderId: provider.providerId,
+    selectedSourceProviderVersion: provider.providerVersion,
+    callId: input.result.modelTurn.callId,
+    assistantMessageId: input.assistantMessageId,
+    createdAt: input.now,
+  });
+  const delivered = recordResourceNudgeDelivery(current.semanticProgress!, receipt);
+  if (delivered === current.semanticProgress) return undefined;
+  return Object.freeze({
+    expectedProgressRevision: current.revision,
+    nextProgress: Object.freeze({
+      ...current,
+      policyVersion:
+        policy.correctionVersion === "AUTONOMOUS_CORRECTION_V2"
+          ? "adaptive-resource-governance.v2"
+          : "adaptive-resource-governance.v1",
+      semanticProgress: delivered,
+      lastAcceptedBoundary: {
+        kind: "MODEL_TURN" as const,
+        sourceStepId: String(input.result.turn.stepId),
+        messageIds: Object.freeze([input.assistantMessageId]),
+      },
+      revision: current.revision + 1,
+      updatedAt: input.now,
+    }),
   });
 }
 

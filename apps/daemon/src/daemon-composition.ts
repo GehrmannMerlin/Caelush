@@ -14,6 +14,7 @@ import {
   type ToolTurnPipeline,
   type ToolFeedbackContributionApplier,
   type RunMessageAuthority,
+  type ResourceCorrectionRecoveryPolicy,
 } from "@caelush/core";
 import { createLocalProjectInspector } from "@caelush/coding-agent";
 import { AttachmentReadOperationError } from "@caelush/coding-agent";
@@ -22,6 +23,7 @@ import type { ProviderStreamPolicy } from "./config.js";
 import type { AttachmentService } from "./attachments/attachment-service.js";
 import { AttachmentServiceError } from "./attachments/attachment-service.js";
 import { createInterruptedToolHistoryService } from "./services/interrupted-tool-history.js";
+import { createLegacyPendingBatchAdapter } from "./execution/legacy-pending-batch-adapter.js";
 import {
   isInternalPromptCacheResetReason,
   toPublicPromptCacheResetReason,
@@ -188,7 +190,6 @@ import {
   type ToolFeedbackContributionPipeline,
   type ToolFeedbackContributionRegistration,
 } from "@caelush/coding-agent";
-import { CODING_EXECUTION_DISCIPLINE } from "@caelush/coding-agent";
 import {
   assertDefaultBuiltinSecurityCoverage,
   createDefaultV1ToolExecutionSecurity,
@@ -209,6 +210,7 @@ import {
   type WorkspacePreparationPort,
 } from "./services/security-capability-service.js";
 import { RunSecurityPromptProjector } from "./services/run-security-prompt-projector.js";
+import { resolveRunCodingExecutionDiscipline } from "./services/coding-execution-policy.js";
 import { RunInputService } from "./services/run-input-intake.js";
 import {
   resolveSecurityFeatureGates,
@@ -275,10 +277,6 @@ export const DEFAULT_CORE_AGENT_POLICY = [
   "After a mutation, inspect the resulting files and relevant diff before claiming success.",
   "Stop when the requested evidence is sufficient; report blockers and uncertainty plainly.",
   "Never reveal hidden chain-of-thought, raw provider reasoning, credentials, or facts you have not observed. Give useful user-visible progress updates at meaningful decision points: before substantial tool work, after evidence changes the picture, when the approach changes or is blocked, before requested edits, and after verification. For non-trivial work, explain in a few specific sentences what you checked, what the evidence establishes, what remains uncertain, and why the next action follows; simple actions may need only one sentence. Prefer concrete file names, command outcomes, counts, and limitations when actually observed. Distinguish facts from inference, and state when something has not been checked. If bounded Work Update State is present in Context, use it only to notice new committed observations since the last committed update; obtain specific facts from conversation evidence, do not repeat an unchanged update, and never treat a Tool observation as verification or quote opaque record IDs. Do not pad to meet a length target, narrate every routine tool call, repeat earlier updates, imply verification that did not happen, or use repetitive headings such as '工作说明'. Keep the explanation and any required tool requests in the same turn; a normal assistant answer without tool requests remains subject to the existing completion and verification rules.",
-  // The coding execution discipline is owned by the Coding layer, so the sentences about planning,
-  // milestone acceptance, self-correction and the working record are reviewed next to the Tool
-  // schema and the plan parser that enforce them.
-  CODING_EXECUTION_DISCIPLINE,
 ].join(" ");
 
 export const DEFAULT_BASE_SYSTEM_PROMPT = DEFAULT_CORE_AGENT_POLICY;
@@ -341,7 +339,7 @@ export interface DaemonCompositionOptions {
   readonly eventQueuePolicy?: SubscriberQueuePolicy;
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
-  /** ADAPTIVE_V1 remains opt-in until the paired real-provider cache gate passes. */
+  /** ADAPTIVE_V1 and WORKING_SET_V2 are explicit opt-ins; working-set keeps the legacy request reserve. */
   readonly contextBudgetPolicyVersion?: ContextBudgetPolicySnapshot["version"];
   /** Finite Gateway watchdog overrides; omitted values use production defaults. */
   readonly providerStreamPolicy?: Partial<ProviderStreamPolicy>;
@@ -370,7 +368,7 @@ export interface DaemonCompositionOptions {
     event: import("./providers/model-wire-diagnostic.js").ModelWireDiagnosticEvent,
   ) => void;
   /**
-   * The Coding Tool definitions this host composed, when it does not want the default ten.
+   * The Coding Tool definitions this host composed, when it does not want the default twelve.
    *
    * The same value reaches the registry and the Coding catalog, so the executable Tool set and its
    * overlay are always two views of one derivation. Phase 4F narrowed this from the legacy
@@ -392,6 +390,8 @@ export interface DaemonCompositionOptions {
   /** Optional fully composed feedback contribution pipeline for a host that owns the registry. */
   readonly toolFeedbackContributionPipeline?: ToolFeedbackContributionPipeline;
   readonly toolFeedbackContributionBudget?: Partial<ToolFeedbackContributionBudget>;
+  /** Test/host seam; omitted selects the daemon-owned ordinary correction recovery authority. */
+  readonly resourceCorrectionRecoveryPolicy?: ResourceCorrectionRecoveryPolicy | null;
 }
 
 export interface DaemonComposition {
@@ -613,8 +613,8 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
         purpose: "MAIN_AGENT",
         clock,
       }),
-    privateReplayResolverFactory: (scope) =>
-      createDaemonPrivateReplayResolver(options.storage.privateReplay, scope),
+    privateReplayResolverFactory: (scope, replayOptions) =>
+      createDaemonPrivateReplayResolver(options.storage.privateReplay, scope, replayOptions),
     notifier: eventNotifier,
     eventIdFactory: { create: createEventId },
     clock,
@@ -740,11 +740,11 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
    * ```text
    * RuntimeResolver
    *   → the four Runtime Operations adapters     @caelush/coding-agent
-   *   → createDefaultCodingTools(...)            the ten Coding Tool definitions
+   *   → createDefaultCodingTools(...)            the twelve Coding Tool definitions
    *   → ToolRegistryBuilder                      the canonical AgentToolRegistry
    * ```
    *
-   * The default ten Tools now **originate in `@caelush/coding-agent`**. The legacy package's
+   * The default twelve Tools now **originate in `@caelush/coding-agent`**. The legacy package's
    * `createDefaultBuiltinToolRegistrations` is no longer called here: it survives as a compatibility
    * facade for its own callers and for its tests, and every registration it builds delegates to these
    * same Coding factories. Production does not go through it, so there is exactly one place the
@@ -1088,6 +1088,35 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   const contextRequestOverheadEstimator = createContextRequestOverheadEstimator();
   const contextBudgetPolicyResolver: RunContextBudgetPolicyResolver = {
     async resolve(run) {
+      if (options.contextBudgetPolicyVersion === "WORKING_SET_V2") {
+        const model = ai.models.resolve(run.model);
+        const requestOverheadTokens = contextRequestOverheadEstimator.estimate({
+          model,
+          tools: activeToolRegistry.modelSpecs(),
+        }).totalTokens;
+        // This exactly matches the existing LEGACY_FULL_OUTPUT_V1 Context reserve: model output
+        // limit plus the existing 512-token safety reserve and request overhead. WORKING_SET_V2
+        // changes when history is reorganized, never the request's output reserve algorithm.
+        const effectiveInputTokens =
+          model.limits.contextWindowTokens -
+          model.limits.maxOutputTokens -
+          512 -
+          requestOverheadTokens;
+        if (!Number.isSafeInteger(effectiveInputTokens) || effectiveInputTokens < 1) {
+          throw new RangeError("WORKING_SET_V2 has no positive effective input budget.");
+        }
+        return Object.freeze({
+          version: "WORKING_SET_V2" as const,
+          requestBudget: Object.freeze({ version: "LEGACY_FULL_OUTPUT_V1" as const }),
+          workingSet: Object.freeze({
+            targetTokens: Math.min(effectiveInputTokens, 96_000),
+            triggerRatio: 0.75,
+            postCompactionRatio: 0.5,
+            allowCurrentTurnPrefix: true,
+            cooldownTurns: 5,
+          }),
+        });
+      }
       if (options.contextBudgetPolicyVersion !== "ADAPTIVE_V1") {
         return Object.freeze({ version: "LEGACY_FULL_OUTPUT_V1" as const });
       }
@@ -1117,6 +1146,11 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       const config = await executionConfigResolver.resolve(run);
       const model = ai.models.resolve(run.model);
       const cacheRequest = resolveDefaultCacheRequest(model, config.modelSettings?.cache);
+      const governance = await options.storage.resourceGovernance.get(run.id);
+      const codingExecutionDiscipline = resolveRunCodingExecutionDiscipline(
+        run,
+        governance?.correctionRecovery ?? null,
+      );
       const securityPrompt =
         run.securityPolicy === undefined
           ? undefined
@@ -1126,7 +1160,11 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
             );
       return createRunAgentExecutionContext({
         config: {
-          baseSystemPrompt: [config.baseSystemPrompt, securityPrompt?.text]
+          baseSystemPrompt: [
+            config.baseSystemPrompt,
+            codingExecutionDiscipline,
+            securityPrompt?.text,
+          ]
             .filter((value): value is string => value !== undefined)
             .join("\n\n"),
           tools: activeToolRegistry.modelSpecs(),
@@ -1176,6 +1214,17 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       });
     },
   };
+  const legacyPendingBatch = createLegacyPendingBatchAdapter({
+    storage: options.storage,
+    codecs: messages.codecs,
+    durable: toolDurableCoordinator,
+  });
+  const resourceCorrectionRecoveryPolicy =
+    options.resourceCorrectionRecoveryPolicy === null
+      ? undefined
+      : (options.resourceCorrectionRecoveryPolicy ?? {
+          authority: "DAEMON_AUTO_CORRECTION_V1" as const,
+        });
   const verificationExecution = createRunBoundVerificationExecution(runtime, options.storage.runs);
   const verificationWorkspace = createRunBoundVerificationWorkspace(runtime);
   const verificationGit = createRunBoundVerificationGit(runtime);
@@ -1192,6 +1241,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     executionStore: options.storage.execution,
     privateReplayStore: options.storage.privateReplay,
     completionStore: options.storage.execution,
+    progressPersistence: options.storage.execution,
     events: eventNotifier,
     configResolver: executionConfigResolver,
     messages,
@@ -1206,6 +1256,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     resources: { cancelOwnedResources: (runId) => runtime.cancelOwnedResources(runId) },
     budget: options.storage.budget,
     resourceGovernance: options.storage.resourceGovernance,
+    ...(resourceCorrectionRecoveryPolicy === undefined ? {} : { resourceCorrectionRecoveryPolicy }),
+    legacyPendingBatchInspection: legacyPendingBatch.inspection,
+    legacyPendingBatchDispatcher: legacyPendingBatch.dispatcher,
     /**
      * The Run Layer's completion collaborator, composed once.
      *

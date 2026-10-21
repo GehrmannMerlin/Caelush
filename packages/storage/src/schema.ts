@@ -218,6 +218,7 @@ export const runResourceStates = sqliteTable(
     resourceGuardState: text("resource_guard_state").notNull(),
     revision: integer("revision").notNull(),
     recentFingerprintsJson: text("recent_fingerprints_json").notNull(),
+    correctionRecoveryJson: text("correction_recovery_json"),
     createdAtMs: integer("created_at_ms").notNull(),
     updatedAtMs: integer("updated_at_ms").notNull(),
   },

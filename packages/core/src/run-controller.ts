@@ -37,6 +37,7 @@ import {
   cancelAgentStepState,
   createInitialAgentState,
   markAgentStateCancelled,
+  markAgentStateWaitingApproval,
   markAgentStateWaitingResource,
   markAgentStateMaxStepsReached,
   markAgentStateBudgetExceeded,
@@ -51,12 +52,18 @@ import { cancelAgentStep, completeAgentStep, failAgentStep } from "./agent-step.
 import { classifyInterruptedStep } from "./interrupted-step-recovery.js";
 import { normalizeToolResultBatch } from "./agent-tool-results.js";
 import { defaultObservationPolicy } from "./agent-tool-batch.js";
+import { toTextOnlyAIToolResultContent } from "./ai-message-content.js";
+import {
+  assertCorrectionRecoveryBelongsToRun,
+  createLegacyCorrectionRecoveryRecord,
+} from "./legacy-correction-recovery.js";
 import {
   markAgentRunFailed,
   markAgentRunCancelled,
   markAgentRunTimedOut,
   markAgentRunBudgetExceeded,
   markAgentRunWaitingResource,
+  markAgentRunWaitingApproval,
   resumeAgentRunFromVerificationRepair,
   resumeAgentRunFromApproval,
   resumeAgentRunFromResource,
@@ -107,9 +114,8 @@ import type {
 import {
   captureRunToolTurnFacts,
   createRunToolTurnDriverFactory,
-  recordRunResourceCorrectionDelivery,
-  recordRunToolTurnProgress,
-  recordRunToolTurnReplan,
+  projectRunToolTurnProgress,
+  projectRunResourceCorrectionDelivery,
   type ResolvedRunToolTurn,
   type RunToolTurnDriverDependencies,
 } from "./run-tool-turn-coordinator.js";
@@ -227,9 +233,9 @@ const STALE_STEP_ERROR = {
 /**
  * How many interrupted-Step re-issues one Run gets per daemon lifetime.
  *
- * A provider turn that produced no durable output may still have been billed, so a replay is a
- * deliberate, bounded exception rather than the default. Two covers "the process died once and then
- * the machine slept"; more than that is a crash loop, and the fail-closed settlement is correct.
+ * Reissue is available only when Storage proves `llm.started` was never committed for the Step.
+ * Two covers a repeated pre-provider process interruption; more than that is a crash loop, and the
+ * fail-closed settlement is correct.
  */
 const MAX_INTERRUPTED_STEP_REISSUES = 2;
 
@@ -511,124 +517,381 @@ export class RunController {
     return this.resumeResolvedApprovalLocked(loaded, resolved);
   }
 
-  /**
-   * Continue a Run parked on a resource decision.
-   *
-   * ```text
-   * legacy NO_PROGRESS wait         close the un-dispatched batch, then reconsider
-   * a wait this build cannot retire  refuse, and say why
-   * ```
-   *
-   * ## What "continue" has to mean
-   *
-   * The old implementation restored `RUNNING`, put the *same* pending decision back on a
-   * `WAITING_TOOL_RESULTS` continuation and drove recovery. Nothing about the Run's conditions had
-   * changed, so the very next admission reached the same decision and parked it again — five user
-   * clicks, five round trips of 30-42 ms, no model turn and no Tool execution. A button that only
-   * rewrites a status is not a decision.
-   *
-   * What this records instead is a decision with content: the pending calls are closed as *explicitly
-   * not executed*, one result per call in source order, and the Run advances to its next model
-   * boundary where the model — not the governor — decides what to do with that. The refusal to
-   * dispatch was the old decision; re-asking the model is the new one.
-   *
-   * ## What it deliberately cannot resume
-   *
-   * Only a `WAITING_RESOURCE` checkpoint. That checkpoint is only ever written instead of a dispatch,
-   * so its pending batch is provably unexecuted. A batch that reached the Tool Layer lives on a
-   * `WAITING_TOOL_RESULTS` continuation and is recovered there, per invocation, by the durable Tool
-   * ledger — this path can never re-send a call whose side effects are unknown.
-   *
-   * A second click finds the Run already `RUNNING` and returns its current snapshot: the decision is
-   * one boundary, and a double submit must not append a second set of results.
-   */
+  /** Compatibility API that delegates to the automatic Core recovery boundary. */
   private async continueResourceGuardLocked(runId: RunId): Promise<RunControllerResult> {
-    const loaded = await this.load(runId);
+    return this.recoverLegacyResourceWait(await this.load(runId));
+  }
+  /** Resolve one historical ordinary correction boundary from read-only Tool and message facts. */
+  private async recoverLegacyResourceWait(
+    initial: RunExecutionSnapshot,
+  ): Promise<RunControllerResult> {
+    const loaded = initial;
+    if (isTerminal(loaded.run.status)) return this.resultFromSnapshot(loaded);
     if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
     if (this.isExpired(loaded)) return this.finalizeTimeout(loaded);
-    if (loaded.run.status === "RUNNING" || isTerminal(loaded.run.status)) {
-      // Already continued (double click, a retried request, a reconnected client), or continued and
-      // since settled. The boundary advanced once; returning the live snapshot is the idempotent
-      // answer, and it can never append a second set of results.
-      return this.resultFromSnapshot(loaded);
-    }
     if (
       loaded.run.status !== "WAITING_RESOURCE" ||
       loaded.state === undefined ||
       loaded.continuation?.type !== "WAITING_RESOURCE"
     ) {
-      throw new RunControllerInputError(
-        "Resource continuation requires a Run waiting for a resource decision.",
+      return this.resultFromSnapshot(loaded);
+    }
+    if (loaded.continuation.reason !== "NO_PROGRESS") {
+      throw new RunControllerInfrastructureError(
+        "Historical resource boundary recovery only supports ordinary NO_PROGRESS waits.",
       );
     }
-    const now = this.dependencies.clock.now();
+    const inspection = this.dependencies.legacyPendingBatchInspection;
+    const repository = this.dependencies.resourceGovernance;
+    if (inspection === undefined || repository === undefined) {
+      throw new RunControllerInfrastructureError(
+        "Historical ordinary correction recovery requires durable Tool inspection and progress storage.",
+      );
+    }
+    const pending = loaded.continuation.pendingDecision.toolRequests;
     const sourceStepId = loaded.continuation.sourceStepId;
-    const pendingDecision = loaded.continuation.pendingDecision;
-    const policy = defaultObservationPolicy();
-    // One result per requested call, in assistant source order, produced by the same normalizer the
-    // canonical Tool path uses so the batch stays cardinality- and order-preserving.
-    const normalized = normalizeToolResultBatch(
-      pendingDecision.toolRequests,
-      pendingDecision.toolRequests.map((request) => ({
-        role: "tool" as const,
-        toolCallId: request.externalCallId,
-        toolName: request.toolName,
-        content: [
-          {
-            type: "text" as const,
-            text:
-              "Not executed. Execution was paused before this batch was dispatched, and the Run has " +
-              "reconsidered instead of resending it. Re-read the current goal, the latest accepted " +
-              "results and the current step, then issue only the calls that can be formed correctly.",
-          },
-        ],
-        isError: true,
-      })),
+    const requestedCalls = pending.map(({ externalCallId, toolName }) => ({
+      externalCallId,
+      toolName,
+    }));
+    let inspected = await inspection.inspect({
+      runId: loaded.run.id,
+      sourceStepId,
+      calls: requestedCalls,
+    });
+    assertLegacyInspectionOrder(requestedCalls, inspected);
+    const unsafe = inspected.find(
+      (fact) => fact.kind === "RUNNING_UNKNOWN" || fact.kind === "INVALID",
     );
+    if (unsafe !== undefined) {
+      throw new RunControllerInfrastructureError(
+        `Historical Tool outcome is unresolved (${unsafe.kind}:${unsafe.kind === "INVALID" ? (unsafe.reasonCode ?? "UNKNOWN") : "UNKNOWN"}); the call was not resent.`,
+      );
+    }
+
+    const approvals = inspected.filter((fact) => fact.kind === "WAITING_APPROVAL");
+    if (approvals.length > 1) {
+      throw new RunControllerInfrastructureError(
+        "Historical Tool batch contains multiple pending approvals and cannot be reattached safely.",
+      );
+    }
+    if (approvals.length === 0) {
+      const requested = inspected.filter((fact) => fact.kind === "REQUESTED");
+      if (requested.length > 0) {
+        const dispatcher = this.dependencies.legacyPendingBatchDispatcher;
+        if (dispatcher === undefined) {
+          throw new RunControllerInfrastructureError(
+            "Historical Tool batch contains an unstarted invocation, but its lifecycle cannot close it safely.",
+          );
+        }
+        for (const call of requested) {
+          await dispatcher.cancelUnstarted({
+            runId: loaded.run.id,
+            sourceStepId,
+            externalCallId: call.externalCallId,
+            toolName: call.toolName,
+          });
+        }
+        inspected = await inspection.inspect({
+          runId: loaded.run.id,
+          sourceStepId,
+          calls: requestedCalls,
+        });
+        assertLegacyInspectionOrder(requestedCalls, inspected);
+        if (inspected.some((fact) => fact.kind !== "NOT_DISPATCHED" && fact.kind !== "SETTLED")) {
+          throw new RunControllerInfrastructureError(
+            "A Tool invocation changed while recovery was closing the old batch; no call was resent.",
+          );
+        }
+      }
+    }
+
+    const now = this.dependencies.clock.now();
+    const { current, baseProgress, correctionRecovery } = await this.prepareLegacyCorrectionUpgrade(
+      loaded,
+      sourceStepId,
+      now,
+    );
+    if (approvals.length === 1) {
+      const approval = approvals[0]!;
+      if (approval.kind !== "WAITING_APPROVAL") {
+        throw new RunControllerInvariantError("Approval inspection lost its discriminator.");
+      }
+      const run = markAgentRunWaitingApproval(resumeAgentRunFromResource(loaded.run));
+      const state = markAgentStateWaitingApproval(
+        resumeAgentStateFromResource(loaded.state, now),
+        now,
+      );
+      const progress = {
+        ...baseProgress,
+        policyVersion: "adaptive-resource-governance.v2",
+        correctionRecovery,
+        revision: current.revision + 1,
+        updatedAt: now,
+      };
+      const committed = await this.commit(
+        {
+          run,
+          state,
+          expectedStateRevision: loaded.stateRevision ?? null,
+          expectedContinuationRevision: loaded.continuationRevision ?? null,
+          stepWrites: [],
+          messagesToAppend: [],
+          continuation: {
+            operation: "SET",
+            checkpoint: {
+              type: "WAITING_TOOL_RESULTS",
+              runId: loaded.run.id,
+              sourceStepId,
+              pendingDecision: loaded.continuation.pendingDecision,
+              observationPolicy: defaultObservationPolicy(),
+              waitingApproval: {
+                invocationId: approval.invocationId as never,
+                ...(approval.approvalId === undefined
+                  ? {}
+                  : { approvalId: approval.approvalId as never }),
+                externalCallId: approval.externalCallId,
+                toolName: approval.toolName as never,
+              },
+            },
+            updatedAt: now,
+          },
+          events: [
+            this.eventFactory.statusChanged(
+              loaded.run,
+              "WAITING_RESOURCE",
+              "WAITING_APPROVAL",
+              this.nextEventId(),
+              now,
+            ),
+          ],
+        },
+        { expectedProgressRevision: current.revision, nextProgress: progress },
+      );
+      this.notify(committed.events);
+      return this.resultFromSnapshot(committed.snapshot);
+    }
+
+    const existingResults = new Map<
+      string,
+      {
+        readonly record: (typeof loaded.conversationRecords)[number];
+        readonly message: import("@caelush/agent").AgentToolResultMessage;
+      }
+    >();
+    for (const record of loaded.conversationRecords) {
+      if (record.messageType !== "TOOL_RESULT" || record.sourceStepId !== sourceStepId) continue;
+      const message = this.dependencies.messages.codecs.decode(record);
+      if (message.type !== "TOOL_RESULT") continue;
+      if (!pending.some((call) => call.externalCallId === message.toolCallId)) {
+        throw new RunControllerInvariantError(
+          "Historical correction boundary contains a result outside its pending Tool batch.",
+        );
+      }
+      if (existingResults.has(message.toolCallId)) {
+        throw new RunControllerInvariantError(
+          "Historical correction boundary contains duplicate accepted Tool results.",
+        );
+      }
+      existingResults.set(message.toolCallId, { record, message });
+    }
+    const byCall = new Map(inspected.map((fact) => [fact.externalCallId, fact] as const));
+    const rawResults = pending.map((call) => {
+      const fact = byCall.get(call.externalCallId);
+      if (fact === undefined || fact.toolName !== call.toolName) {
+        throw new RunControllerInvariantError("Historical Tool inspection lost call identity.");
+      }
+      const prior = existingResults.get(call.externalCallId);
+      if (prior !== undefined) {
+        if (
+          prior.message.toolName !== call.toolName ||
+          (fact.kind === "SETTLED" &&
+            (prior.message.observation.kind !== "OBSERVATION" ||
+              prior.message.observation.observationId !== fact.observation.observationId ||
+              fact.observation.runId !== loaded.run.id ||
+              fact.observation.sourceStepId !== sourceStepId ||
+              fact.observation.invocationId.length === 0)) ||
+          (fact.kind === "NOT_DISPATCHED" && prior.message.observation.kind !== "NO_OBSERVATION")
+        ) {
+          throw new RunControllerInvariantError(
+            "Accepted Tool result does not match its inspected durable execution fact.",
+          );
+        }
+        return {
+          role: "tool" as const,
+          toolCallId: prior.message.toolCallId,
+          toolName: prior.message.toolName,
+          content: [{ type: "text" as const, text: prior.message.projectedContent }],
+          isError: prior.message.isError,
+        };
+      }
+      if (fact.kind === "SETTLED") {
+        return {
+          role: "tool" as const,
+          toolCallId: fact.externalCallId,
+          toolName: fact.toolName,
+          content: [{ type: "text" as const, text: fact.message.content }],
+          isError: fact.message.isError,
+        };
+      }
+      if (fact.kind === "NOT_DISPATCHED") {
+        return {
+          role: "tool" as const,
+          toolCallId: fact.externalCallId,
+          toolName: fact.toolName,
+          content: [
+            {
+              type: "text" as const,
+              text: "Not executed. The previous ordinary correction boundary stopped before this call was dispatched. Continue from the accepted history and choose the next action that advances the task.",
+            },
+          ],
+          isError: true,
+        };
+      }
+      throw new RunControllerInfrastructureError(
+        "Historical Tool result could not be closed without replaying an uncertain invocation.",
+      );
+    });
+    const normalized = normalizeToolResultBatch(pending, rawResults);
+    const policy = defaultObservationPolicy();
     const run = resumeAgentRunFromResource(loaded.run);
     const state = resumeAgentStateFromResource(loaded.state, now);
-    const commit = await this.commit({
-      run,
-      state,
-      expectedStateRevision: loaded.stateRevision ?? null,
-      expectedContinuationRevision: loaded.continuationRevision ?? null,
-      stepWrites: [],
-      messagesToAppend: normalized.map((message) =>
-        createExternalToolResultMessageAppend(
-          this.dependencies.messages,
-          loaded.run,
-          sourceStepId,
-          message,
-          policy,
-        ),
-      ),
-      continuation: {
-        operation: "SET",
-        checkpoint: {
-          type: "WAITING_TOOL_RESULTS" as const,
-          runId: loaded.continuation.runId,
-          sourceStepId,
-          pendingDecision,
-          receivedResults: normalized,
-          observationPolicy: policy,
-        },
+    const continuation = {
+      type: "WAITING_TOOL_RESULTS" as const,
+      runId: loaded.run.id,
+      sourceStepId,
+      pendingDecision: loaded.continuation.pendingDecision,
+      receivedResults: normalized,
+      observationPolicy: policy,
+    };
+    const progressFacts = captureRunToolTurnFacts({
+      snapshot: { ...loaded, run, state, continuation },
+    });
+    if (progressFacts === undefined) {
+      throw new RunControllerInvariantError("Recovered Tool results have no Run progress facts.");
+    }
+    const toolPipeline = this.dependencies.toolTurn;
+    if (toolPipeline === undefined) {
+      throw new RunControllerInfrastructureError(
+        "Historical resource recovery cannot accept progress without the canonical Tool pipeline.",
+      );
+    }
+    const messagesToAppend: ReturnType<typeof createExternalToolResultMessageAppend>[] = [];
+    const messageIds: string[] = [];
+    for (const message of normalized) {
+      const prior = existingResults.get(message.toolCallId);
+      if (prior !== undefined) {
+        messageIds.push(String(prior.record.messageId));
+        continue;
+      }
+      const fact = byCall.get(message.toolCallId);
+      if (fact?.kind === "SETTLED") {
+        messageIds.push(fact.message.messageId);
+        continue;
+      }
+      const append = createExternalToolResultMessageAppend(
+        this.dependencies.messages,
+        loaded.run,
+        sourceStepId,
+        message,
+        policy,
+      );
+      messagesToAppend.push(append);
+      messageIds.push(String(append.draft.messageId));
+    }
+    const progressBoundary = { kind: "TOOL_RESULTS" as const, sourceStepId, messageIds };
+    const projectedProgress = await projectRunToolTurnProgress({
+      dependencies: this.toolTurnDependencies(toolPipeline, loaded.run.id),
+      facts: progressFacts,
+      turnId: String(sourceStepId),
+      boundary: progressBoundary,
+      replan: false,
+      baseProgress: { ...baseProgress, correctionRecovery },
+      results: normalized.map((message) => ({
+        toolName: message.toolName,
+        content: toTextOnlyAIToolResultContent(message.content),
+        isError: message.isError,
+      })),
+    });
+    const progress = projectedProgress ?? {
+      expectedProgressRevision: current.revision,
+      nextProgress: {
+        ...baseProgress,
+        correctionRecovery,
+        lastAcceptedBoundary: progressBoundary,
+        revision: current.revision + 1,
         updatedAt: now,
       },
-      events: [
-        this.eventFactory.statusChanged(
-          loaded.run,
-          "WAITING_RESOURCE",
-          "RUNNING",
-          this.nextEventId(),
-          now,
-        ),
-      ],
+    };
+    const committed = await this.commit(
+      {
+        run,
+        state,
+        expectedStateRevision: loaded.stateRevision ?? null,
+        expectedContinuationRevision: loaded.continuationRevision ?? null,
+        stepWrites: [],
+        messagesToAppend,
+        continuation: { operation: "SET", checkpoint: continuation, updatedAt: now },
+        events: [
+          this.eventFactory.statusChanged(
+            loaded.run,
+            "WAITING_RESOURCE",
+            "RUNNING",
+            this.nextEventId(),
+            now,
+          ),
+        ],
+      },
+      progress,
+    );
+    this.notify(committed.events);
+    return this.driveRunExecutionLocked(
+      await this.ensureDurableToolResults(committed.snapshot),
+      "RECOVER",
+    );
+  }
+
+  private async prepareLegacyCorrectionUpgrade(
+    loaded: RunExecutionSnapshot,
+    sourceStepId: StepId,
+    now: import("@caelush/protocol").TimestampMs,
+  ) {
+    const repository = this.dependencies.resourceGovernance;
+    const policy = this.dependencies.resourceCorrectionRecoveryPolicy;
+    if (
+      repository === undefined ||
+      policy === undefined ||
+      loaded.run.resourcePolicy === undefined
+    ) {
+      throw new RunControllerInfrastructureError(
+        "Historical resource correction recovery has no typed daemon policy or durable resource ledger.",
+      );
+    }
+    const current = await repository.createOrGet(loaded.run.id, {
+      policyVersion: "adaptive-resource-governance.v1",
+      mode: loaded.run.resourcePolicy.mode,
+      now,
     });
-    this.notify(commit.events);
-    // The results are already durable in this transaction; this is the same validation every other
-    // accepted batch passes through, and it appends nothing when they are present.
-    const accepted = await this.ensureDurableToolResults(commit.snapshot);
-    return this.driveRunExecutionLocked(accepted, "EXECUTE");
+    const correctionRecovery =
+      current.correctionRecovery ??
+      createLegacyCorrectionRecoveryRecord({
+        runId: loaded.run.id,
+        sourceStepId,
+        stateRevision: loaded.stateRevision ?? 0,
+        continuationRevision: loaded.continuationRevision ?? 0,
+        committedAt: now,
+        authority: policy.authority,
+      });
+    assertCorrectionRecoveryBelongsToRun(loaded.run.id, correctionRecovery);
+    return {
+      current,
+      correctionRecovery,
+      baseProgress: {
+        ...current,
+        policyVersion: "adaptive-resource-governance.v2",
+        correctionRecovery,
+      },
+    };
   }
 
   private async resumeResolvedApprovalLocked(
@@ -715,7 +978,10 @@ export class RunController {
     this.notify(commit.events);
     if (run.resourcePolicy !== undefined && this.dependencies.resourceGovernance !== undefined) {
       await this.dependencies.resourceGovernance.createOrGet(run.id, {
-        policyVersion: "adaptive-resource-governance.v1",
+        policyVersion:
+          run.resourcePolicy.correctionVersion === "AUTONOMOUS_CORRECTION_V2"
+            ? "adaptive-resource-governance.v2"
+            : "adaptive-resource-governance.v1",
         mode: run.resourcePolicy.mode,
         now,
       });
@@ -823,6 +1089,11 @@ export class RunController {
     // Legacy retry provenance is normalized *durably* before anything is routed, so the coordinator
     // only ever sees a state it can decide on and no runtime special case is needed for it.
     let normalized = await this.normalizeLegacyRetryProvenance(loaded);
+    if (normalized.run.status === "WAITING_RESOURCE") {
+      if (normalized.cancellationIntent !== undefined) return this.finalizeCancellation(normalized);
+      if (this.isExpired(normalized)) return this.finalizeTimeout(normalized);
+      return this.recoverLegacyResourceWait(normalized);
+    }
     // The coordinator owns the governance priority — terminal, cancellation, deadline, exception,
     // step budget, boundary — so the ordering cannot drift between call sites.
     const coordinated = this.coordinatedBoundary(normalized);
@@ -1338,6 +1609,9 @@ export class RunController {
       ...(this.dependencies.resourceGovernance === undefined
         ? {}
         : { resourceGovernance: this.dependencies.resourceGovernance }),
+      ...(this.dependencies.resourceCorrectionRecoveryPolicy === undefined
+        ? {}
+        : { resourceCorrectionRecoveryPolicy: this.dependencies.resourceCorrectionRecoveryPolicy }),
       clock: this.dependencies.clock,
       // The Run's live cancellation signal, read when the batch runs. The adapter never creates an
       // abort scope, never owns a timeout and never reads a deadline: it forwards this unchanged.
@@ -1499,17 +1773,12 @@ export class RunController {
    * Settle a Tool effect the frozen planner can express.
    *
    * ```text
-   * PLAN -> MATERIALIZE -> COMMIT -> NOTIFY -> post-commit resource observation
+   * PLAN -> MATERIALIZE -> atomic Run/result/progress COMMIT -> NOTIFY
    * ```
    *
-   * The order is the contract, and the last step is ordered as carefully as the rest: resource
-   * progress accounts for work the Run *accepted*, so it is recorded only after the continuation
-   * is durable. A settlement whose commit lost its compare-and-swap leaves the progress ledger
-   * where it was, and the durable Tool invocations remain the recovery authority — the next
-   * recovery reads them instead of replaying a handler.
-   *
-   * A `REPLAN` is the one route that also advances the durable replan count, and it does so after
-   * its synthetic results are durable for the same reason.
+   * Resource progress accounts for work the Run *accepted*. The Tool result, continuation and
+   * progress ledger either commit together or leave no accepted result; recovery then reads one
+   * durable boundary.
    */
   private async settleCanonicalToolTurn(
     current: RunExecutionSnapshot,
@@ -1547,51 +1816,52 @@ export class RunController {
       ownership: { eventIds: this.dependencies.eventIdFactory },
     });
 
-    const committed = await this.commit(materialized);
+    const progress = await this.projectToolTurnProgress(current, result, materialized);
+    const committed = await this.commit(materialized, progress);
     this.notify(committed.events);
-    await this.recordToolTurnProgress(committed.snapshot, result);
     return committed.snapshot;
   }
 
-  /**
-   * The post-commit resource progress of one settled Tool batch.
-   *
-   * It runs for the two routes whose results the Run accepted — `COMPLETED` and `REPLAN` — and for
-   * nothing else. An approval boundary accepted no complete batch, and a budget settlement is
-   * terminal: recording progress for either would account for work the Run never took.
-   *
-   * The context is rebuilt from the durable continuation the settlement just committed, which is
-   * the same record the execution was built from, so the progress fingerprint and the observation
-   * policy cannot disagree with the batch that actually ran.
-   */
-  private async recordToolTurnProgress(
-    settled: RunExecutionSnapshot,
+  private async projectToolTurnProgress(
+    current: RunExecutionSnapshot,
     result: Exclude<ToolTurnResult, { kind: "RESOURCE_WAIT" | "BUDGET_EXCEEDED" }>,
-  ): Promise<void> {
+    command: RunExecutionCommit,
+  ): Promise<Awaited<ReturnType<typeof projectRunToolTurnProgress>>> {
     const pipeline = this.dependencies.toolTurn;
-    if (pipeline === undefined) return;
+    if (pipeline === undefined) return undefined;
     // The facts come from the adapter, which is the only object that derives a security context, an
     // execution environment or an observation policy for a Tool turn. Rebuilding them here would be a
     // second capture of the same facts, free to disagree with the batch that actually ran.
     const facts = captureRunToolTurnFacts({
-      snapshot: settled,
+      snapshot: current,
     });
-    if (facts === undefined) return;
-    const dependencies = this.toolTurnDependencies(pipeline, settled.run.id);
+    if (facts === undefined) return undefined;
     const results =
       result.kind === "COMPLETED"
         ? result.results
         : result.kind === "REPLAN"
           ? result.syntheticResults
           : [];
-    // A REPLAN writes no Tool invocation at all, so the ledger entry is the only durable trace of the
-    // decision — and it is what a later `WAITING_RESOURCE` reports as `replanCount`.
-    if (result.kind === "REPLAN") await recordRunToolTurnReplan({ dependencies, facts });
-    if (results.length === 0) return;
-    await recordRunToolTurnProgress({
-      dependencies,
+    if (results.length === 0) return undefined;
+    const messageIds = command.messagesToAppend
+      .map(({ draft }) => draft)
+      .filter(
+        (draft) =>
+          draft.messageType === "TOOL_RESULT" &&
+          draft.sourceStepId === facts.continuation.sourceStepId,
+      )
+      .map((draft) => String(draft.messageId));
+    if (messageIds.length === 0) return undefined;
+    return projectRunToolTurnProgress({
+      dependencies: this.toolTurnDependencies(pipeline, current.run.id),
       facts,
       turnId: String(facts.continuation.sourceStepId),
+      boundary: {
+        kind: "TOOL_RESULTS",
+        sourceStepId: String(facts.continuation.sourceStepId),
+        messageIds,
+      },
+      replan: result.kind === "REPLAN",
       results,
     });
   }
@@ -2204,37 +2474,53 @@ export class RunController {
       true,
     );
     const appends = [...assistant.messagesToAppend, ...plan.appends];
+    const assistantMessage = assistant.messagesToAppend.find(
+      ({ draft }) => draft.messageType === "ASSISTANT" && draft.sourceStepId === String(step.id),
+    );
+    const correctionProgress =
+      assistantMessage === undefined
+        ? undefined
+        : await projectRunResourceCorrectionDelivery({
+            repository: this.dependencies.resourceGovernance,
+            run: current.run,
+            result,
+            assistantMessageId: String(assistantMessage.draft.messageId),
+            now,
+          });
     const run = AgentRunSchema.parse({ ...current.run, currentStepId: undefined });
-    const commit = await this.commit({
-      run,
-      state: settledState,
-      expectedStateRevision: current.stateRevision ?? null,
-      expectedContinuationRevision: current.continuationRevision ?? null,
-      stepWrites: [{ operation: "UPDATE", step: completeAgentStep(step, { finishedAt: now }) }],
-      messagesToAppend: appends,
-      ...(assistant.privateReplayWrites === undefined
-        ? {}
-        : { privateReplayWrites: assistant.privateReplayWrites }),
-      ...(plan.materialized.length === 0
-        ? {}
-        : { runInputs: { now, handoff: { entries: plan.materialized } } }),
-      continuation: {
-        operation: "SET",
-        checkpoint: {
-          type: "WAITING_STEERING",
-          runId: run.id,
-          sourceStepId: step.id,
-          messageIds: plan.turnMessageIds,
+    const commit = await this.commit(
+      {
+        run,
+        state: settledState,
+        expectedStateRevision: current.stateRevision ?? null,
+        expectedContinuationRevision: current.continuationRevision ?? null,
+        stepWrites: [{ operation: "UPDATE", step: completeAgentStep(step, { finishedAt: now }) }],
+        messagesToAppend: appends,
+        ...(assistant.privateReplayWrites === undefined
+          ? {}
+          : { privateReplayWrites: assistant.privateReplayWrites }),
+        ...(plan.materialized.length === 0
+          ? {}
+          : { runInputs: { now, handoff: { entries: plan.materialized } } }),
+        continuation: {
+          operation: "SET",
+          checkpoint: {
+            type: "WAITING_STEERING",
+            runId: run.id,
+            sourceStepId: step.id,
+            messageIds: plan.turnMessageIds,
+          },
+          updatedAt: now,
         },
-        updatedAt: now,
+        events: [
+          this.eventFactory.llmCompleted(current.run, settledState, step, this.nextEventId(), now),
+          ...appends.map((entry) =>
+            this.eventFactory.messageCommitted(run, entry.draft, this.nextEventId(), now),
+          ),
+        ],
       },
-      events: [
-        this.eventFactory.llmCompleted(current.run, settledState, step, this.nextEventId(), now),
-        ...appends.map((entry) =>
-          this.eventFactory.messageCommitted(run, entry.draft, this.nextEventId(), now),
-        ),
-      ],
-    });
+      correctionProgress,
+    );
     this.notify(commit.events);
     return this.resultFromSnapshot(commit.snapshot);
   }
@@ -2680,9 +2966,29 @@ export class RunController {
       ownership: { eventIds: this.dependencies.eventIdFactory },
     });
 
+    const correctionAssistant =
+      result.kind === "TOOL_REQUESTS" || result.kind === "FINAL_CANDIDATE"
+        ? materialized.messagesToAppend.find(
+            ({ draft }) =>
+              draft.messageType === "ASSISTANT" &&
+              draft.sourceStepId === String(result.turn.stepId),
+          )
+        : undefined;
+    const correctionProgress =
+      correctionAssistant !== undefined &&
+      (result.kind === "TOOL_REQUESTS" || result.kind === "FINAL_CANDIDATE")
+        ? await projectRunResourceCorrectionDelivery({
+            repository: this.dependencies.resourceGovernance,
+            run: current.run,
+            result,
+            assistantMessageId: String(correctionAssistant.draft.messageId),
+            now,
+          })
+        : undefined;
+
     let committed: RunExecutionCommitResult;
     try {
-      committed = await this.commit(materialized);
+      committed = await this.commit(materialized, correctionProgress);
     } catch (error) {
       // The last window: the inputs were accepted after this settlement was planned but before the
       // completion transaction took the write lock. The frozen effect is still in hand, so the
@@ -2694,33 +3000,7 @@ export class RunController {
       return this.settleDeferredFinalCandidate(raced, result, observation);
     }
     this.notify(committed.events);
-    // A corrective intervention prepared for the following request is only *delivered* when a model
-    // result bound to that request commits. This runs after the assistant message is durable, so a
-    // failed, cancelled or never-started turn cannot consume an escalation step.
-    await this.recordCorrectionDelivery(committed.snapshot, String(result.turn.stepId));
     return this.resultFromSnapshot(committed.snapshot);
-  }
-
-  /**
-   * Record that one settled model turn carried a pending corrective intervention.
-   *
-   * The write is deliberately after the commit: delivery is a fact *about* a committed request, and a
-   * receipt written before the message existed could claim a delivery that a failed commit never
-   * made. It is idempotent by intervention identity, and it fails toward re-sending rather than toward
-   * silently retiring advice the model may not have seen.
-   */
-  private async recordCorrectionDelivery(
-    settled: RunExecutionSnapshot,
-    stepId: string,
-  ): Promise<void> {
-    const pipeline = this.dependencies.toolTurn;
-    if (pipeline === undefined || this.dependencies.resourceGovernance === undefined) return;
-    if (settled.run.resourcePolicy === undefined) return;
-    await recordRunResourceCorrectionDelivery({
-      dependencies: this.toolTurnDependencies(pipeline, settled.run.id),
-      run: settled.run,
-      settledStepId: stepId,
-    });
   }
 
   /**
@@ -2914,6 +3194,20 @@ export class RunController {
       "FINAL_ANSWER",
       observation,
     );
+    const assistantMessage = assistantCommit.messagesToAppend.find(
+      ({ draft }) =>
+        draft.messageType === "ASSISTANT" && draft.sourceStepId === String(result.turn.stepId),
+    );
+    const correctionProgress =
+      assistantMessage === undefined
+        ? undefined
+        : await projectRunResourceCorrectionDelivery({
+            repository: this.dependencies.resourceGovernance,
+            run: current.run,
+            result,
+            assistantMessageId: String(assistantMessage.draft.messageId),
+            now,
+          });
 
     const commit = await this.commitCandidateBoundary({
       run,
@@ -2924,6 +3218,7 @@ export class RunController {
       expectedContinuationRevision: current.continuationRevision ?? null,
       stepWrites: [{ operation: "UPDATE", step: completedStep }],
       ...assistantCommit,
+      ...(correctionProgress === undefined ? {} : { progress: correctionProgress }),
       events: [
         ...this.successEvents(current.run, decisionState, completedStep, observation, now),
         this.eventFactory.statusChanged(
@@ -3775,7 +4070,10 @@ export class RunController {
      * facts rather than about this controller. The second settlement below is unchanged.
      */
     if (
-      classifyInterruptedStep(snapshot) === "REPLAY_SAFE" &&
+      classifyInterruptedStep({
+        ...snapshot,
+        providerAttemptStarted: snapshot.activeStepProviderStarted,
+      }) === "REPLAY_SAFE" &&
       this.claimInterruptedStepReissue(snapshot.run.id)
     ) {
       return this.reissueInterruptedStep(snapshot);
@@ -3880,9 +4178,22 @@ export class RunController {
     return snapshot;
   }
 
-  private async commit(command: RunExecutionCommit) {
+  private async commit(
+    command: RunExecutionCommit,
+    progress?: Awaited<ReturnType<typeof projectRunToolTurnProgress>>,
+  ) {
     try {
-      return await this.dependencies.executionStore.commit(this.withMessageCommitEvents(command));
+      const execution = this.withMessageCommitEvents(command);
+      if (progress !== undefined) {
+        const persistence = this.dependencies.progressPersistence;
+        if (persistence === undefined) {
+          throw new RunControllerInfrastructureError(
+            "Run progress persistence is not configured for an accepted progress boundary.",
+          );
+        }
+        return await persistence.commitExecutionWithProgress({ execution, ...progress });
+      }
+      return await this.dependencies.executionStore.commit(execution);
     } catch (error) {
       if (
         error instanceof RunControllerInfrastructureError ||
@@ -5047,6 +5358,24 @@ function isTerminal(status: AgentRun["status"]): boolean {
     "MAX_STEPS_REACHED",
     "BUDGET_EXCEEDED",
   ].includes(status);
+}
+
+function assertLegacyInspectionOrder(
+  requests: readonly { readonly externalCallId: string; readonly toolName: string }[],
+  facts: readonly { readonly externalCallId: string; readonly toolName: string }[],
+): void {
+  if (
+    requests.length !== facts.length ||
+    requests.some(
+      (request, index) =>
+        facts[index]?.externalCallId !== request.externalCallId ||
+        facts[index]?.toolName !== request.toolName,
+    )
+  ) {
+    throw new RunControllerInfrastructureError(
+      "Historical Tool inspection did not preserve the pending batch identity and order.",
+    );
+  }
 }
 
 /**

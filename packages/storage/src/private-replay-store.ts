@@ -8,10 +8,13 @@ import {
 import type {
   AgentMessageRecordDraft,
   EncryptedPrivateReplay,
+  PrivateReplayExecutionOptions,
+  PrivateReplayExecutionReader,
   PrivateReplayIdentity,
   PrivateReplayReadScope,
   PrivateReplayStorePort,
   PrivateReplayWrite,
+  ReplayProtectionExecutionPort,
   ReplayProtectionPort,
 } from "@caelush/agent";
 import type { CaelushDatabase } from "./database.js";
@@ -95,48 +98,101 @@ export class SqlitePrivateReplayStore implements PrivateReplayStorePort {
     }
   }
 
+  async openExecution(
+    scope: PrivateReplayReadScope,
+    options?: PrivateReplayExecutionOptions,
+  ): Promise<PrivateReplayExecutionReader> {
+    try {
+      if (this.protection === undefined) throw new PrivateReplayError();
+      assertReadActive(options?.signal);
+      const protection = await this.protection.openExecution(options);
+      let disposed = false;
+      const read = (identity: PrivateReplayIdentity) =>
+        this.readInScope(
+          scope,
+          identity,
+          protection.open.bind(protection),
+          options?.signal,
+          () => disposed,
+        );
+      return Object.freeze({
+        read,
+        async dispose(): Promise<void> {
+          if (disposed) return;
+          disposed = true;
+          protection.dispose();
+        },
+      });
+    } catch {
+      throw new PrivateReplayError();
+    }
+  }
+
+  /** @deprecated Model-turn execution must use openExecution() to scope key material. */
   forExecution(scope: PrivateReplayReadScope) {
-    const bound = { ...scope, selectedMessageIds: new Set(scope.selectedMessageIds) };
     return Object.freeze({
-      read: async (identity: PrivateReplayIdentity): Promise<Uint8Array> => {
-        try {
-          assertPrivateReplayIdentity(identity);
-          const requested = Object.freeze({ ...identity });
-          if (
-            this.protection === undefined ||
-            requested.sessionId !== bound.sessionId ||
-            requested.providerId !== bound.providerId ||
-            requested.model !== bound.model ||
-            requested.api !== bound.api ||
-            !bound.selectedMessageIds.has(requested.messageId)
-          )
-            throw new PrivateReplayError();
-          const execution = this.database.client
-            .prepare("SELECT session_id FROM agent_runs WHERE id = ?")
-            .get(bound.executionRunId);
-          if (execution?.session_id !== bound.sessionId) throw new PrivateReplayError();
-          const sourceRun = this.database.client
-            .prepare("SELECT session_id FROM agent_runs WHERE id = ?")
-            .get(requested.runId);
-          if (sourceRun?.session_id !== bound.sessionId) throw new PrivateReplayError();
-          const row = this.row(requested.messageId);
-          if (
-            row === undefined ||
-            row.run_id !== requested.runId ||
-            row.session_id !== requested.sessionId ||
-            !isDeepStrictEqual(JSON.parse(row.identity_json), requested)
-          )
-            throw new PrivateReplayError();
-          this.assertStoredMessage(requested);
-          return await this.protection.open(
-            requested,
-            JSON.parse(row.envelope_json) as EncryptedPrivateReplay,
-          );
-        } catch {
-          throw new PrivateReplayError();
-        }
-      },
+      read: (identity: PrivateReplayIdentity) =>
+        this.readInScope(
+          scope,
+          identity,
+          this.protection === undefined
+            ? async () => {
+                throw new PrivateReplayError();
+              }
+            : this.protection.open.bind(this.protection),
+        ),
     });
+  }
+
+  private async readInScope(
+    scope: PrivateReplayReadScope,
+    identity: PrivateReplayIdentity,
+    open: ReplayProtectionExecutionPort["open"] | ReplayProtectionPort["open"],
+    signal?: AbortSignal,
+    isDisposed: () => boolean = () => false,
+  ): Promise<Uint8Array> {
+    let plaintext: Uint8Array | undefined;
+    try {
+      assertReadActive(signal);
+      if (isDisposed()) throw new PrivateReplayError();
+      assertPrivateReplayIdentity(identity);
+      const requested = Object.freeze({ ...identity });
+      const selectedMessageIds = new Set(scope.selectedMessageIds);
+      if (
+        requested.sessionId !== scope.sessionId ||
+        requested.providerId !== scope.providerId ||
+        requested.model !== scope.model ||
+        requested.api !== scope.api ||
+        !selectedMessageIds.has(requested.messageId)
+      )
+        throw new PrivateReplayError();
+      const execution = this.database.client
+        .prepare("SELECT session_id FROM agent_runs WHERE id = ?")
+        .get(scope.executionRunId);
+      if (execution?.session_id !== scope.sessionId) throw new PrivateReplayError();
+      const sourceRun = this.database.client
+        .prepare("SELECT session_id FROM agent_runs WHERE id = ?")
+        .get(requested.runId);
+      if (sourceRun?.session_id !== scope.sessionId) throw new PrivateReplayError();
+      const row = this.row(requested.messageId);
+      if (
+        row === undefined ||
+        row.run_id !== requested.runId ||
+        row.session_id !== requested.sessionId ||
+        !isDeepStrictEqual(JSON.parse(row.identity_json), requested)
+      )
+        throw new PrivateReplayError();
+      this.assertStoredMessage(requested);
+      assertReadActive(signal);
+      if (isDisposed()) throw new PrivateReplayError();
+      plaintext = await open(requested, JSON.parse(row.envelope_json) as EncryptedPrivateReplay);
+      assertReadActive(signal);
+      if (isDisposed()) throw new PrivateReplayError();
+      return plaintext;
+    } catch {
+      plaintext?.fill(0);
+      throw new PrivateReplayError();
+    }
   }
 
   /** Authenticates before BEGIN; no key lookup or await is performed inside a SQLite transaction. */
@@ -251,4 +307,8 @@ export class SqlitePrivateReplayStore implements PrivateReplayStorePort {
       .get(identity.messageId) as Parameters<typeof assertMessage>[1];
     assertMessage(identity, message);
   }
+}
+
+function assertReadActive(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new PrivateReplayError();
 }

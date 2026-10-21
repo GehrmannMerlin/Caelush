@@ -5,7 +5,6 @@ import type {
   PrivateReplayReadScope,
   PrivateReplayStorePort,
 } from "@caelush/agent";
-import type { AIPrivateReplayResolver } from "@caelush/ai";
 import { createDaemonPrivateReplayResolver } from "../src/replay/private-replay-resolver.js";
 
 const identity: PrivateReplayIdentity = {
@@ -29,18 +28,18 @@ const scope: PrivateReplayReadScope = {
   selectedAssistantMessageIds: [identity.messageId],
 };
 
-function resolverFixture() {
+async function resolverFixture() {
   const read = vi.fn(async () => new TextEncoder().encode("private"));
   const store = {
-    forExecution: vi.fn(() => ({ read })),
+    openExecution: vi.fn(async () => ({ read, dispose: vi.fn() })),
   } as unknown as PrivateReplayStorePort;
-  const resolver: AIPrivateReplayResolver = createDaemonPrivateReplayResolver(store, scope);
-  return { resolver, read };
+  const execution = await createDaemonPrivateReplayResolver(store, scope);
+  return { execution, resolver: execution.resolver, read };
 }
 
 describe("daemon private replay resolver", () => {
   it("resolves the full opaque identity for a Context-selected same-Session historical Assistant", async () => {
-    const { resolver, read } = resolverFixture();
+    const { execution, resolver, read } = await resolverFixture();
     const state = createPrivateReplayReference(identity);
     const bytes = await resolver.resolve({
       providerState: state,
@@ -50,10 +49,11 @@ describe("daemon private replay resolver", () => {
     });
     expect(new TextDecoder().decode(bytes)).toBe("private");
     expect(read).toHaveBeenCalledWith(identity);
+    await execution.dispose();
   });
 
   it("rejects a reference outside the actual selected-message scope before Store access", async () => {
-    const { resolver, read } = resolverFixture();
+    const { execution, resolver, read } = await resolverFixture();
     const unselected = createPrivateReplayReference({ ...identity, messageId: "message-2" });
     await expect(
       resolver.resolve({
@@ -64,13 +64,16 @@ describe("daemon private replay resolver", () => {
       }),
     ).rejects.toThrow("Private replay unavailable.");
     expect(read).not.toHaveBeenCalled();
+    await execution.dispose();
   });
 
   it("rejects a selected reference attached to a different Assistant position", async () => {
-    const { resolver, read } = resolverFixture();
+    const { read } = await resolverFixture();
     const secondIdentity = { ...identity, messageId: "message-2" };
-    const scopedResolver = createDaemonPrivateReplayResolver(
-      { forExecution: vi.fn(() => ({ read })) } as unknown as PrivateReplayStorePort,
+    const scopedExecution = await createDaemonPrivateReplayResolver(
+      {
+        openExecution: vi.fn(async () => ({ read, dispose: vi.fn() })),
+      } as unknown as PrivateReplayStorePort,
       {
         ...scope,
         selectedMessageIds: [identity.messageId, secondIdentity.messageId],
@@ -79,7 +82,7 @@ describe("daemon private replay resolver", () => {
     );
     const reference = createPrivateReplayReference(secondIdentity);
     await expect(
-      scopedResolver.resolve({
+      scopedExecution.resolver.resolve({
         providerState: reference,
         providerId: identity.providerId as never,
         model: { provider: identity.providerId, model: identity.model },
@@ -87,5 +90,6 @@ describe("daemon private replay resolver", () => {
       }),
     ).rejects.toThrow("Private replay unavailable.");
     expect(read).not.toHaveBeenCalled();
+    await scopedExecution.dispose();
   });
 });

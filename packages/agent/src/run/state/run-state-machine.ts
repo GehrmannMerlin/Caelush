@@ -46,7 +46,9 @@ export const RUN_STATUS_TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
     "BUDGET_EXCEEDED",
   ],
   WAITING_APPROVAL: ["RUNNING", "FAILED", "CANCELLED", "TIMEOUT"],
-  WAITING_RESOURCE: ["RUNNING", "FAILED", "CANCELLED", "TIMEOUT"],
+  // A historical resource wait may be reattached to a separately durable ApprovalRequest. This
+  // transition is only used after Core verifies that exact invocation and approval identity.
+  WAITING_RESOURCE: ["RUNNING", "WAITING_APPROVAL", "FAILED", "CANCELLED", "TIMEOUT"],
   VERIFYING: ["COMPLETED", "RUNNING", "FAILED", "CANCELLED", "TIMEOUT", "BUDGET_EXCEEDED"],
   COMPLETED: [],
   FAILED: [],

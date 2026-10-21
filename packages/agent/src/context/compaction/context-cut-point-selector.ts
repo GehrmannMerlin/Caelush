@@ -26,7 +26,7 @@ export function createContextCutPointSelector(): ContextCutPointSelector {
         units: orderContextHistoryUnits(input.history.units),
       });
       const turns = canonicalTurns(history.units);
-      if (turns.length < 2) return null;
+      if (turns.length === 0) return null;
 
       const fullTurnCandidate = selectFullTurnBoundary(
         history,
@@ -41,6 +41,7 @@ export function createContextCutPointSelector(): ContextCutPointSelector {
           turns,
           input.targetRecentTailTokens,
           input.minRecentTailTokens,
+          input.allowCurrentTurnPrefix === true,
         )
       );
     },
@@ -98,12 +99,16 @@ function selectProtocolSafeSplit(
   turns: readonly ContextHistoryUnit[],
   targetRecentTailTokens: number,
   minRecentTailTokens: number,
+  allowCurrentTurnPrefix: boolean,
 ): ContextCompactionCutCandidate | null {
   let best: ContextCompactionCutCandidate | null = null;
 
-  for (let turnIndex = 0; turnIndex < turns.length - 1; turnIndex += 1) {
+  for (let turnIndex = 0; turnIndex < turns.length; turnIndex += 1) {
     const turn = turns[turnIndex]!;
-    if (turn.status !== "CLOSED" || !turn.compactionEligible) continue;
+    const currentTurnPrefix =
+      allowCurrentTurnPrefix && turnIndex === turns.length - 1 && turn.status === "OPEN";
+    if (!currentTurnPrefix && (turn.status !== "CLOSED" || !turn.compactionEligible)) continue;
+    if (!currentTurnPrefix && turnIndex === turns.length - 1) continue;
     if (
       turns
         .slice(0, turnIndex)
@@ -113,42 +118,89 @@ function selectProtocolSafeSplit(
     }
 
     const protocols = protocolsForTurn(history.units, turn);
-    if (
-      protocols.length < 2 ||
-      protocols.some((unit) => unit.status !== "CLOSED" || !unit.compactionEligible)
-    ) {
+    if (protocols.length < 2) continue;
+    if (currentTurnPrefix) {
+      // Keep one recent completed batch and every open call/result obligation in the active input.
+      const completed = protocols.filter(
+        (unit) => unit.status === "CLOSED" && unit.compactionEligible,
+      );
+      if (completed.length < 2) continue;
+      const firstOpenProtocol = protocols.findIndex(
+        (unit) => unit.status !== "CLOSED" || !unit.compactionEligible,
+      );
+      if (
+        firstOpenProtocol >= 0 &&
+        protocols
+          .slice(firstOpenProtocol)
+          .some((unit) => unit.status === "CLOSED" && unit.compactionEligible)
+      )
+        continue;
+      if (
+        protocols.some((unit) =>
+          unit.messages.some((message) => message.tokenEstimate === undefined),
+        )
+      )
+        continue;
+    } else if (protocols.some((unit) => unit.status !== "CLOSED" || !unit.compactionEligible)) {
       continue;
     }
     if (turn.messages.some((message) => message.tokenEstimate === undefined)) continue;
 
     for (let protocolIndex = 0; protocolIndex < protocols.length - 1; protocolIndex += 1) {
+      if (
+        currentTurnPrefix &&
+        (protocols
+          .slice(0, protocolIndex + 1)
+          .some((unit) => unit.status !== "CLOSED" || !unit.compactionEligible) ||
+          !protocols
+            .slice(protocolIndex + 1)
+            .some((unit) => unit.status === "CLOSED" && unit.compactionEligible))
+      ) {
+        continue;
+      }
       const firstKeptProtocol = protocols[protocolIndex + 1]!;
       const firstKeptMessage = firstKeptProtocol.messages[0];
       if (firstKeptMessage === undefined) continue;
       if (firstKeptProtocol.messages.some((message) => message.tokenEstimate === undefined))
         continue;
 
-      const retainedTokens = retainedTokensForSplit(turns, turnIndex, firstKeptMessage.sequence);
+      const firstProtocolMessage = protocols[0]!.messages[0];
+      if (firstProtocolMessage === undefined) continue;
+      const compactedTokens = currentTurnPrefix
+        ? turn.messages
+            .filter(
+              (message) =>
+                message.sequence >= firstProtocolMessage.sequence &&
+                message.sequence < firstKeptMessage.sequence,
+            )
+            .reduce((total, message) => total + (message.tokenEstimate ?? 0), 0)
+        : history.estimatedTokens -
+          retainedTokensForSplit(turns, turnIndex, firstKeptMessage.sequence);
+      const retainedTokens = history.estimatedTokens - compactedTokens;
       if (retainedTokens < minRecentTailTokens) continue;
-      const compactedTokens = history.estimatedTokens - retainedTokens;
       const cut: ProtocolSafeSplitCut = {
         kind: "PROTOCOL_SAFE_SPLIT",
         conversationTurnId: firstKeptMessage.conversationTurnId,
         originalUserMessageId: turn.messages[0]?.messageId ?? firstKeptMessage.messageId,
+        ...(currentTurnPrefix ? { preserveLeadingMessages: true as const } : {}),
         firstKeptProtocolUnitId: firstKeptProtocol.id,
         firstKeptMessageId: firstKeptMessage.messageId,
         firstKeptSequence: firstKeptMessage.sequence,
       };
+      const selectedProtocolIds = protocols.slice(0, protocolIndex + 1).map((unit) => unit.id);
       const candidate = freezeContextCompactionCutCandidate({
         cut,
-        compactedUnitIds: [
-          ...turns.slice(0, turnIndex).map((unit) => unit.id),
-          ...protocols.slice(0, protocolIndex + 1).map((unit) => unit.id),
-        ],
-        retainedUnitIds: [
-          ...protocols.slice(protocolIndex + 1).map((unit) => unit.id),
-          ...turns.slice(turnIndex + 1).map((unit) => unit.id),
-        ],
+        compactedUnitIds: currentTurnPrefix
+          ? selectedProtocolIds
+          : [...turns.slice(0, turnIndex).map((unit) => unit.id), ...selectedProtocolIds],
+        retainedUnitIds: currentTurnPrefix
+          ? canonicalUnits(history.units)
+              .filter((unit) => !selectedProtocolIds.includes(unit.id))
+              .map((unit) => unit.id)
+          : [
+              ...protocols.slice(protocolIndex + 1).map((unit) => unit.id),
+              ...turns.slice(turnIndex + 1).map((unit) => unit.id),
+            ],
         compactedTokens,
         retainedTokens,
       });

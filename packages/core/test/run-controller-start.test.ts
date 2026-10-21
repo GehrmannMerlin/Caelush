@@ -607,7 +607,9 @@ describe("RunController project verification driving", () => {
     // is missing. The infrastructure error then fails the Run instead of leaving an ownerless boundary.
     expect(result.status).toBe("FAILED");
     expect(runnerCalls).toBe(0);
-    expect(profileCalls).toBe(0);
+    // The project profile is read while the candidate's durable VerificationPlan is assembled.
+    // Missing recovery persistence is discovered after the plan boundary, before runner/runtime IO.
+    expect(profileCalls).toBe(1);
     expect(runtimeCalls).toBe(0);
     expect(store.snapshot.run.status).toBe("FAILED");
     expect(store.snapshot.continuation).toBeUndefined();

@@ -1,15 +1,14 @@
 import {
+  createUtf8HeuristicTokenEstimator,
   createContextItemId,
   createContextSourceId,
   createContextSourceItem,
   type ContextSourceInput,
   type ContextSourceProvider,
 } from "@caelush/agent";
-import {
-  boundPlanBlock,
-  deriveTaskPlanSnapshot,
-  renderTaskPlanBlock,
-} from "@caelush/coding-agent";
+import type { ContextTokenEstimatorPort } from "@caelush/agent";
+import { deriveTaskPlanSnapshot, renderBoundedTaskPlan } from "@caelush/coding-agent";
+import type { TaskPlanEvidenceResolverPort } from "./task-plan-evidence-adapter.js";
 
 const SOURCE_ID = createContextSourceId("daemon.task-plan");
 const SOURCE_VERSION = "task-plan-v2";
@@ -36,7 +35,13 @@ const MAX_BLOCK_BYTES = 8 * 1024;
  * gets its milestones, unresolved failures and next action back after a compaction replaced the
  * messages that carried them.
  */
-export function createTaskPlanContextProvider(): ContextSourceProvider {
+export function createTaskPlanContextProvider(
+  options: {
+    readonly tokenEstimator?: ContextTokenEstimatorPort;
+    readonly evidenceResolver?: TaskPlanEvidenceResolverPort;
+  } = {},
+): ContextSourceProvider {
+  const tokenEstimator = options.tokenEstimator ?? createUtf8HeuristicTokenEstimator();
   return Object.freeze({
     id: SOURCE_ID,
     async collect(input: ContextSourceInput) {
@@ -59,7 +64,29 @@ export function createTaskPlanContextProvider(): ContextSourceProvider {
         };
       }
 
-      const text = boundPlanBlock(renderTaskPlanBlock(snapshot), MAX_BLOCK_BYTES);
+      const refs = snapshot.steps.flatMap((step) => step.evidenceRefs ?? []);
+      const [evidence, availableEvidenceRefs] = await Promise.all([
+        options.evidenceResolver === undefined || refs.length === 0
+          ? Promise.resolve([])
+          : options.evidenceResolver.resolve({
+              identity: input.identity,
+              planRevision: snapshot.revision,
+              refs,
+              conversation: input.conversation,
+            }),
+        options.evidenceResolver === undefined
+          ? Promise.resolve([])
+          : options.evidenceResolver.available({
+              identity: input.identity,
+              conversation: input.conversation,
+            }),
+      ]);
+      const rendered = renderBoundedTaskPlan(snapshot, {
+        maxBytes: MAX_BLOCK_BYTES,
+        evidence,
+        availableEvidenceRefs,
+      });
+      const text = rendered.text;
       return {
         providerId: SOURCE_ID,
         providerVersion: SOURCE_VERSION,
@@ -75,9 +102,7 @@ export function createTaskPlanContextProvider(): ContextSourceProvider {
             scope: "RUN",
             retention: "EPHEMERAL",
             priorityClass: "HIGH",
-            // An honest estimate derived from the bounded text, not a constant that misreports a
-            // 8 KiB block as 200 tokens.
-            tokenEstimate: estimateTokens(text),
+            tokenEstimate: tokenEstimator.estimateText(text, input.model),
             cacheStability: "DYNAMIC",
             freshness: "CURRENT",
             sensitivity: "INTERNAL",
@@ -89,15 +114,4 @@ export function createTaskPlanContextProvider(): ContextSourceProvider {
       };
     },
   });
-}
-
-/**
- * A conservative token estimate for a block that may be largely non-ASCII.
- *
- * Four UTF-8 bytes per token is the usual English rule of thumb and badly wrong for CJK, where a
- * single character can be three bytes and one token. Counting bytes and dividing by three keeps the
- * estimate from understating the budget it is used to guard.
- */
-function estimateTokens(text: string): number {
-  return Math.max(1, Math.ceil(Buffer.byteLength(text, "utf8") / 3));
 }

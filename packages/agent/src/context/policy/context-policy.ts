@@ -34,6 +34,16 @@ export interface ContextPolicyOptions {
   readonly proactiveCompactionRearmRatio?: number;
   /** Minimum new model turns between ordinary attempts. */
   readonly proactiveCompactionCooldownTurns?: number;
+  /** Run-frozen V2 working-set thresholds; absent retains the historical Context policy. */
+  readonly workingSet?: ContextWorkingSetPolicy;
+}
+
+export interface ContextWorkingSetPolicy {
+  readonly targetTokens: number;
+  readonly triggerRatio: number;
+  readonly postCompactionRatio: number;
+  readonly allowCurrentTurnPrefix: boolean;
+  readonly cooldownTurns: number;
 }
 
 export interface ContextPolicyInput {
@@ -113,6 +123,9 @@ export interface ContextPolicy {
   readonly emergencyCompactionTokens: number;
   readonly targetRecentTailTokens: number;
   readonly minRecentTailTokens: number;
+  readonly targetPostCompactionTokens?: number;
+  readonly allowCurrentTurnPrefix?: boolean;
+  readonly workingSet?: ContextWorkingSetPolicy;
   readonly observationPolicy: ToolObservationPolicySnapshot;
   readonly conversationCapTokens: number;
   readonly sourceLimits: Readonly<Record<string, number>>;
@@ -228,11 +241,32 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
     targetRecentTailRatio,
     options.targetRecentTailTokensCap ?? DEFAULTS.targetRecentTailTokensCap,
   );
-  const minRecentTailTokens = boundedRatioCap(
+  const baseMinRecentTailTokens = boundedRatioCap(
     effectiveInputLimitTokens,
     minRecentTailRatio,
     options.minRecentTailTokensCap ?? DEFAULTS.minRecentTailTokensCap,
   );
+  const workingSet = options.workingSet;
+  if (workingSet !== undefined) assertWorkingSet(workingSet, effectiveInputLimitTokens);
+  const targetPostCompactionTokens =
+    workingSet === undefined
+      ? Math.floor(effectiveInputLimitTokens * 0.8)
+      : Math.max(1, Math.floor(workingSet.targetTokens * workingSet.postCompactionRatio));
+  const boundedTargetRecentTailTokens = Math.min(
+    targetRecentTailTokens,
+    targetPostCompactionTokens,
+  );
+  const minRecentTailTokens = Math.min(baseMinRecentTailTokens, boundedTargetRecentTailTokens);
+  const emergencyCompactionTokens = Math.floor(
+    effectiveInputLimitTokens * emergencyCompactionRatio,
+  );
+  const proactiveCompactionTokens =
+    workingSet === undefined
+      ? Math.floor(effectiveInputLimitTokens * proactiveCompactionRatio)
+      : Math.max(1, Math.floor(workingSet.targetTokens * workingSet.triggerRatio));
+  if (proactiveCompactionTokens >= emergencyCompactionTokens) {
+    throw new RangeError("Proactive compaction threshold must remain below emergency pressure.");
+  }
   const maxSingleObservationTokens = boundedRatioCap(
     effectiveInputLimitTokens,
     maxSingleObservationRatio,
@@ -244,7 +278,7 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
     options.maxObservationBatchTokensCap ?? DEFAULTS.maxObservationBatchTokensCap,
   );
   if (
-    minRecentTailTokens > targetRecentTailTokens ||
+    minRecentTailTokens > boundedTargetRecentTailTokens ||
     maxSingleObservationTokens < 1 ||
     maxObservationBatchTokens < 1
   ) {
@@ -262,20 +296,39 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
     effectiveInputLimitTokens,
     proactiveCompactionRatio,
     emergencyCompactionRatio,
-    proactiveCompactionTokens: Math.floor(effectiveInputLimitTokens * proactiveCompactionRatio),
-    emergencyCompactionTokens: Math.floor(effectiveInputLimitTokens * emergencyCompactionRatio),
-    targetRecentTailTokens,
+    proactiveCompactionTokens,
+    emergencyCompactionTokens,
+    targetRecentTailTokens: boundedTargetRecentTailTokens,
     minRecentTailTokens,
+    targetPostCompactionTokens,
+    allowCurrentTurnPrefix: workingSet?.allowCurrentTurnPrefix ?? false,
+    ...(workingSet === undefined ? {} : { workingSet: Object.freeze({ ...workingSet }) }),
     observationPolicy: Object.freeze({ maxSingleObservationTokens, maxObservationBatchTokens }),
     conversationCapTokens,
     sourceLimits,
-    elasticPoolTokens: Math.max(0, effectiveInputLimitTokens - targetRecentTailTokens),
+    elasticPoolTokens: Math.max(0, effectiveInputLimitTokens - boundedTargetRecentTailTokens),
     proactiveCompaction: Object.freeze({
       enabled: options.proactiveCompactionEnabled ?? true,
       rearmRatio: options.proactiveCompactionRearmRatio ?? 0.65,
-      cooldownTurns: options.proactiveCompactionCooldownTurns ?? 4,
+      cooldownTurns: workingSet?.cooldownTurns ?? options.proactiveCompactionCooldownTurns ?? 4,
     }),
   });
+}
+
+function assertWorkingSet(
+  workingSet: ContextWorkingSetPolicy,
+  effectiveInputLimitTokens: number,
+): void {
+  assertPositiveSafeInteger(workingSet.targetTokens, "workingSet.targetTokens");
+  if (workingSet.targetTokens > effectiveInputLimitTokens) {
+    throw new RangeError("Working-set targetTokens must not exceed the effective input budget.");
+  }
+  assertRatio(workingSet.triggerRatio, "workingSet.triggerRatio");
+  assertRatio(workingSet.postCompactionRatio, "workingSet.postCompactionRatio");
+  assertNonNegativeSafeInteger(workingSet.cooldownTurns, "workingSet.cooldownTurns");
+  if (typeof workingSet.allowCurrentTurnPrefix !== "boolean") {
+    throw new TypeError("workingSet.allowCurrentTurnPrefix must be boolean.");
+  }
 }
 
 export function classifyContextPressure(

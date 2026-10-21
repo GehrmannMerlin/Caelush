@@ -166,6 +166,7 @@ const CODING_BUILTINS = [
   "find_files",
   "search_text",
   "apply_patch",
+  "update_plan",
   "exec_command",
   "write_stdin",
   "stop_process",
@@ -325,7 +326,7 @@ describe("Phase 4F guard — one authority per responsibility", () => {
     }
   });
 
-  it("declares the eleven Coding builtins exactly once, in @caelush/coding-agent", async () => {
+  it("declares the twelve Coding builtins exactly once, in @caelush/coding-agent", async () => {
     for (const name of CODING_BUILTINS) {
       const holders = await declarationHolders(`name: "${name}"`);
       expect(holders, name).toEqual([

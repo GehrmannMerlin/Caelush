@@ -223,6 +223,49 @@ describe("daemon production composition E2E", () => {
     expect(run.contextBudgetPolicy?.safetyReserveTokens).toBeGreaterThan(0);
   }, 20_000);
 
+  it("freezes WORKING_SET_V2 around the unchanged legacy request reserve", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "caelush-working-set-budget-e2e-"));
+    directory = workspacePath;
+    daemon = await startDaemon({
+      databasePath: join(workspacePath, "caelush.db"),
+      port: 0,
+      sseHeartbeatIntervalMs: 0,
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [new PlainAnswerProvider()],
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+      contextBudgetPolicyVersion: "WORKING_SET_V2",
+    });
+    const client = new CaelushClient({ baseUrl: daemon.url });
+    const session = await client.createSession({
+      defaultWorkspace: { id: createWorkspaceId(), path: workspacePath },
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+    });
+    const workspace = session.defaultWorkspace;
+    if (workspace === undefined) throw new Error("test Workspace was not registered");
+
+    const run = await client.createRun(session.id, {
+      goal: "exercise the frozen working-set policy",
+      workspace,
+      model: { provider: "fixture", model: "fixture-model" },
+      runtime: { id: "local", kind: "local" },
+      preset: { id: "FULL_ACCESS", expectedVersion: 1 },
+      limits: { maxSteps: 2, maxToolCalls: 2, timeoutMs: 10_000 },
+    });
+
+    expect(run.contextBudgetPolicy).toMatchObject({
+      version: "WORKING_SET_V2",
+      requestBudget: { version: "LEGACY_FULL_OUTPUT_V1" },
+      workingSet: {
+        targetTokens: 96_000,
+        triggerRatio: 0.75,
+        postCompactionRatio: 0.5,
+        allowCurrentTurnPrefix: true,
+        cooldownTurns: 5,
+      },
+    });
+  }, 20_000);
+
   it("executes tools, natural completion, and durable SSE replay through the client", async () => {
     const workspacePath = await mkdtemp(join(tmpdir(), "caelush-production-e2e-"));
     directory = workspacePath;

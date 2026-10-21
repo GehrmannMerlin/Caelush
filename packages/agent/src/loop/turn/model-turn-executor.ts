@@ -11,7 +11,11 @@ import type {
   ModelDescriptor,
   AIStreamEvent,
 } from "@caelush/ai";
-import type { PrivateReplayReadScope } from "../../messages/private-replay.js";
+import type {
+  PrivateReplayExecutionOptions,
+  PrivateReplayReadScope,
+  PrivateReplayResolverExecution,
+} from "../../messages/private-replay.js";
 import type { SelectedAssistantReplaySource } from "../types.js";
 
 import type { RunEventNotifierPort } from "../../events/notifier-port.js";
@@ -115,7 +119,8 @@ export interface ModelTurnExecutorDependencies {
   /** Host-controlled, execution-scoped resolver factory over Context-selected message IDs. */
   readonly privateReplayResolverFactory?: (
     scope: PrivateReplayReadScope,
-  ) => AIPrivateReplayResolver;
+    options: PrivateReplayExecutionOptions,
+  ) => Promise<PrivateReplayResolverExecution>;
   /** Canonical live-event sink. It has no durable write authority. */
   readonly notifier?: RunEventNotifierPort;
   /** Injected so the Agent projector never manufactures IDs internally. */
@@ -209,12 +214,17 @@ export function createModelTurnExecutor(
         }
         return { kind: "COMPLETED", result };
       } catch (error) {
+        if (input.signal.aborted) return { kind: "CANCELLED" };
         if (error instanceof ConversationContinuityPreflightError) {
           return continuityFailure(error.reason);
         }
         return classifyTurnFailure(error, input.signal);
       } finally {
-        preparedReplay?.dispose();
+        try {
+          await preparedReplay?.dispose();
+        } catch {
+          // Cleanup failures cannot replace the frozen model-turn result.
+        }
         if (!transferredPrivateCompletion && stream !== undefined) {
           const privateCompletion = stream.takePrivateCompletion?.();
           if (privateCompletion?.completeness === "COMPLETE") privateCompletion.payload.fill(0);
@@ -226,12 +236,15 @@ export function createModelTurnExecutor(
 
 interface PreparedPrivateReplay {
   readonly resolver: AIPrivateReplayResolver;
-  dispose(): void;
+  dispose(): void | Promise<void>;
 }
 
 class ConversationContinuityPreflightError extends Error {
-  constructor(readonly reason: ConversationContinuityIncompatibilityReason) {
-    super("The selected model cannot safely continue this conversation.");
+  constructor(
+    readonly reason: ConversationContinuityIncompatibilityReason,
+    options?: { readonly cause?: unknown },
+  ) {
+    super("The selected model cannot safely continue this conversation.", options);
     this.name = "ConversationContinuityPreflightError";
   }
 }
@@ -292,20 +305,29 @@ async function preparePrivateReplayResolver(
     selectedMessageIds: input.selectedMessageIds ?? [],
     selectedAssistantMessageIds: sources?.map((source) => source.messageId) ?? [],
   };
-  let resolver: AIPrivateReplayResolver;
+  let execution: PrivateReplayResolverExecution;
   try {
-    resolver = dependencies.privateReplayResolverFactory(scope);
-  } catch {
-    throw new ConversationContinuityPreflightError("REPLAY_DATA_UNAVAILABLE");
+    execution = await dependencies.privateReplayResolverFactory(scope, {
+      signal: input.signal,
+    });
+  } catch (error) {
+    if (input.signal.aborted) {
+      throw new Error("Replay preparation cancelled.", { cause: error });
+    }
+    throw new ConversationContinuityPreflightError("REPLAY_DATA_UNAVAILABLE", { cause: error });
   }
 
   const replayBytes: Uint8Array[] = [];
   try {
+    if (input.signal.aborted) {
+      throw new Error("Replay preparation cancelled.");
+    }
     for (const message of assistantMessages) {
+      if (input.signal.aborted) throw new Error("Replay preparation cancelled.");
       if (message.role !== "assistant" || message.providerState === undefined) {
         throw new ConversationContinuityPreflightError("LEGACY_REPLAY_MISSING");
       }
-      const bytes = await resolver.resolve({
+      const bytes = await execution.resolver.resolve({
         providerState: message.providerState,
         providerId: descriptor.ref.provider,
         model: descriptor.ref,
@@ -314,12 +336,24 @@ async function preparePrivateReplayResolver(
       if (!(bytes instanceof Uint8Array)) {
         throw new ConversationContinuityPreflightError("REPLAY_DATA_UNAVAILABLE");
       }
+      if (input.signal.aborted) {
+        bytes.fill(0);
+        throw new Error("Replay preparation cancelled.");
+      }
       replayBytes.push(bytes);
     }
   } catch (error) {
     for (const bytes of replayBytes) bytes.fill(0);
+    try {
+      await execution.dispose();
+    } catch {
+      // A failed preflight still releases the key lease; cleanup errors stay private.
+    }
+    if (input.signal.aborted) {
+      throw new Error("Replay preparation cancelled.", { cause: error });
+    }
     if (error instanceof ConversationContinuityPreflightError) throw error;
-    throw new ConversationContinuityPreflightError("REPLAY_DATA_UNAVAILABLE");
+    throw new ConversationContinuityPreflightError("REPLAY_DATA_UNAVAILABLE", { cause: error });
   }
 
   let nextReplayIndex = 0;
@@ -336,9 +370,10 @@ async function preparePrivateReplayResolver(
         return bytes;
       },
     },
-    dispose() {
+    async dispose() {
       for (const bytes of replayBytes) bytes.fill(0);
       replayBytes.length = 0;
+      await execution.dispose();
     },
   };
 }

@@ -74,6 +74,7 @@ const EXPECTED_DEFAULT_TOOL_ORDER = [
   "find_files",
   "search_text",
   "apply_patch",
+  "update_plan",
   "exec_command",
   "write_stdin",
   "stop_process",
@@ -126,7 +127,7 @@ function runningInvocation(input: {
 }
 
 describe("production Tool composition delegation", () => {
-  it("composes the eleven defaults through the production root unchanged", async () => {
+  it("composes the twelve defaults through the production root unchanged", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-tool-delegation-"));
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
     daemon = await composeDaemon({ storage });
@@ -134,7 +135,7 @@ describe("production Tool composition delegation", () => {
     // The production root's registry is the canonical one, in the frozen Coding order.
     expect(daemon.toolRegistry.names()).toEqual(EXPECTED_DEFAULT_TOOL_ORDER);
     expect(daemon.toolRegistry.names()).toEqual([...DEFAULT_CODING_TOOL_ORDER]);
-    expect(daemon.toolRegistry.size).toBe(11);
+    expect(daemon.toolRegistry.size).toBe(12);
 
     // One registry, never two: the Run Layer's model catalog is that registry's own model specs.
     expect(daemon.toolTurn.modelSpecs()).toBe(daemon.toolRegistry.modelSpecs());

@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPrivateReplayReference, createAgentMessageIdFactory } from "@caelush/agent";
 import type { AgentMessageRecordDraft, PrivateReplayIdentity } from "@caelush/agent";
+import type { JsonObject } from "@caelush/ai";
 import { createReplayProtection, createInjectedReplayKeyProvider } from "@caelush/security";
 import { openCaelushStorage } from "../src/index.js";
 import type { CaelushStorage } from "../src/index.js";
@@ -60,7 +61,7 @@ async function setup(path = ":memory:", key = randomBytes(32)) {
     modelProjectionVersion: 1,
     createdAt: session.createdAt,
     source: { kind: "MODEL", callId: "call" },
-    audience: { model: true, transcript: true },
+    audience: { model: true, transcript: true, debug: false },
     data: {
       content: [{ type: "TEXT", text: "safe" }],
       phase: "FINAL_ANSWER",
@@ -70,7 +71,9 @@ async function setup(path = ":memory:", key = randomBytes(32)) {
         model: { provider: "test", model: "test-model" },
         finishReason: "STOP",
       },
-      providerState: createPrivateReplayReference(identity),
+      providerState: JSON.parse(
+        JSON.stringify(createPrivateReplayReference(identity)),
+      ) as JsonObject,
     },
   };
   const write = await store.privateReplay.prepare(identity, bytes());
@@ -126,22 +129,23 @@ describe("private replay storage and Run transaction", () => {
     expect((await readFile(path)).includes(Buffer.from(fixture.key))).toBe(false);
     const reopened = await openCaelushStorage({ path, replayProtection: protection(fixture.key) });
     stores.push(reopened);
-    const restored = await reopened.privateReplay
-      .forExecution(fixture.scope)
-      .read(fixture.identity);
+    const restoredReader = await reopened.privateReplay.openExecution(fixture.scope);
+    const restored = await restoredReader.read(fixture.identity);
     const expected = bytes();
     const matches = Buffer.from(restored).equals(expected);
     restored.fill(0);
     expected.fill(0);
     expect(matches).toBe(true);
+    await restoredReader.dispose();
+    await expectReplayReadDenied(restoredReader.read(fixture.identity));
     const wrongKeyStorage = await openCaelushStorage({
       path,
       replayProtection: protection(randomBytes(32)),
     });
     stores.push(wrongKeyStorage);
-    await expectReplayReadDenied(
-      wrongKeyStorage.privateReplay.forExecution(fixture.scope).read(fixture.identity),
-    );
+    const wrongKeyReader = await wrongKeyStorage.privateReplay.openExecution(fixture.scope);
+    await expectReplayReadDenied(wrongKeyReader.read(fixture.identity));
+    await wrongKeyReader.dispose();
     const damaged = auditDatabase(path);
     const row = damaged
       .prepare("SELECT envelope_json FROM private_replays WHERE message_id = ?")
@@ -152,9 +156,9 @@ describe("private replay storage and Run transaction", () => {
       .prepare("UPDATE private_replays SET envelope_json = ? WHERE message_id = ?")
       .run(JSON.stringify(envelope), fixture.identity.messageId);
     closeAuditDatabase(damaged);
-    await expectReplayReadDenied(
-      reopened.privateReplay.forExecution(fixture.scope).read(fixture.identity),
-    );
+    const damagedReader = await reopened.privateReplay.openExecution(fixture.scope);
+    await expectReplayReadDenied(damagedReader.read(fixture.identity));
+    await damagedReader.dispose();
   });
 
   it("refuses conflicts, missing references, unauthorized scopes and altered identities", async () => {
@@ -162,7 +166,7 @@ describe("private replay storage and Run transaction", () => {
     await store.execution.commit(command);
     const secondRun = makeRun(command.run.sessionId);
     await store.runs.insert(secondRun);
-    const selectedHistory = store.privateReplay.forExecution({
+    const selectedHistory = await store.privateReplay.openExecution({
       ...scope,
       executionRunId: secondRun.id,
     });
@@ -171,6 +175,7 @@ describe("private replay storage and Run transaction", () => {
     expect(Buffer.from(historicalBytes).equals(expectedBytes)).toBe(true);
     historicalBytes.fill(0);
     expectedBytes.fill(0);
+    await selectedHistory.dispose();
     await expectReplayReadDenied(
       store.privateReplay
         .forExecution({
@@ -230,6 +235,17 @@ describe("private replay storage and Run transaction", () => {
     await expect(empty.privateReplay.prepare(identity, bytes())).rejects.toThrow(
       "Private replay unavailable.",
     );
+  });
+
+  it("rejects a cancelled execution before opening its reader", async () => {
+    const { store, command, scope } = await setup();
+    await store.execution.commit(command);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      store.privateReplay.openExecution(scope, { signal: controller.signal }),
+    ).rejects.toThrow("Private replay unavailable.");
   });
 });
 

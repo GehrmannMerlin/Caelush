@@ -71,6 +71,8 @@ function compactionFixture(options: {
   readonly summarizer: ContextSummarizerPort;
   readonly factsProvider: DeterministicCompactionFactsProvider;
   readonly signal: AbortSignal;
+  readonly currentIntentRepetitions?: number;
+  readonly mode?: "NORMAL" | "FORCED_RECOVERY";
 }) {
   const historicalRunId = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a";
   const currentRunId = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9c";
@@ -94,7 +96,7 @@ function compactionFixture(options: {
     runId: currentRunId,
     turnId: currentTurnId,
     sequence: 10,
-    text: "current intent ".repeat(725),
+    text: "current intent ".repeat(options.currentIntentRepetitions ?? 725),
   });
   const conversation = snapshot(
     [
@@ -218,7 +220,7 @@ function compactionFixture(options: {
       input: { kind: "USER_INPUT" as const, userMessageId: current.message.id },
       model: MODEL,
       tools: [],
-      mode: "NORMAL" as const,
+      mode: options.mode ?? "NORMAL",
       signal: options.signal,
     },
     get commitCalls() {
@@ -285,11 +287,14 @@ describe("Phase 8C Context Engine failure boundaries", () => {
       },
       factsProvider: facts(),
       signal: new AbortController().signal,
+      currentIntentRepetitions: 400,
+      mode: "FORCED_RECOVERY",
     });
 
-    await fixture.engine.prepare(fixture.input);
+    const prepared = await fixture.engine.prepare(fixture.input);
 
     expect(fixture.commitCalls).toBe(1);
+    expect(prepared.report.compactionCount).toBe(1);
     expect(fixture.lastCheckpoint?.degraded).toBe(true);
     expect(fixture.lastCheckpoint?.structuredCheckpoint.verificationState).toBe("CURRENT");
     expect(fixture.lastCheckpoint?.structuredCheckpoint.blocked).toContain(

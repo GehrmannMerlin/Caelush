@@ -210,6 +210,7 @@ export type {
   ContextPolicy,
   ContextPolicyInput,
   ContextPolicyOptions,
+  ContextWorkingSetPolicy,
   ContextPriorityClass,
   ContextPlanner,
   ContextPlannerInput,
@@ -1216,10 +1217,14 @@ export {
 } from "./messages/private-replay.js";
 export type {
   EncryptedPrivateReplay,
+  PrivateReplayExecutionOptions,
+  PrivateReplayExecutionReader,
   PrivateReplayIdentity,
   PrivateReplayReadScope,
+  PrivateReplayResolverExecution,
   PrivateReplayWrite,
   PrivateReplayStorePort,
+  ReplayProtectionExecutionPort,
   ReplayProtectionPort,
 } from "./messages/private-replay.js";
 

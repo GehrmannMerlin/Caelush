@@ -30,6 +30,9 @@ import type { ModelTransportRecoveryPort } from "./model-transport-recovery-port
 import type { RetryJitterSource, RetryPolicy } from "./retry-controller.js";
 import type { RunBudgetPort } from "./budget-ports.js";
 import type { ResourceGovernancePort } from "./resource-governance-port.js";
+import type { RunProgressPersistencePort } from "./run-progress-store.js";
+import type { ResourceCorrectionRecoveryPolicy } from "./legacy-correction-recovery.js";
+import type { LegacyPendingBatchInspectionPort } from "./legacy-pending-batch-inspection-port.js";
 import type { ModelUsage } from "@caelush/ai";
 import type { AIToolSpec } from "@caelush/ai";
 import type {
@@ -266,6 +269,14 @@ export interface RunControllerDependencies {
   /** Core-side request estimator. The durable budget port receives plain numbers. */
   readonly tokenEstimator?: import("./llm-token-estimator.js").LLMTokenEstimator;
   readonly resourceGovernance?: ResourceGovernancePort;
+  /** Explicit host authorization for historical ordinary NO_PROGRESS recovery. */
+  readonly resourceCorrectionRecoveryPolicy?: ResourceCorrectionRecoveryPolicy;
+  /** Read-only, per-call durable facts for closing a historical ordinary resource wait. */
+  readonly legacyPendingBatchInspection?: LegacyPendingBatchInspectionPort;
+  /** Existing Tool lifecycle authority for cancelling never-started historical invocations. */
+  readonly legacyPendingBatchDispatcher?: import("./legacy-pending-batch-inspection-port.js").LegacyPendingBatchDispatcherPort;
+  /** Core-private transaction that accepts derived progress with its authoritative Run facts. */
+  readonly progressPersistence?: RunProgressPersistencePort;
   /**
    * The Run Layer's completion collaborator.
    *

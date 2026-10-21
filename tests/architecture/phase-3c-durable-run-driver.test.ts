@@ -572,15 +572,26 @@ describe("Phase 3C Run Layer ownership", () => {
     );
     expect(canonical.length).toBeGreaterThan(0);
 
-    // No generic fallback: a planner error is not caught, and no compatibility settlement is
-    // reachable from this method at all. Dual authority is exactly what that would create.
-    expect(canonical).not.toContain("catch");
+    // A single known final-candidate write race is settled from the already-produced effect; other
+    // failures propagate and cannot enter a compatibility settlement or trigger a provider retry.
+    expect(canonical).toContain("catch (error)");
+    expect(canonical).toContain(
+      'if (!(error instanceof RunInputPendingError) || result.kind !== "FINAL_CANDIDATE")',
+    );
+    expect(canonical).toMatch(
+      /if \(!\(error instanceof RunInputPendingError\) \|\| result\.kind !== "FINAL_CANDIDATE"\) \{\s*throw error;/,
+    );
+    expect(canonical).toContain(
+      "return this.settleDeferredFinalCandidate(raced, result, observation);",
+    );
     expect(canonical).not.toContain("Compatibility(");
 
     // Ordering is the contract: plan, materialize, commit, then notify.
     const plan = canonical.indexOf("this.transitionPlanner.plan(");
     const materialize = canonical.indexOf("this.eventMaterializer.materialize(");
-    const commit = canonical.indexOf("await this.commit(materialized)");
+    const commit = canonical.indexOf(
+      "committed = await this.commit(materialized, correctionProgress)",
+    );
     const notify = canonical.indexOf("this.notify(committed.events)");
     expect(plan).toBeGreaterThan(-1);
     expect(materialize).toBeGreaterThan(plan);
@@ -631,7 +642,9 @@ describe("Phase 3C Run Layer ownership", () => {
     const controller = executable("packages/core/src/run-controller.ts");
     expect(controller).toContain("createAgentModelTurnBoundary(");
     // The commit the boundary asks for is RunController-owned, not boundary-owned.
-    expect(controller).toContain("openTurn: (turn) => this.openAgentTurn(turn)");
+    expect(controller).toContain(
+      "openTurn: (turn, selection) => this.openAgentTurn(turn, selection)",
+    );
     expect(controller).toContain("private async openAgentTurn(");
     // And the boundary is entered through the frozen driver, not through a legacy lifecycle hook.
     expect(controller).toContain("createRunExecutionDriver(");

@@ -31,3 +31,14 @@ export const CODING_EXECUTION_DISCIPLINE = [
   "Give short, specific, visible progress reasons; never output hidden reasoning. Do not claim a check passed when you have not run it, and do not declare the task complete merely because every plan step is marked done.",
   "If the plan Tool is unavailable, report that plainly and keep working: an unavailable plan is not a reason to do nothing. A simple question does not need a plan, and a request that asks only for a design must stop at the design.",
 ].join(" ");
+
+/**
+ * Select the execution discipline from the correction contract frozen for a Run.
+ * Historical Runs stay on their original prompt unless a durable recovery record explicitly upgrades
+ * them; a daemon process default must never reinterpret a Run after it has started.
+ */
+export function selectCodingExecutionDiscipline(
+  correctionVersion: string | undefined,
+): string | undefined {
+  return correctionVersion === "AUTONOMOUS_CORRECTION_V2" ? CODING_EXECUTION_DISCIPLINE : undefined;
+}

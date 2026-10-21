@@ -28,3 +28,9 @@ export function projectModelResourceGovernance(state: ResourceGovernanceState | 
     correction.guidance,
   ].join("\n");
 }
+
+/** Checkpoint and authority summaries must not carry pending correction advice outside its receipt. */
+export function projectModelResourceSummary(state: ResourceGovernanceState | null): string {
+  if (state === null) return "NO_RESOURCE_STATE";
+  return `${state.mode}:${state.resourceGuardState}`;
+}

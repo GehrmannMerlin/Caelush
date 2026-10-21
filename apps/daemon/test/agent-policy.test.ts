@@ -1,4 +1,7 @@
-import { CODING_EXECUTION_DISCIPLINE } from "@caelush/coding-agent";
+import {
+  CODING_EXECUTION_DISCIPLINE,
+  selectCodingExecutionDiscipline,
+} from "@caelush/coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BASE_SYSTEM_PROMPT,
@@ -29,11 +32,13 @@ describe("default Core Agent Policy", () => {
     }
   });
 
-  it("carries the coding execution discipline exactly once", () => {
-    // One canonical policy: a second copy would let the two drift, and a missing one would leave the
-    // plan Tool with guidance but no discipline for when to use it.
-    const occurrences = DEFAULT_CORE_AGENT_POLICY.split(CODING_EXECUTION_DISCIPLINE).length - 1;
-    expect(occurrences).toBe(1);
+  it("keeps versioned coding execution discipline out of the process-wide base prompt", () => {
+    expect(DEFAULT_CORE_AGENT_POLICY).not.toContain(CODING_EXECUTION_DISCIPLINE);
+    expect(selectCodingExecutionDiscipline("AUTONOMOUS_CORRECTION_V2")).toBe(
+      CODING_EXECUTION_DISCIPLINE,
+    );
+    expect(selectCodingExecutionDiscipline(undefined)).toBeUndefined();
+    expect(selectCodingExecutionDiscipline("HISTORICAL_V1")).toBeUndefined();
   });
 
   it("states the behaviour the reliability fix depends on", () => {

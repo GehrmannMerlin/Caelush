@@ -43,6 +43,7 @@ import {
 } from "./failure-settlement.js";
 import {
   createRequestedToolInvocation,
+  cancelRequestedToolInvocation,
   isTerminalToolInvocation,
   markToolInvocationWaitingApproval,
   startToolInvocation,
@@ -208,6 +209,9 @@ export interface DurableToolExecutionCoordinator {
       readonly signal: AbortSignal;
     },
   ): Promise<DurableToolExecutionOutcome>;
+
+  /** Durably cancel a REQUESTED invocation without entering admission or the executor. */
+  cancelUnstarted(snapshot: ToolExecutionSnapshot): Promise<DurableToolExecutionOutcome>;
 }
 
 /* ------------------------------------------------------------------------------------------------
@@ -931,6 +935,33 @@ export function createDurableToolExecutionCoordinator(
         return await recoverSnapshot(snapshot, restore);
       } finally {
         activeCalls.delete(key);
+      }
+    },
+    async cancelUnstarted(snapshot: ToolExecutionSnapshot): Promise<DurableToolExecutionOutcome> {
+      const invocation = snapshot.invocation;
+      if (invocation.status !== "REQUESTED" || snapshot.observation !== undefined) {
+        throw new ToolExecutionInvariantError(
+          "Only an unstarted REQUESTED Tool invocation can be cancelled.",
+        );
+      }
+      const externalCallId = invocation.externalCallId;
+      const key =
+        externalCallId === undefined
+          ? undefined
+          : callKey(invocation.runId, invocation.stepId, externalCallId);
+      if (key !== undefined) assertCallIsNotActive(activeCalls, key, invocation.runId);
+      if (key !== undefined) activeCalls.add(key);
+      try {
+        const cancelled = cancelRequestedToolInvocation(invocation, input.clock.now());
+        const committed = await commitAndNotify({
+          sessionId: snapshot.sessionId,
+          invocation: cancelled,
+          expectedRevision: snapshot.revision,
+          events: [],
+        });
+        return Object.freeze({ kind: "CANCELLED", invocation: committed.snapshot.invocation });
+      } finally {
+        if (key !== undefined) activeCalls.delete(key);
       }
     },
   };

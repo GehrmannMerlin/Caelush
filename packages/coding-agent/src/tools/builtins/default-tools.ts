@@ -28,8 +28,8 @@ import { createReadAttachmentTool } from "./read-attachment.js";
  *
  * ```text
  * 1  read_file        2  list_directory   3  find_files     4  search_text   5  apply_patch
- * 6  exec_command     7  write_stdin       8  stop_process   9  git_status   10  git_diff
- * 11 read_attachment  the owner-scoped reader for conversation attachments
+ * 6  update_plan      7  exec_command     8  write_stdin    9  stop_process
+ * 10 git_status      11  git_diff        12  read_attachment
  * ```
  *
  * ## The order is frozen
@@ -54,7 +54,7 @@ import { createReadAttachmentTool } from "./read-attachment.js";
  */
 
 /**
- * The eleven default Coding Tools, in their frozen order.
+ * The twelve default Coding Tools, in their frozen order.
  *
  * `stop_process` sits inside the process family, directly after `write_stdin`. That placement is not
  * cosmetic: the three process Tools are the start / observe / end triple of one lifecycle, and a model
@@ -77,7 +77,7 @@ export const DEFAULT_CODING_TOOL_ORDER = Object.freeze([
   "read_attachment",
 ] as const satisfies readonly ToolName[]);
 
-/** The Operations the default eleven need, one port per capability family. */
+/** The Operations the default twelve need, one port per capability family. */
 export interface DefaultCodingToolOperations {
   /**
    * The read-file probe port.
@@ -107,7 +107,7 @@ export interface DefaultCodingToolOperations {
 }
 
 /**
- * Build the eleven default Coding Tool definitions, in the frozen order.
+ * Build the twelve default Coding Tool definitions, in the frozen order.
  *
  * The returned array is frozen, and so is each definition and each `AgentTool` inside it: a caller that
  * kept a reference cannot reorder the catalog or mutate a schema out from under a built registry.
@@ -146,7 +146,7 @@ export const GIT_TOOL_NAMES = Object.freeze(["git_status", "git_diff"] as const)
  * What a host knows about Git for the workspace it is composing Tools for.
  *
  * ```text
- * AVAILABLE     a repository was proven to work; the eleven-Tool default is offered
+ * AVAILABLE     a repository was proven to work; the twelve-Tool default is offered
  * UNAVAILABLE   no repository, or Git does not work here; the Git Tools are not offered
  * UNKNOWN       the host could not prove it; treated exactly like UNAVAILABLE
  * ```
@@ -158,7 +158,7 @@ export const GIT_TOOL_NAMES = Object.freeze(["git_status", "git_diff"] as const)
 export type GitToolAvailability = "AVAILABLE" | "UNAVAILABLE" | "UNKNOWN";
 
 /**
- * The default eleven minus the Git Tools, for a host whose Git availability is not `AVAILABLE`.
+ * The default twelve minus the Git Tools, for a host whose Git availability is not `AVAILABLE`.
  *
  * Git exposure fails closed: `UNKNOWN` is treated exactly like `UNAVAILABLE`, because a host that cannot
  * prove Git works must not offer a model a Tool that will fail. Returning the reduced *definition* list

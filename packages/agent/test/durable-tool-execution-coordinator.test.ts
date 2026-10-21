@@ -398,6 +398,21 @@ describe("DurableToolExecutionCoordinator", () => {
     expect(h.executions()).toBe(1);
   });
 
+  it("cancels an unstarted REQUESTED invocation through the durable lifecycle without executing it", async () => {
+    const h = harness({});
+    const pending = seeded("REQUESTED");
+    const snapshot = { sessionId: createSessionId(), invocation: pending, revision: 1 };
+    h.store.seed(snapshot);
+
+    const outcome = await h.coordinator.cancelUnstarted(snapshot);
+
+    expect(outcome.kind).toBe("CANCELLED");
+    expect(outcome.invocation.status).toBe("CANCELLED");
+    expect(h.executions()).toBe(0);
+    expect(h.admissionCalls()).toBe(0);
+    expect(h.store.commits.at(-1)?.invocation.status).toBe("CANCELLED");
+  });
+
   it("never re-executes a durable RUNNING invocation and records uncertainty instead", async () => {
     const h = harness({});
     const running = seeded("RUNNING", {
@@ -851,9 +866,9 @@ describe("DurableToolExecutionCoordinator", () => {
     expect(h.executions()).toBe(1);
   });
 
-  it("exposes exactly the two frozen methods", async () => {
+  it("exposes exactly the frozen execution methods", async () => {
     const h = harness({});
-    expect(Object.keys(h.coordinator).sort()).toEqual(["execute", "recover"]);
+    expect(Object.keys(h.coordinator).sort()).toEqual(["cancelUnstarted", "execute", "recover"]);
   });
 
   it("does not settle a second time when the observation is already durable", async () => {

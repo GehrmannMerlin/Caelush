@@ -27,11 +27,13 @@ export async function windowsDpapi(
   operation: "protect" | "unprotect",
   keyId: string,
   bytes: Uint8Array,
+  signal?: AbortSignal,
 ): Promise<Buffer> {
   if (
     process.platform !== "win32" ||
     bytes.byteLength > 8192 ||
-    !/^[a-zA-Z0-9_.-]{1,128}$/.test(keyId)
+    !/^[a-zA-Z0-9_.-]{1,128}$/.test(keyId) ||
+    signal?.aborted
   )
     throw new PrivateReplayError();
   return new Promise((resolve, reject) => {
@@ -59,14 +61,25 @@ export async function windowsDpapi(
     const chunks: Buffer[] = [];
     let size = 0;
     let failed = false;
+    let settled = false;
     const fail = () => {
       failed = true;
       child.kill();
     };
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", fail);
+    };
+    const rejectOnce = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new PrivateReplayError());
+    };
     const timer = setTimeout(fail, 10000);
     child.on("error", () => {
-      clearTimeout(timer);
-      reject(new PrivateReplayError());
+      fail();
+      rejectOnce();
     });
     child.stdin.on("error", fail);
     child.stderr.on("data", () => {
@@ -80,7 +93,7 @@ export async function windowsDpapi(
       } else chunks.push(chunk);
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
+      cleanup();
       const encoded = Buffer.concat(chunks);
       try {
         if (failed || code !== 0 || encoded.length === 0) throw new PrivateReplayError();
@@ -89,16 +102,27 @@ export async function windowsDpapi(
           result.fill(0);
           throw new PrivateReplayError();
         }
+        if (settled) {
+          result.fill(0);
+          return;
+        }
+        settled = true;
         resolve(result);
       } catch {
-        reject(new PrivateReplayError());
+        rejectOnce();
       } finally {
         encoded.fill(0);
         for (const chunk of chunks) chunk.fill(0);
       }
     });
-    child.stdin.end(
-      JSON.stringify({ operation, keyId, content: Buffer.from(bytes).toString("base64") }),
+    signal?.addEventListener("abort", fail, { once: true });
+    if (signal?.aborted) fail();
+    const content = Buffer.from(bytes);
+    const request = Buffer.from(
+      JSON.stringify({ operation, keyId, content: content.toString("base64") }),
+      "utf8",
     );
+    content.fill(0);
+    child.stdin.end(request, () => request.fill(0));
   });
 }

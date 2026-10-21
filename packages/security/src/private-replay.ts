@@ -10,6 +10,8 @@ import { assertPrivateReplayIdentity, PrivateReplayError } from "@caelush/agent"
 import type {
   EncryptedPrivateReplay,
   PrivateReplayIdentity,
+  PrivateReplayExecutionOptions,
+  ReplayProtectionExecutionPort,
   ReplayProtectionPort,
 } from "@caelush/agent";
 
@@ -18,9 +20,12 @@ export interface ReplayKey {
   readonly keyId: string;
   readonly bytes: Uint8Array;
 }
+export interface ReplayKeyLookupOptions {
+  readonly signal?: AbortSignal;
+}
 export interface ReplayKeyProvider {
   current(): Promise<ReplayKey>;
-  get(keyId: string): Promise<ReplayKey | undefined>;
+  get(keyId: string, options?: ReplayKeyLookupOptions): Promise<ReplayKey | undefined>;
 }
 
 /** Persistent secret injection for non-Windows hosts; lifecycle belongs to the trusted host. */
@@ -101,11 +106,18 @@ function aad(identity: Buffer, keyId: string, contentMac: string): Buffer {
 }
 
 export function createReplayProtection(provider: ReplayKeyProvider): ReplayProtectionPort {
-  async function open(
+  function assertExecutionActive(
+    disposed: boolean,
+    options: PrivateReplayExecutionOptions | undefined,
+  ): void {
+    if (disposed || options?.signal?.aborted) throw new PrivateReplayError();
+  }
+
+  async function openWithMaster(
     identity: PrivateReplayIdentity,
     envelope: EncryptedPrivateReplay,
+    master: Uint8Array,
   ): Promise<Uint8Array> {
-    let key: ReplayKey | undefined;
     let partial: Buffer | undefined;
     let encryptionKey: Buffer | undefined;
     let equalityKey: Buffer | undefined;
@@ -121,15 +133,12 @@ export function createReplayProtection(provider: ReplayKeyProvider): ReplayProte
       const ciphertext = decode(envelope.ciphertext);
       const contentMac = decode(envelope.contentMac, 32);
       if (ciphertext.length > MAX_PRIVATE_REPLAY_BYTES) throw new PrivateReplayError();
-      key = await provider.get(envelope.keyId);
-      if (key === undefined || key.keyId !== envelope.keyId) throw new PrivateReplayError();
-      assertKey(key);
-      encryptionKey = deriveKey(key.bytes, "encryption");
-      equalityKey = deriveKey(key.bytes, "equality");
+      encryptionKey = deriveKey(master, "encryption");
+      equalityKey = deriveKey(master, "equality");
       const decipher = createDecipheriv("aes-256-gcm", encryptionKey, nonce, {
         authTagLength: 16,
       });
-      decipher.setAAD(aad(bound, key.keyId, envelope.contentMac));
+      decipher.setAAD(aad(bound, envelope.keyId, envelope.contentMac));
       decipher.setAuthTag(tag);
       partial = decipher.update(ciphertext);
       const final = decipher.final();
@@ -146,8 +155,100 @@ export function createReplayProtection(provider: ReplayKeyProvider): ReplayProte
       partial?.fill(0);
       encryptionKey?.fill(0);
       equalityKey?.fill(0);
+    }
+  }
+
+  async function open(
+    identity: PrivateReplayIdentity,
+    envelope: EncryptedPrivateReplay,
+  ): Promise<Uint8Array> {
+    let key: ReplayKey | undefined;
+    try {
+      key = await provider.get(envelope.keyId);
+      if (key === undefined || key.keyId !== envelope.keyId) throw new PrivateReplayError();
+      assertKey(key);
+      return await openWithMaster(identity, envelope, key.bytes);
+    } catch {
+      throw new PrivateReplayError();
+    } finally {
       key?.bytes.fill(0);
     }
+  }
+
+  async function openExecution(
+    options?: PrivateReplayExecutionOptions,
+  ): Promise<ReplayProtectionExecutionPort> {
+    if (options?.signal?.aborted) throw new PrivateReplayError();
+    const masterKeys = new Map<string, Promise<Buffer>>();
+    let disposed = false;
+
+    async function masterFor(keyId: string): Promise<Buffer> {
+      assertExecutionActive(disposed, options);
+      let pending = masterKeys.get(keyId);
+      if (pending === undefined) {
+        pending = (async () => {
+          let key: ReplayKey | undefined;
+          try {
+            key = await provider.get(
+              keyId,
+              options?.signal === undefined ? {} : { signal: options.signal },
+            );
+            assertExecutionActive(disposed, options);
+            if (key === undefined || key.keyId !== keyId) throw new PrivateReplayError();
+            assertKey(key);
+            const owned = Buffer.from(key.bytes);
+            key.bytes.fill(0);
+            key = undefined;
+            if (disposed || options?.signal?.aborted) {
+              owned.fill(0);
+              throw new PrivateReplayError();
+            }
+            return owned;
+          } catch {
+            key?.bytes.fill(0);
+            throw new PrivateReplayError();
+          }
+        })();
+        masterKeys.set(keyId, pending);
+      }
+      const master = await pending;
+      assertExecutionActive(disposed, options);
+      return master;
+    }
+
+    return Object.freeze({
+      async open(
+        identity: PrivateReplayIdentity,
+        envelope: EncryptedPrivateReplay,
+      ): Promise<Uint8Array> {
+        let plaintext: Uint8Array | undefined;
+        try {
+          assertExecutionActive(disposed, options);
+          const master = await masterFor(envelope.keyId);
+          plaintext = await openWithMaster(identity, envelope, master);
+          if (disposed || options?.signal?.aborted) {
+            plaintext.fill(0);
+            plaintext = undefined;
+            throw new PrivateReplayError();
+          }
+          return plaintext;
+        } catch {
+          plaintext?.fill(0);
+          throw new PrivateReplayError();
+        }
+      },
+      dispose(): void {
+        if (disposed) return;
+        disposed = true;
+        for (const pending of masterKeys.values()) {
+          void pending.then(
+            (master) => master.fill(0),
+            () => undefined,
+          );
+        }
+        masterKeys.clear();
+      },
+    });
   }
 
   return Object.freeze({
@@ -193,6 +294,7 @@ export function createReplayProtection(provider: ReplayKeyProvider): ReplayProte
       }
     },
     open,
+    openExecution,
     async verify(identity: PrivateReplayIdentity, envelope: EncryptedPrivateReplay): Promise<void> {
       (await open(identity, envelope)).fill(0);
     },

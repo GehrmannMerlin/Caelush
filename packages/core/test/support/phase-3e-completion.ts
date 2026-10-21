@@ -73,6 +73,8 @@ import {
   type RunCompletionPersistencePort,
   type RunContinuationCheckpoint,
   type RunExecutionSnapshot,
+  type RunProgressPersistencePort,
+  type ResourceGovernancePort,
 } from "../../src/index.js";
 import { fakeFrozenModelTurnExecutor } from "./run-agent-execution.js";
 import { testRunMessageAuthority } from "./run-message-authority.js";
@@ -578,6 +580,8 @@ export interface Phase3EHarnessOptions {
    * be measuring a disagreement it created itself.
    */
   readonly clock?: { now(): TimestampMs };
+  /** Make the test Context receipt prove that it selected the pending correction source item. */
+  readonly selectPendingCorrection?: boolean;
   /** Counts every completion commit the Run Layer asks the persistence port for. */
   readonly commits?: CompletionCommitCounter;
   readonly onVerifiedCompletion?: (input: {
@@ -616,7 +620,7 @@ export function harness3e(options: Phase3EHarnessOptions): Phase3EHarness {
   const reviewer = options.reviewer ?? stubReviewer();
   const projectRunner = options.projectRunner ?? stubProjectRunner();
   const checks = options.checks ?? TASK_ONLY;
-  const contextEngine = policyContextEngine();
+  const contextEngine = policyContextEngine(options);
   const executor = fakeFrozenModelTurnExecutor(async (request, _signal, callIndex) => {
     turns.push({ request });
     return options.script(callIndex);
@@ -664,6 +668,33 @@ export function harness3e(options: Phase3EHarnessOptions): Phase3EHarness {
       : typeof options.persistence === "function"
         ? options.persistence(basePersistence)
         : basePersistence;
+
+  // The unit harness has separate in-memory authorities, so this adapter serially commits the same
+  // accepted progress object after the MemoryRunStore accepts its execution. Atomic rollback behavior
+  // is exercised by the SQLite store integration suite.
+  const resourceGovernance = options.extra?.["resourceGovernance"] as
+    ResourceGovernancePort | undefined;
+  const progressPersistence: RunProgressPersistencePort | undefined =
+    resourceGovernance === undefined
+      ? undefined
+      : {
+          async commitExecutionWithProgress(input) {
+            const current = await resourceGovernance.get(input.execution.run.id);
+            if (
+              (current?.revision ?? null) !== input.expectedProgressRevision ||
+              current === null
+            ) {
+              throw new Error("memory resource progress revision conflict");
+            }
+            const committed = await store.commit(input.execution);
+            await resourceGovernance.compareAndSwap(
+              input.execution.run.id,
+              input.expectedProgressRevision!,
+              input.nextProgress,
+            );
+            return committed;
+          },
+        };
 
   /**
    * The same host facts, grouped the way a production composition groups them.
@@ -727,6 +758,7 @@ export function harness3e(options: Phase3EHarnessOptions): Phase3EHarness {
   const controller = new RunController({
     agentExecution: execution,
     executionStore: store,
+    ...(progressPersistence === undefined ? {} : { progressPersistence }),
     ...(persistence === undefined ? {} : { completionStore: persistence }),
     ...(completionPort === undefined ? {} : { completion: completionPort }),
     events: {
@@ -739,6 +771,29 @@ export function harness3e(options: Phase3EHarnessOptions): Phase3EHarness {
     messages,
     clock,
     eventIdFactory: { create: createEventId },
+    ...(options.extra?.["resourceCorrectionRecoveryPolicy"] === undefined
+      ? {}
+      : {
+          resourceCorrectionRecoveryPolicy: options.extra[
+            "resourceCorrectionRecoveryPolicy"
+          ] as import("../../src/legacy-correction-recovery.js").ResourceCorrectionRecoveryPolicy,
+        }),
+    ...(resourceGovernance === undefined
+      ? {}
+      : {
+          legacyPendingBatchInspection: (options.extra?.["legacyPendingBatchInspection"] as
+            | import("../../src/legacy-pending-batch-inspection-port.js").LegacyPendingBatchInspectionPort
+            | undefined) ?? {
+            inspect: async (input: {
+              readonly runId: RunId;
+              readonly sourceStepId: StepId;
+              readonly calls: readonly {
+                readonly externalCallId: string;
+                readonly toolName: string;
+              }[];
+            }) => input.calls.map((call) => ({ ...call, kind: "NOT_DISPATCHED" as const })),
+          },
+        }),
     ...(canonical
       ? {}
       : {
@@ -934,11 +989,41 @@ export function changedFile(
 
 /* ------------------------------------------------------------- test doubles */
 
-function policyContextEngine(): ContextEnginePort {
+function policyContextEngine(options: Phase3EHarnessOptions): ContextEnginePort {
   return {
     async prepare(input: ContextPrepareInput): Promise<PreparedModelContext> {
+      const resourceGovernance = options.extra?.resourceGovernance as
+        | {
+            get(runId: RunId): Promise<{
+              semanticProgress?: {
+                correction?: {
+                  interventionId: string;
+                  stage: string;
+                  toolName: string;
+                  code: string;
+                  occurrences: number;
+                  guidance: string;
+                };
+              };
+            } | null>;
+          }
+        | undefined;
+      const correction = options.selectPendingCorrection
+        ? (await resourceGovernance?.get(input.identity.runId))?.semanticProgress?.correction
+        : undefined;
+      const contextFingerprint = "a".repeat(64);
       return {
-        messages: [...turnMessages(input)],
+        messages: [
+          ...turnMessages(input),
+          ...(correction === undefined
+            ? []
+            : [
+                {
+                  role: "system" as const,
+                  content: `PENDING_CORRECTION stage=${correction.stage} tool=${correction.toolName} code=${correction.code} occurrences=${String(correction.occurrences)}\n${correction.guidance}`,
+                },
+              ]),
+        ],
         requestBudget: {
           version: "LEGACY_FULL_OUTPUT_V1",
           outputReserveTokens: 0,
@@ -957,6 +1042,21 @@ function policyContextEngine(): ContextEnginePort {
           maxSingleObservationTokens: 4_000,
           maxObservationBatchTokens: 12_000,
         },
+        ...(correction === undefined
+          ? {}
+          : {
+              contextFingerprint,
+              contextArtifactId: contextFingerprint,
+              selectedContextSources: [
+                {
+                  providerId: "daemon.resource-governance-correction",
+                  providerVersion: "resource-correction-receipt-v1",
+                  selectedItemIds: [
+                    `daemon.resource-governance:correction:${correction.interventionId}`,
+                  ],
+                },
+              ],
+            }),
       };
     },
   };

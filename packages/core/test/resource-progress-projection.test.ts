@@ -155,7 +155,7 @@ describe("resource progress window (V2 autonomous correction)", () => {
       deliveredInterventions: 0,
     });
 
-    state = recordResourceNudgeDelivery(state);
+    state = deliverPendingCorrection(state);
     expect(decideResourceSemanticIntervention(V2, state)).toMatchObject({
       kind: "NUDGE",
       stage: "REVIEW_APPROACH",
@@ -164,14 +164,14 @@ describe("resource progress window (V2 autonomous correction)", () => {
 
     // The third rung is only offered once the episode has the evidence its text describes.
     state = applyResourceProgressTurn(V2, state, turn("a4"));
-    state = recordResourceNudgeDelivery(state);
+    state = deliverPendingCorrection(state);
     expect(decideResourceSemanticIntervention(V2, state)).toMatchObject({
       kind: "NUDGE",
       stage: "REBUILD_WORK_STATE",
       deliveredInterventions: 2,
     });
 
-    state = recordResourceNudgeDelivery(state);
+    state = deliverPendingCorrection(state);
     expect(decideResourceSemanticIntervention(V2, state).kind).toBe("NONE");
   });
 
@@ -195,13 +195,21 @@ describe("resource progress window (V2 autonomous correction)", () => {
         occurrences: 3,
         guidance: "fields",
         sourceStepId: "step-1",
+        episodeId: "episode-1",
+        sourceBoundaryId: "step-1",
       }),
     });
-    const staleReceipt = recordResourceNudgeDelivery(withCorrection, "old");
+    const staleReceipt = recordResourceNudgeDelivery(
+      withCorrection,
+      deliveryReceipt(withCorrection, "old"),
+    );
     expect(staleReceipt).toBe(withCorrection);
     expect(staleReceipt.correction?.interventionId).toBe("new");
 
-    const fresh = recordResourceNudgeDelivery(withCorrection, "new");
+    const fresh = recordResourceNudgeDelivery(
+      withCorrection,
+      deliveryReceipt(withCorrection, "new"),
+    );
     expect(fresh.correction).toBeUndefined();
     expect(fresh.active?.deliveredInterventions).toBe(1);
   });
@@ -219,12 +227,58 @@ describe("resource progress window (V2 autonomous correction)", () => {
         occurrences: 3,
         guidance: "fields",
         sourceStepId: "step-1",
+        episodeId: "episode-1",
+        sourceBoundaryId: "step-1",
       }),
     });
     const folded = applyResourceProgressTurn(V2, withCorrection, turn("d4"));
     expect(folded.correction?.interventionId).toBe("keep");
   });
 });
+
+function withPendingCorrection(progress: ResourceSemanticProgress): ResourceSemanticProgress {
+  const decision = decideResourceSemanticIntervention(V2, progress);
+  if (decision.kind !== "NUDGE") return progress;
+  return Object.freeze({
+    ...progress,
+    correction: Object.freeze({
+      interventionId: `test:${decision.stage}:${String(decision.deliveredInterventions)}`,
+      stage: decision.stage,
+      patternKey: decision.patternKey,
+      toolName: decision.toolName,
+      code: decision.code,
+      occurrences: decision.occurrences,
+      guidance: "fields",
+      sourceStepId: progress.turns.at(-1)?.turnId ?? "step-1",
+      episodeId: progress.active?.episodeId ?? "episode-1",
+      sourceBoundaryId: progress.turns.at(-1)?.turnId ?? "step-1",
+    }),
+  });
+}
+
+function deliveryReceipt(
+  progress: ResourceSemanticProgress,
+  interventionId = progress.correction?.interventionId ?? "test:delivery",
+) {
+  return {
+    interventionId,
+    episodeId: progress.correction?.episodeId ?? progress.active?.episodeId ?? "episode-1",
+    consumerStepId: "consumer-step",
+    contextArtifactId: "context-artifact",
+    contextFingerprint: "a".repeat(64),
+    selectedSourceItemId: "selected-item",
+    selectedSourceProviderId: "daemon.resource-governance-correction",
+    selectedSourceProviderVersion: "resource-correction-receipt-v1",
+    callId: "call-1",
+    assistantMessageId: "assistant-1",
+    createdAt: 1,
+  };
+}
+
+function deliverPendingCorrection(progress: ResourceSemanticProgress): ResourceSemanticProgress {
+  const pending = withPendingCorrection(progress);
+  return recordResourceNudgeDelivery(pending, deliveryReceipt(pending));
+}
 
 describe("resource progress window (shared)", () => {
   it("resolves the episode when the same Tool finally runs successfully", () => {

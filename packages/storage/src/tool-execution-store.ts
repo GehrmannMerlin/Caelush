@@ -74,6 +74,7 @@ function validateRunAndStep(
   sessionId: SessionId,
   runId: string,
   stepId: string,
+  allowResourceWaitCancellation = false,
 ): void {
   const runRow = client
     .prepare("SELECT id, session_id, status, data_json FROM agent_runs WHERE id = ?")
@@ -89,7 +90,12 @@ function validateRunAndStep(
   if (run.sessionId !== sessionId || runRow.session_id !== sessionId) {
     throw new ToolExecutionInvariantError("Tool execution session does not match the Run.");
   }
-  if (run.status !== "RUNNING" || runRow.status !== "RUNNING") {
+  const running = run.status === "RUNNING" && runRow.status === "RUNNING";
+  const resourceWaitCancellation =
+    allowResourceWaitCancellation &&
+    run.status === "WAITING_RESOURCE" &&
+    runRow.status === "WAITING_RESOURCE";
+  if (!running && !resourceWaitCancellation) {
     throw new ToolExecutionInvariantError("Tool execution requires a RUNNING Run.");
   }
 
@@ -439,6 +445,7 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
         command.sessionId,
         command.invocation.runId,
         command.invocation.stepId,
+        command.invocation.status === "CANCELLED" && command.expectedRevision !== null,
       );
       const existing = client
         .prepare("SELECT revision FROM tool_invocations WHERE id = ?")

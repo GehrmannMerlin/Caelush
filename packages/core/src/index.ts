@@ -126,6 +126,21 @@ export { ProgressLedger } from "./progress-ledger.js";
 export { ResourceLoopDetector } from "./resource-loop-detector.js";
 export { ResourceGovernor } from "./resource-governor.js";
 export {
+  RESOURCE_GOVERNANCE_CORRECTION_PROVIDER_ID,
+  RESOURCE_GOVERNANCE_CORRECTION_PROVIDER_VERSION,
+  resourceGovernanceCorrectionContextItemId,
+} from "./resource-governance-context-identity.js";
+export {
+  assertCorrectionRecoveryBelongsToRun,
+  createLegacyCorrectionRecoveryRecord,
+} from "./legacy-correction-recovery.js";
+export type { ResourceCorrectionRecoveryPolicy } from "./legacy-correction-recovery.js";
+export type {
+  LegacyPendingBatchDispatcherPort,
+  LegacyPendingBatchInspectionPort,
+  LegacyPendingToolCallInspection,
+} from "./legacy-pending-batch-inspection-port.js";
+export {
   describePatternFields,
   preparationFailureFactFromRejection,
   resourceProgressTurn,
@@ -176,7 +191,10 @@ export type { ResourceDecision, ResourceToolBatchEvaluationInput } from "./resou
 export type {
   ResourceGovernancePort,
   ResourceGovernanceState,
+  ResourceProgressBoundary,
 } from "./resource-governance-port.js";
+export type { RunProgressPersistencePort } from "./run-progress-store.js";
+export type { RunProgressWrite } from "./run-progress-store.js";
 export type { RunControllerResult, RunControllerToolResults } from "./run-controller-input.js";
 export {
   RunController,

@@ -129,6 +129,47 @@ describe("Phase 7A ModelDescriptor-derived policy", () => {
       }),
     ).toThrow();
   });
+
+  it("uses a frozen working-set trigger and post-compaction target without changing the input limit", () => {
+    const policy = createContextPolicy({
+      model: MODEL,
+      requestOverhead: { toolSchemaTokens: 300, protocolOverheadTokens: 25, totalTokens: 325 },
+      options: {
+        outputReserveTokens: 1_000,
+        safetyReserveTokens: 200,
+        workingSet: {
+          targetTokens: 5_000,
+          triggerRatio: 0.75,
+          postCompactionRatio: 0.5,
+          allowCurrentTurnPrefix: true,
+          cooldownTurns: 5,
+        },
+      },
+    });
+
+    expect(policy.effectiveInputLimitTokens).toBe(8_475);
+    expect(policy.proactiveCompactionTokens).toBe(3_750);
+    expect(policy.targetPostCompactionTokens).toBe(2_500);
+    expect(policy.targetRecentTailTokens).toBeLessThanOrEqual(2_500);
+    expect(policy.minRecentTailTokens).toBeLessThanOrEqual(policy.targetRecentTailTokens);
+    expect(policy.allowCurrentTurnPrefix).toBe(true);
+    expect(policy.proactiveCompaction.cooldownTurns).toBe(5);
+    expect(() =>
+      createContextPolicy({
+        model: MODEL,
+        requestOverhead: { toolSchemaTokens: 300, protocolOverheadTokens: 25, totalTokens: 325 },
+        options: {
+          workingSet: {
+            targetTokens: 9_000,
+            triggerRatio: 0.75,
+            postCompactionRatio: 0.5,
+            allowCurrentTurnPrefix: true,
+            cooldownTurns: 5,
+          },
+        },
+      }),
+    ).toThrow(RangeError);
+  });
 });
 
 describe("Phase 7A token and request overhead ports", () => {

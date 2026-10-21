@@ -1,0 +1,195 @@
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ApiAdapter } from "@caelush/ai";
+import {
+  AgentRunSchema,
+  AgentSessionSchema,
+  RunResourcePolicySchema,
+  WorkspaceRecordSchema,
+  createRunId,
+  createSessionId,
+  createTimestampMs,
+  createWorkspaceId,
+  type ContextBudgetPolicySnapshot,
+  type RunLimits,
+} from "@caelush/protocol";
+import { createInjectedReplayKeyProvider, expandPermissionPreset } from "@caelush/security";
+import { createReplayProtection } from "@caelush/security";
+import { openCaelushStorage, toHostToolEffectsPort, type CaelushStorage } from "@caelush/storage";
+import {
+  applyToolEffectsToAgentState,
+  createCodingToolSettlementExtensionDecoder,
+  effectsChangeAgentState,
+} from "@caelush/coding-agent";
+import { composeDaemon, type DaemonComposition } from "../../src/daemon-composition.js";
+import type { ResourceCorrectionRecoveryPolicy } from "@caelush/core";
+import {
+  FIXTURE_API,
+  FIXTURE_MODEL,
+  FIXTURE_PROVIDER,
+  fixtureBinding,
+  fixtureModelSource,
+} from "./ai-fixture.js";
+
+export interface ReliabilityFixtureOptions {
+  readonly adapter: ApiAdapter;
+  readonly rootDirectory?: string;
+  readonly limits?: RunLimits;
+  readonly resourcePolicy?: unknown;
+  readonly permissionPreset?: "VIEW_ONLY" | "WORKSPACE_WRITE" | "FULL_ACCESS";
+  readonly resourceCorrectionRecoveryPolicy?: ResourceCorrectionRecoveryPolicy | null;
+  readonly contextBudgetPolicy?: ContextBudgetPolicySnapshot;
+}
+
+/** A real daemon composition and SQLite database with only its external model wire scripted. */
+export interface ReliabilityFixture {
+  readonly composition: DaemonComposition;
+  readonly storage: CaelushStorage;
+  readonly databasePath: string;
+  readonly fixtureRoot: string;
+  readonly workspacePath: string;
+  readonly sessionId: ReturnType<typeof createSessionId>;
+  readonly run: ReturnType<typeof AgentRunSchema.parse>;
+  restartComposition(): Promise<DaemonComposition>;
+  dispose(): Promise<void>;
+}
+
+export async function createReliabilityFixture(
+  options: ReliabilityFixtureOptions,
+): Promise<ReliabilityFixture> {
+  const fixtureRoot =
+    options.rootDirectory ?? (await mkdtemp(join(tmpdir(), "caelush-reliability-")));
+  const workspacePath = join(fixtureRoot, "workspace");
+  const databasePath = join(fixtureRoot, "caelush.db");
+  await mkdir(workspacePath, { recursive: true });
+
+  let storage: CaelushStorage | undefined;
+  let composition: DaemonComposition | undefined;
+  try {
+    storage = await openCaelushStorage({
+      path: databasePath,
+      replayProtection: createReplayProtection({
+        ...createInjectedReplayKeyProvider("reliability-fixture", Buffer.alloc(32, 7)),
+      }),
+      toolSettlementExtension: createCodingToolSettlementExtensionDecoder({
+        effects: toHostToolEffectsPort({
+          changesState: effectsChangeAgentState,
+          apply: applyToolEffectsToAgentState,
+        }),
+      }),
+    });
+    const compose = (recoveryPolicy?: ResourceCorrectionRecoveryPolicy | null) =>
+      composeDaemon({
+        storage: storage!,
+        providerBindings: [fixtureBinding()],
+        modelSources: [fixtureModelSource()],
+        adapterOverrides: [options.adapter],
+        defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
+        ...(recoveryPolicy === undefined
+          ? {}
+          : { resourceCorrectionRecoveryPolicy: recoveryPolicy }),
+      });
+    composition = await compose(options.resourceCorrectionRecoveryPolicy);
+
+    const now = createTimestampMs(Date.now());
+    const workspaceId = createWorkspaceId();
+    const workspace = WorkspaceRecordSchema.parse({
+      id: workspaceId,
+      canonicalPath: workspacePath,
+      displayName: "Reliability fixture",
+      createdAt: now,
+      updatedAt: now,
+      lastOpenedAt: now,
+    });
+    await storage.workspaces.insert(workspace);
+
+    const sessionId = createSessionId();
+    const model = { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL };
+    const session = AgentSessionSchema.parse({
+      id: sessionId,
+      workspaceId,
+      defaultWorkspace: { id: workspaceId, path: workspacePath },
+      defaultModel: model,
+      createdAt: now,
+      updatedAt: now,
+      metadata: {},
+    });
+    await storage.sessions.insert(session, { expectedWorkspace: workspace });
+
+    const limits = options.limits ?? { maxSteps: 32, maxToolCalls: 64, timeoutMs: 120_000 };
+    const resourcePolicy = RunResourcePolicySchema.parse(
+      options.resourcePolicy ?? {
+        mode: "ADAPTIVE",
+        correctionVersion: "AUTONOMOUS_CORRECTION_V2",
+        operationalLease: { maxAgentTurns: 24, maxToolOperations: 64 },
+        batch: { maxToolCallsPerTurn: 16 },
+        progress: {
+          windowTurns: 8,
+          identicalCallNudgeThreshold: 3,
+          noProgressTurnsBeforeReplan: 4,
+          replansBeforePause: 2,
+        },
+        hardLimits: {},
+        inactivity: {},
+      },
+    );
+    const securityPolicy = expandPermissionPreset({
+      presetId: options.permissionPreset ?? "WORKSPACE_WRITE",
+      expectedVersion: 1,
+      createdAt: new Date(now).toISOString(),
+    });
+    const run = AgentRunSchema.parse({
+      id: createRunId(),
+      sessionId,
+      goal: "exercise the real daemon reliability path",
+      status: "PENDING",
+      workspace: { id: workspaceId, path: workspacePath },
+      model,
+      runtime: { id: "local", kind: "local" },
+      permissionProfile: securityPolicy.permissionProfile,
+      approvalPolicy: securityPolicy.approvalPolicy,
+      securityPolicy,
+      contextBudgetPolicy: options.contextBudgetPolicy ?? { version: "LEGACY_FULL_OUTPUT_V1" },
+      completionContract: "NATURAL_V1",
+      limits,
+      resourcePolicy,
+      createdAt: now,
+    });
+    await storage.runs.insert(run);
+
+    let disposed = false;
+    return {
+      composition,
+      storage,
+      databasePath,
+      fixtureRoot,
+      workspacePath,
+      sessionId,
+      run,
+      async restartComposition() {
+        await composition?.dispose();
+        composition = await compose();
+        return composition;
+      },
+      async dispose() {
+        if (disposed) return;
+        disposed = true;
+        await composition?.dispose().catch(() => undefined);
+        await storage?.close().catch(() => undefined);
+        if (options.rootDirectory === undefined) {
+          await rm(fixtureRoot, { recursive: true, force: true });
+        }
+      },
+    };
+  } catch (error) {
+    await composition?.dispose().catch(() => undefined);
+    await storage?.close().catch(() => undefined);
+    if (options.rootDirectory === undefined) {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+    throw error;
+  }
+}
+
+export { FIXTURE_API };

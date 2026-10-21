@@ -149,19 +149,30 @@ interface FrozenSelectedAssistantReplaySource {
   readonly hasProviderState: boolean;
 }
 
+interface FrozenContextSourceItemSelection {
+  readonly providerId: string;
+  readonly providerVersion: string;
+  readonly selectedItemIds: readonly string[];
+}
+
 interface FrozenPreparedModelContext {
   readonly messages: readonly AIMessage[];
   readonly requestBudget: FrozenContextRequestBudget;
   readonly selectedMessageIds?: readonly string[];
   readonly selectedAssistantReplaySources?: readonly FrozenSelectedAssistantReplaySource[];
+  readonly selectedContextSources?: readonly FrozenContextSourceItemSelection[];
   readonly report: FrozenContextBuildReport;
   readonly observationPolicy: FrozenToolObservationPolicySnapshot;
   readonly checkpoint?: ContextCheckpointRef;
   readonly contextFingerprint?: string;
+  readonly contextArtifactId?: string;
 }
 
 interface FrozenAgentLoopContextReceipt {
   readonly report: FrozenContextBuildReport;
+  readonly contextFingerprint?: string;
+  readonly contextArtifactId?: string;
+  readonly selectedContextSources?: readonly FrozenContextSourceItemSelection[];
   readonly observationPolicy: FrozenToolObservationPolicySnapshot;
   readonly recovery: "NONE" | "FORCED_CONTEXT_RECOVERY";
 }
@@ -305,7 +316,15 @@ type ModelSettingsIsOptional = Expect<
 /* The context receipt and the prepared context. `recovered` is the drift this catches. */
 type ContextReceiptExact = Expect<Equal<AgentLoopContextReceipt, FrozenAgentLoopContextReceipt>>;
 type ContextReceiptKeys = Expect<
-  Equal<Keys<AgentLoopContextReceipt>, "report" | "observationPolicy" | "recovery">
+  Equal<
+    Keys<AgentLoopContextReceipt>,
+    | "report"
+    | "contextFingerprint"
+    | "contextArtifactId"
+    | "selectedContextSources"
+    | "observationPolicy"
+    | "recovery"
+  >
 >;
 type PreparedContextExact = Expect<Equal<PreparedModelContext, FrozenPreparedModelContext>>;
 type PreparedContextKeys = Expect<
@@ -315,10 +334,12 @@ type PreparedContextKeys = Expect<
     | "requestBudget"
     | "selectedMessageIds"
     | "selectedAssistantReplaySources"
+    | "selectedContextSources"
     | "report"
     | "observationPolicy"
     | "checkpoint"
     | "contextFingerprint"
+    | "contextArtifactId"
   >
 >;
 

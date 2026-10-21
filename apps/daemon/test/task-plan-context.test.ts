@@ -132,6 +132,6 @@ describe("task plan context", () => {
     )) as never as { items: readonly { payload?: { text?: string } }[] };
     const text = textOf(result);
     expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8 * 1024);
-    expect(text).toContain("[plan truncated");
+    expect(text).toContain("summarized/truncated");
   });
 });

@@ -392,6 +392,7 @@ export type {
   ContextPolicy,
   ContextPolicyInput,
   ContextPolicyOptions,
+  ContextWorkingSetPolicy,
   ContextPressureState,
 } from "./policy/context-policy.js";
 

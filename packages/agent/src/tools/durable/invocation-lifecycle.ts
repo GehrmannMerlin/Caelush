@@ -20,7 +20,8 @@ import { ToolExecutionInvariantError } from "./durable-errors.js";
  * ```text
  * REQUESTED ──▶ WAITING_APPROVAL ──▶ RUNNING ──▶ COMPLETED
  *     │                │                 │
- *     └────────────────┴─────────────────┴──────▶ FAILED
+ *     ├────────────────┴─────────────────┴──────▶ FAILED
+ *     └─────────────────────────────────────────▶ CANCELLED
  *
  * CANCELLED    terminal; reachable only from durable state a host already wrote
  * ```
@@ -37,19 +38,17 @@ import { ToolExecutionInvariantError } from "./durable-errors.js";
  * `COMPLETED → RUNNING` gets an error rather than a rewritten row, because the durable history of a
  * Tool call is evidence, not a mutable field.
  *
- * ## `CANCELLED` is deliberately unreachable from here
+ * ## `CANCELLED` is only reachable before execution
  *
- * There is no `cancelToolInvocation`. Protocol v1 declares `CANCELLED` and the durable invariant
- * admits it, but **no production transition in this phase enters it**: Run cancellation settles a Run,
- * and a Tool invocation that was already terminal keeps the terminal state it earned. Recovery
- * therefore *reads* a `CANCELLED` invocation and returns it without executing anything, but nothing in
- * this module invents a new cancellation semantics that the frozen Run cancellation invariants do not
- * authorize.
+ * A host may close a still-`REQUESTED` invocation at an authoritative Run resource boundary. This is
+ * safe because the durable lifecycle guarantees that admission and execution have not begun. Later
+ * statuses cannot enter `CANCELLED`: a waiting approval remains a user decision and a running
+ * invocation has an unknown side-effect boundary.
  */
 
 const ALLOWED_TRANSITIONS: Readonly<Record<ToolInvocationStatus, readonly ToolInvocationStatus[]>> =
   Object.freeze({
-    REQUESTED: Object.freeze(["WAITING_APPROVAL", "RUNNING", "FAILED"] as const),
+    REQUESTED: Object.freeze(["WAITING_APPROVAL", "RUNNING", "FAILED", "CANCELLED"] as const),
     WAITING_APPROVAL: Object.freeze(["RUNNING", "FAILED"] as const),
     RUNNING: Object.freeze(["COMPLETED", "FAILED"] as const),
     COMPLETED: Object.freeze([] as const),
@@ -129,6 +128,15 @@ export function createRequestedToolInvocation(
 export function markToolInvocationWaitingApproval(invocation: ToolInvocation): ToolInvocation {
   assertToolInvocationTransition(invocation.status, "WAITING_APPROVAL");
   return replaceInvocation(invocation, { status: "WAITING_APPROVAL" });
+}
+
+/** Close a durably requested call that has not crossed admission or execution. */
+export function cancelRequestedToolInvocation(
+  invocation: ToolInvocation,
+  finishedAt: TimestampMs,
+): ToolInvocation {
+  assertToolInvocationTransition(invocation.status, "CANCELLED");
+  return replaceInvocation(invocation, { status: "CANCELLED", finishedAt });
 }
 
 /**

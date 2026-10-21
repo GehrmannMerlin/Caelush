@@ -18,6 +18,7 @@ export interface ContextPressureInput {
   readonly proactiveCompactionTokens: number;
   readonly emergencyCompactionTokens: number;
   readonly targetRecentTailTokens: number;
+  readonly targetPostCompactionTokens?: number;
   readonly minRecentTailTokens: number;
   readonly mode: "NORMAL" | "FORCED_RECOVERY";
   readonly hasCompressibleHistory: boolean;
@@ -78,7 +79,9 @@ export function createContextPressureEvaluator(): ContextPressureEvaluator {
         trigger,
         pressureRatio: input.estimatedInputTokens / input.effectiveInputLimitTokens,
         shouldCompact: shouldCompact && input.hasCompressibleHistory,
-        targetPostCompactionTokens: Math.floor(input.effectiveInputLimitTokens * HYSTERESIS_RATIO),
+        targetPostCompactionTokens:
+          input.targetPostCompactionTokens ??
+          Math.floor(input.effectiveInputLimitTokens * HYSTERESIS_RATIO),
         targetRecentTailTokens: input.targetRecentTailTokens,
         minRecentTailTokens: input.minRecentTailTokens,
       });
@@ -121,6 +124,14 @@ function assertPressureInput(input: ContextPressureInput): void {
   assertNonNegativeSafeInteger(input.proactiveCompactionTokens, "proactiveCompactionTokens");
   assertNonNegativeSafeInteger(input.emergencyCompactionTokens, "emergencyCompactionTokens");
   assertNonNegativeSafeInteger(input.targetRecentTailTokens, "targetRecentTailTokens");
+  if (input.targetPostCompactionTokens !== undefined) {
+    assertPositiveSafeInteger(input.targetPostCompactionTokens, "targetPostCompactionTokens");
+    if (input.targetPostCompactionTokens > input.effectiveInputLimitTokens) {
+      throw new RangeError(
+        "Target post-compaction tokens must not exceed the effective input limit.",
+      );
+    }
+  }
   assertNonNegativeSafeInteger(input.minRecentTailTokens, "minRecentTailTokens");
   if (input.proactiveCompactionTokens >= input.emergencyCompactionTokens) {
     throw new RangeError("Proactive pressure must be below emergency pressure.");
