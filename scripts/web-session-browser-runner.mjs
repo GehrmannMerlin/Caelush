@@ -37,6 +37,7 @@ const s2Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S2";
 const s3Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S3";
 const s4Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S4";
 const s5Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S5";
+const reliabilityOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "RELIABILITY";
 const S2_COMPLETE_TEXT = `S2_COMPLETE ${"word ".repeat(1_800).trim()}`;
 const waitVisible = (locator, timeout = 15_000) => locator.waitFor({ state: "visible", timeout });
 const waitForCompletedRun = (title, timeout = 15_000) =>
@@ -475,6 +476,37 @@ try {
     await context.close();
     await browser.close();
     process.stdout.write("[browser-runner] attachment composer geometry and upload flow passed.\n");
+    process.exit(0);
+  }
+  if (reliabilityOnly) {
+    /*
+     * Two prompts, chosen so the browser is doing real work and the model wire is the only scripted
+     * part:
+     *
+     * ```text
+     * alias write        the model sends the documented text under `input`
+     * rejected argument  the model sends a number for `patch`, then corrects from the refusal
+     * ```
+     *
+     * What this can assert is what the browser shows: a Run that finishes and renders its answer. The
+     * facts that matter — the file was written, the refusal named the field, the correction followed
+     * the refusal — are asserted on the workspace and on the recorded wire by the caller. Neither
+     * half alone would prove the path: a rendered answer can come from a Run that silently skipped
+     * the write, and a written file can come from a Run whose UI never settled.
+     */
+    smokeStage = "reliability alias write";
+    await submitPrompt("reliability alias write");
+    await waitVisible(exactText("RELIABILITY_ALIAS_OK"));
+
+    smokeStage = "reliability rejected argument";
+    await submitPrompt("reliability rejected argument");
+    await waitVisible(exactText("RELIABILITY_REJECTION_OK"));
+
+    await context.close();
+    await browser.close();
+    process.stdout.write(
+      "[browser-runner] both reliability prompts completed through the production composer.\n",
+    );
     process.exit(0);
   }
   if (s5Only) {

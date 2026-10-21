@@ -32,6 +32,7 @@ import { resolvePromptCacheArtifactDirectory } from "./browser-smoke-artifact-pa
  */
 
 const S5Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S5";
+const reliabilityOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "RELIABILITY";
 const FIXTURE_PROVIDER_ID = S5Only ? "deepseek" : "browser-fixture";
 const FIXTURE_MODEL_ID = S5Only ? "deepseek-flash" : "browser-fixture-model";
 const S5_UNSUPPORTED_MODEL_ID = "deepseek-chat";
@@ -48,6 +49,21 @@ let s4ProcessCalls = 0;
 let s4ProcessBytesEmitted = 0;
 let s4RawPatchServed = false;
 const s5ProviderRequests = [];
+/**
+ * What the reliability scope's two prompts actually sent and received.
+ *
+ * ```text
+ * recorded   the prompt text, whether a Tool result was already in the request, and that text
+ * asserted   the correction was driven by the refusal, and the alias really wrote the file
+ * ```
+ *
+ * The browser drives the real composer and the real submit path; only the model wire is scripted.
+ * Keeping the wire facts lets the assertions below say what the model was told, instead of inferring
+ * it from the fact that a Run finished.
+ */
+const reliabilityRequests = [];
+let reliabilityAliasRequests = 0;
+let reliabilityRejectionRequests = 0;
 
 const S2_CANCEL_TEXT = `S2_CANCEL_${"cancel ".repeat(1_800)}`;
 const S2_COMPLETE_TEXT = `S2_COMPLETE ${"word ".repeat(1_800).trim()}`;
@@ -271,6 +287,58 @@ async function handleModelRequest(request, response) {
   const latestUserText = [...messages]
     .reverse()
     .find((message) => message?.role === "user" && typeof message.content === "string")?.content;
+  const reliabilityPrompt = latestPromptText(messages);
+  if (reliabilityOnly && reliabilityPrompt === RELIABILITY_ALIAS_PROMPT) {
+    reliabilityAliasRequests += 1;
+    recordReliabilityRequest(RELIABILITY_ALIAS_PROMPT, messages, reliabilityAliasRequests);
+    if (reliabilityAliasRequests > 1) {
+      writeSse(response, textChunks("RELIABILITY_ALIAS_OK"));
+      return;
+    }
+    // The historical shape: the model sends the documented text under `input` rather than `patch`.
+    writeSse(
+      response,
+      toolCallChunks("apply_patch", { input: RELIABILITY_ALIAS_PATCH }, "reliability-alias-patch"),
+    );
+    return;
+  }
+  if (reliabilityOnly && reliabilityPrompt === RELIABILITY_REJECTION_PROMPT) {
+    reliabilityRejectionRequests += 1;
+    const record = recordReliabilityRequest(
+      RELIABILITY_REJECTION_PROMPT,
+      messages,
+      reliabilityRejectionRequests,
+    );
+    if (reliabilityRejectionRequests === 1) {
+      // The exact mistake the incident produced: a number where the schema requires a string.
+      writeSse(response, toolCallChunks("apply_patch", { patch: 7 }, "reliability-bad-patch"));
+      return;
+    }
+    if (reliabilityRejectionRequests === 2) {
+      /*
+       * Only the newest result counts. The request also carries the earlier turn's `Patch applied.`,
+       * so asserting on the joined history would let that harmless text satisfy a check about the
+       * refusal — the correction has to follow the result the refusal produced.
+       */
+      if (!record.lastToolText.includes("patch")) {
+        record.contractFailure = "the refusal did not name the offending argument";
+      }
+      if (record.lastToolText.includes("infrastructure failed")) {
+        record.contractFailure = "the refusal was reported as an infrastructure failure";
+      }
+      writeSse(
+        response,
+        toolCallChunks(
+          "apply_patch",
+          { input: RELIABILITY_REJECTION_PATCH },
+          "reliability-fixed-patch",
+        ),
+      );
+      return;
+    }
+    writeSse(response, textChunks("RELIABILITY_REJECTION_OK"));
+    return;
+  }
   if (!isReview && latestUserText?.includes("S5 Max guidance test")) {
     writeSse(response, textChunks("<h1>Reasoning guidance</h1>"));
     return;
@@ -616,6 +684,78 @@ function recordS4ModelChunk(sentChunk) {
   s4ModelBytesServed += Buffer.byteLength(content, "utf8");
 }
 
+/**
+ * The prompt the user actually just typed.
+ *
+ * ```text
+ * last user message                     the runtime context delta, not the prompt
+ * last user message before those        the prompt
+ * ```
+ *
+ * Every request carries a `<runtime_context_baseline>` / `<runtime_context_delta>` user message after
+ * the real one, so "the last user message" is never the prompt. Matching the whole request instead
+ * would match an *earlier* turn of the same conversation, which is how the alias branch answered the
+ * rejection prompt.
+ */
+function latestPromptText(messages) {
+  return [...messages]
+    .reverse()
+    .find(
+      (message) =>
+        message?.role === "user" &&
+        typeof message.content === "string" &&
+        !message.content.startsWith("<runtime_context_"),
+    )?.content;
+}
+
+function recordReliabilityRequest(prompt, messages, ordinal) {
+  const toolMessages = messages.filter((message) => message?.role === "tool");
+  const toolResultText = toolMessages
+    .map((message) =>
+      typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? ""),
+    )
+    .join("\n");
+  const lastToolMessage = toolMessages.at(-1);
+  const lastToolText =
+    typeof lastToolMessage?.content === "string"
+      ? lastToolMessage.content
+      : JSON.stringify(lastToolMessage?.content ?? "");
+  const record = {
+    prompt,
+    ordinal,
+    hasToolResult: toolMessages.length > 0,
+    toolResultText,
+    lastToolText,
+    contractFailure: undefined,
+  };
+  reliabilityRequests.push(record);
+  return record;
+}
+
+/**
+ * The two prompts this scope drives, defined once.
+ *
+ * Detection is by the whole request text, never by "the last user message": every request after the
+ * first also carries a runtime context baseline/delta as its final user message, so a
+ * last-user-message check matches the baseline and never the prompt.
+ */
+const RELIABILITY_ALIAS_PROMPT = "reliability alias write";
+const RELIABILITY_REJECTION_PROMPT = "reliability rejected argument";
+
+const RELIABILITY_ALIAS_PATCH = [
+  "*** Begin Patch",
+  "*** Add File: reliability-alias.txt",
+  "+ALIAS_SENTINEL written through the documented input alias",
+  "*** End Patch",
+].join("\n");
+
+const RELIABILITY_REJECTION_PATCH = [
+  "*** Begin Patch",
+  "*** Add File: reliability-rejected.txt",
+  "+REJECTION_SENTINEL written only after the schema refusal arrived",
+  "*** End Patch",
+].join("\n");
+
 function holdSseFor(response, delayMs, chunks, initialChunks = []) {
   response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
   response.flushHeaders();
@@ -746,7 +886,9 @@ const browserArtifacts = promptCacheOnly
               ? join(tmpdir(), `caelush-web-browser-smoke-s4-${process.pid}`)
               : s5Only
                 ? join(tmpdir(), `caelush-web-browser-smoke-s5-${process.pid}`)
-                : join(process.cwd(), "test-results", "web-session-browser-smoke")
+                : reliabilityOnly
+                  ? join(tmpdir(), `caelush-web-browser-smoke-reliability-${process.pid}`)
+                  : join(process.cwd(), "test-results", "web-session-browser-smoke")
     : resolve(configuredArtifactDirectory);
 
 const directory = await mkdtemp(join(tmpdir(), "caelush-web-browser-"));
@@ -907,6 +1049,7 @@ try {
     !s3Only &&
     !s4Only &&
     !s5Only &&
+    !reliabilityOnly &&
     !attachmentOnly
   ) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
@@ -921,6 +1064,43 @@ try {
     }
     process.stdout.write(
       `[browser-smoke] in-workspace patch persisted, reviewed escape blocked: fixture=${JSON.stringify(fixture)} outside=${JSON.stringify(outside)}\n`,
+    );
+  }
+  if (result === 0 && reliabilityOnly) {
+    const alias = await readFile(join(directory, "reliability-alias.txt"), "utf8");
+    const rejected = await readFile(join(directory, "reliability-rejected.txt"), "utf8");
+    if (!alias.includes("ALIAS_SENTINEL")) {
+      throw new Error("The input alias never reached the workspace: " + JSON.stringify(alias));
+    }
+    if (!rejected.includes("REJECTION_SENTINEL")) {
+      throw new Error(
+        "The corrected patch never reached the workspace: " + JSON.stringify(rejected),
+      );
+    }
+    const failures = reliabilityRequests
+      .filter((record) => record.contractFailure !== undefined)
+      .map((record) => record.contractFailure);
+    if (failures.length > 0) {
+      throw new Error("The reliability wire contract failed: " + JSON.stringify(failures));
+    }
+    if (reliabilityAliasRequests !== 2) {
+      throw new Error(
+        `The alias prompt needed one Tool turn and one answer, not ${String(reliabilityAliasRequests)} requests.`,
+      );
+    }
+    if (reliabilityRejectionRequests !== 3) {
+      throw new Error(
+        `The rejection prompt needed refusal -> correction -> answer, not ${String(reliabilityRejectionRequests)} requests.`,
+      );
+    }
+    // The refusal the model corrected from, quoted: a reviewer reading a red job needs to see what it
+    // was actually told, not just that a third request happened. Selected by ordinal, because the
+    // conversation also carries the previous prompt's successful result.
+    const refusal = reliabilityRequests.find(
+      (record) => record.prompt === RELIABILITY_REJECTION_PROMPT && record.ordinal === 2,
+    );
+    process.stdout.write(
+      `[browser-smoke] reliability wire: alias requests=${String(reliabilityAliasRequests)}, rejection requests=${String(reliabilityRejectionRequests)}, refusal=${JSON.stringify(refusal?.lastToolText?.slice(0, 200) ?? "none")}.\n`,
     );
   }
   if (result !== 0) process.exitCode = result;

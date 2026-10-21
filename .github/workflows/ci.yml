@@ -79,6 +79,102 @@ jobs:
       - name: Run architecture tests
         run: corepack pnpm@11.21.0 exec vitest run tests/architecture
 
+  # The reliability gate for the Tool-preparation, failed-history, diagnostics, plan-evidence and
+  # feedback paths. Deliberately independent of `architecture`: a red architecture baseline must not
+  # hide whether these paths still work, and this job passing must never be read as the whole
+  # workflow passing — the architecture gate stays the repository-wide gate.
+  #
+  # Both hosts run it because the failures these tests cover are host-shaped: Windows path handling,
+  # process exit codes and PowerShell wrapping are where the original defects surfaced.
+  #
+  # Build closure: `@caelush/daemon` and `@caelush/client` are imported from `dist` by these tests, so
+  # their dependency closures must exist before vitest runs. Skipping that step is the same failure
+  # the contract tests hit when `dist` was missing.
+  reliability:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    name: reliability (${{ matrix.os }})
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: corepack pnpm@11.21.0 install --frozen-lockfile
+
+      - name: Build the composition and client dependency closures
+        run: >-
+          corepack pnpm@11.21.0 -r
+          --filter "@caelush/daemon..."
+          --filter "@caelush/client..."
+          --if-present run build
+
+      - name: Record the environment under test
+        shell: bash
+        run: |
+          mkdir -p reliability-results
+          {
+            echo "commit=$(git rev-parse HEAD)"
+            echo "node=$(node -v)"
+            echo "pnpm=$(corepack pnpm@11.21.0 --version)"
+            echo "runner=${{ matrix.os }}"
+          } | tee reliability-results/environment.txt
+
+      # The projector suite is excluded on purpose: it carries a pre-existing failure
+      # (`run.input.accepted` has no projection fixture) that predates this work and is unrelated to
+      # it. The diagnostics assertions added to it still run under `pnpm test` in the `check` job.
+      # Fixing that fixture here would mean editing a baseline expectation to manufacture a green
+      # gate, which this job must not do.
+      - name: Run the reliability paths
+        shell: bash
+        run: |
+          set -o pipefail
+          corepack pnpm@11.21.0 exec vitest run \
+            --pool=forks --maxWorkers=1 --testTimeout=600000 \
+            packages/coding-agent/test/apply-patch-arguments.test.ts \
+            packages/coding-agent/test/coding-tool-catalog.test.ts \
+            packages/agent/test/tools-call-preparation.test.ts \
+            apps/daemon/test/patch-normalization-e2e.test.ts \
+            apps/daemon/test/tool-composition-delegation.test.ts \
+            apps/daemon/test/reliability-control-e2e.test.ts \
+            apps/daemon/test/failed-tool-history-continuation.test.ts \
+            packages/storage/test/interrupted-history-closure.test.ts \
+            packages/agent/test/messages/interrupted-tool-batch-reconciler.test.ts \
+            apps/daemon/test/run-failure-diagnostics.test.ts \
+            apps/daemon/test/session-presentation-service.test.ts \
+            packages/coding-agent/test/task-plan-evidence.test.ts \
+            packages/coding-agent/test/task-plan-semantic-budget.test.ts \
+            apps/daemon/test/task-plan-context.test.ts \
+            apps/daemon/test/task-plan-evidence-e2e.test.ts \
+            apps/daemon/test/reliability-feedback-e2e.test.ts \
+            2>&1 | tee reliability-results/vitest.log
+
+      - name: Upload the reliability results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reliability-${{ matrix.os }}
+          path: reliability-results/*
+          if-no-files-found: error
+
   check:
     needs:
       - architecture
