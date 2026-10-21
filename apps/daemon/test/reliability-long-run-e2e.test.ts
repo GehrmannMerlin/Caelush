@@ -292,7 +292,22 @@ function evidenceRead(id: string, ordinal: number): AIAdapterEvent[] {
   });
 }
 
-describe("daemon long-run reliability acceptance", () => {
+/**
+ * Infrastructure capacity, not adaptive behaviour.
+ *
+ * ```text
+ * what this proves   the production composition survives a long Run: turns, leases, ordered Tool
+ *                    results, compaction and durable state stay consistent for 75 and for 250 steps
+ * what this cannot   that a model would choose the right next action. Every step here is scripted by
+ * prove              step number, so a Run that resumed correctly and a Run that ignored all feedback
+ *                    both reach the same final status
+ * ```
+ *
+ * `reliability-feedback-e2e.test.ts` is the file that asks the other question: there, each step exists
+ * only because a specific Tool result was delivered to the model. Neither file is evidence about a
+ * real provider — that is `scripts/reliability-real-model-eval.mjs`, and it is reported separately.
+ */
+describe("daemon long-run reliability acceptance (infrastructure capacity)", () => {
   it("continues after four invalid patches, commits the fifth patch, and verifies the created app", async () => {
     const adapter = new CorrectionAndApplicationAdapter();
     const fixture = await createReliabilityFixture({
@@ -402,6 +417,9 @@ describe("daemon long-run reliability acceptance", () => {
 
     const metrics = {
       scenario: "long-run-250-400",
+      layer: "INFRASTRUCTURE_CAPACITY",
+      proves: "the production composition survives 250 steps and 400 ordered Tool results",
+      doesNotProve: "that a model chooses its next action from the feedback it was given",
       elapsedMs: Math.round(elapsedMs),
       mainModelSteps: adapter.mainRequests.length,
       scriptedToolCalls: adapter.scriptedToolCalls,

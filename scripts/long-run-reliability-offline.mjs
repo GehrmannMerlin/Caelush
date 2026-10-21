@@ -6,24 +6,26 @@
  * no model call   no network   no API key   deterministic
  * ```
  *
- * It exercises the three deterministic defects the long-run reliability work addressed, using the
- * same public modules production uses:
+ * It exercises the deterministic defects the long-run reliability work addressed, using the same
+ * public modules production uses — and it reports them by **verification layer**, because the three
+ * layers answer different questions and only one of them can be answered without a model:
  *
  * ```text
- * surface capacity    a full epoch must rotate, not fail
- * schema feedback     a wrong field must be named, not merely reported
- * repeated failures   the same mistake must escalate, however the arguments change
+ * INFRASTRUCTURE_CAPACITY   a full epoch rotates, not fails; a long sequence stays ordered
+ * FEEDBACK_PATH             a wrong field is named; a repeated mistake escalates; a plan states
+ *                           that "completed" is a report rather than proof
+ * REAL_MODEL_ADAPTATION     NOT MEASURED HERE — needs a configured provider, a fixed task set and an
+ *                           external acceptance check, and it costs money
  * ```
+ *
+ * A green run below therefore says nothing about completion rate or about whether a real model
+ * recovers. It is the part of the claim that can be made offline, and it is labelled as such.
  *
  * Run it after `pnpm build`:
  *
  * ```bash
  * node scripts/long-run-reliability-offline.mjs
  * ```
- *
- * The real-model comparison is deliberately *not* here: it needs a fixed model, a fixed task set and
- * an external acceptance check, and it costs money. This harness is what can be stated without any
- * of those.
  */
 import { createHash } from "node:crypto";
 
@@ -40,14 +42,27 @@ const {
   applyResourceProgressTurn,
   decideResourceSemanticIntervention,
   emptyResourceSemanticProgress,
+  resourceProgressPolicyFrom,
   resourceProgressTurn,
 } = core;
 const { applyPatchInputSchema, deriveTaskPlanSnapshot, renderTaskPlanBlock, validatePlanSteps } =
   coding;
 
+const LAYERS = Object.freeze({
+  INFRASTRUCTURE_CAPACITY: {
+    title: "INFRASTRUCTURE_CAPACITY",
+    question: "does the mechanism hold under load, independent of any model?",
+  },
+  FEEDBACK_PATH: {
+    title: "FEEDBACK_PATH",
+    question: "is the feedback a model would need actually delivered, and is it true?",
+  },
+});
+
 const results = [];
-function check(name, condition, detail) {
-  results.push({ name, pass: Boolean(condition), detail });
+function check(layer, name, condition, detail) {
+  if (LAYERS[layer] === undefined) throw new RangeError(`unknown verification layer ${layer}`);
+  results.push({ layer, name, pass: Boolean(condition), detail });
 }
 
 /* ------------------------------------------------------------------ surface capacity */
@@ -76,6 +91,7 @@ const atLimit = decidePromptSurfaceCapacity({
   targetSectionStates: target,
 });
 check(
+  "INFRASTRUCTURE_CAPACITY",
   "128 visible decisions still append; the 129th rotates",
   atLimit.kind === "ROLLOVER_REQUIRED" && atLimit.observed === 129,
   `${atLimit.kind} observed=${atLimit.observed ?? "-"}`,
@@ -91,6 +107,7 @@ const tooBig = decidePromptSurfaceCapacity({
   targetSectionStates: [sectionState(1, "a".repeat(padding))],
 });
 check(
+  "INFRASTRUCTURE_CAPACITY",
   "a baseline that cannot fit stays terminal instead of rotating forever",
   tooBig.kind === "BASELINE_TOO_LARGE",
   `${tooBig.kind} dimension=${tooBig.dimension ?? "-"}`,
@@ -105,6 +122,7 @@ const named =
   inputOnly.issues.some((issue) => issue.property === "patch") &&
   inputOnly.issues.some((issue) => issue.property === "input");
 check(
+  "FEEDBACK_PATH",
   "an input-only apply_patch names both the missing and the unsupported field",
   named,
   inputOnly.valid ? "unexpectedly valid" : JSON.stringify(inputOnly.issues.map((i) => i.property)),
@@ -113,9 +131,31 @@ check(
 const acceptsExample = compiled.validate({
   patch: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-a\n+b\n*** End Patch",
 });
-check("the documented argument shape passes the real schema", acceptsExample.valid, "");
+check(
+  "FEEDBACK_PATH",
+  "the documented argument shape passes the real schema",
+  acceptsExample.valid,
+  "",
+);
 
 /* ------------------------------------------------------------- repeated failures */
+
+// The thresholds come from a Run's frozen policy, not from constants copied into this script: a
+// harness that hard-codes 3/4/2 would keep passing after the policy changed underneath it.
+const PROGRESS_POLICY = resourceProgressPolicyFrom({
+  mode: "ADAPTIVE",
+  correctionVersion: "AUTONOMOUS_CORRECTION_V2",
+  operationalLease: { maxAgentTurns: 24, maxToolOperations: 64 },
+  batch: { maxToolCallsPerTurn: 2 },
+  progress: {
+    windowTurns: 8,
+    identicalCallNudgeThreshold: 3,
+    noProgressTurnsBeforeReplan: 4,
+    replansBeforePause: 2,
+  },
+  hardLimits: {},
+  inactivity: {},
+});
 
 function failureTurn(turnId, patchText) {
   const fact = {
@@ -148,31 +188,54 @@ function failureTurn(turnId, patchText) {
 }
 
 let window = emptyResourceSemanticProgress();
-let firstNudge = undefined;
-let firstReplan = undefined;
+const corrections = [];
 for (let turn = 1; turn <= 8; turn += 1) {
-  window = applyResourceProgressTurn(window, failureTurn(`step-${turn}`, `patch body ${turn}`));
-  const decision = decideResourceSemanticIntervention(window);
-  if (firstNudge === undefined && decision.kind === "NUDGE") firstNudge = turn;
-  if (firstReplan === undefined && decision.kind === "REPLAN") firstReplan = turn;
+  window = applyResourceProgressTurn(
+    PROGRESS_POLICY,
+    window,
+    failureTurn(`step-${turn}`, `patch body ${turn}`),
+  );
+  const decision = decideResourceSemanticIntervention(PROGRESS_POLICY, window);
+  if (decision.kind === "NUDGE") corrections.push({ turn, stage: decision.stage });
 }
 check(
+  "FEEDBACK_PATH",
   "64 attempts with different patch bodies collapse into one pattern",
   window.turns.length > 0,
   "",
 );
-check("a reminder fires on the third occurrence", firstNudge === 3, `turn=${firstNudge ?? "-"}`);
-check("a re-plan fires on the fourth occurrence", firstReplan === 4, `turn=${firstReplan ?? "-"}`);
+check(
+  "FEEDBACK_PATH",
+  "the third identical failure prepares the first correction rung",
+  corrections[0]?.turn === 3 && corrections[0]?.stage === "INPUT_CORRECTION",
+  `turn=${String(corrections[0]?.turn ?? "-")} stage=${corrections[0]?.stage ?? "-"}`,
+);
+/*
+ * The rungs are delivery-gated: INPUT_CORRECTION -> REVIEW_APPROACH -> REBUILD_WORK_STATE advance
+ * only when a receipt proves the model was actually told. This window records no receipts, so the
+ * advice must stay on the first rung — escalating past it would blame the model for advice it never
+ * received. The advancing sequence is covered by the delivery-receipt tests, not by this harness.
+ */
+check(
+  "FEEDBACK_PATH",
+  "an undelivered correction never silently escalates to a later rung",
+  corrections.length > 0 && corrections.every((entry) => entry.stage === "INPUT_CORRECTION"),
+  [...new Set(corrections.map((entry) => entry.stage))].join(",") || "none",
+);
 
 const activityOnly = Array.from({ length: 10 }, (_unused, index) =>
   resourceProgressTurn({
     turnId: `activity-${index}`,
     results: [{ toolName: "read_file", isError: false }],
   }),
-).reduce(applyResourceProgressTurn, emptyResourceSemanticProgress());
+).reduce(
+  (progress, turn) => applyResourceProgressTurn(PROGRESS_POLICY, progress, turn),
+  emptyResourceSemanticProgress(),
+);
 check(
+  "FEEDBACK_PATH",
   "ten productive reads never escalate",
-  decideResourceSemanticIntervention(activityOnly).kind === "NONE",
+  decideResourceSemanticIntervention(PROGRESS_POLICY, activityOnly).kind === "NONE",
   "",
 );
 
@@ -210,9 +273,15 @@ const snapshot = deriveTaskPlanSnapshot({
     },
   ],
 });
-check("a valid plan is accepted", planOk, "");
-check("the accepted plan is re-derivable from messages", snapshot?.steps.length === 2, "");
+check("FEEDBACK_PATH", "a valid plan is accepted", planOk, "");
 check(
+  "FEEDBACK_PATH",
+  "the accepted plan is re-derivable from messages",
+  snapshot?.steps.length === 2,
+  "",
+);
+check(
+  "FEEDBACK_PATH",
   "the rendered plan states that a completed step is a report",
   snapshot !== undefined && renderTaskPlanBlock(snapshot).includes("not proof"),
   "",
@@ -222,12 +291,28 @@ check(
 
 const failed = results.filter((result) => !result.pass);
 const width = Math.max(...results.map((result) => result.name.length));
-console.log("\nLong-run reliability — offline checks\n");
-for (const result of results) {
-  console.log(`  ${result.pass ? "PASS" : "FAIL"}  ${result.name.padEnd(width)}  ${result.detail}`);
+console.log("\nLong-run reliability — offline checks, by verification layer\n");
+for (const [layer, description] of Object.entries(LAYERS)) {
+  const group = results.filter((result) => result.layer === layer);
+  if (group.length === 0) continue;
+  const passed = group.filter((result) => result.pass).length;
+  console.log(`  ${description.title}  ${String(passed)}/${String(group.length)}`);
+  console.log(`    ${description.question}`);
+  for (const result of group) {
+    console.log(
+      `    ${result.pass ? "PASS" : "FAIL"}  ${result.name.padEnd(width)}  ${result.detail}`,
+    );
+  }
+  console.log("");
 }
+console.log("  REAL_MODEL_ADAPTATION  NOT MEASURED");
+console.log("    would a real model use this feedback to finish a complex task?");
+console.log("    Needs a configured provider, a fixed task set and an external acceptance check.");
 console.log(
-  `\n  ${String(results.length - failed.length)}/${String(results.length)} checks passed.` +
-    "  (No model was called; this says nothing about completion rate.)\n",
+  "    Run scripts/reliability-real-model-eval.mjs for that layer; it is reported separately.",
+);
+console.log(
+  `\n  ${String(results.length - failed.length)}/${String(results.length)} offline checks passed.` +
+    "  No model was called: this is not a completion rate.\n",
 );
 process.exit(failed.length === 0 ? 0 : 1);
