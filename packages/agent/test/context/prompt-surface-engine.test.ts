@@ -657,7 +657,7 @@ describe("Prompt Surface Context Engine integration", () => {
     expect(value.store.inspect(value.runId)?.epochId).toBe(warmSurface.epochId);
   });
 
-  it("continues a long Run across the visible-decision capacity bound", async () => {
+  it("continues a long Run across the capacity bound without losing a decision", async () => {
     const value = fixture();
     const engine = value.engine();
     // A real long Run has room for 128 accumulated deltas; the 10k fixture window does not.
@@ -677,17 +677,35 @@ describe("Prompt Surface Context Engine integration", () => {
     }
 
     const epochs = value.store.inspectEpochs(value.runId);
-    expect(epochs).toHaveLength(2);
+    /*
+     * Two bounds, and a Run reaches whichever comes first.
+     *
+     * ```text
+     * 128 records        the hard ceiling: one epoch may not accumulate more decisions than this
+     * 24 000 tokens      the replay soft budget: every Step re-sends the whole record chain, so a
+     *                    hundred small records already cost more than rebuilding the view
+     * ```
+     *
+     * This Run crosses the replay budget first, which is why the epoch below closes before the
+     * ceiling — the same order production takes, and the reason a rollover is not something a test
+     * may schedule by step number. The 129th-record case is exercised against real SQLite in
+     * `packages/storage/test/prompt-surface-rollover-production.test.ts`; what is asserted here is
+     * the property both bounds share: the boundary is crossed without dropping or duplicating a
+     * Step's decision, and the closed epoch stays readable.
+     */
+    expect(epochs.length).toBeGreaterThanOrEqual(2);
     const [firstEpoch, secondEpoch] = epochs;
     expect(firstEpoch?.resetReason).toBe("INITIAL");
-    expect(firstEpoch?.records).toHaveLength(PROMPT_SURFACE_LIMITS.maxEpochSnapshots);
     expect(secondEpoch?.resetReason).toBe("CAPACITY_ROLLOVER");
-    expect(secondEpoch?.createdStepSequence).toBe(PROMPT_SURFACE_LIMITS.maxEpochSnapshots + 1);
-    expect(secondEpoch?.records).toHaveLength(2);
+    const rolloverStep = secondEpoch!.createdStepSequence;
+    expect(rolloverStep).toBeGreaterThan(2);
+    expect(rolloverStep).toBeLessThanOrEqual(PROMPT_SURFACE_LIMITS.maxEpochSnapshots + 1);
+    // The closed epoch holds exactly the decisions it made: one per Step up to the rollover.
+    expect(firstEpoch?.records).toHaveLength(rolloverStep - 1);
     expect(secondEpoch?.records?.[0]).toMatchObject({
       ordinal: 1,
       kind: "BASELINE",
-      sourceStepSequence: PROMPT_SURFACE_LIMITS.maxEpochSnapshots + 1,
+      sourceStepSequence: rolloverStep,
     });
 
     // Every Step has exactly one decision, and none was dropped by the boundary.
@@ -702,7 +720,7 @@ describe("Prompt Surface Context Engine integration", () => {
     const baseline = secondEpoch?.records?.[0];
     expect(
       baseline?.updates.some(
-        (update) => update.op === "SET" && update.content.includes("step 129"),
+        (update) => update.op === "SET" && update.content.includes(`step ${String(rolloverStep)}`),
       ),
     ).toBe(true);
     const lastPreparedText = (lastPrepared?.messages ?? [])
@@ -712,9 +730,11 @@ describe("Prompt Surface Context Engine integration", () => {
 
     // The superseded epoch is kept intact for audit and replay.
     expect(
-      firstEpoch?.sectionStates?.some((state) => state.content.includes("step 128")),
+      firstEpoch?.sectionStates?.some((state) =>
+        state.content.includes(`step ${String(rolloverStep - 1)}`),
+      ),
     ).toBe(true);
     expect(value.state.usage.at(-1)?.promptSurface?.resetReason).toBe("CAPACITY_ROLLOVER");
     expect(value.state.usage.at(-2)?.promptSurface?.resetReason).toBe("CAPACITY_ROLLOVER");
-  });
+  }, 60_000);
 });

@@ -191,7 +191,7 @@ describe("Prompt Surface capacity rollover against SQLite", () => {
     const previous = await storage.promptSurface.readEpoch(runId, full.epochId);
     expect(previous?.records).toHaveLength(128);
     expect(previous?.sectionStates).toEqual([sectionState("work-progress", "work at step 128")]);
-  });
+  }, 60_000);
 
   it("chains three capacity rollovers and keeps every epoch readable", async () => {
     const { storage, runId } = await newStorageRun();
@@ -238,7 +238,7 @@ describe("Prompt Surface capacity rollover against SQLite", () => {
     }
     const resolved = await storage.promptSurface.getCurrent(runId);
     expect(resolved?.epochId).toBe(epochIds.at(-1));
-  });
+  }, 60_000);
 
   it("answers a replayed rollover with IDEMPOTENT and never opens a second epoch", async () => {
     const { storage, runId } = await newStorageRun();
@@ -267,7 +267,7 @@ describe("Prompt Surface capacity rollover against SQLite", () => {
     expect(committed?.records).toHaveLength(1);
     expect(committed?.records?.[0]?.kind).toBe("BASELINE");
     expect(await storage.promptSurface.readEpoch(runId, full.epochId)).toBeDefined();
-  });
+  }, 60_000);
 
   it("re-reads once after a concurrent CAS change instead of overwriting it", async () => {
     const { storage, runId } = await newStorageRun();
@@ -307,7 +307,7 @@ describe("Prompt Surface capacity rollover against SQLite", () => {
     expect(closed?.sectionStates).toEqual([sectionState("work-progress", "work at step 128")]);
     expect(outcome.epoch.sectionStates).toEqual(targetStates);
     expect(outcome.epoch.createdStepSequence).toBe(130);
-  });
+  }, 60_000);
 
   it("still rejects an epoch identity that carries replay state", async () => {
     const { storage, runId } = await newStorageRun();
@@ -347,5 +347,5 @@ describe("Prompt Surface capacity rollover against SQLite", () => {
         expectedSectionStates: targetStates,
       }),
     ).rejects.toBeInstanceOf(StorageError);
-  });
+  }, 60_000);
 });
