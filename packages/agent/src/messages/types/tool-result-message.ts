@@ -327,14 +327,16 @@ export function assertToolPreparationFailureFact(
   ) {
     throw new TypeError("Tool preparation failure fact has an unsupported shape.");
   }
-  if (candidate["kind"] !== "PREPARATION_REJECTED" && candidate["kind"] !== "MODEL_ARGUMENT_PARSING") {
+  if (
+    candidate["kind"] !== "PREPARATION_REJECTED" &&
+    candidate["kind"] !== "MODEL_ARGUMENT_PARSING"
+  ) {
     throw new TypeError("Tool preparation failure kind is unsupported.");
   }
   if (candidate["disposition"] !== "SAFE_FAILURE") {
     throw new TypeError("Tool preparation failure disposition is unsupported.");
   }
-  const expectedClassifierVersion =
-    candidate["kind"] === "PREPARATION_REJECTED" ? 1 : 2;
+  const expectedClassifierVersion = candidate["kind"] === "PREPARATION_REJECTED" ? 1 : 2;
   if (candidate["classifierVersion"] !== expectedClassifierVersion) {
     throw new TypeError("Tool preparation failure classifier version is unsupported.");
   }

@@ -285,7 +285,9 @@ async function executeCallsSequentially(
         // A known, safe Tool failure is not a barrier: the loop continues. Only an unproven side
         // effect stops the batch.
         if (isUncertainSettlement(invocation.error)) skipRemaining = true;
-        else if (invocation.status === "FAILED") barrier ??= { ordinal, code: "TOOL_EXECUTION_FAILED" };
+        else if (invocation.status === "FAILED") {
+          barrier ??= { ordinal, code: "TOOL_EXECUTION_FAILED" };
+        }
         break;
       }
       case "WAITING_APPROVAL": {

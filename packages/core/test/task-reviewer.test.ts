@@ -213,7 +213,8 @@ describe("TaskAcceptanceReviewer", () => {
     ).resolves.toMatchObject({ status: "ERROR", errorCode: "REVIEWER_TOOLS_FORBIDDEN" });
   });
 
-  it("fails closed for tool calls and malformed reviewer output", async () => {    const { run, bundle } = fixture();
+  it("fails closed for tool calls and malformed reviewer output", async () => {
+    const { run, bundle } = fixture();
     const make = (response: ReturnType<typeof turn>) =>
       new TaskAcceptanceReviewer({
         modelTurns: fakeModelTurnExecutor(async () => response),

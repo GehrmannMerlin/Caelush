@@ -223,7 +223,8 @@ describe("agent continuity S1 — dependency barrier and correction facts", () =
     }
   }, 120_000);
 
-  it("keeps an independent read running after a malformed request in the same batch", async () => {    const { fixture, wires } = await fixtureWith("independent-read", (_wire, index) =>
+  it("keeps an independent read running after a malformed request in the same batch", async () => {
+    const { fixture, wires } = await fixtureWith("independent-read", (_wire, index) =>
       index === 0
         ? sse([
             { id: "bad", name: "read_file", arguments: BAD_ARGS },

@@ -107,9 +107,7 @@ export function executableToolCalls(
 export function rejectedToolRequests(
   requests: readonly AIReceivedToolRequest[],
 ): readonly Extract<AIReceivedToolRequest, { kind: "INVALID_ARGUMENTS" }>[] {
-  return requests.flatMap((request) =>
-    request.kind === "INVALID_ARGUMENTS" ? [request] : [],
-  );
+  return requests.flatMap((request) => (request.kind === "INVALID_ARGUMENTS" ? [request] : []));
 }
 
 /**

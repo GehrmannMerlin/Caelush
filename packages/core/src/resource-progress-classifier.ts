@@ -94,7 +94,8 @@ export function modelArgumentRejectionFact(input: {
   });
 }
 
-/** Derive the stable pattern identity of one preparation failure. */export function toolFailurePatternKey(input: {
+/** Derive the stable pattern identity of one preparation failure. */
+export function toolFailurePatternKey(input: {
   readonly toolName: string;
   readonly fact: ToolPreparationFailureFact;
 }): string {

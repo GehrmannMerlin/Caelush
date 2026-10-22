@@ -116,10 +116,10 @@ export class DefaultAgentToolRegistryBuilder implements AgentToolRegistryBuilder
       try {
         assertToolSchedulingFacts(tool.scheduling);
       } catch {
-        throw new AgentToolRegistrationError(
-          `Tool "${name}" declared invalid scheduling facts.`,
-          { reason: "INVALID_DEFINITION", toolName: name },
-        );
+        throw new AgentToolRegistrationError(`Tool "${name}" declared invalid scheduling facts.`, {
+          reason: "INVALID_DEFINITION",
+          toolName: name,
+        });
       }
     }
     const clonedTool: AgentTool = Object.freeze({

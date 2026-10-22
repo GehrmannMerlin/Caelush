@@ -18,7 +18,11 @@ import type {
   ToolTurnResult,
   WaitingApprovalBoundary,
 } from "@caelush/agent";
-import { fingerprintProjection, isModelRejectedCall, modelRejectedArgumentsFeedback } from "@caelush/agent";
+import {
+  fingerprintProjection,
+  isModelRejectedCall,
+  modelRejectedArgumentsFeedback,
+} from "@caelush/agent";
 import type { ToolBatchCall } from "@caelush/agent";
 import {
   AttachmentModelContentReferenceSchema,

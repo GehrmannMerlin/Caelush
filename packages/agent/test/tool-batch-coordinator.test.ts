@@ -121,13 +121,15 @@ interface Harness {
   readonly setRejections: (byToolName: Record<string, ToolFailureFeedback>) => void;
 }
 
-function harness(options: {
-  readonly classes?: Readonly<Record<string, ToolSchedulingClass>>;
-  /** External call ids whose durable settlement is a real `FAILED`, not a completed error result. */
-  readonly failOn?: readonly string[];
-  /** External call ids whose durable settlement has an unproven side effect. */
-  readonly unknownOn?: readonly string[];
-} = {}): Harness {
+function harness(
+  options: {
+    readonly classes?: Readonly<Record<string, ToolSchedulingClass>>;
+    /** External call ids whose durable settlement is a real `FAILED`, not a completed error result. */
+    readonly failOn?: readonly string[];
+    /** External call ids whose durable settlement has an unproven side effect. */
+    readonly unknownOn?: readonly string[];
+  } = {},
+): Harness {
   const events: string[] = [];
   const prepared: string[] = [];
   const preflights: string[][] = [];
@@ -506,11 +508,7 @@ describe("canonical Tool batch — pre-invocation rejection", () => {
 
     if (outcome.kind !== "COMPLETED") throw new Error("expected COMPLETED");
     // The independent read still runs; the mutation is answered in place and never dispatched.
-    expect(outcome.items.map((item) => item.kind)).toEqual([
-      "REJECTED",
-      "OBSERVATION",
-      "SKIPPED",
-    ]);
+    expect(outcome.items.map((item) => item.kind)).toEqual(["REJECTED", "OBSERVATION", "SKIPPED"]);
     expect(idsOf(outcome.items)).toEqual(["call_bad", "call_read", "call_write"]);
     expect(h.executed).toEqual(["call_read"]);
     const withheld = outcome.items[2]!;
