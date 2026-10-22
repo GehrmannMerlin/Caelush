@@ -199,14 +199,24 @@ describe(`long-run context acceptance (${String(STEPS)} steps, ${POLICY} policy)
      * fixture had silently fallen back to a legacy policy, every bound below would describe a
      * different product than the one a user gets.
      */
-    let workingSet: { readonly targetTokens: number; readonly triggerRatio: number } | undefined;
+    let headroom:
+      | { readonly expectedGrowthTokens: number; readonly preferredOutputTokens: number }
+      | undefined;
     if (POLICY === "default") {
-      expect(fixture.run.contextBudgetPolicy.version).toBe("WORKING_SET_V2");
-      if (fixture.run.contextBudgetPolicy.version !== "WORKING_SET_V2") return;
-      // min(effective input, 96 000): the production cap, not a value this test chose.
-      expect(fixture.run.contextBudgetPolicy.workingSet.targetTokens).toBe(96_000);
-      expect(fixture.run.contextBudgetPolicy.requestBudget.version).toBe("LEGACY_FULL_OUTPUT_V1");
-      workingSet = fixture.run.contextBudgetPolicy.workingSet;
+      /*
+       * The production default no longer carries a working set. It freezes the headroom algorithm and
+       * its parameters; the output allowance and the preparation trigger are derived per turn from
+       * the input that is actually prepared.
+       */
+      expect(fixture.run.contextBudgetPolicy.version).toBe("TURN_BUDGET_V3");
+      if (fixture.run.contextBudgetPolicy.version !== "TURN_BUDGET_V3") return;
+      expect(fixture.run.contextBudgetPolicy.algorithm).toBe("HEADROOM_V1");
+      expect(fixture.run.contextBudgetPolicy.preferredOutputTokens).toBe(8_192);
+      expect(fixture.run.contextBudgetPolicy.expectedGrowthTokens).toBeGreaterThan(0);
+      expect(
+        (fixture.run.contextBudgetPolicy as { readonly workingSet?: unknown }).workingSet,
+      ).toBeUndefined();
+      headroom = fixture.run.contextBudgetPolicy;
     } else {
       expect(fixture.run.contextBudgetPolicy).toEqual({ version: "LEGACY_FULL_OUTPUT_V1" });
     }
@@ -311,14 +321,19 @@ describe(`long-run context acceptance (${String(STEPS)} steps, ${POLICY} policy)
       expect(rollovers[0]!.created_step_sequence).toBeLessThan(129);
     } else {
       /*
-       * Under the default policy the bound is compaction, not the 128-record ceiling: history is
-       * reorganized before the Surface ever reaches it. Both facts are read from durable state — a
-       * checkpoint row and a compaction-marked epoch — rather than from anything the script decided.
+       * Under the headroom policy this Run is nowhere near its window: a million-token model and a
+       * few hundred small reads. The correct behaviour is therefore *not* to reorganize history —
+       * and this is the assertion that would have failed for three years of the old default, which
+       * compacted at roughly 72 000 tokens no matter how much room it had.
+       *
+       * The 128-record Surface boundary still rolls over, because that bound is structural and has
+       * nothing to do with capacity.
        */
-      expect(checkpoints.length).toBeGreaterThanOrEqual(1);
-      expect(compactions.length).toBeGreaterThanOrEqual(1);
-      expect(adapter.summaryCalls).toBeGreaterThanOrEqual(1);
-      expect(rollovers).toHaveLength(0);
+      expect(checkpoints).toHaveLength(0);
+      expect(compactions).toHaveLength(0);
+      expect(adapter.summaryCalls).toBe(0);
+      expect(rollovers.length).toBeGreaterThanOrEqual(1);
+      expect(rollovers[0]!.created_step_sequence).toBeLessThan(129);
     }
 
     /*
@@ -333,12 +348,45 @@ describe(`long-run context acceptance (${String(STEPS)} steps, ${POLICY} policy)
     const firstBytes = adapter.requestBytes[0]!;
     const largestBytes = Math.max(...adapter.requestBytes);
     expect(firstBytes).toBeGreaterThan(0);
-    if (workingSet !== undefined) {
-      const triggerBytes = Math.ceil(
-        workingSet.targetTokens * workingSet.triggerRatio * UTF8_BYTES_PER_TOKEN,
-      );
-      const overshootBytes = 8 * 1024;
-      expect(largestBytes).toBeLessThanOrEqual(triggerBytes + overshootBytes);
+    if (headroom !== undefined) {
+      /*
+       * The bound is the window, and it is checked against the durable per-turn decision rather than
+       * against a byte heuristic: the last turn's `inputTokens + outputAllowanceTokens + safetyTokens`
+       * must fit its `windowTokens`, and its remaining room must cover the growth it expects.
+       */
+      expect(largestBytes).toBeLessThanOrEqual(MODEL_LIMITS.contextWindowTokens * UTF8_BYTES_PER_TOKEN);
+      const decisionDb = new DatabaseSync(fixture.databasePath, { readOnly: true });
+      try {
+        const row = decisionDb
+          .prepare("SELECT breakdown_json FROM context_runtime_states WHERE run_id=?")
+          .get(fixture.run.id) as { breakdown_json: string } | undefined;
+        expect(row).toBeDefined();
+        const decision = (
+          JSON.parse(row!.breakdown_json) as {
+            readonly turnBudget?: {
+              readonly version: string;
+              readonly windowTokens: number;
+              readonly inputTokens: number;
+              readonly outputAllowanceTokens: number;
+              readonly safetyTokens: number;
+              readonly remainingTokens: number;
+              readonly expectedGrowthTokens: number;
+              readonly decision: string;
+            };
+          }
+        ).turnBudget;
+        expect(decision).toBeDefined();
+        expect(decision!.version).toBe("TURN_BUDGET_DECISION_V1");
+        expect(decision!.windowTokens).toBe(MODEL_LIMITS.contextWindowTokens);
+        expect(decision!.outputAllowanceTokens).toBe(headroom.preferredOutputTokens);
+        expect(decision!.inputTokens + decision!.outputAllowanceTokens + decision!.safetyTokens).toBeLessThanOrEqual(
+          decision!.windowTokens,
+        );
+        expect(decision!.decision).toBe("KEEP");
+        expect(decision!.remainingTokens).toBeGreaterThanOrEqual(decision!.expectedGrowthTokens);
+      } finally {
+        decisionDb.close();
+      }
     } else {
       expect(largestBytes).toBeGreaterThanOrEqual(firstBytes);
     }

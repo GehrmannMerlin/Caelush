@@ -32,6 +32,7 @@ class UnusedFixtureAdapter implements ApiAdapter {
   readonly id = FIXTURE_API;
 
   async *stream(_input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
+    void _input;
     yield { type: "adapter.finish", payload: { finishReason: "STOP" } };
   }
 }

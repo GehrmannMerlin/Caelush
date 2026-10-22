@@ -59,10 +59,6 @@ function sseText(text: string): Response {
   );
 }
 
-interface ToolResultWire {
-  readonly content: string;
-}
-
 function toolContents(wire: Record<string, unknown> | undefined): readonly string[] {
   const messages = (wire?.["messages"] ?? []) as readonly Record<string, unknown>[];
   return messages
