@@ -1,7 +1,7 @@
 import type { TextStreamPart, ToolSet } from "ai";
 import { createAIError } from "../../errors/ai-error.js";
 import { normalizeOpenAICompatibleError } from "./error-normalizer.js";
-import { parseOpenAICompatibleToolInput } from "./tool-call-parser.js";
+import { classifyOpenAICompatibleToolInput } from "./tool-call-parser.js";
 import {
   assertRawToolCallIdentity,
   createRawStreamState,
@@ -114,15 +114,57 @@ export function* translateOpenAICompatiblePart(
     }
 
     case "tool-call": {
-      const input = parseOpenAICompatibleToolInput(part.input);
-      if (input === undefined) {
-        throw invalidResponse(state, "The stream returned an invalid tool call.");
-      }
+      // Prefer the bytes the provider actually sent. The SDK parses an argument string when it can,
+      // which would otherwise leave a rejection reporting zero bytes and could not distinguish raw
+      // text from an already-decoded JSON string.
+      const receivedArguments = state.privateReplayCapture?.receivedArguments(part.toolCallId);
+      const classification = classifyOpenAICompatibleToolInput(receivedArguments ?? part.input);
       if (part.toolCallId.length === 0) {
         throw invalidResponse(state, "The stream returned a tool call without identity.");
       }
       assertToolName(part.toolName, state);
 
+      if (classification.kind === "REJECTED") {
+        // The request is identifiable and the turn is otherwise well formed, so this is a value the
+        // model can be told about rather than a stream failure. Nothing is substituted for the
+        // arguments: no empty object, no repair, no guessed prefix.
+        const lifecycle = state.toolLifecycles.get(part.toolCallId);
+        if (lifecycle === undefined) {
+          state.toolLifecycles.set(part.toolCallId, {
+            name: part.toolName,
+            completed: false,
+          });
+          yield {
+            type: "tool_call.start",
+            payload: { toolCallId: part.toolCallId, toolName: part.toolName },
+          };
+        } else if (lifecycle.completed || lifecycle.name !== part.toolName) {
+          throw invalidResponse(state, "The stream changed a completed tool call.");
+        }
+        const current = state.toolLifecycles.get(part.toolCallId);
+        if (current === undefined) {
+          throw invalidResponse(state, "The stream lost a tool call lifecycle.");
+        }
+        current.completed = true;
+        state.privateReplayCapture?.rejectTool(
+          part.toolCallId,
+          part.toolName,
+          classification.issue,
+        );
+        // Truncation is a fact about the turn, and the provider states it in the finish reason. When
+        // it is known, the reason is upgraded; otherwise the parse failure stands on its own.
+        const issue =
+          classification.issue.code === "MALFORMED_JSON" && state.raw.nativeFinishReason() === "length"
+            ? { ...classification.issue, code: "INCOMPLETE_ARGUMENTS" as const }
+            : classification.issue;
+        yield {
+          type: "tool_call.rejected",
+          payload: { toolCallId: part.toolCallId, toolName: part.toolName, issue },
+        };
+        return;
+      }
+
+      const input = classification.input;
       const call = { id: part.toolCallId, name: part.toolName, input };
       state.privateReplayCapture?.completeTool(call.id, call.name, call.input);
       const lifecycle = state.toolLifecycles.get(call.id);

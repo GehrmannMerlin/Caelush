@@ -577,6 +577,9 @@ function trackAdapterEvent(
     case "tool_call.completed":
       tracker.complete(event.payload.id, event.payload.name, context);
       return undefined;
+    case "tool_call.rejected":
+      tracker.reject(event.payload.toolCallId, event.payload.toolName, context);
+      return undefined;
     case "adapter.finish":
       return {
         finishReason: event.payload.finishReason,
@@ -638,6 +641,8 @@ function toPublicEvent(
       return { type: "tool_call.delta", payload: { ...event.payload } };
     case "tool_call.completed":
       return { type: "tool_call.completed", payload: event.payload };
+    case "tool_call.rejected":
+      return { type: "tool_call.rejected", payload: event.payload };
     case "usage":
       return { type: "usage", payload: event.payload };
     default:

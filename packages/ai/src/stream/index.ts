@@ -9,6 +9,7 @@ export type {
   AITextDeltaEvent,
   AIToolCallCompletedEvent,
   AIToolCallDeltaEvent,
+  AIToolCallRejectedEvent,
   AIToolCallStartEvent,
   AIUsageEvent,
 } from "./events.js";

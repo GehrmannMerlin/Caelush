@@ -1,5 +1,7 @@
 import { assertExactKeys, assertNonEmptyString, describeValue } from "../internal/assertions.js";
 import { isJsonObject } from "../json/json-value.js";
+import { assertAIRejectedToolArgumentsIssue } from "../tools/received-tool-request.js";
+import type { AIRejectedToolArgumentsIssue } from "../tools/received-tool-request.js";
 import type { JsonObject } from "../json/json-value.js";
 
 /**
@@ -46,6 +48,20 @@ export interface AIToolCallContent {
   readonly input: JsonObject;
 }
 
+/**
+ * A tool call the model requested whose arguments could not be executed.
+ *
+ * It keeps the provider's identity, the Tool name and the typed reason, and it deliberately has no
+ * `input`: the model never produced an argument object, so writing one would put words in its mouth.
+ * The raw argument text lives only in the provider's private replay artifact.
+ */
+export interface AIToolCallRejectedContent {
+  readonly type: "tool-call-rejected";
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly issue: AIRejectedToolArgumentsIssue;
+}
+
 /** A text part in user input or a Tool result. */
 export interface AIUserTextPart {
   readonly type: "text";
@@ -74,7 +90,7 @@ export type AIUserContent = AIUserTextPart | AIUserImagePart;
 export type AIToolResultContent = string | readonly AIUserContent[];
 
 /** One part of an assistant message. */
-export type AIContent = AITextContent | AIToolCallContent;
+export type AIContent = AITextContent | AIToolCallContent | AIToolCallRejectedContent;
 
 /** Phase 2A compatibility name for {@link AITextContent}. */
 export type AIAssistantTextContent = AITextContent;
@@ -87,6 +103,7 @@ export type AIAssistantContent = AIContent;
 
 const TEXT_KEYS = ["type", "text"] as const;
 const TOOL_CALL_KEYS = ["type", "toolCallId", "toolName", "input"] as const;
+const TOOL_CALL_REJECTED_KEYS = ["type", "toolCallId", "toolName", "issue"] as const;
 const USER_TEXT_KEYS = ["type", "text"] as const;
 const USER_IMAGE_KEYS = ["type", "mediaType", "data"] as const;
 const USER_IMAGE_KEYS_WITH_DETAIL = ["type", "mediaType", "data", "detail"] as const;
@@ -192,6 +209,21 @@ export function isAIContent(value: unknown): value is AIContent {
     );
   }
 
+  if (candidate.type === "tool-call-rejected") {
+    try {
+      assertExactKeys(candidate, TOOL_CALL_REJECTED_KEYS, "AI rejected tool-call content");
+      assertAIRejectedToolArgumentsIssue(candidate.issue);
+    } catch {
+      return false;
+    }
+    return (
+      typeof candidate.toolCallId === "string" &&
+      candidate.toolCallId.length > 0 &&
+      typeof candidate.toolName === "string" &&
+      candidate.toolName.length > 0
+    );
+  }
+
   return false;
 }
 
@@ -221,6 +253,14 @@ export function assertAIContent(value: unknown): asserts value is AIContent {
         `AI tool-call input must be a JSON object, received ${describeValue(candidate.input)}.`,
       );
     }
+    return;
+  }
+
+  if (candidate.type === "tool-call-rejected") {
+    assertExactKeys(candidate, TOOL_CALL_REJECTED_KEYS, "AI rejected tool-call content");
+    assertNonEmptyString(candidate.toolCallId, "AI rejected tool-call toolCallId");
+    assertNonEmptyString(candidate.toolName, "AI rejected tool-call toolName");
+    assertAIRejectedToolArgumentsIssue(candidate.issue);
     return;
   }
 

@@ -21,6 +21,14 @@ export interface ToolCallTracker {
   delta(toolCallId: string, context: AIErrorContext): void;
   /** Complete a tool call. An inactive call or a renamed tool is a violation. */
   complete(toolCallId: string, toolName: string, context: AIErrorContext): void;
+  /**
+   * Close a tool call whose arguments were rejected.
+   *
+   * It is a lifecycle end, not a completion: the call is no longer open, so a finished stream may
+   * not report it as an unfinished call, and it was never executable, so `completed` stays false in
+   * every projection that asks for executable calls.
+   */
+  reject(toolCallId: string, toolName: string, context: AIErrorContext): void;
   /** Ids announced but not completed, in announcement order. */
   openIds(): readonly string[];
   /** Every id seen, in announcement order. */
@@ -60,6 +68,20 @@ export function createToolCallTracker(): ToolCallTracker {
       if (lifecycle === undefined || lifecycle.completed) {
         throw invalidResponse(
           `AI stream completed the inactive tool call "${toolCallId}".`,
+          context,
+        );
+      }
+      if (lifecycle.name !== toolName) {
+        throw invalidResponse(`AI stream changed the tool name of "${toolCallId}".`, context);
+      }
+      lifecycle.completed = true;
+    },
+
+    reject(toolCallId, toolName, context): void {
+      const lifecycle = lifecycles.get(toolCallId);
+      if (lifecycle === undefined || lifecycle.completed) {
+        throw invalidResponse(
+          `AI stream rejected the inactive tool call "${toolCallId}".`,
           context,
         );
       }

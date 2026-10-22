@@ -20,6 +20,7 @@ export type {
   AIContent,
   AITextContent,
   AIToolCallContent,
+  AIToolCallRejectedContent,
 } from "./content.js";
 export { AI_MESSAGE_PHASES, isAIMessagePhase } from "./assistant-item.js";
 export type { AIMessagePhase, AIModelTurnAssistantItem } from "./assistant-item.js";

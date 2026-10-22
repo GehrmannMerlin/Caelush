@@ -74,6 +74,7 @@ export type {
   AISystemMessage,
   AITextContent,
   AIToolCallContent,
+  AIToolCallRejectedContent,
   AIToolResultMessage,
   AIUserMessage,
 } from "./messages/index.js";
@@ -83,11 +84,26 @@ export type { AIMessagePhase, AIModelTurnAssistantItem } from "./messages/index.
 export {
   assertAIFinishReason,
   assertAIToolCall,
+  assertAIReceivedToolRequest,
+  assertAIRejectedToolArgumentsIssue,
   AI_FINISH_REASONS,
+  AI_RECEIVED_TOOL_REQUEST_KINDS,
+  AI_REJECTED_TOOL_ARGUMENT_ISSUE_CODES,
   assertAIToolSpec,
+  executableToolCalls,
   isAIFinishReason,
+  isAIRejectedToolArgumentsIssueCode,
+  isExecutableToolRequest,
+  rejectedToolRequests,
 } from "./tools/index.js";
-export type { AIFinishReason, AIToolCall, AIToolSpec } from "./tools/index.js";
+export type {
+  AIFinishReason,
+  AIReceivedToolRequest,
+  AIRejectedToolArgumentsIssue,
+  AIRejectedToolArgumentsIssueCode,
+  AIToolCall,
+  AIToolSpec,
+} from "./tools/index.js";
 
 export { assertModelUsage, normalizeModelUsage } from "./models/model-usage.js";
 export type { ModelUsage } from "./models/model-usage.js";
@@ -240,6 +256,7 @@ export type {
   AITextDeltaEvent,
   AIToolCallCompletedEvent,
   AIToolCallDeltaEvent,
+  AIToolCallRejectedEvent,
   AIToolCallStartEvent,
   AIUsageEvent,
 } from "./stream/events.js";

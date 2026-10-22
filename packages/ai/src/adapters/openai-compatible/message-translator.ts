@@ -91,6 +91,23 @@ function toAssistantMessage(
       continue;
     }
     const raw = rawToolArguments.get(part.toolCallId);
+    if (part.type === "tool-call-rejected") {
+      // A rejected call is replayed with the exact argument bytes when the private artifact holds
+      // them. Without it the in-memory message has no bytes at all, so the wire states "no complete
+      // arguments" rather than substituting an object the model never produced.
+      content.push({
+        type: "tool-call" as const,
+        toolCallId: part.toolCallId,
+        toolName: part.toolName,
+        input: {},
+        providerOptions: {
+          openaiCompatible: {
+            function: { name: part.toolName, arguments: raw?.rawArguments ?? "" },
+          },
+        },
+      });
+      continue;
+    }
     content.push(
       raw === undefined
         ? toAssistantContent(part)
@@ -119,6 +136,19 @@ function toAssistantMessage(
 function toAssistantContent(part: AIAssistantContent): AssistantPart {
   if (part.type === "text") {
     return { type: "text" as const, text: part.text };
+  }
+  if (part.type === "tool-call-rejected") {
+    // Reached only when no private artifact supplied the received bytes: the wire then states that
+    // the call carried no complete arguments, which is true, instead of inventing an object.
+    return {
+      type: "tool-call" as const,
+      toolCallId: part.toolCallId,
+      toolName: part.toolName,
+      input: {},
+      providerOptions: {
+        openaiCompatible: { function: { name: part.toolName, arguments: "" } },
+      },
+    };
   }
   return {
     type: "tool-call" as const,

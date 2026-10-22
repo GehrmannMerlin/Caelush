@@ -110,6 +110,9 @@ describe("@caelush/ai subpaths", () => {
       "tool_call.start",
       "tool_call.delta",
       "tool_call.completed",
+      // A request whose arguments cannot be executed is a value the model is told about, so the
+      // adapter contract names it beside the completed lifecycle.
+      "tool_call.rejected",
       "usage",
       "adapter.finish",
     ]);

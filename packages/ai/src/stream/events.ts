@@ -1,4 +1,5 @@
 import type { AIFinishReason, AIToolCall } from "../tools/tool-call.js";
+import type { AIRejectedToolArgumentsIssue } from "../tools/received-tool-request.js";
 import type { AIInvocationResolution } from "../request/resolved-model-request.js";
 import type { AISerializableError } from "../errors/serializable-error.js";
 import type { LLMCallId } from "../ids/llm-call-id.js";
@@ -96,6 +97,21 @@ export interface AIToolCallCompletedEvent {
   readonly payload: AIToolCall;
 }
 
+/**
+ * A tool call whose arguments could not be executed.
+ *
+ * It is a value, not a failure: the request has reliable identity and the turn reached a trusted
+ * finish, so the conversation can state exactly what happened and let the model correct it.
+ */
+export interface AIToolCallRejectedEvent {
+  readonly type: "tool_call.rejected";
+  readonly payload: {
+    readonly toolCallId: string;
+    readonly toolName: string;
+    readonly issue: AIRejectedToolArgumentsIssue;
+  };
+}
+
 /** A usage snapshot. A later snapshot supersedes an earlier one. */
 export interface AIUsageEvent {
   readonly type: "usage";
@@ -127,6 +143,7 @@ export type AIStreamEvent =
   | AIToolCallStartEvent
   | AIToolCallDeltaEvent
   | AIToolCallCompletedEvent
+  | AIToolCallRejectedEvent
   | AIUsageEvent
   | AIStreamFinishEvent
   | AIStreamErrorEvent;
@@ -140,6 +157,7 @@ export const AI_STREAM_EVENT_TYPES = [
   "tool_call.start",
   "tool_call.delta",
   "tool_call.completed",
+  "tool_call.rejected",
   "usage",
   "stream.finish",
   "stream.error",

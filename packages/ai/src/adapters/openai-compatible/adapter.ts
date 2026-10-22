@@ -99,11 +99,16 @@ export function createOpenAICompatibleApiAdapter(): ApiAdapter {
         onError: () => undefined,
       });
 
-      const privateReplayCapture = nativeReplayEnabled
-        ? createDeepSeekPrivateReplayCapture({
-            requireReasoning: (request.tools?.length ?? 0) > 0,
-          })
-        : undefined;
+      // Capture is enabled for every tool-bearing turn, not only a native-replay one: a rejected
+      // call's exact received bytes can only live here, and whether one occurred is not knowable
+      // before the stream is read. The artifact is only handed to the caller when it is either
+      // required for replay or carries a rejection.
+      const privateReplayCapture =
+        nativeReplayEnabled || (request.tools?.length ?? 0) > 0
+          ? createDeepSeekPrivateReplayCapture({
+              requireReasoning: nativeReplayEnabled && (request.tools?.length ?? 0) > 0,
+            })
+          : undefined;
       const state = createStreamTranslationState(signal, model.ref, privateReplayCapture);
       let finishSeen = false;
       let replayFinishComplete = false;
@@ -131,7 +136,8 @@ export function createOpenAICompatibleApiAdapter(): ApiAdapter {
               model.adapterMetadata?.["openai-compatible"],
             ),
           );
-          if (input.capturePrivateCompletion !== undefined) {
+          const required = nativeReplayEnabled || privateReplayCapture.hasRejectedTool();
+          if (input.capturePrivateCompletion !== undefined && required) {
             input.capturePrivateCompletion(candidate);
           } else if (candidate.completeness === "COMPLETE") {
             candidate.payload.fill(0);
@@ -203,18 +209,28 @@ function assertReplayToolCalls(
   providerId: string,
   model: import("../../models/model-ref.js").ModelRef,
 ): void {
-  const semanticCalls = content.filter((part) => part.type === "tool-call");
+  // Request order is the pairing authority, and a rejected call is a request: it occupies the same
+  // position in the payload as it does in the durable content.
+  const semanticCalls = content.filter(
+    (part) => part.type === "tool-call" || part.type === "tool-call-rejected",
+  );
   if (semanticCalls.length !== rawCalls.length) throw replayUnavailable(providerId, model);
   for (let index = 0; index < semanticCalls.length; index += 1) {
     const semantic = semanticCalls[index];
     const raw = rawCalls[index];
-    if (
-      semantic === undefined ||
-      semantic.type !== "tool-call" ||
-      raw === undefined ||
-      raw.id !== semantic.toolCallId ||
-      raw.name !== semantic.toolName
-    )
+    if (semantic === undefined || raw === undefined) throw replayUnavailable(providerId, model);
+    if (raw.id !== semantic.toolCallId || raw.name !== semantic.toolName)
+      throw replayUnavailable(providerId, model);
+    if (semantic.type === "tool-call-rejected") {
+      // The artifact must have recorded exactly this: a call whose arguments were unexecutable.
+      if (
+        raw.argumentMode !== "PROVIDER_INVALID_ARGUMENTS" ||
+        parseOpenAICompatibleToolInput(raw.rawArguments) !== undefined
+      )
+        throw replayUnavailable(providerId, model);
+      continue;
+    }
+    if (raw.argumentMode === "PROVIDER_INVALID_ARGUMENTS")
       throw replayUnavailable(providerId, model);
     const parsed = parseOpenAICompatibleToolInput(raw.rawArguments);
     if (parsed === undefined || !isDeepStrictEqual(parsed, semantic.input)) {

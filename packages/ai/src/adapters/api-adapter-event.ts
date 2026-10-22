@@ -1,4 +1,5 @@
 import type { AIFinishReason, AIToolCall } from "../tools/tool-call.js";
+import type { AIRejectedToolArgumentsIssue } from "../tools/received-tool-request.js";
 import type { AIMessagePhase } from "../messages/assistant-item.js";
 import type { ModelUsage } from "../models/model-usage.js";
 
@@ -42,6 +43,21 @@ export type AIAdapterEvent =
       readonly payload: { readonly toolCallId: string; readonly delta: string };
     }
   | { readonly type: "tool_call.completed"; readonly payload: AIToolCall }
+  | {
+      /**
+       * A request the provider delivered with arguments this dialect cannot execute.
+       *
+       * The adapter keeps the identity it received and states the typed reason; it never substitutes
+       * a parsed object, never retries inside the adapter and never emits a Tool result. What to tell
+       * the model is decided by the layer that owns the conversation, not here.
+       */
+      readonly type: "tool_call.rejected";
+      readonly payload: {
+        readonly toolCallId: string;
+        readonly toolName: string;
+        readonly issue: AIRejectedToolArgumentsIssue;
+      };
+    }
   | { readonly type: "usage"; readonly payload: ModelUsage }
   | {
       readonly type: "adapter.finish";
@@ -60,6 +76,7 @@ export const AI_ADAPTER_EVENT_TYPES = [
   "tool_call.start",
   "tool_call.delta",
   "tool_call.completed",
+  "tool_call.rejected",
   "usage",
   "adapter.finish",
 ] as const satisfies readonly AIAdapterEvent["type"][];

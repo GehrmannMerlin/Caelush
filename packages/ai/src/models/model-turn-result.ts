@@ -1,4 +1,5 @@
 import type { AIFinishReason, AIToolCall } from "../tools/tool-call.js";
+import type { AIReceivedToolRequest } from "../tools/received-tool-request.js";
 import type { AIInvocationResolution } from "../request/resolved-model-request.js";
 import type { LLMCallId } from "../ids/llm-call-id.js";
 import type { ModelRef } from "./model-ref.js";
@@ -20,6 +21,15 @@ export interface AIModelTurnResult {
   readonly providerId: ProviderId;
   readonly model: ModelRef;
   readonly text: string;
+  /**
+   * Every request the turn produced, in source order, executable and rejected alike.
+   *
+   * This is the authority for "one result per request". `toolCalls` is its executable projection;
+   * a rejected request exists only here and in the assistant items, carrying identity and a typed
+   * reason but no argument object.
+   */
+  readonly toolRequests: readonly AIReceivedToolRequest[];
+  /** The executable projection of {@link toolRequests}, in the same order. */
   readonly toolCalls: readonly AIToolCall[];
   /** Ordered, phase-aware assistant items when produced by the canonical stream assembler. */
   readonly assistantItems?: readonly AIModelTurnAssistantItem[];

@@ -4,6 +4,10 @@ import type { AIInvocationResolution } from "../request/resolved-model-request.j
 import type { AIStreamEvent } from "./events.js";
 import type { AISerializableError } from "../errors/serializable-error.js";
 import type { AIToolCall } from "../tools/tool-call.js";
+import type {
+  AIReceivedToolRequest,
+  AIRejectedToolArgumentsIssue,
+} from "../tools/received-tool-request.js";
 import type { LLMCallId } from "../ids/llm-call-id.js";
 import type { ModelRef } from "../models/model-ref.js";
 import type { ModelUsage } from "../models/model-usage.js";
@@ -15,6 +19,12 @@ import type { AIMessagePhase, AIModelTurnAssistantItem } from "../messages/assis
 type MutableAssistantPart =
   | { type: "text"; text: string }
   | { type: "tool-call"; toolCallId: string; toolName: string; input: AIToolCall["input"] }
+  | {
+      type: "tool-call-rejected";
+      toolCallId: string;
+      toolName: string;
+      issue: AIRejectedToolArgumentsIssue;
+    }
   | { type: "PENDING_TOOL_CALL"; toolCallId: string };
 
 interface MutableAssistantItem {
@@ -62,6 +72,13 @@ export function createAIModelTurnAssembler(): AIModelTurnAssembler {
   const toolCallItems = new Map<string, string>();
   const toolCallOrder: string[] = [];
   const toolCalls = new Map<string, AIToolCall>();
+  /**
+   * The ordered authority: one entry per request the model sent, executable or rejected.
+   *
+   * `toolCalls` is its executable projection and never a second copy of the order, which is what
+   * makes "one result per request, same identity, original order" checkable.
+   */
+  const toolRequests: AIReceivedToolRequest[] = [];
 
   function failInvalidResponse(message: string): never {
     throw createAIError("AI_INVALID_RESPONSE", message, {
@@ -154,6 +171,40 @@ export function createAIModelTurnAssembler(): AIModelTurnAssembler {
             input: event.payload.input,
           };
           toolCalls.set(event.payload.id, event.payload);
+          toolRequests.push({
+            kind: "EXECUTABLE",
+            sourceOrdinal: toolRequests.length,
+            call: event.payload,
+          });
+          return;
+        }
+        case "tool_call.rejected": {
+          const assistantItemId = toolCallItems.get(event.payload.toolCallId);
+          const item = assistantItemId === undefined ? undefined : items.get(assistantItemId);
+          const slot = item?.content.findIndex(
+            (part) =>
+              part.type === "PENDING_TOOL_CALL" && part.toolCallId === event.payload.toolCallId,
+          );
+          if (item === undefined || slot === undefined || slot < 0) {
+            return failInvalidResponse(
+              "AI adapter rejected a Tool call without its announcement.",
+            );
+          }
+          // The recorded part keeps the identity and the reason, and never an `input`: the model
+          // produced no argument object, so none is written down.
+          item.content[slot] = {
+            type: "tool-call-rejected",
+            toolCallId: event.payload.toolCallId,
+            toolName: event.payload.toolName,
+            issue: event.payload.issue,
+          };
+          toolRequests.push({
+            kind: "INVALID_ARGUMENTS",
+            sourceOrdinal: toolRequests.length,
+            id: event.payload.toolCallId,
+            name: event.payload.toolName,
+            issue: event.payload.issue,
+          });
           return;
         }
         case "usage":
@@ -212,6 +263,14 @@ export function createAIModelTurnAssembler(): AIModelTurnAssembler {
           if (part.type === "PENDING_TOOL_CALL") {
             return failInvalidResponse("AI stream finished with an incomplete Tool call item.");
           }
+          if (part.type === "tool-call-rejected") {
+            return {
+              type: "tool-call-rejected" as const,
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+              issue: part.issue,
+            };
+          }
           return part.type === "text"
             ? { type: "text", text: part.text }
             : {
@@ -232,12 +291,18 @@ export function createAIModelTurnAssembler(): AIModelTurnAssembler {
         .filter((part): part is Extract<AIContent, { type: "text" }> => part.type === "text")
         .map((part) => part.text)
         .join("");
-      const completedCalls = toolCallOrder.map((toolCallId) => {
+      const completedCalls = toolCallOrder.flatMap((toolCallId) => {
         const toolCall = toolCalls.get(toolCallId);
+        // A rejected call is a closed request that produced no executable call; only a call that was
+        // announced and then neither completed nor rejected is an unfinished turn.
         if (toolCall === undefined) {
+          const rejected = toolRequests.some(
+            (request) => request.kind === "INVALID_ARGUMENTS" && request.id === toolCallId,
+          );
+          if (rejected) return [];
           return failInvalidResponse("AI stream finished before a Tool call was completed.");
         }
-        return toolCall;
+        return [toolCall];
       });
 
       const result: {
@@ -246,6 +311,7 @@ export function createAIModelTurnAssembler(): AIModelTurnAssembler {
         model: ModelRef;
         text: string;
         toolCalls: readonly AIToolCall[];
+        toolRequests: readonly AIReceivedToolRequest[];
         assistantItems: readonly AIModelTurnAssistantItem[];
         finishReason: AIModelTurnResult["finishReason"];
         usage?: ModelUsage;
@@ -256,6 +322,7 @@ export function createAIModelTurnAssembler(): AIModelTurnAssembler {
         model,
         text,
         toolCalls: Object.freeze(completedCalls),
+        toolRequests: Object.freeze([...toolRequests]),
         assistantItems: Object.freeze(assistantItems),
         finishReason,
         resolution,

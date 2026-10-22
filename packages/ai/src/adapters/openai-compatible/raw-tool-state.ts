@@ -23,6 +23,8 @@ export interface RawStreamState {
   readonly ids: Set<string>;
   /** All distinct tool-call indexes observed in raw chunks. */
   readonly indexes: Set<number>;
+  /** The provider-native index each tool-call id was first announced under. */
+  readonly indexById: Map<string, number>;
   /** The last provider-native finish reason, when the provider supplied one. */
   nativeFinishReason(): string | undefined;
   /** Record a provider-native finish reason. Called only by the adapter. */
@@ -37,12 +39,14 @@ export interface RawStreamState {
 export function createRawStreamState(): RawStreamState {
   const ids = new Set<string>();
   const indexes = new Set<number>();
+  const indexById = new Map<string, number>();
   let nativeFinishReason: string | undefined;
   let rawUsage: OpenAICompatibleRawUsage | undefined;
 
   return {
     ids,
     indexes,
+    indexById,
     nativeFinishReason: () => nativeFinishReason,
     observeFinishReason: (reason) => {
       nativeFinishReason = reason;
@@ -80,15 +84,27 @@ export function assertRawToolCallIdentity(rawValue: unknown, state: RawStreamSta
 
     for (const toolCall of toolCalls) {
       if (!isRecord(toolCall)) continue;
+      const index =
+        typeof toolCall.index === "number" && Number.isInteger(toolCall.index)
+          ? toolCall.index
+          : undefined;
       if (typeof toolCall.id === "string" && toolCall.id.length > 0) {
         if (toolCall.id.trim().length === 0) {
           throw new Error("OpenAI-compatible stream contained a whitespace tool-call id.");
         }
         state.ids.add(toolCall.id);
+        if (index !== undefined) {
+          // One id may be repeated across chunks for the same slot, but the same id under two
+          // different slots is two calls pretending to be one. The SDK collapses those by id, so the
+          // duplicate has to be refused from the raw chunks or it would silently lose a request.
+          const previous = state.indexById.get(toolCall.id);
+          if (previous !== undefined && previous !== index) {
+            throw new Error("OpenAI-compatible stream reused a tool-call id for a second call.");
+          }
+          state.indexById.set(toolCall.id, index);
+        }
       }
-      if (typeof toolCall.index === "number" && Number.isInteger(toolCall.index)) {
-        state.indexes.add(toolCall.index);
-      }
+      if (index !== undefined) state.indexes.add(index);
       if (toolCall.id === undefined && toolCall.index === undefined) {
         if (state.ids.size > 1 || state.indexes.size > 1) {
           throw new Error(

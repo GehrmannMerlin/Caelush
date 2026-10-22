@@ -24,7 +24,19 @@ export interface DeepSeekNativeReplayPayloadV1 {
     readonly name: string;
     readonly rawArguments: string;
     readonly argumentMode:
-      "PROVIDER_JSON" | "SDK_EMPTY_INPUT_NORMALIZATION" | "SDK_TRAILING_COMMA_NORMALIZATION";
+      | "PROVIDER_JSON"
+      | "SDK_EMPTY_INPUT_NORMALIZATION"
+      | "SDK_TRAILING_COMMA_NORMALIZATION"
+      /** The provider sent arguments this dialect could not execute; `rawArguments` is verbatim. */
+      | "PROVIDER_INVALID_ARGUMENTS";
+    /**
+     * Present only for a call whose arguments were rejected.
+     *
+     * It is written by this build and absent from artifacts written before the rejection path
+     * existed, so decoding accepts both shapes. A rejected call keeps its exact received bytes here
+     * and nowhere else: the public message carries only identity and a typed reason.
+     */
+    readonly rejected?: true;
   }[];
 }
 
@@ -36,6 +48,7 @@ interface ToolArgumentCapture {
   completed: boolean;
   rawArguments?: string;
   argumentMode?: DeepSeekNativeReplayPayloadV1["toolCalls"][number]["argumentMode"];
+  rejected?: true;
 }
 
 /** Bounded, linear capture of Provider-native reasoning and raw tool argument deltas. */
@@ -44,6 +57,12 @@ export interface DeepSeekPrivateReplayCapture {
   startTool(id: string, name: string): void;
   appendTool(id: string, delta: string): void;
   completeTool(id: string, name: string, input: JsonObject): void;
+  /** Record a call whose received arguments could not be parsed into an executable object. */
+  rejectTool(id: string, name: string, issue: { readonly code: string }): void;
+  /** The argument text received so far for one call, verbatim, when it is still bounded. */
+  receivedArguments(id: string): string | undefined;
+  /** True when at least one received call was rejected, so the artifact carries wire truth. */
+  hasRejectedTool(): boolean;
   finalize(
     providerId: string,
     model: string,
@@ -161,6 +180,30 @@ export function createDeepSeekPrivateReplayCapture(options: {
       current.rawArguments = rawArguments;
       current.argumentMode = argumentMode;
     },
+    rejectTool(id, name, issue) {
+      if (incomplete || disposed) return;
+      void issue;
+      const current = toolArguments.get(id);
+      if (current === undefined || current.completed || current.name !== name) {
+        invalidate();
+        return;
+      }
+      // The exact bytes the provider sent, kept verbatim so the next faithful replay can reproduce
+      // them. Nothing here is guessed or completed.
+      current.completed = true;
+      current.rejected = true;
+      current.rawArguments = current.chunks.join("");
+      current.argumentMode = "PROVIDER_INVALID_ARGUMENTS";
+    },
+    hasRejectedTool() {
+      for (const capture of toolArguments.values()) if (capture.rejected === true) return true;
+      return false;
+    },
+    receivedArguments(id) {
+      if (incomplete || disposed) return undefined;
+      const capture = toolArguments.get(id);
+      return capture === undefined ? undefined : capture.chunks.join("");
+    },
     finalize(providerId, model, connectionFingerprint) {
       if (incomplete || disposed) return { completeness: "INCOMPLETE" };
       const capturedTools = [...toolArguments.values()];
@@ -186,6 +229,7 @@ export function createDeepSeekPrivateReplayCapture(options: {
           name: call.name,
           rawArguments: call.rawArguments,
           argumentMode: call.argumentMode,
+          ...(call.rejected === true ? { rejected: true as const } : {}),
         })),
       };
       const serialized = JSON.stringify(payload);
@@ -250,15 +294,37 @@ export function decodeDeepSeekNativeReplayPayload(
     )
       return undefined;
     for (const call of value.toolCalls) {
+      if (!isRecord(call)) return undefined;
+      // Two accepted shapes: the original four fields, and the five-field form written once a
+      // rejected call exists. An artifact from an older build is not reinterpreted, only read.
+      const keys = Object.keys(call);
+      const hasRejectedFlag = keys.length === 5 && Object.hasOwn(call, "rejected");
+      if (!hasRejectedFlag && !hasExactKeys(call, ["id", "name", "rawArguments", "argumentMode"]))
+        return undefined;
       if (
-        !isRecord(call) ||
-        !hasExactKeys(call, ["id", "name", "rawArguments", "argumentMode"]) ||
+        hasRejectedFlag &&
+        !hasExactKeys(call, ["id", "name", "rawArguments", "argumentMode", "rejected"])
+      )
+        return undefined;
+      if (hasRejectedFlag && call.rejected !== true) return undefined;
+      if (
         typeof call.id !== "string" ||
         typeof call.name !== "string" ||
         typeof call.rawArguments !== "string" ||
         (call.argumentMode !== "PROVIDER_JSON" &&
           call.argumentMode !== "SDK_EMPTY_INPUT_NORMALIZATION" &&
-          call.argumentMode !== "SDK_TRAILING_COMMA_NORMALIZATION")
+          call.argumentMode !== "SDK_TRAILING_COMMA_NORMALIZATION" &&
+          call.argumentMode !== "PROVIDER_INVALID_ARGUMENTS")
+      )
+        return undefined;
+      // The flag and the argument mode must agree, so neither can claim a rejection the other denies.
+      if ((call.rejected === true) !== (call.argumentMode === "PROVIDER_INVALID_ARGUMENTS"))
+        return undefined;
+      // A call recorded as rejected must genuinely be unexecutable; a parseable object recorded as a
+      // rejection would mean the artifact disagrees with the durable message it replays.
+      if (
+        call.argumentMode === "PROVIDER_INVALID_ARGUMENTS" &&
+        parseOpenAICompatibleToolInput(call.rawArguments) !== undefined
       )
         return undefined;
     }

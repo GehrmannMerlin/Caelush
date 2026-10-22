@@ -234,6 +234,17 @@ function toAssistantContent(
 ): AnthropicContentBlock {
   if (part.type === "text") return { type: "text", text: part.text };
 
+  if (part.type === "tool-call-rejected") {
+    // This dialect has no representation for a tool_use whose arguments were never a document: the
+    // block requires an object. Substituting one would replay a request the model did not make, so
+    // the conversation is reported as unsupported here rather than silently rewritten.
+    throw createAIError(
+      "AI_CAPABILITY_UNSUPPORTED",
+      "This API cannot replay a tool call whose arguments were rejected.",
+      { model },
+    );
+  }
+
   if (toolNamesByCallId.has(part.toolCallId)) {
     throw invalid(
       `AI message list declares the tool call id "${part.toolCallId}" more than once.`,
