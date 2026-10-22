@@ -19,6 +19,7 @@ export type AIErrorCode =
   | "AI_CONTEXT_OVERFLOW"
   | "AI_ABORTED"
   | "AI_INVALID_RESPONSE"
+  | "AI_PROVIDER_UNAVAILABLE"
   | "AI_PROVIDER_ERROR";
 
 /** Every frozen code, in canonical order. */
@@ -36,17 +37,21 @@ export const AI_ERROR_CODES = [
   "AI_CONTEXT_OVERFLOW",
   "AI_ABORTED",
   "AI_INVALID_RESPONSE",
+  "AI_PROVIDER_UNAVAILABLE",
   "AI_PROVIDER_ERROR",
 ] as const satisfies readonly AIErrorCode[];
 
 /**
  * Frozen default retryability.
  *
- * Only `AI_RATE_LIMIT`, `AI_NETWORK` and `AI_TIMEOUT` are retryable. Everything
- * else is a deterministic outcome: retrying it would repeat the same failure.
- * Note that `AI_PROVIDER_ERROR` and `AI_CONTEXT_OVERFLOW` are deliberately *not*
- * retryable, and that the AI core itself never retries — the flag is information
- * for the caller.
+ * Only the transient codes are retryable: `AI_RATE_LIMIT`, `AI_NETWORK`,
+ * `AI_TIMEOUT` and `AI_PROVIDER_UNAVAILABLE`. Everything else is a deterministic
+ * outcome: retrying it would repeat the same failure. `AI_PROVIDER_UNAVAILABLE`
+ * is the verified-transient status family (408, 425, 500, 502, 503, 504), which
+ * is kept apart from `AI_PROVIDER_ERROR` because a generic 4xx must never be
+ * retried. Note that `AI_PROVIDER_ERROR` and `AI_CONTEXT_OVERFLOW` are
+ * deliberately *not* retryable, and that the AI core itself never retries — the
+ * flag is information for the caller.
  */
 export const DEFAULT_AI_ERROR_RETRYABILITY: Record<AIErrorCode, boolean> = {
   AI_PROVIDER_NOT_FOUND: false,
@@ -62,6 +67,7 @@ export const DEFAULT_AI_ERROR_RETRYABILITY: Record<AIErrorCode, boolean> = {
   AI_CONTEXT_OVERFLOW: false,
   AI_ABORTED: false,
   AI_INVALID_RESPONSE: false,
+  AI_PROVIDER_UNAVAILABLE: true,
   AI_PROVIDER_ERROR: false,
 };
 
@@ -80,6 +86,7 @@ export const AI_ERROR_DEFAULT_MESSAGES: Record<AIErrorCode, string> = {
   AI_CONTEXT_OVERFLOW: "AI provider rejected the request because the context window was exceeded.",
   AI_ABORTED: "AI provider request was aborted.",
   AI_INVALID_RESPONSE: "AI provider returned an invalid response.",
+  AI_PROVIDER_UNAVAILABLE: "AI provider is temporarily unavailable.",
   AI_PROVIDER_ERROR: "AI provider request failed.",
 };
 

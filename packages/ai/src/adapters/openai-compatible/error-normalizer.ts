@@ -40,6 +40,17 @@ export function normalizeOpenAICompatibleError(
         ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
       });
     }
+    // A verified transient status is distinguishable from a deterministic request defect. Treating
+    // the whole family as `AI_PROVIDER_ERROR` made one 503 end the Run, while a generic 400 must
+    // never be retried — so the classification is by status, not by "some provider failure".
+    if (statusCode !== undefined && TRANSIENT_PROVIDER_STATUSES.has(statusCode)) {
+      const retryAfterMs = parseRetryAfterMs(readRetryAfterValue(error.responseHeaders), nowMs);
+      return createAIError("AI_PROVIDER_UNAVAILABLE", undefined, {
+        ...context,
+        cause: error,
+        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+      });
+    }
     if (statusCode !== undefined && statusCode >= 400) {
       return createAIError("AI_PROVIDER_ERROR", undefined, { ...context, cause: error });
     }
@@ -68,6 +79,20 @@ export function normalizeOpenAICompatibleError(
   }
   return createAIError("AI_PROVIDER_ERROR", undefined, { ...context, cause: error });
 }
+
+/**
+ * HTTP statuses that mean "the provider could not serve this request right now".
+ *
+ * ```text
+ * 408 request timeout        425 too early
+ * 500 internal error         502 bad gateway
+ * 503 service unavailable    504 gateway timeout
+ * ```
+ *
+ * The list is explicit rather than `>= 500` so a future status cannot become retryable by accident,
+ * and 429 is handled before it because it carries a different, already-classified meaning.
+ */
+const TRANSIENT_PROVIDER_STATUSES = new Set([408, 425, 500, 502, 503, 504]);
 
 /**
  * SDK errors that are not transport failures, mapped onto the frozen error set.

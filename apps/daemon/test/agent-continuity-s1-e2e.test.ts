@@ -197,6 +197,32 @@ describe("agent continuity S1 — dependency barrier and correction facts", () =
     }
   }, 180_000);
 
+  it("waits out a transient 503 instead of ending the Run", async () => {
+    const { fixture, wires } = await fixtureWith("provider-503", (_wire, index) =>
+      index === 0
+        ? new Response('{"error":{"message":"upstream unavailable"}}', {
+            status: 503,
+            headers: { "content-type": "application/json" },
+          })
+        : sse(undefined, "Recovered after the provider came back."),
+    );
+    try {
+      const first = await fixture.composition.controller.start(fixture.run.id);
+      // A transient status is a wait, not a terminal failure: the Run stays RUNNING with a durable
+      // retry checkpoint, and the attempt is scheduled rather than looped in-process.
+      expect(first.run.status).toBe("RUNNING");
+      expect(wires).toHaveLength(1);
+
+      await new Promise((resolve) => setTimeout(resolve, 1_600));
+      const resumed = await fixture.composition.controller.recover(fixture.run.id);
+
+      expect(resumed.run.status).toBe("COMPLETED");
+      expect(wires).toHaveLength(2);
+    } finally {
+      await fixture.dispose();
+    }
+  }, 120_000);
+
   it("keeps an independent read running after a malformed request in the same batch", async () => {    const { fixture, wires } = await fixtureWith("independent-read", (_wire, index) =>
       index === 0
         ? sse([

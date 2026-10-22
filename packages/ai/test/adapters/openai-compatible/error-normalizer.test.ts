@@ -89,13 +89,33 @@ describe("OpenAI-compatible error normalization", () => {
     ).toBe(Date.parse("2026-10-21T07:28:00.000Z") - Date.parse("2026-10-04T00:00:00.000Z"));
   });
 
-  it("maps other provider 4xx and 5xx to a non-retryable provider error", () => {
-    for (const statusCode of [400, 404, 409, 422, 500, 502, 503]) {
+  it("maps a deterministic provider 4xx to a non-retryable provider error", () => {
+    for (const statusCode of [400, 404, 409, 422, 508]) {
       const normalized = normalize(apiError({ statusCode }));
 
       expect(normalized.code, String(statusCode)).toBe("AI_PROVIDER_ERROR");
       expect(normalized.retryable).toBe(false);
     }
+  });
+
+  it("maps the verified transient status family to a retryable unavailability", () => {
+    // Q20: one 503 must be a wait-and-resend, not the end of the Run. 508 is deliberately outside
+    // the list, so the family stays explicit rather than "every 5xx".
+    for (const statusCode of [408, 425, 500, 502, 503, 504]) {
+      const normalized = normalize(apiError({ statusCode }));
+
+      expect(normalized.code, String(statusCode)).toBe("AI_PROVIDER_UNAVAILABLE");
+      expect(normalized.retryable).toBe(true);
+    }
+  });
+
+  it("keeps a transient status's retry-after hint", () => {
+    const normalized = normalize(
+      apiError({ statusCode: 503, responseHeaders: { "retry-after": "3" } }),
+    );
+
+    expect(normalized.code).toBe("AI_PROVIDER_UNAVAILABLE");
+    expect(normalized.retryAfterMs).toBe(3_000);
   });
 
   it("maps a transport failure without a status code to network, retryable", () => {

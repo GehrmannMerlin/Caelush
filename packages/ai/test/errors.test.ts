@@ -25,11 +25,12 @@ const EXPECTED_RETRYABILITY: Record<AIErrorCode, boolean> = {
   AI_CONTEXT_OVERFLOW: false,
   AI_ABORTED: false,
   AI_INVALID_RESPONSE: false,
+  AI_PROVIDER_UNAVAILABLE: true,
   AI_PROVIDER_ERROR: false,
 };
 
 describe("AIErrorCode", () => {
-  it("freezes exactly the fourteen codes", () => {
+  it("freezes exactly the fifteen codes", () => {
     expect(AI_ERROR_CODES).toEqual([
       "AI_PROVIDER_NOT_FOUND",
       "AI_MODEL_UNSUPPORTED",
@@ -44,6 +45,7 @@ describe("AIErrorCode", () => {
       "AI_CONTEXT_OVERFLOW",
       "AI_ABORTED",
       "AI_INVALID_RESPONSE",
+      "AI_PROVIDER_UNAVAILABLE",
       "AI_PROVIDER_ERROR",
     ]);
   });
@@ -55,10 +57,15 @@ describe("AIErrorCode", () => {
     }
   });
 
-  it("only treats rate limit, network and timeout as retryable", () => {
+  it("treats only the verified transient codes as retryable", () => {
     const retryable = AI_ERROR_CODES.filter((code) => DEFAULT_AI_ERROR_RETRYABILITY[code]);
 
-    expect(retryable).toEqual(["AI_RATE_LIMIT", "AI_NETWORK", "AI_TIMEOUT"]);
+    expect(retryable).toEqual([
+      "AI_RATE_LIMIT",
+      "AI_NETWORK",
+      "AI_TIMEOUT",
+      "AI_PROVIDER_UNAVAILABLE",
+    ]);
   });
 
   it("has a default message for every code", () => {

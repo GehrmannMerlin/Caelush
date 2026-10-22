@@ -22,6 +22,7 @@ import type { AIError } from "@caelush/ai";
  * AI_RATE_LIMIT                → RATE_LIMIT
  * AI_NETWORK                   → NETWORK
  * AI_TIMEOUT                   → TIMEOUT
+ * AI_PROVIDER_UNAVAILABLE      → NETWORK (a verified transient status family)
  * AI_CONTEXT_OVERFLOW          → CONTEXT_OVERFLOW
  * AI_PROVIDER_ERROR            → PROVIDER_ERROR
  * AI_PROVIDER_NOT_FOUND        → PROVIDER_ERROR
@@ -144,6 +145,10 @@ export function toModelTurnExecutionErrorCode(code: AIError["code"]): ModelTurnE
       return "NETWORK";
     case "AI_TIMEOUT":
       return "TIMEOUT";
+    case "AI_PROVIDER_UNAVAILABLE":
+      // A 503 and a dropped connection have the same recovery: wait and resend. The durable
+      // spelling stays `NETWORK`, so no checkpoint written before this code existed changes shape.
+      return "NETWORK";
     case "AI_CONTEXT_OVERFLOW":
       return "CONTEXT_OVERFLOW";
     case "AI_MODEL_UNSUPPORTED":
