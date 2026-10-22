@@ -97,6 +97,10 @@ function echoTool(execute: AgentTool["execute"]): AgentTool {
       additionalProperties: false,
     },
     executionMode: "SEQUENTIAL",
+    // A plain echo reads nothing and writes nothing, so it declares the read-only scheduling class
+    // the canonical batch coordinator needs in order to keep it independent of an earlier rejected
+    // call. Without the fact it would be `UNKNOWN`, and an unproven mutation is withheld by design.
+    scheduling: { class: "READ_ONLY" },
     execute,
   };
 }

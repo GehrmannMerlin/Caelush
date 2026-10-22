@@ -115,6 +115,8 @@ function fixtureDefinitions(execute: AgentTool["execute"]): readonly CodingToolD
       additionalProperties: false,
     },
     executionMode: "SEQUENTIAL",
+    // The echo call is a read: declaring that lets it stay independent of a sibling rejection.
+    scheduling: { class: "READ_ONLY" },
     execute,
   };
   const approval: AgentTool = {
