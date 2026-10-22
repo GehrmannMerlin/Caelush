@@ -186,9 +186,28 @@ describe("ResourceGovernor", () => {
     }
   });
 
-  it("still refuses an oversized batch under V2", () => {
+  it("admits an oversized batch under V2, because the size is a chunk size", () => {
+    // Q06: the batch limit is an execution chunk size, not an admission line. The coordinator splits
+    // the calls and the model still receives one result per call, so refusing here would be the
+    // defect this test used to lock in.
     expect(
       evaluate(v2, {
+        cumulativeAgentTurns: 1,
+        cumulativeToolOperations: 0,
+        turnsInLease: 1,
+        toolsInLease: 0,
+        requestedToolCalls: 20,
+        progressLevel: "HEALTHY",
+        replanCount: 0,
+      }),
+    ).toMatchObject({ kind: "ALLOW" });
+  });
+
+  it("still refuses an oversized batch for a Run frozen under V1", () => {
+    // A V1 policy's `maxToolCallsPerTurn` meant "the largest batch this Run may submit". Reinterpreting
+    // a frozen policy would change a decision the Run already made, so the refusal stays.
+    expect(
+      evaluate(v1, {
         cumulativeAgentTurns: 1,
         cumulativeToolOperations: 0,
         turnsInLease: 1,

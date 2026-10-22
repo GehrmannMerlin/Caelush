@@ -129,11 +129,19 @@ export class ResourceGovernor {
     assertNonNegativeInteger(input.requestedToolCalls, "requestedToolCalls");
     assertNonNegativeInteger(input.replanCount, "replanCount");
     if (input.requestedToolCalls > this.policy.batch.maxToolCallsPerTurn) {
-      return {
-        kind: "REPLAN",
-        requestedToolCalls: input.requestedToolCalls,
-        reason: "BATCH_TOO_LARGE",
-      };
+      // The batch size is an **execution chunk size**, not an admission limit, for a Run on the
+      // autonomous correction discipline: the coordinator dispatches the requested calls in
+      // source-ordered chunks of at most this many, and the model sees one result per call. A Run
+      // whose policy was frozen under the historical discipline keeps the old refusal, because its
+      // `maxToolCallsPerTurn` meant "the largest batch this Run may ever submit" and reinterpreting a
+      // frozen policy would change a decision the Run already made.
+      if (!this.autonomous) {
+        return {
+          kind: "REPLAN",
+          requestedToolCalls: input.requestedToolCalls,
+          reason: "BATCH_TOO_LARGE",
+        };
+      }
     }
     const maxToolCalls = this.policy.hardLimits.maxToolCalls;
     if (
