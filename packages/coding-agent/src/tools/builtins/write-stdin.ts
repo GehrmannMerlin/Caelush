@@ -77,6 +77,7 @@ const inputSchema = {
 export function createWriteStdinTool(operations: ProcessOperations): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "write_stdin",
+    scheduling: { class: "UNKNOWN" },
     description: "Poll process.",
     inputSchema,
     resultDetailsSchema: EXEC_OUTPUT_SCHEMA,

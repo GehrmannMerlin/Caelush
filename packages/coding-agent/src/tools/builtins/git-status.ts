@@ -80,6 +80,7 @@ const resultDetailsSchema = {
 export function createGitStatusTool(operations: GitOperations): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "git_status",
+    scheduling: { class: "READ_ONLY" },
     description: "Git.",
     executionMode: "PARALLEL_SAFE",
     inputSchema,

@@ -8,6 +8,8 @@ import {
 
 import type { AgentBudgetBlock } from "../../loop/ports/model-request-admission.js";
 import { isToolExecutionEnvironment } from "../types/execution-environment.js";
+import { mayRunAfterEarlierFailure } from "../types/scheduling.js";
+import type { ToolSchedulingFacts } from "../types/scheduling.js";
 import { assertToolSecurityContext } from "../admission/security-context.js";
 import type { ToolBudgetAdmissionPort } from "../admission/budget-port.js";
 import type {
@@ -132,6 +134,29 @@ export const TOOL_NOT_STARTED_CONTENT =
 const TOOL_NOT_STARTED_CANCELLED_CONTENT =
   "This tool call was not started because the tool batch was cancelled.";
 
+/**
+ * Stable model-facing code for a call withheld after an earlier call in the same batch failed.
+ *
+ * The call was never prepared for dispatch and never executed. The model is told to re-submit it
+ * once the failed call is corrected, or to explain why it does not depend on it — the batch
+ * coordinator cannot prove independence from an argument object, and guessing would be worse than
+ * asking.
+ */
+export const TOOL_DEPENDENCY_UNPROVEN = "TOOL_DEPENDENCY_UNPROVEN";
+
+/** Safe, bounded feedback for a mutation withheld after an earlier failure in the same batch. */
+export const TOOL_DEPENDENCY_UNPROVEN_CONTENT =
+  "This tool call was not started because an earlier call in this batch did not complete, and this " +
+  "operation may change state that depends on it. Nothing was executed for this call. Correct the " +
+  "failed call first, then re-submit this operation once you can state why it is independent.";
+
+/** Why the rest of a batch cannot be assumed to apply to the state the model observed. */
+interface BatchBarrier {
+  /** The source position of the call that established the barrier. */
+  readonly ordinal: number;
+  readonly code: string;
+}
+
 /** @deprecated Use TOOL_NOT_STARTED. Kept as a source-compatible alias for existing Agent hosts. */
 export const SKIPPED_AFTER_UNCERTAIN_EXECUTION = TOOL_NOT_STARTED;
 
@@ -199,17 +224,21 @@ async function executeCallsSequentially(
 
   const items: ToolBatchItemOutcome[] = [];
   let skipRemaining = false;
+  let barrier: BatchBarrier | undefined;
   let callIndex = 0;
 
   for (const call of request.calls) {
     const notStartedCalls = request.calls.slice(callIndex);
+    const ordinal = callIndex;
     callIndex += 1;
 
     // A rejected request never reached a handler and never will: the model has to correct it. It is
     // reported in place rather than dropped, so the result batch still answers every request the
-    // model made, in the order it made them.
+    // model made, in the order it made them. It also establishes the batch barrier: a later call was
+    // chosen on the assumption this one's arguments described the world.
     if (isModelRejectedCall(call)) {
       items.push(modelRejectedItem(call));
+      barrier ??= { ordinal, code: TOOL_ARGUMENTS_REJECTED };
       continue;
     }
 
@@ -227,6 +256,14 @@ async function executeCallsSequentially(
       // A safe, model-correctable rejection. It never blocks the rest of the batch, and it never
       // created a ToolInvocation, an observation, an approval, a budget reservation or an event.
       items.push(Object.freeze({ kind: "REJECTED", call, feedback: prepared.feedback }));
+      barrier ??= { ordinal, code: prepared.feedback.code };
+      continue;
+    }
+
+    // The failure above happened before this call, and the model believed something about the world
+    // when it wrote this one. Only a class that cannot depend on unobserved state may still run.
+    if (barrier !== undefined && !mayRunAfterEarlierFailure(schedulingOf(prepared.call))) {
+      items.push(dependencyUnprovenItem(call, barrier, ordinal));
       continue;
     }
 
@@ -248,6 +285,7 @@ async function executeCallsSequentially(
         // A known, safe Tool failure is not a barrier: the loop continues. Only an unproven side
         // effect stops the batch.
         if (isUncertainSettlement(invocation.error)) skipRemaining = true;
+        else if (invocation.status === "FAILED") barrier ??= { ordinal, code: "TOOL_EXECUTION_FAILED" };
         break;
       }
       case "WAITING_APPROVAL": {
@@ -320,6 +358,7 @@ async function executeCallsWithWindows(
 ): Promise<ToolBatchOutcome> {
   const items: ToolBatchItemOutcome[] = [];
   let skipRemaining = false;
+  let barrier: BatchBarrier | undefined;
   let index = 0;
 
   while (index < request.calls.length) {
@@ -328,6 +367,7 @@ async function executeCallsWithWindows(
       // Reported even while the batch is skipping dependants: the request was never going to run,
       // and its feedback is what lets the model correct it.
       items.push(modelRejectedItem(current));
+      barrier ??= { ordinal: index, code: TOOL_ARGUMENTS_REJECTED };
       index += 1;
       continue;
     }
@@ -341,6 +381,15 @@ async function executeCallsWithWindows(
     const first = prepareCall(options, current);
     if (first.kind === "REJECTED") {
       items.push(Object.freeze({ kind: "REJECTED", call: current, feedback: first.feedback }));
+      barrier ??= { ordinal: index, code: first.feedback.code };
+      index += 1;
+      continue;
+    }
+
+    // The window below must never straddle a barrier. A read may still run; anything else is
+    // withheld in place so the model sees exactly which call it has to re-submit.
+    if (barrier !== undefined && !mayRunAfterEarlierFailure(schedulingOf(first.call))) {
+      items.push(dependencyUnprovenItem(current, barrier, index));
       index += 1;
       continue;
     }
@@ -360,6 +409,7 @@ async function executeCallsWithWindows(
         const prepared = prepareCall(options, candidate);
         if (prepared.kind !== "READY") break;
         if (prepared.call.resolved.tool.executionMode !== "PARALLEL_SAFE") break;
+        if (barrier !== undefined && !mayRunAfterEarlierFailure(schedulingOf(prepared.call))) break;
         window.push(prepared.call);
         windowCalls.push(candidate);
         probe += 1;
@@ -401,6 +451,8 @@ async function executeCallsWithWindows(
             }),
           );
           if (isUncertainSettlement(invocation.error)) skipRemaining = true;
+          else if (invocation.status === "FAILED")
+            barrier ??= { ordinal: index + offset, code: "TOOL_EXECUTION_FAILED" };
           break;
         }
         case "WAITING_APPROVAL":
@@ -582,6 +634,42 @@ function skippedItem(
     disposition: "SAFE_FAILURE",
   });
   return Object.freeze({ kind: "SKIPPED", call, feedback });
+}
+
+/**
+ * A call withheld because an earlier call in the same batch did not complete.
+ *
+ * It is a `SKIPPED` item, not a `REJECTED` one: nothing was prepared for dispatch, so calling it a
+ * schema rejection would tell the model to fix arguments that may be perfectly valid. The details
+ * carry only the source ordinal and the earlier failure's stable code — never its text, arguments or
+ * output.
+ */
+function dependencyUnprovenItem(
+  call: ToolCallRequest,
+  barrier: BatchBarrier,
+  ordinal: number,
+): ToolBatchItemOutcome {
+  const feedback: ToolFailureFeedback = Object.freeze({
+    code: TOOL_DEPENDENCY_UNPROVEN,
+    content: TOOL_DEPENDENCY_UNPROVEN_CONTENT,
+    details: Object.freeze({
+      dependencyBarrierOrdinal: barrier.ordinal,
+      dependencyBarrierCode: barrier.code,
+      notExecutedOrdinal: ordinal,
+    }),
+    disposition: "SAFE_FAILURE",
+  });
+  return Object.freeze({ kind: "SKIPPED", call, feedback });
+}
+
+/**
+ * The scheduling facts of a prepared call.
+ *
+ * A Tool that declared nothing is `UNKNOWN`, which is not a read-only default: the declaration is
+ * the only proof this layer accepts, and an absent declaration proves nothing.
+ */
+function schedulingOf(call: PreparedToolCall): ToolSchedulingFacts {
+  return call.resolved.tool.scheduling ?? { class: "UNKNOWN" };
 }
 
 function cancelledOutcome(

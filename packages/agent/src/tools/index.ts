@@ -36,6 +36,14 @@ export type { ToolExecutionMode } from "./types/execution-mode.js";
 
 export type { ToolExecutionIdentity } from "./types/execution-identity.js";
 export type { ToolExecutionEnvironment } from "./types/execution-environment.js";
+export {
+  assertToolSchedulingFacts,
+  DEFAULT_TOOL_SCHEDULING_FACTS,
+  isToolSchedulingClass,
+  mayRunAfterEarlierFailure,
+  TOOL_SCHEDULING_CLASSES,
+} from "./types/scheduling.js";
+export type { ToolSchedulingClass, ToolSchedulingFacts } from "./types/scheduling.js";
 export { DISCARDING_TOOL_EXECUTION_UPDATE_SINK } from "./types/tool-update.js";
 export type { ToolExecutionUpdate, ToolExecutionUpdateSink } from "./types/tool-update.js";
 export type { AgentToolExecutionInput } from "./types/execution-input.js";
@@ -343,6 +351,8 @@ export {
   createToolBatchCoordinator,
   modelRejectedArgumentsFeedback,
   TOOL_ARGUMENTS_REJECTED,
+  TOOL_DEPENDENCY_UNPROVEN,
+  TOOL_DEPENDENCY_UNPROVEN_CONTENT,
   TOOL_NOT_STARTED,
   TOOL_NOT_STARTED_CONTENT,
   SKIPPED_AFTER_UNCERTAIN_CONTENT,

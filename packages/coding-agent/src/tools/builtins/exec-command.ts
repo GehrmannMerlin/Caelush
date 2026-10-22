@@ -91,6 +91,7 @@ const inputSchema = {
 export function createExecCommandTool(operations: ExecOperations): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "exec_command",
+    scheduling: { class: "UNKNOWN" },
     description: "Run command.",
     inputSchema,
     resultDetailsSchema: EXEC_OUTPUT_SCHEMA,

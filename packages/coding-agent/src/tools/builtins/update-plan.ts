@@ -213,6 +213,7 @@ export function renderAcceptedPlan(plan: TaskPlan): string {
 export function createUpdatePlanTool(): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "update_plan",
+    scheduling: { class: "CONTROL_STATE" },
     description: "Record milestones and the current working record.",
     inputSchema,
     resultDetailsSchema,

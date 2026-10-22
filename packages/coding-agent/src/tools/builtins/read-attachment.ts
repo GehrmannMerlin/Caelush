@@ -225,6 +225,7 @@ export function createReadAttachmentTool(
 ): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "read_attachment",
+    scheduling: { class: "READ_ONLY" },
     description: "Read a bounded range from an attached file.",
     inputSchema,
     resultDetailsSchema,

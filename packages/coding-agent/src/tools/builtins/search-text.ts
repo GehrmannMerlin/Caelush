@@ -109,6 +109,7 @@ export function createSearchTextTool(
 ): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "search_text",
+    scheduling: { class: "READ_ONLY" },
     description: "Search workspace text.",
     executionMode: "PARALLEL_SAFE",
     inputSchema,

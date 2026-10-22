@@ -71,6 +71,7 @@ const inputSchema = {
 export function createStopProcessTool(operations: ProcessOperations): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "stop_process",
+    scheduling: { class: "UNKNOWN" },
     description: "Stop managed process.",
     inputSchema,
     resultDetailsSchema: EXEC_OUTPUT_SCHEMA,

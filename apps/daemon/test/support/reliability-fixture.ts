@@ -43,7 +43,20 @@ import {
 export type FixtureContextBudgetPolicy = ContextBudgetPolicySnapshot | "DAEMON_DEFAULT";
 
 export interface ReliabilityFixtureOptions {
-  readonly adapter: ApiAdapter;
+  /**
+   * The scripted dialect adapter, appended to the built-in adapter set.
+   *
+   * Required unless {@link useBuiltinAdapter} is set. A test that exercises the real SDK over an
+   * in-memory wire uses the built-in `openai-compatible-chat` adapter and injects only
+   * `providerBindingOverrides.transport.fetch`, because appending a second adapter under the same
+   * API id is a duplicate registration and wrapping the built-in one under `fixture-api` fails the
+   * provider's own replay-identity check.
+   */
+  readonly adapter?: ApiAdapter;
+  /** Use only the built-in adapters, with the wire supplied through the provider binding. */
+  readonly useBuiltinAdapter?: boolean;
+  /** Provider binding overrides, e.g. `transport.fetch` returning an in-memory SSE response. */
+  readonly providerBindingOverrides?: Record<string, unknown>;
   readonly rootDirectory?: string;
   readonly limits?: RunLimits;
   readonly resourcePolicy?: unknown;
@@ -103,11 +116,19 @@ export async function createReliabilityFixture(
     const compose = (recoveryPolicy?: ResourceCorrectionRecoveryPolicy | null) =>
       composeDaemon({
         storage: storage!,
-        providerBindings: [fixtureBinding()],
+        providerBindings: [
+          fixtureBinding(
+            (options.providerBindingOverrides ?? {}) as Parameters<typeof fixtureBinding>[0],
+          ),
+        ],
         modelSources: [
           fixtureModelSource(options.modelLimits, options.adapterMetadata, options.api),
         ],
-        adapterOverrides: [options.adapter],
+        adapterOverrides: options.useBuiltinAdapter
+          ? []
+          : options.adapter === undefined
+            ? []
+            : [options.adapter],
         defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
         ...(recoveryPolicy === undefined
           ? {}

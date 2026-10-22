@@ -72,6 +72,7 @@ const inputSchema = {
 export function createReadFileTool(operations: ReadFileProbeOperations): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "read_file",
+    scheduling: { class: "READ_ONLY" },
     description: "Read workspace text.",
     executionMode: "PARALLEL_SAFE",
     inputSchema,

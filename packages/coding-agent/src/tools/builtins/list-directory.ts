@@ -74,6 +74,7 @@ export function createListDirectoryTool(
 ): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "list_directory",
+    scheduling: { class: "READ_ONLY" },
     description: "List dir.",
     executionMode: "PARALLEL_SAFE",
     inputSchema,

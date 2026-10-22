@@ -2,6 +2,7 @@ import { ToolNameSchema, type ToolName } from "@caelush/protocol";
 
 import { AgentToolRegistrationError, AgentToolRegistryStateError } from "../types/errors.js";
 import type { AgentTool } from "../types/agent-tool.js";
+import { assertToolSchedulingFacts } from "../types/scheduling.js";
 import { cloneJsonValue, deepFreezeJson } from "../schema/json-canonical.js";
 import {
   DEFAULT_TOOL_REGISTRY_OPTIONS,
@@ -108,6 +109,19 @@ export class DefaultAgentToolRegistryBuilder implements AgentToolRegistryBuilder
       description: tool.description,
       inputSchema: clonedSchema,
     });
+    // A scheduling declaration is provenance for the batch coordinator, so it is validated at
+    // registration and copied by value. The field set is exact: a Tool cannot smuggle arguments, a
+    // resource path or a model-supplied claim through it.
+    if (tool.scheduling !== undefined) {
+      try {
+        assertToolSchedulingFacts(tool.scheduling);
+      } catch {
+        throw new AgentToolRegistrationError(
+          `Tool "${name}" declared invalid scheduling facts.`,
+          { reason: "INVALID_DEFINITION", toolName: name },
+        );
+      }
+    }
     const clonedTool: AgentTool = Object.freeze({
       name: spec.name,
       description: spec.description,
@@ -115,6 +129,9 @@ export class DefaultAgentToolRegistryBuilder implements AgentToolRegistryBuilder
       label: tool.label,
       resultDetailsSchema: deepFreezeJson(cloneJsonValue(tool.resultDetailsSchema)),
       executionMode: tool.executionMode,
+      ...(tool.scheduling === undefined
+        ? {}
+        : { scheduling: Object.freeze({ class: tool.scheduling.class }) }),
       ...(tool.prepareArguments === undefined ? {} : { prepareArguments: tool.prepareArguments }),
       execute: tool.execute,
     });

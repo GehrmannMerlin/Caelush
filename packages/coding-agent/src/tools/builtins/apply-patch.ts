@@ -92,6 +92,7 @@ const resultDetailsSchema = {
 export function createApplyPatchTool(operations: PatchOperations): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "apply_patch",
+    scheduling: { class: "MAY_MUTATE" },
     description: "Apply workspace patch.",
     inputSchema,
     resultDetailsSchema,

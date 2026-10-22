@@ -28,6 +28,7 @@ import {
   type ToolCallPreparationOutcome,
   type ToolCallRequest,
   type ToolFailureFeedback,
+  type ToolSchedulingClass,
 } from "../src/index.js";
 
 /**
@@ -120,12 +121,23 @@ interface Harness {
   readonly setRejections: (byToolName: Record<string, ToolFailureFeedback>) => void;
 }
 
-function harness(): Harness {
+function harness(options: {
+  readonly classes?: Readonly<Record<string, ToolSchedulingClass>>;
+  /** External call ids whose durable settlement is a real `FAILED`, not a completed error result. */
+  readonly failOn?: readonly string[];
+  /** External call ids whose durable settlement has an unproven side effect. */
+  readonly unknownOn?: readonly string[];
+} = {}): Harness {
   const events: string[] = [];
   const prepared: string[] = [];
   const preflights: string[][] = [];
   const executed: string[] = [];
   let rejections: Record<string, ToolFailureFeedback> = {};
+  // The fake tools have no effect at all, so `READ_ONLY` is the honest declaration for them. A test
+  // about the dependency barrier names the classes it needs instead of relying on this default.
+  const classes = options.classes ?? {};
+  const failOn = new Set(options.failOn ?? []);
+  const unknownOn = new Set(options.unknownOn ?? []);
 
   const coordinator = createToolBatchCoordinator({
     preparer: {
@@ -139,7 +151,13 @@ function harness(): Harness {
           kind: "READY",
           call: {
             request: value,
-            resolved: { tool: { name: value.toolName, executionMode: "SEQUENTIAL" } },
+            resolved: {
+              tool: {
+                name: value.toolName,
+                executionMode: "SEQUENTIAL",
+                scheduling: { class: classes[value.toolName] ?? "READ_ONLY" },
+              },
+            },
             args: {},
           } as unknown as PreparedToolCall,
         };
@@ -157,8 +175,17 @@ function harness(): Harness {
         const externalCallId = input.call.request.externalCallId;
         events.push(`execute:${externalCallId}`);
         executed.push(externalCallId);
-        const invocation = invocationOf(input.call.request);
-        return { kind: "SETTLED", invocation, observation: observationOf(invocation) };
+        const unknown = unknownOn.has(externalCallId);
+        const failed = unknown || failOn.has(externalCallId);
+        const invocation = invocationOf(input.call.request, {
+          ...(failed ? { status: "FAILED" as const } : {}),
+          ...(unknown ? { error: { code: "TOOL_OUTCOME_UNKNOWN" } } : {}),
+        });
+        return {
+          kind: "SETTLED",
+          invocation,
+          observation: observationOf(invocation, failed ? "failed" : "ok", failed),
+        };
       },
     },
   });
@@ -456,6 +483,101 @@ describe("canonical Tool batch — pre-invocation rejection", () => {
     expect(outcome.items.map((item) => item.kind)).toEqual(["REJECTED", "OBSERVATION"]);
     expect(idsOf(outcome.items)).toEqual(["call_bad", "call_good"]);
     expect(h.executed).toEqual(["call_good"]);
+  });
+
+  it("withholds a mutating call whose independence from the rejection is unproven", async () => {
+    const h = harness({ classes: { write_file: "MAY_MUTATE" } });
+    h.setRejections({
+      bad_tool: {
+        code: "TOOL_UNAVAILABLE",
+        content: "No such Tool is registered.",
+        details: {},
+        disposition: "SAFE_FAILURE",
+      },
+    });
+
+    const outcome = await h.coordinator.execute(
+      request([
+        { externalCallId: "call_bad", toolName: "bad_tool", args: {} },
+        { externalCallId: "call_read", toolName: "echo", args: {} },
+        { externalCallId: "call_write", toolName: "write_file", args: {} },
+      ]),
+    );
+
+    if (outcome.kind !== "COMPLETED") throw new Error("expected COMPLETED");
+    // The independent read still runs; the mutation is answered in place and never dispatched.
+    expect(outcome.items.map((item) => item.kind)).toEqual([
+      "REJECTED",
+      "OBSERVATION",
+      "SKIPPED",
+    ]);
+    expect(idsOf(outcome.items)).toEqual(["call_bad", "call_read", "call_write"]);
+    expect(h.executed).toEqual(["call_read"]);
+    const withheld = outcome.items[2]!;
+    expect(withheld.kind === "SKIPPED" && withheld.feedback.code).toBe("TOOL_DEPENDENCY_UNPROVEN");
+    expect(withheld.kind === "SKIPPED" && withheld.feedback.disposition).toBe("SAFE_FAILURE");
+  });
+
+  it("withholds a mutation after a malformed request without re-running the earlier calls", async () => {
+    const h = harness({ classes: { write_file: "MAY_MUTATE" } });
+    const outcome = await h.coordinator.execute(
+      request([
+        {
+          externalCallId: "call_bad",
+          toolName: "write_file",
+          issue: { code: "MALFORMED_JSON", argumentBytes: 17 },
+        },
+        { externalCallId: "call_read", toolName: "echo", args: {} },
+        { externalCallId: "call_write", toolName: "write_file", args: {} },
+      ]),
+    );
+
+    if (outcome.kind !== "COMPLETED") throw new Error("expected COMPLETED");
+    expect(outcome.items.map((item) => item.kind)).toEqual([
+      "MODEL_REJECTED",
+      "OBSERVATION",
+      "SKIPPED",
+    ]);
+    expect(h.executed).toEqual(["call_read"]);
+  });
+
+  it("withholds a mutation after a real execution failure but keeps plan bookkeeping going", async () => {
+    const h = harness({
+      classes: { write_file: "MAY_MUTATE", update_plan: "CONTROL_STATE" },
+      failOn: ["call_fail"],
+    });
+    const outcome = await h.coordinator.execute(
+      request([
+        { externalCallId: "call_fail", toolName: "write_file", args: {} },
+        { externalCallId: "call_plan", toolName: "update_plan", args: {} },
+        { externalCallId: "call_next", toolName: "write_file", args: {} },
+      ]),
+    );
+
+    if (outcome.kind !== "COMPLETED") throw new Error("expected COMPLETED");
+    expect(outcome.items.map((item) => item.kind)).toEqual([
+      "OBSERVATION",
+      "OBSERVATION",
+      "SKIPPED",
+    ]);
+    expect(h.executed).toEqual(["call_fail", "call_plan"]);
+  });
+
+  it("keeps the stronger skip for every call after an unknown outcome", async () => {
+    // An unknown effect is not a corrected-and-resubmit situation: the later calls were chosen
+    // against a state nobody observed, so even an independent-looking read is withheld.
+    const h = harness({ unknownOn: ["call_unknown"] });
+    const outcome = await h.coordinator.execute(
+      request([
+        { externalCallId: "call_unknown", toolName: "echo", args: {} },
+        { externalCallId: "call_read", toolName: "echo", args: {} },
+      ]),
+    );
+    if (outcome.kind !== "COMPLETED") throw new Error("expected COMPLETED");
+    expect(outcome.items.map((item) => item.kind)).toEqual(["OBSERVATION", "SKIPPED"]);
+    const withheld = outcome.items[1]!;
+    expect(withheld.kind === "SKIPPED" && withheld.feedback.code).toBe("TOOL_NOT_STARTED");
+    expect(h.executed).toEqual(["call_unknown"]);
   });
 
   it("turns a preparation infrastructure throw into an infrastructure failure, not a rejection", async () => {
@@ -962,7 +1084,15 @@ function readyPreparer() {
         kind: "READY",
         call: {
           request: value,
-          resolved: { tool: { name: value.toolName, executionMode: "SEQUENTIAL" } },
+          // The fake Tools used by these cases observe nothing and change nothing, so `READ_ONLY` is
+          // their honest declaration. A case about the dependency barrier names `MAY_MUTATE` itself.
+          resolved: {
+            tool: {
+              name: value.toolName,
+              executionMode: "SEQUENTIAL",
+              scheduling: { class: "READ_ONLY" as const },
+            },
+          },
           args: {},
         } as unknown as PreparedToolCall,
       };

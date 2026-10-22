@@ -68,6 +68,7 @@ const resultDetailsSchema = {
 export function createGitDiffTool(operations: GitOperations): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "git_diff",
+    scheduling: { class: "READ_ONLY" },
     description: "Git.",
     executionMode: "PARALLEL_SAFE",
     inputSchema,

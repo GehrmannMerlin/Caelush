@@ -1,4 +1,5 @@
-import type { AgentTool } from "@caelush/agent";
+import { DEFAULT_TOOL_SCHEDULING_FACTS, type AgentTool } from "@caelush/agent";
+import type { ToolSchedulingFacts } from "@caelush/agent";
 
 /**
  * The shared Coding builtin helper.
@@ -47,6 +48,14 @@ export interface CodingToolDefinitionInput {
   readonly prepareArguments?: AgentTool["prepareArguments"];
   /** Declared scheduling capability; omitted means `SEQUENTIAL`. */
   readonly executionMode?: AgentTool["executionMode"];
+  /**
+   * What the Tool can prove about its effect before it runs; omitted means `UNKNOWN`.
+   *
+   * A builtin states this next to its name because that is where a reader looks for "what does this
+   * Tool do to the world". Omitting it is not "read-only": it makes the call withheld after an
+   * earlier failure in the same batch.
+   */
+  readonly scheduling?: ToolSchedulingFacts | undefined;
 }
 
 /**
@@ -63,6 +72,7 @@ export function defineCodingTool(input: CodingToolDefinitionInput): AgentTool {
     label: humanizeToolName(input.name),
     resultDetailsSchema: input.resultDetailsSchema,
     executionMode: input.executionMode ?? "SEQUENTIAL",
+    scheduling: input.scheduling ?? DEFAULT_TOOL_SCHEDULING_FACTS,
     ...(input.prepareArguments === undefined ? {} : { prepareArguments: input.prepareArguments }),
     execute: input.execute,
   });

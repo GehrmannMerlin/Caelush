@@ -78,6 +78,7 @@ export function createFindFilesTool(
 ): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "find_files",
+    scheduling: { class: "READ_ONLY" },
     description: "Find workspace files.",
     executionMode: "PARALLEL_SAFE",
     inputSchema,

@@ -2,6 +2,7 @@ import type { AIToolSpec, JsonObject } from "@caelush/ai";
 
 import type { AgentToolExecutionInput } from "./execution-input.js";
 import type { ToolExecutionMode } from "./execution-mode.js";
+import type { ToolSchedulingFacts } from "./scheduling.js";
 import type { AgentToolResult } from "./tool-result.js";
 
 /**
@@ -73,6 +74,15 @@ export interface AgentTool<
    * records intent for a later round rather than changing today's scheduling.
    */
   readonly executionMode: ToolExecutionMode;
+  /**
+   * What this Tool can prove about its own effect before it runs.
+   *
+   * Optional and defaulting to `UNKNOWN`: a Tool that says nothing is treated as possibly mutating,
+   * so the batch coordinator withholds it after an earlier call in the same batch failed. It is data
+   * only — no handler, no resource handle, no model-supplied claim — and it never widens what a
+   * batch may execute or run concurrently.
+   */
+  readonly scheduling?: ToolSchedulingFacts | undefined;
   /** Optional pure compatibility normalization applied before schema validation. */
   readonly prepareArguments?: ((rawArgs: Readonly<JsonObject>) => TArgs) | undefined;
   readonly execute: (input: AgentToolExecutionInput<TArgs>) => Promise<AgentToolResult<TDetails>>;
