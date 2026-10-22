@@ -41,6 +41,14 @@ export interface PartialTurnResult {
   readonly model?: AIModelRef;
   readonly text?: string;
   readonly toolCalls?: AIModelTurnResult["toolCalls"];
+  /**
+   * The ordered received requests.
+   *
+   * A test that scripts a rejected-only turn supplies this and an empty `toolCalls`; when it is
+   * omitted the executable projection is mirrored, which is what a turn without rejected requests
+   * actually carries.
+   */
+  readonly toolRequests?: AIModelTurnResult["toolRequests"];
   readonly finishReason?: AIModelTurnResult["finishReason"];
   readonly usage?: ModelUsage | undefined;
   readonly resolution?: AIModelTurnResult["resolution"];
@@ -55,13 +63,21 @@ const DEFAULT_RESOLUTION: AIModelTurnResult["resolution"] = {
 /** Build a complete turn result from the fields a test cares about. */
 export function modelTurnResult(partial: PartialTurnResult = {}): AIModelTurnResult {
   const provider = partial.model?.provider ?? partial.providerId ?? "fixture";
+  const toolCalls = partial.toolCalls ?? [];
   return {
     // The AI call id is a different brand of the same `llm_<uuid>` string.
     callId: (partial.callId ?? createProtocolCallId()) as AIModelTurnResult["callId"],
     providerId: partial.providerId ?? provider,
     model: partial.model ?? { provider, model: "fixture-model" },
     text: partial.text ?? "",
-    toolCalls: partial.toolCalls ?? [],
+    toolRequests:
+      partial.toolRequests ??
+      toolCalls.map((call, sourceOrdinal) => ({
+        kind: "EXECUTABLE" as const,
+        sourceOrdinal,
+        call,
+      })),
+    toolCalls,
     finishReason: partial.finishReason ?? "STOP",
     ...(partial.usage === undefined ? {} : { usage: partial.usage }),
     resolution: partial.resolution ?? DEFAULT_RESOLUTION,

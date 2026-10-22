@@ -1,4 +1,5 @@
 import type { AIModelRequest, AIModelTurnResult, ModelUsage } from "@caelush/ai";
+import { countReceivedToolRequests } from "@caelush/ai";
 import type { AgentExecutionIdentity } from "@caelush/agent";
 import {
   buildTaskReviewPrompt,
@@ -143,7 +144,9 @@ export class TaskAcceptanceReviewer implements VerificationTaskReviewerPort {
       if (settlement?.kind === "EXCEEDED") {
         return { ...errorResult(input.bundle, "BUDGET_EXCEEDED"), budget: settlement };
       }
-      if (turn.toolCalls.length > 0) {
+      if (countReceivedToolRequests(turn) > 0) {
+        // A rejected-only turn has an empty `toolCalls` and still asked for a Tool. Both arms are
+        // checked by the shared helper, so a new content kind cannot reintroduce the blind spot.
         if (attempt + 1 < maxAttempts) continue;
         return errorResult(input.bundle, "REVIEWER_TOOLS_FORBIDDEN");
       }

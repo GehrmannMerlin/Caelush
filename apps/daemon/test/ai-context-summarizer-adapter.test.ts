@@ -205,4 +205,28 @@ describe("Phase 8C Daemon semantic summarizer adapter", () => {
       }),
     ).rejects.toThrow(/tool/i);
   });
+
+  it("refuses a summary turn whose only Tool request had unparseable arguments", async () => {
+    // `toolCalls` is empty here, so a projection-only check would accept the turn. The request is
+    // still a Tool request, and a summary is never allowed to ask for one.
+    const rejectedOnly = fakeGateway(
+      gatewayResult({
+        toolCalls: [],
+        toolRequests: [
+          {
+            kind: "INVALID_ARGUMENTS",
+            sourceOrdinal: 0,
+            id: "call_rejected",
+            name: "read_file",
+            issue: { code: "MALFORMED_JSON", argumentBytes: 9 },
+          },
+        ],
+      }),
+    );
+    await expect(
+      createAIContextSummarizerAdapter(rejectedOnly.gateway).summarize(input, {
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow(/tool/i);
+  });
 });

@@ -113,6 +113,27 @@ export function rejectedToolRequests(
 }
 
 /**
+ * How many Tool requests a settled turn actually produced, executable or not.
+ *
+ * This is the one helper every "a turn that must not use Tools" check calls. Reading
+ * `toolCalls.length` instead is the mistake it exists to prevent: `toolCalls` is the *executable
+ * projection*, so a turn whose only request had unparseable arguments reports zero executable calls
+ * while still having asked for a Tool.
+ *
+ * It tolerates a turn value produced before `toolRequests` existed — a host-supplied or historical
+ * result may carry only the executable projection — by falling back to that projection, which is the
+ * most that turn can prove. A value that carries `toolRequests` is answered from it exclusively, so
+ * a rejected request can never be hidden behind an empty `toolCalls`.
+ */
+export function countReceivedToolRequests(turn: {
+  readonly toolRequests?: readonly AIReceivedToolRequest[] | undefined;
+  readonly toolCalls: readonly AIToolCall[];
+}): number {
+  const requests = turn.toolRequests;
+  return Array.isArray(requests) ? requests.length : turn.toolCalls.length;
+}
+
+/**
  * Assert one received request.
  *
  * The executable arm reuses the frozen `AIToolCall` assertion rather than restating it, so a

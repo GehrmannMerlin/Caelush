@@ -9,6 +9,7 @@ export type { AIFinishReason, AIToolCall } from "./tool-call.js";
 export {
   assertAIReceivedToolRequest,
   assertAIRejectedToolArgumentsIssue,
+  countReceivedToolRequests,
   executableToolCalls,
   isAIRejectedToolArgumentsIssueCode,
   isExecutableToolRequest,

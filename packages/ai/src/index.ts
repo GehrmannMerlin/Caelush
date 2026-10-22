@@ -90,6 +90,7 @@ export {
   AI_RECEIVED_TOOL_REQUEST_KINDS,
   AI_REJECTED_TOOL_ARGUMENT_ISSUE_CODES,
   assertAIToolSpec,
+  countReceivedToolRequests,
   executableToolCalls,
   isAIFinishReason,
   isAIRejectedToolArgumentsIssueCode,

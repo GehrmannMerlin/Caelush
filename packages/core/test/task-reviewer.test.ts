@@ -182,8 +182,38 @@ describe("TaskAcceptanceReviewer", () => {
     expect(requests[0]).toMatchObject({ settings: { maxOutputTokens: 8_192 } });
   });
 
-  it("fails closed for tool calls and malformed reviewer output", async () => {
+  it("fails closed when the only Tool request had unparseable arguments", async () => {
     const { run, bundle } = fixture();
+    // The executable projection is empty, so a `toolCalls.length` check would accept this turn.
+    const rejectedOnly = {
+      ...turn('{"verdict":"PASS","summary":"Nothing was checked."}'),
+      toolRequests: [
+        {
+          kind: "INVALID_ARGUMENTS" as const,
+          sourceOrdinal: 0,
+          id: "call_rejected",
+          name: "read_file",
+          issue: { code: "MALFORMED_JSON" as const, argumentBytes: 12 },
+        },
+      ],
+    };
+    const reviewer = new TaskAcceptanceReviewer({
+      modelTurns: fakeModelTurnExecutor(async () => rejectedOnly),
+      budget: budget(),
+      clock: { now: () => createTimestampMs(50) },
+    });
+
+    await expect(
+      reviewer.review({
+        run,
+        candidateText: "Implemented it.",
+        bundle,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toMatchObject({ status: "ERROR", errorCode: "REVIEWER_TOOLS_FORBIDDEN" });
+  });
+
+  it("fails closed for tool calls and malformed reviewer output", async () => {    const { run, bundle } = fixture();
     const make = (response: ReturnType<typeof turn>) =>
       new TaskAcceptanceReviewer({
         modelTurns: fakeModelTurnExecutor(async () => response),

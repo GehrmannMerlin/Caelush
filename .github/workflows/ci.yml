@@ -67,6 +67,18 @@ jobs:
       - name: Install dependencies
         run: corepack pnpm@11.21.0 install --frozen-lockfile
 
+      # The contract tests below import `@caelush/protocol` and `@caelush/client` through their
+      # package entry points, which resolve to `dist`. Without this step the job fails on module
+      # resolution before it has checked a single contract, and the architecture gate behind it is
+      # skipped — a red that says nothing about architecture. The closure is built explicitly rather
+      # than relying on step order.
+      - name: Build the contract dependency closure
+        run: >-
+          corepack pnpm@11.21.0 -r
+          --filter "@caelush/protocol..."
+          --filter "@caelush/client..."
+          --if-present run build
+
       - name: Run contract tests
         run: >-
           corepack pnpm@11.21.0 exec vitest run tests/contracts
@@ -151,7 +163,14 @@ jobs:
             --pool=forks --maxWorkers=1 --testTimeout=600000 \
             packages/coding-agent/test/apply-patch-arguments.test.ts \
             packages/coding-agent/test/coding-tool-catalog.test.ts \
+            packages/ai/test/received-tool-request.test.ts \
+            packages/ai/test/adapters/openai-compatible/rejected-replay.test.ts \
             packages/agent/test/tools-call-preparation.test.ts \
+            packages/agent/test/tool-batch-coordinator.test.ts \
+            apps/daemon/test/coding-tool-scheduling-facts.test.ts \
+            apps/daemon/test/agent-continuity-s1-e2e.test.ts \
+            apps/daemon/test/ai-context-summarizer-adapter.test.ts \
+            apps/daemon/test/invalid-tool-request-feedback-e2e.test.ts \
             apps/daemon/test/patch-normalization-e2e.test.ts \
             apps/daemon/test/tool-composition-delegation.test.ts \
             apps/daemon/test/reliability-control-e2e.test.ts \

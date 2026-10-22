@@ -1,4 +1,5 @@
 import type { AIGateway, AIModelRequest } from "@caelush/ai";
+import { countReceivedToolRequests } from "@caelush/ai";
 import {
   CONTEXT_SUMMARY_PROMPT_VERSION,
   SemanticSummaryMalformedError,
@@ -25,8 +26,11 @@ export function createAIContextSummarizerAdapter(gateway: AIGateway) {
     ): Promise<ContextSummarizationResult> {
       const request = createAIContextSummaryRequest(input);
       const result = await gateway.complete(request, { signal: options.signal });
-      if (result.toolCalls.length > 0) {
-        throw new TypeError("Semantic summary returned unexpected Tool calls.");
+      // Every *received* request counts, not only the executable projection: a turn whose only Tool
+      // request had unparseable arguments still asked for a Tool, and a summary is never allowed to
+      // ask. `toolCalls` would be empty for exactly that turn.
+      if (countReceivedToolRequests(result) > 0) {
+        throw new TypeError("Semantic summary returned unexpected Tool requests.");
       }
       let semantic;
       try {
