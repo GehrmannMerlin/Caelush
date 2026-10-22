@@ -825,22 +825,22 @@ function toolCallChunk(
 }
 
 async function runPackagedPty(runtimeModule, protocolModule, workspace) {
+  const ptySessionHelper = new URL("./artifact-pty-session.mjs", import.meta.url).href;
   const source = [
     `const { LocalRuntime } = await import(${JSON.stringify(runtimeModule)});`,
     `const { createRunId, createWorkspaceId } = await import(${JSON.stringify(protocolModule)});`,
+    `const { collectPtyResult } = await import(${JSON.stringify(ptySessionHelper)});`,
     "const runtime = new LocalRuntime();",
     `const scope = await runtime.openWorkspace({ id: createWorkspaceId(), path: ${JSON.stringify(workspace)} });`,
     "const ownerRunId = createRunId();",
-    'const result = await scope.exec.execute({ ownerRunId, command: "echo artifact-pty", tty: true, yieldTimeMs: 2000 });',
-    'if (!result.output.includes("artifact-pty")) process.exit(1);',
-    // A ConPTY exit can land just after the yield deadline, so a single yield races the exit event.
-    // Drain the session to its terminal state instead of demanding one race-free observation.
-    'if (result.status === "RUNNING") {',
-    "  if (result.sessionId === undefined) process.exit(1);",
-    '  const settled = await scope.exec.interact({ ownerRunId, sessionId: result.sessionId, chars: "", yieldTimeMs: 5000 });',
-    '  if (settled.status !== "EXITED" || settled.exitCode !== 0) process.exit(1);',
+    'const result = await collectPtyResult(scope.exec, { ownerRunId, command: "echo artifact-pty", tty: true, yieldTimeMs: 2000 });',
+    'if (!result.output.includes("artifact-pty") || result.status !== "EXITED" || result.exitCode !== 0) {',
+    '  if (result.status === "RUNNING" && result.sessionId !== undefined) {',
+    "    try { await scope.exec.terminate({ ownerRunId, sessionId: result.sessionId }); } catch {}",
+    "  }",
+    "  console.error(`PTY smoke did not finish successfully: status=${result.status}; exitCode=${result.exitCode}; output=${JSON.stringify(result.output)}`);",
+    "  process.exit(1);",
     "}",
-    "if (result.exitCode !== undefined && result.exitCode !== 0) process.exit(1);",
     "process.exit(0);",
   ].join("\n");
   const result = await run(process.execPath, ["--input-type=module", "-e", source], {
