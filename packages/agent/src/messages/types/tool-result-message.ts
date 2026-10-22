@@ -540,15 +540,30 @@ export function createAgentToolResultMessage(
     ...(input.preparationFailure === undefined
       ? {}
       : {
-          preparationFailure: Object.freeze({
-            kind: "PREPARATION_REJECTED" as const,
-            code: input.preparationFailure.code,
-            issues: Object.freeze(
-              input.preparationFailure.issues.map((issue) => Object.freeze({ ...issue })),
-            ),
-            disposition: "SAFE_FAILURE" as const,
-            classifierVersion: 1 as const,
-          }),
+          // The kind and its classifier version are copied together and never re-derived: the two
+          // facts mean different things, and rewriting one into the other would change the pattern
+          // identity a restart recomputes from this row.
+          preparationFailure: Object.freeze(
+            input.preparationFailure.kind === "MODEL_ARGUMENT_PARSING"
+              ? {
+                  kind: "MODEL_ARGUMENT_PARSING" as const,
+                  code: input.preparationFailure.code,
+                  issues: Object.freeze(
+                    input.preparationFailure.issues.map((issue) => Object.freeze({ ...issue })),
+                  ),
+                  disposition: "SAFE_FAILURE" as const,
+                  classifierVersion: 2 as const,
+                }
+              : {
+                  kind: "PREPARATION_REJECTED" as const,
+                  code: input.preparationFailure.code,
+                  issues: Object.freeze(
+                    input.preparationFailure.issues.map((issue) => Object.freeze({ ...issue })),
+                  ),
+                  disposition: "SAFE_FAILURE" as const,
+                  classifierVersion: 1 as const,
+                },
+          ),
         }),
   });
 }

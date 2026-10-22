@@ -143,6 +143,33 @@ describe("TOOL_RESULT schema V3 preparation-failure facts", () => {
     );
   });
 
+  it("round-trips a malformed-argument fact and refuses a mismatched classifier version", () => {
+    // A request whose arguments never formed an object is a different fact from a schema rejection,
+    // and its own classifier version pins that meaning. It must survive the durable round trip, and a
+    // record that claims the wrong version for its kind must be refused rather than reinterpreted.
+    const parsingFact: ToolPreparationFailureFact = Object.freeze({
+      kind: "MODEL_ARGUMENT_PARSING" as const,
+      code: "TOOL_ARGUMENTS_REJECTED",
+      issues: Object.freeze([Object.freeze({ keyword: "MALFORMED_JSON" })]),
+      disposition: "SAFE_FAILURE" as const,
+      classifierVersion: 2 as const,
+    });
+    const original = message({ observationBacked: false, preparationFailure: parsingFact });
+    const encoded = AGENT_TOOL_RESULT_MESSAGE_CODEC_V3.encode(original);
+    const decoded = AGENT_TOOL_RESULT_MESSAGE_CODEC_V3.decode(recordFor(original, encoded, 3));
+
+    expect(decoded.preparationFailure).toEqual(parsingFact);
+    expect(() =>
+      AGENT_TOOL_RESULT_MESSAGE_CODEC_V3.decode(
+        recordFor(
+          original,
+          { ...encoded, preparationFailure: { ...parsingFact, classifierVersion: 1 } },
+          3,
+        ),
+      ),
+    ).toThrow(AgentMessageCodecError);
+  });
+
   it("refuses an unbounded or malformed fact", () => {
     const original = message({ observationBacked: false, preparationFailure: FACT });
     const encoded = AGENT_TOOL_RESULT_MESSAGE_CODEC_V3.encode(original);
