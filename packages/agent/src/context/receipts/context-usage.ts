@@ -4,6 +4,7 @@ import type { RunId, TimestampMs } from "@caelush/protocol";
 import type { ContextFingerprint } from "../contracts/context-fingerprint.js";
 import type { ContextPressureState } from "../policy/context-policy.js";
 import type { ContextPromptSurfaceReceipt } from "./context-build-receipt.js";
+import type { TurnBudgetDecision } from "../policy/request-headroom.js";
 
 export type ContextUsageBuildStatus = "SUCCESS" | "FAILED" | "CONTEXT_EXHAUSTED";
 
@@ -35,6 +36,13 @@ export interface ContextUsageSnapshot {
   readonly lastBuildStatus: ContextUsageBuildStatus;
   readonly contextFingerprint?: ContextFingerprint;
   readonly promptSurface?: ContextPromptSurfaceReceipt;
+  /**
+   * The turn's frozen `HEADROOM_V1` decision.
+   *
+   * Persisted with the usage snapshot so "why did this turn reorganize history" is answerable after
+   * a restart, from the same row the ring and the inspector already read.
+   */
+  readonly turnBudget?: TurnBudgetDecision;
   readonly updatedAt: TimestampMs;
 }
 

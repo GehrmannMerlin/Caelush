@@ -17,6 +17,7 @@ import type { ModelTurnExecutionErrorCode } from "./turn/model-turn-error.js";
 import type { AgentConversationSnapshot } from "../messages/conversation/conversation-snapshot.js";
 import type { AgentMessageId } from "../messages/types/ids.js";
 import type { ContextCheckpointRef } from "../context/compaction/context-compaction-contracts.js";
+import type { TurnBudgetDecision } from "../context/policy/request-headroom.js";
 
 /**
  * The frozen Agent Kernel contracts of Architecture V2.
@@ -228,6 +229,15 @@ export interface ContextBuildReport {
    * implementation: a delta here is a real, reportable divergence, not a heuristic mismatch.
    */
   readonly preflight?: ContextPreflightReport;
+
+  /**
+   * This turn's frozen budget decision.
+   *
+   * Present whenever the Run was created against `TURN_BUDGET_V3`. It is the record a UI, a support
+   * report and a regression test read to answer "why was history reorganized here" without
+   * re-deriving the arithmetic from a window size.
+   */
+  readonly turnBudget?: TurnBudgetDecision;
 }
 
 /** The preflight's own view of the request, kept apart from what was finally sent. */
@@ -287,11 +297,27 @@ export interface ToolObservationPolicySnapshot {
 }
 
 /** The immutable output and safety reserve carried by one prepared Context. */
-export interface ContextRequestBudget {
-  readonly version: "ADAPTIVE_V1" | "LEGACY_FULL_OUTPUT_V1";
-  readonly outputReserveTokens: number;
-  readonly safetyReserveTokens: number;
-}
+export type ContextRequestBudget =
+  | {
+      readonly version: "ADAPTIVE_V1" | "LEGACY_FULL_OUTPUT_V1";
+      readonly outputReserveTokens: number;
+      readonly safetyReserveTokens: number;
+    }
+  | {
+      /**
+       * The turn's real output allowance, decided by `HEADROOM_V1`.
+       *
+       * This is the one number the Context reserve, the Core admission and the provider request all
+       * use. The previous variants either reserved the model's whole output capability
+       * (`LEGACY_FULL_OUTPUT_V1`) or reserved a value the request builder could silently raise
+       * (`ADAPTIVE_V1`), so "what the context reserved" and "what the wire allowed" could disagree.
+       */
+      readonly version: "TURN_BUDGET_V3";
+      readonly algorithm: "HEADROOM_V1";
+      readonly outputAllowanceTokens: number;
+      readonly safetyReserveTokens: number;
+      readonly expectedGrowthTokens: number;
+    };
 
 /** A durable context checkpoint reference owned by the Context target path. */
 export type { ContextCheckpointRef } from "../context/compaction/context-compaction-contracts.js";

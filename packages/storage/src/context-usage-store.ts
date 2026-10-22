@@ -3,6 +3,7 @@ import type {
   ContextUsageSnapshot,
   ContextUsageSourceBreakdown,
   ContextUsageStorePort,
+  TurnBudgetDecision,
 } from "@caelush/agent";
 import { PROMPT_SURFACE_RESET_REASONS } from "@caelush/agent";
 import type { RunId } from "@caelush/protocol";
@@ -29,13 +30,14 @@ interface UsageRow {
 }
 
 interface UsageEnvelope {
-  readonly version: 4;
+  readonly version: 5;
   readonly breakdown: readonly ContextUsageSourceBreakdown[];
   readonly contextFingerprint: string | null;
   readonly promptSurface: ContextPromptSurfaceReceipt | null;
   readonly requestOverheadTokens?: number;
   readonly fullRequestInputEstimateTokens?: number;
   readonly fullWindowUsedRatio?: number;
+  readonly turnBudget?: TurnBudgetDecision | null;
 }
 
 export class SqliteContextUsageStore implements ContextUsageStorePort {
@@ -47,10 +49,11 @@ export class SqliteContextUsageStore implements ContextUsageStorePort {
       compareStrings(left.sourceId, right.sourceId),
     );
     const envelope: UsageEnvelope = {
-      version: 4,
+      version: 5,
       breakdown,
       contextFingerprint: snapshot.contextFingerprint ?? null,
       promptSurface: snapshot.promptSurface ?? null,
+      turnBudget: snapshot.turnBudget ?? null,
       ...(snapshot.requestOverheadTokens === undefined
         ? {}
         : {
@@ -206,6 +209,7 @@ function assertSnapshot(snapshot: ContextUsageSnapshot): void {
     }
   }
   if (snapshot.promptSurface !== undefined) assertPromptSurfaceReceipt(snapshot.promptSurface);
+  if (snapshot.turnBudget !== undefined) decodeTurnBudget(snapshot.turnBudget);
 }
 
 function decodeUsage(row: UsageRow): ContextUsageSnapshot {
@@ -249,7 +253,10 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
       throw new Error("invalid usage envelope");
     const candidate = envelope as Record<string, unknown>;
     if (
-      (candidate.version !== 2 && candidate.version !== 3 && candidate.version !== 4) ||
+      (candidate.version !== 2 &&
+        candidate.version !== 3 &&
+        candidate.version !== 4 &&
+        candidate.version !== 5) ||
       !Array.isArray(candidate.breakdown) ||
       (candidate.contextFingerprint !== null && typeof candidate.contextFingerprint !== "string")
     )
@@ -258,8 +265,15 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
       throw new Error("invalid V2 usage envelope");
     }
     const promptSurface =
-      candidate.version === 3 || candidate.version === 4
+      candidate.version === 3 || candidate.version === 4 || candidate.version === 5
         ? decodePromptSurfaceReceipt(candidate.promptSurface)
+        : undefined;
+    if (candidate.version !== 5 && Object.hasOwn(candidate, "turnBudget")) {
+      throw new Error("invalid pre-V5 usage envelope");
+    }
+    const turnBudget =
+      candidate.version === 5 && candidate.turnBudget !== null
+        ? decodeTurnBudget(candidate.turnBudget)
         : undefined;
     const fullUsageFields = [
       candidate.requestOverheadTokens,
@@ -269,7 +283,8 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
     const hasFullUsageFields = fullUsageFields.some((value) => value !== undefined);
     if (
       hasFullUsageFields &&
-      (candidate.version !== 4 ||
+      (candidate.version === 2 ||
+        candidate.version === 3 ||
         !Number.isSafeInteger(candidate.requestOverheadTokens) ||
         (candidate.requestOverheadTokens as number) < 0 ||
         !Number.isSafeInteger(candidate.fullRequestInputEstimateTokens) ||
@@ -320,6 +335,7 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
         ? {}
         : { contextFingerprint: candidate.contextFingerprint as never }),
       ...(promptSurface === undefined ? {} : { promptSurface }),
+      ...(turnBudget === undefined ? {} : { turnBudget }),
       updatedAt: row.updated_at_ms as ContextUsageSnapshot["updatedAt"],
     });
   } catch (error) {
@@ -390,8 +406,92 @@ function assertPromptSurfaceReceipt(value: ContextPromptSurfaceReceipt): void {
   decodePromptSurfaceReceipt(value);
 }
 
-function decodeRecoveryStages(value: string | null): readonly string[] {
-  if (value === null || value === undefined) return Object.freeze([]);
+/**
+ * Validate a persisted `TURN_BUDGET_DECISION_V1` record.
+ *
+ * The decision is only useful if it is read back exactly as it was written: a UI that re-derives
+ * `remaining` from a rounded window, or a support report that reads a different `O` than the wire
+ * carried, would be worse than no record at all. Every field is therefore checked, including the
+ * arithmetic invariant `remaining = W - P - O - S`.
+ */
+function decodeTurnBudget(value: unknown): TurnBudgetDecision {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error("invalid turn budget decision");
+  const candidate = value as Record<string, unknown>;
+  if (candidate.version !== "TURN_BUDGET_DECISION_V1" || candidate.algorithm !== "HEADROOM_V1")
+    throw new Error("unsupported turn budget decision version");
+  for (const field of [
+    "windowTokens",
+    "inputTokens",
+    "outputAllowanceTokens",
+    "safetyTokens",
+    "expectedGrowthTokens",
+  ] as const) {
+    if (!Number.isSafeInteger(candidate[field]) || (candidate[field] as number) < 0)
+      throw new Error("invalid turn budget decision number");
+  }
+  if (
+    (candidate.windowTokens as number) < 1 ||
+    (candidate.outputAllowanceTokens as number) < 1 ||
+    (candidate.expectedGrowthTokens as number) < 1
+  )
+    throw new Error("invalid turn budget decision magnitude");
+  if (!Number.isSafeInteger(candidate.remainingTokens))
+    throw new Error("invalid turn budget decision remainder");
+  if (
+    (candidate.remainingTokens as number) !==
+    (candidate.windowTokens as number) -
+      (candidate.inputTokens as number) -
+      (candidate.outputAllowanceTokens as number) -
+      (candidate.safetyTokens as number)
+  ) {
+    throw new Error("turn budget decision does not satisfy its own constraint");
+  }
+  if (
+    candidate.decision !== "KEEP" &&
+    candidate.decision !== "ADJUST_OUTPUT" &&
+    candidate.decision !== "PREPARE_HISTORY"
+  )
+    throw new Error("invalid turn budget decision kind");
+  if (typeof candidate.modelProfileRef !== "string" || candidate.modelProfileRef.length === 0)
+    throw new Error("invalid turn budget model profile");
+  if (
+    typeof candidate.preparedSurfaceDigest !== "string" ||
+    candidate.preparedSurfaceDigest.length === 0
+  )
+    throw new Error("invalid turn budget surface digest");
+  const sources = candidate.sources;
+  if (sources === null || typeof sources !== "object" || Array.isArray(sources))
+    throw new Error("invalid turn budget sources");
+  const sourceRecord = sources as Record<string, unknown>;
+  if (
+    sourceRecord.window !== "MODEL_LIMITS" ||
+    (sourceRecord.output !== "EXPLICIT_SETTING" &&
+      sourceRecord.output !== "PREFERRED_ALLOWANCE" &&
+      sourceRecord.output !== "AVAILABLE_ROOM") ||
+    sourceRecord.safety !== "HEADROOM_V1_SAFETY" ||
+    sourceRecord.growth !== "HEADROOM_V1_EXPECTED_GROWTH"
+  ) {
+    throw new Error("invalid turn budget source provenance");
+  }
+  const decision = candidate as unknown as TurnBudgetDecision;
+  return Object.freeze({
+    version: decision.version,
+    algorithm: decision.algorithm,
+    modelProfileRef: decision.modelProfileRef,
+    preparedSurfaceDigest: decision.preparedSurfaceDigest,
+    windowTokens: decision.windowTokens,
+    inputTokens: decision.inputTokens,
+    outputAllowanceTokens: decision.outputAllowanceTokens,
+    safetyTokens: decision.safetyTokens,
+    expectedGrowthTokens: decision.expectedGrowthTokens,
+    remainingTokens: decision.remainingTokens,
+    decision: decision.decision,
+    sources: Object.freeze({ ...decision.sources }),
+  });
+}
+
+function decodeRecoveryStages(value: string | null): readonly string[] {  if (value === null || value === undefined) return Object.freeze([]);
   const parsed = JSON.parse(value) as unknown;
   if (
     !Array.isArray(parsed) ||

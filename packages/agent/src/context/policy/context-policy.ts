@@ -36,6 +36,25 @@ export interface ContextPolicyOptions {
   readonly proactiveCompactionCooldownTurns?: number;
   /** Run-frozen V2 working-set thresholds; absent retains the historical Context policy. */
   readonly workingSet?: ContextWorkingSetPolicy;
+  /**
+   * Run-frozen headroom thresholds.
+   *
+   * ```text
+   * proactive  W - O - S - G   reorganize as soon as the next turn's growth no longer fits
+   * emergency  W - O - S       the input itself no longer fits
+   * ```
+   *
+   * This replaces a fixed working-set target with the only quantity the user actually cares about:
+   * how much room is left after this request. It is not a renamed quota — `G` is derived from the
+   * bounded Tool-result growth of a single next turn, so the trigger scales with the model's window
+   * instead of capping history at a constant.
+   */
+  readonly requestHeadroom?: ContextRequestHeadroomPolicy;
+}
+
+export interface ContextRequestHeadroomPolicy {
+  readonly expectedGrowthTokens: number;
+  readonly postCompactionRatio: number;
 }
 
 export interface ContextWorkingSetPolicy {
@@ -126,6 +145,7 @@ export interface ContextPolicy {
   readonly targetPostCompactionTokens?: number;
   readonly allowCurrentTurnPrefix?: boolean;
   readonly workingSet?: ContextWorkingSetPolicy;
+  readonly requestHeadroom?: ContextRequestHeadroomPolicy;
   readonly observationPolicy: ToolObservationPolicySnapshot;
   readonly conversationCapTokens: number;
   readonly sourceLimits: Readonly<Record<string, number>>;
@@ -277,23 +297,45 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
     options.minRecentTailTokensCap ?? DEFAULTS.minRecentTailTokensCap,
   );
   const workingSet = options.workingSet;
+  const requestHeadroom = options.requestHeadroom;
+  if (workingSet !== undefined && requestHeadroom !== undefined) {
+    throw new RangeError("A Context policy cannot be frozen against both a working set and headroom.");
+  }
   if (workingSet !== undefined) assertWorkingSet(workingSet, effectiveInputLimitTokens);
+  if (requestHeadroom !== undefined) {
+    assertPositiveSafeInteger(
+      requestHeadroom.expectedGrowthTokens,
+      "requestHeadroom.expectedGrowthTokens",
+    );
+    assertRatio(requestHeadroom.postCompactionRatio, "requestHeadroom.postCompactionRatio");
+    if (requestHeadroom.expectedGrowthTokens >= effectiveInputLimitTokens) {
+      throw new RangeError("Expected growth must leave a positive input budget.");
+    }
+  }
   const targetPostCompactionTokens =
-    workingSet === undefined
-      ? Math.floor(effectiveInputLimitTokens * 0.8)
-      : Math.max(1, Math.floor(workingSet.targetTokens * workingSet.postCompactionRatio));
+    requestHeadroom !== undefined
+      ? Math.max(1, Math.floor(effectiveInputLimitTokens * requestHeadroom.postCompactionRatio))
+      : workingSet === undefined
+        ? Math.floor(effectiveInputLimitTokens * 0.8)
+        : Math.max(1, Math.floor(workingSet.targetTokens * workingSet.postCompactionRatio));
   const boundedTargetRecentTailTokens = Math.min(
     targetRecentTailTokens,
     targetPostCompactionTokens,
   );
   const minRecentTailTokens = Math.min(baseMinRecentTailTokens, boundedTargetRecentTailTokens);
-  const emergencyCompactionTokens = Math.floor(
-    effectiveInputLimitTokens * emergencyCompactionRatio,
-  );
+  const emergencyCompactionTokens =
+    requestHeadroom !== undefined
+      ? // With headroom the emergency band is the real boundary: the input no longer fits next to
+        // this turn's output allowance. A 90% band would declare an emergency before the request is
+        // actually impossible, which is a fixed quota by another name.
+        effectiveInputLimitTokens
+      : Math.floor(effectiveInputLimitTokens * emergencyCompactionRatio);
   const proactiveCompactionTokens =
-    workingSet === undefined
-      ? Math.floor(effectiveInputLimitTokens * proactiveCompactionRatio)
-      : Math.max(1, Math.floor(workingSet.targetTokens * workingSet.triggerRatio));
+    requestHeadroom !== undefined
+      ? Math.max(1, effectiveInputLimitTokens - requestHeadroom.expectedGrowthTokens)
+      : workingSet === undefined
+        ? Math.floor(effectiveInputLimitTokens * proactiveCompactionRatio)
+        : Math.max(1, Math.floor(workingSet.targetTokens * workingSet.triggerRatio));
   if (proactiveCompactionTokens >= emergencyCompactionTokens) {
     throw new RangeError("Proactive compaction threshold must remain below emergency pressure.");
   }
@@ -333,6 +375,9 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
     targetPostCompactionTokens,
     allowCurrentTurnPrefix: workingSet?.allowCurrentTurnPrefix ?? false,
     ...(workingSet === undefined ? {} : { workingSet: Object.freeze({ ...workingSet }) }),
+    ...(requestHeadroom === undefined
+      ? {}
+      : { requestHeadroom: Object.freeze({ ...requestHeadroom }) }),
     observationPolicy: Object.freeze({ maxSingleObservationTokens, maxObservationBatchTokens }),
     conversationCapTokens,
     sourceLimits,

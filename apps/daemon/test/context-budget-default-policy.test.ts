@@ -12,16 +12,16 @@ import { FIXTURE_API, fixtureBinding, fixtureModelSource } from "./support/ai-fi
  * The Context budget policy a new Run is frozen against.
  *
  * ```text
- * daemon default                     → WORKING_SET_V2
+ * daemon default                     → TURN_BUDGET_V3 (HEADROOM_V1)
  * explicit LEGACY_FULL_OUTPUT_V1     → LEGACY_FULL_OUTPUT_V1
+ * explicit WORKING_SET_V2            → WORKING_SET_V2, for reproducing the old behaviour
  * a Run created before the default   → whatever it was frozen with
  * ```
  *
  * The policy is resolved exactly once, at Run creation, and persisted on the Run. That is why a
  * historical Run must never change when the daemon's default changes, and why this test drives the
  * real HTTP create-run route instead of asserting on the resolver's return value directly: a test
- * that injects `WORKING_SET_V2` by hand proves the resolver can be called, not that production uses
- * it.
+ * that injects a policy by hand proves the resolver can be called, not that production uses it.
  */
 
 let directory: string | undefined;
@@ -49,7 +49,11 @@ interface BootedDaemon {
 
 async function boot(options: {
   readonly databasePath: string;
-  readonly contextBudgetPolicyVersion?: "LEGACY_FULL_OUTPUT_V1" | "ADAPTIVE_V1" | "WORKING_SET_V2";
+  readonly contextBudgetPolicyVersion?:
+    | "LEGACY_FULL_OUTPUT_V1"
+    | "ADAPTIVE_V1"
+    | "WORKING_SET_V2"
+    | "TURN_BUDGET_V3";
   readonly limits?: { readonly contextWindowTokens: number; readonly maxOutputTokens: number };
 }): Promise<BootedDaemon> {
   const daemon = await startDaemon({
@@ -94,23 +98,21 @@ async function createRun(
 }
 
 describe("Context budget policy default", () => {
-  it("freezes a new Run against WORKING_SET_V2 when the daemon sets no version", async () => {
+  it("freezes a new Run against TURN_BUDGET_V3 when the daemon sets no version", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-context-budget-default-"));
     const { client, session } = await boot({ databasePath: join(directory, "caelush.db") });
     const run = await createRun(client, session);
 
     expect(run.contextBudgetPolicy).toEqual({
-      version: "WORKING_SET_V2",
-      // The output reserve algorithm is unchanged: V2 moves when history is reorganized, not how
-      // much room the answer gets.
-      requestBudget: { version: "LEGACY_FULL_OUTPUT_V1" },
-      workingSet: {
-        targetTokens: 96_000,
-        triggerRatio: 0.75,
-        postCompactionRatio: 0.5,
-        allowCurrentTurnPrefix: true,
-        cooldownTurns: 5,
-      },
+      version: "TURN_BUDGET_V3",
+      algorithm: "HEADROOM_V1",
+      // The fixed working set is gone: no 96 000-token target and no 75% trigger survive into a new
+      // Run. The allowance is derived per turn from the input that is actually prepared.
+      minOutputTokens: 2_048,
+      preferredOutputTokens: 8_192,
+      safetyTokens: 640,
+      expectedGrowthTokens: 2_560,
+      postCompactionRatio: 0.8,
     });
   }, 20_000);
 
@@ -149,11 +151,11 @@ describe("Context budget policy default", () => {
     const reread = await restarted.client.getRun(historical.id);
     expect(reread.contextBudgetPolicy.version).toBe("LEGACY_FULL_OUTPUT_V1");
     expect((await createRun(restarted.client, restarted.session)).contextBudgetPolicy.version).toBe(
-      "WORKING_SET_V2",
+      "TURN_BUDGET_V3",
     );
   }, 30_000);
 
-  it("refuses to create a Run when the working set has no positive budget", async () => {
+  it("refuses to create a Run when the window cannot carry its own reserves", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-context-budget-invalid-"));
     const { client, session } = await boot({
       databasePath: join(directory, "caelush.db"),

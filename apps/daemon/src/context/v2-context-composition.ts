@@ -124,6 +124,9 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
           input.run.contextBudgetPolicy.requestBudget.version === "ADAPTIVE_V1"
         ? { requestBudget: input.run.contextBudgetPolicy.requestBudget }
         : {}),
+    ...(input.run.contextBudgetPolicy?.version === "TURN_BUDGET_V3"
+      ? { turnBudgetPolicy: input.run.contextBudgetPolicy }
+      : {}),
     ...(input.run.contextBudgetPolicy?.version !== "WORKING_SET_V2"
       ? {}
       : { workingSet: input.run.contextBudgetPolicy.workingSet }),

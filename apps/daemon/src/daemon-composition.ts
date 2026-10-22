@@ -67,6 +67,7 @@ import {
   createContextContributionPipeline,
   createContextRequestOverheadEstimator,
   resolveAdaptiveContextBudget,
+  resolveTurnBudgetPolicy,
   createModelTurnExecutor,
   createRunEventFactory,
   STANDARD_AGENT_MESSAGE_CODECS,
@@ -1090,14 +1091,29 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   /**
    * The budget policy a *new* Run is frozen against.
    *
-   * `WORKING_SET_V2` is the production default: it is the only policy that bounds how much context
-   * a long Run accumulates, and a Run is frozen once, at creation, so a Run started before this
-   * default keeps the policy it was created with. An explicit version stays selectable for a host
-   * that must reproduce an older behaviour.
+   * `TURN_BUDGET_V3` is the production default: it stores the `HEADROOM_V1` algorithm and its
+   * parameters, and decides the output allowance per turn from the input that is actually prepared.
+   * A Run is frozen once, at creation, so a Run started before this default keeps the policy it was
+   * created with — `WORKING_SET_V2` (a 96 000-token target and a 75% trigger) and
+   * `LEGACY_FULL_OUTPUT_V1` stay selectable for reproducing an older behaviour, but neither is
+   * applied to a new Run.
    */
-  const requestedContextBudgetPolicy = options.contextBudgetPolicyVersion ?? "WORKING_SET_V2";
+  const requestedContextBudgetPolicy = options.contextBudgetPolicyVersion ?? "TURN_BUDGET_V3";
   const contextBudgetPolicyResolver: RunContextBudgetPolicyResolver = {
     async resolve(run) {
+      if (requestedContextBudgetPolicy === "TURN_BUDGET_V3") {
+        const model = ai.models.resolve(run.model);
+        const config = await executionConfigResolver.resolve(run);
+        return Object.freeze(
+          resolveTurnBudgetPolicy({
+            contextWindowTokens: model.limits.contextWindowTokens,
+            maxOutputTokens: model.limits.maxOutputTokens,
+            ...(config.modelSettings?.maxOutputTokens === undefined
+              ? {}
+              : { configuredOutputCeiling: config.modelSettings.maxOutputTokens }),
+          }),
+        );
+      }
       if (requestedContextBudgetPolicy === "WORKING_SET_V2") {
         const model = ai.models.resolve(run.model);
         const requestOverheadTokens = contextRequestOverheadEstimator.estimate({

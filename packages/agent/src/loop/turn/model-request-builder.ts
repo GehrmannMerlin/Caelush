@@ -8,7 +8,9 @@ import type {
 } from "@caelush/ai";
 
 import type { PreparedModelContext } from "../types.js";
+import type { ContextRequestBudget } from "../types.js";
 import { resolveAdaptiveContextBudget } from "../../context/policy/context-policy.js";
+import { computeRequestHeadroom } from "../../context/policy/request-headroom.js";
 
 /**
  * The frozen model request builder contract.
@@ -84,6 +86,9 @@ export function buildModelRequest(input: ModelRequestBuilderInput): AIModelReque
 function resolveRequestSettings(input: ModelRequestBuilderInput): AIModelSettings | undefined {
   const { requestBudget, report } = input.context;
   if (requestBudget.version === "LEGACY_FULL_OUTPUT_V1") return input.settings;
+  if (requestBudget.version === "TURN_BUDGET_V3") {
+    return resolveTurnBudgetSettings(input, requestBudget);
+  }
 
   assertPositiveSafeInteger(requestBudget.outputReserveTokens, "outputReserveTokens");
   assertPositiveSafeInteger(requestBudget.safetyReserveTokens, "safetyReserveTokens");
@@ -129,6 +134,61 @@ function assertPositiveSafeInteger(value: unknown, label: string): asserts value
   if (!Number.isSafeInteger(value) || (value as number) <= 0) {
     throw new RangeError(`${label} must be a positive safe integer.`);
   }
+}
+
+/**
+ * The `HEADROOM_V1` request settings.
+ *
+ * ```text
+ * wire maxOutputTokens === the allowance the Context budgeted
+ * ```
+ *
+ * There is no fallback here on purpose. Under `LEGACY_FULL_OUTPUT_V1` the reserve was the model's
+ * whole output capability and the wire inherited it; under `ADAPTIVE_V1` the builder could cap the
+ * wire below the reserved value. Both left "what the context reserved" and "what the provider was
+ * allowed to emit" as two numbers that only happened to agree. This one number is computed once per
+ * turn and is used unchanged, and the pre-request invariant is re-checked against the *prepared*
+ * input rather than a preview.
+ */
+function resolveTurnBudgetSettings(
+  input: ModelRequestBuilderInput,
+  requestBudget: Extract<ContextRequestBudget, { version: "TURN_BUDGET_V3" }>,
+): AIModelSettings {
+  const { report } = input.context;
+  const allowance = requestBudget.outputAllowanceTokens;
+  assertPositiveSafeInteger(allowance, "outputAllowanceTokens");
+  assertPositiveSafeInteger(requestBudget.safetyReserveTokens, "safetyReserveTokens");
+  assertPositiveSafeInteger(requestBudget.expectedGrowthTokens, "expectedGrowthTokens");
+  assertNonNegativeSafeInteger(report.estimatedInputTokens, "estimatedInputTokens");
+  assertNonNegativeSafeInteger(report.requestOverheadTokens, "requestOverheadTokens");
+  if (allowance > input.model.limits.maxOutputTokens) {
+    throw new RangeError("Turn output allowance exceeds the model's output ceiling.");
+  }
+  const expectedInputLimit =
+    input.model.limits.contextWindowTokens -
+    allowance -
+    requestBudget.safetyReserveTokens -
+    report.requestOverheadTokens;
+  if (report.effectiveInputLimitTokens !== expectedInputLimit) {
+    throw new RangeError("Prepared context request budget does not match its turn allowance.");
+  }
+  const headroom = computeRequestHeadroom({
+    windowTokens: input.model.limits.contextWindowTokens,
+    fullInputTokens: report.estimatedInputTokens + report.requestOverheadTokens,
+    outputAllowanceTokens: allowance,
+    safetyTokens: requestBudget.safetyReserveTokens,
+    expectedGrowthTokens: requestBudget.expectedGrowthTokens,
+  });
+  if (!headroom.fitsCurrentRequest) {
+    throw new RangeError("Prepared context does not fit the turn's hard window constraint.");
+  }
+  // A narrower explicit generation preference can only lower the wire value; the Engine has already
+  // clamped the allowance to it, so this is a consistency check rather than a second decision.
+  const explicit = input.settings?.maxOutputTokens;
+  return {
+    ...input.settings,
+    maxOutputTokens: explicit === undefined ? allowance : Math.min(explicit, allowance),
+  };
 }
 
 function assertNonNegativeSafeInteger(value: unknown, label: string): asserts value is number {

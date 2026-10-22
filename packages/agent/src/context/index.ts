@@ -395,9 +395,31 @@ export type {
   ContextPolicy,
   ContextPolicyInput,
   ContextPolicyOptions,
+  ContextRequestHeadroomPolicy,
   ContextWorkingSetPolicy,
   ContextPressureState,
 } from "./policy/context-policy.js";
+
+export {
+  computeRequestHeadroom,
+  decideTurnBudget,
+  HEADROOM_V1_DEFAULTS,
+  resolveOutputAllowance,
+  resolveTurnBudgetPolicy,
+  TURN_BUDGET_ALGORITHM,
+} from "./policy/request-headroom.js";
+export type {
+  BoundedBudgetSources,
+  OutputAllowanceInput,
+  RequestHeadroom,
+  RequestHeadroomInput,
+  TurnBudgetAlgorithm,
+  TurnBudgetDecision,
+  TurnBudgetDecisionInput,
+  TurnBudgetDecisionKind,
+  TurnBudgetPolicy,
+  TurnBudgetPolicyInput,
+} from "./policy/request-headroom.js";
 
 export {
   createContextRequestOverheadEstimator,

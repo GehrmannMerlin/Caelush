@@ -115,6 +115,12 @@ import {
   type ContextWorkingSetPolicy,
 } from "../policy/context-policy.js";
 import {
+  decideTurnBudget,
+  resolveOutputAllowance,
+  type TurnBudgetDecision,
+  type TurnBudgetPolicy,
+} from "../policy/request-headroom.js";
+import {
   createContextReceiptBuilder,
   type ContextReceiptBuilder,
   type ContextReceiptBuilderResult,
@@ -218,6 +224,14 @@ export interface V2ContextEngineOptions {
   readonly modelSettings?: AIModelSettings;
   /** Persisted Run policy. Missing or legacy snapshots retain historical full-output behavior. */
   readonly requestBudget?: ContextRequestBudget;
+  /**
+   * Run-frozen headroom algorithm.
+   *
+   * Present for `TURN_BUDGET_V3` Runs. The per-turn `outputAllowanceTokens` is derived here, from
+   * this turn's real input, and then used as the one output number for the Context reserve, the
+   * Core admission and the wire request.
+   */
+  readonly turnBudgetPolicy?: TurnBudgetPolicy;
   /** V2 selection thresholds that leave request output reserves unchanged. */
   readonly workingSet?: ContextWorkingSetPolicy;
   readonly promptSurfaceEpochIdFactory?: { create(): string };
@@ -325,8 +339,10 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         model: input.model,
         tools: input.tools,
       });
+      const persistedRequestBudget =
+        options.requestBudget?.version === "TURN_BUDGET_V3" ? undefined : options.requestBudget;
       const adaptiveBudget =
-        options.requestBudget?.version === "ADAPTIVE_V1"
+        persistedRequestBudget?.version === "ADAPTIVE_V1"
           ? resolveAdaptiveContextBudget({
               contextWindowTokens: input.model.limits.contextWindowTokens,
               maxOutputTokens: input.model.limits.maxOutputTokens,
@@ -338,8 +354,9 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           : undefined;
       if (
         adaptiveBudget !== undefined &&
-        (options.requestBudget?.outputReserveTokens !== adaptiveBudget.outputReserveTokens ||
-          options.requestBudget.safetyReserveTokens !== adaptiveBudget.safetyReserveTokens)
+        persistedRequestBudget !== undefined &&
+        (persistedRequestBudget.outputReserveTokens !== adaptiveBudget.outputReserveTokens ||
+          persistedRequestBudget.safetyReserveTokens !== adaptiveBudget.safetyReserveTokens)
       ) {
         throw new RangeError(
           "Persisted adaptive context budget does not match the resolved model limits and settings.",
@@ -349,6 +366,43 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         input.mode === "FORCED_RECOVERY" && options.forcedObservationPolicy !== undefined
           ? { ...options.policy, ...options.forcedObservationPolicy }
           : options.policy;
+      /*
+       * The headroom algorithm needs one pre-selection input estimate, because the output allowance
+       * must be known *before* the planner is bounded by it. The estimate deliberately covers every
+       * candidate message rather than a preview of a pre-trimmed selection: `W - O` must be sized
+       * against the history the Run actually has, otherwise a small preview would silently raise
+       * `O` past what the full history needs. It is an over-estimate on purpose (the durable message
+       * estimator charges 3 bytes per token, the materializer 4), so a miscalculation shrinks the
+       * allowance instead of overflowing the window.
+       */
+      const headroomPolicy = options.turnBudgetPolicy;
+      const preSelectionInputTokens =
+        headroomPolicy === undefined
+          ? undefined
+          : requestOverhead.totalTokens +
+            input.conversation.turns.reduce(
+              (total, turn) =>
+                total +
+                turn.messages.reduce(
+                  (turnTotal, stored) =>
+                    turnTotal +
+                    tokenEstimator.estimateAgentMessage(stored.message, input.model),
+                  0,
+                ),
+              0,
+            );
+      const outputAllowance =
+        headroomPolicy === undefined || preSelectionInputTokens === undefined
+          ? undefined
+          : resolveOutputAllowance({
+              policy: headroomPolicy,
+              contextWindowTokens: input.model.limits.contextWindowTokens,
+              maxOutputTokens: input.model.limits.maxOutputTokens,
+              fullInputTokens: preSelectionInputTokens,
+              ...(options.modelSettings?.maxOutputTokens === undefined
+                ? {}
+                : { configuredOutputCeiling: options.modelSettings.maxOutputTokens }),
+            });
       const policyOptions = {
         ...configuredPolicyOptions,
         ...(adaptiveBudget === undefined
@@ -356,6 +410,16 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           : {
               outputReserveTokens: adaptiveBudget.outputReserveTokens,
               safetyReserveTokens: adaptiveBudget.safetyReserveTokens,
+            }),
+        ...(headroomPolicy === undefined || outputAllowance === undefined
+          ? {}
+          : {
+              outputReserveTokens: outputAllowance,
+              safetyReserveTokens: headroomPolicy.safetyTokens,
+              requestHeadroom: {
+                expectedGrowthTokens: headroomPolicy.expectedGrowthTokens,
+                postCompactionRatio: headroomPolicy.postCompactionRatio,
+              },
             }),
         ...(options.workingSet === undefined ? {} : { workingSet: options.workingSet }),
       };
@@ -371,13 +435,21 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       ) {
         throw new RangeError("Adaptive context policy produced an inconsistent input limit.");
       }
-      const requestBudget: ContextRequestBudget = Object.freeze({
-        ...(options.requestBudget ?? {
-          version: "LEGACY_FULL_OUTPUT_V1" as const,
-          outputReserveTokens: policy.outputReserveTokens,
-          safetyReserveTokens: policy.safetyReserveTokens,
-        }),
-      });
+      const requestBudget: ContextRequestBudget = Object.freeze(
+        headroomPolicy !== undefined && outputAllowance !== undefined
+          ? {
+              version: "TURN_BUDGET_V3" as const,
+              algorithm: headroomPolicy.algorithm,
+              outputAllowanceTokens: outputAllowance,
+              safetyReserveTokens: headroomPolicy.safetyTokens,
+              expectedGrowthTokens: headroomPolicy.expectedGrowthTokens,
+            }
+          : options.requestBudget ?? {
+              version: "LEGACY_FULL_OUTPUT_V1" as const,
+              outputReserveTokens: policy.outputReserveTokens,
+              safetyReserveTokens: policy.safetyReserveTokens,
+            },
+      );
       throwIfAborted(input.signal);
 
       const sourceInput = {
@@ -775,12 +847,34 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       // The preflight is added to the *final* report, never to the projection that produced it: the
       // report describes the request that will be sent, and its preflight field says what the
       // compaction decision was made from.
-      const finalReport = Object.freeze({ ...finalProjection.audit.report, preflight });
-      await options.usageStore.upsert(
-        recoveryStages.length === 0
+      const turnBudget: TurnBudgetDecision | undefined =
+        headroomPolicy === undefined || outputAllowance === undefined
+          ? undefined
+          : decideTurnBudget({
+              policy: headroomPolicy,
+              modelProfileRef: `${input.model.ref.provider}/${input.model.ref.model}`,
+              preparedSurfaceDigest: sentFingerprint,
+              windowTokens: input.model.limits.contextWindowTokens,
+              fullInputTokens:
+                finalProjection.audit.report.estimatedInputTokens +
+                finalProjection.audit.report.requestOverheadTokens,
+              outputAllowanceTokens: outputAllowance,
+              ...(options.modelSettings?.maxOutputTokens === undefined
+                ? {}
+                : { configuredOutputCeiling: options.modelSettings.maxOutputTokens }),
+              compacted: compactionCount > 0,
+            });
+      const finalReport = Object.freeze({
+        ...finalProjection.audit.report,
+        preflight,
+        ...(turnBudget === undefined ? {} : { turnBudget }),
+      });
+      await options.usageStore.upsert({
+        ...(recoveryStages.length === 0
           ? finalProjection.audit.usage
-          : { ...finalProjection.audit.usage, lastRecoveryStages: recoveryStages },
-      );
+          : { ...finalProjection.audit.usage, lastRecoveryStages: recoveryStages }),
+        ...(turnBudget === undefined ? {} : { turnBudget }),
+      });
       throwIfAborted(input.signal);
       return Object.freeze({
         messages: finalProjection.materializedMessages,

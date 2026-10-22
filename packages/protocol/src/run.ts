@@ -51,6 +51,25 @@ export const WorkingSetPolicyV2Schema = z
   })
   .strict();
 
+/**
+ * The Run-frozen `HEADROOM_V1` parameters.
+ *
+ * A Run stores the *algorithm and its parameters*, never a per-turn quota: the allowance is derived
+ * per turn from the input that is actually prepared, so freezing a number here would recreate the
+ * fixed working set this variant replaces.
+ */
+export const TurnBudgetPolicySnapshotSchema = z
+  .object({
+    version: z.literal("TURN_BUDGET_V3"),
+    algorithm: z.literal("HEADROOM_V1"),
+    minOutputTokens: z.number().int().safe().positive(),
+    preferredOutputTokens: z.number().int().safe().positive(),
+    safetyTokens: z.number().int().safe().nonnegative(),
+    expectedGrowthTokens: z.number().int().safe().positive(),
+    postCompactionRatio: z.number().finite().gt(0).lt(1),
+  })
+  .strict();
+
 export const ContextBudgetPolicySnapshotSchema = ContextRequestBudgetSnapshotSchema.or(
   z
     .object({
@@ -59,10 +78,11 @@ export const ContextBudgetPolicySnapshotSchema = ContextRequestBudgetSnapshotSch
       workingSet: WorkingSetPolicyV2Schema,
     })
     .strict(),
-);
+).or(TurnBudgetPolicySnapshotSchema);
 export type ContextBudgetPolicySnapshot = z.infer<typeof ContextBudgetPolicySnapshotSchema>;
 export type ContextRequestBudgetSnapshot = z.infer<typeof ContextRequestBudgetSnapshotSchema>;
 export type WorkingSetPolicyV2 = z.infer<typeof WorkingSetPolicyV2Schema>;
+export type TurnBudgetPolicySnapshot = z.infer<typeof TurnBudgetPolicySnapshotSchema>;
 
 /**
  * A normal execution result. It records the exact final text and the model Step that produced it;
