@@ -189,8 +189,27 @@ export function projectReadAttachmentSecurityFacts(args: Readonly<JsonObject>): 
   };
 }
 
-export function projectListDirectorySecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
-  const path = pathOf(args.path, "path");
+/**
+ * Security facts for reading conversation history.
+ *
+ * ```text
+ * resourceAccesses   none — no filesystem or process resource is touched
+ * secretScanInputs   none — the Tool's own text is redacted before it is returned
+ * ```
+ *
+ * The reference is digested rather than carried: an approval or a diagnostic does not need the
+ * source identity, and a reference is host-internal addressing material.
+ */
+export function projectReadHistorySecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
+  const sourceRef = typeof args["sourceRef"] === "string" ? args["sourceRef"] : "INVALID";
+  return {
+    resourceAccesses: [],
+    secretScanInputs: [],
+    structuralPreview: { kind: "HISTORY_READ", referenceDigest: digestText(sourceRef) },
+  };
+}
+
+export function projectListDirectorySecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {  const path = pathOf(args.path, "path");
   return {
     resourceAccesses: [],
     secretScanInputs: [],

@@ -64,6 +64,36 @@ export interface AgentMessageRecordStorePort {
    * promoting this member to mandatory.
    */
   listBySession?(sessionId: SessionId): Promise<readonly AgentMessageRecord[]>;
+
+  /**
+   * A bounded slice of one Run's records, ordered by sequence.
+   *
+   * `listByRun` answers "everything", which is the wrong shape for reading a checkpoint's source range
+   * back to a model: loading a whole Session and then slicing it turns a bounded page into an
+   * unbounded read. This query is inclusive on both sequence bounds and carries a hard record limit,
+   * so a caller can page through a range without ever materialising it.
+   *
+   * Optional for the same reason `listBySession` is: a store that cannot answer it is still a complete
+   * record store, and the capability is required structurally at composition by the one caller that
+   * needs it.
+   */
+  readRange?(query: AgentMessageRangeQuery): Promise<AgentMessageRangePage>;
+}
+
+/** A bounded, ordered read of one Run's records. */
+export interface AgentMessageRangeQuery {
+  readonly runId: RunId;
+  /** Inclusive. */
+  readonly fromSequence: number;
+  /** Inclusive. */
+  readonly toSequence: number;
+  readonly limit: number;
+}
+
+export interface AgentMessageRangePage {
+  readonly records: readonly AgentMessageRecord[];
+  /** True when more records exist inside the requested range beyond `limit`. */
+  readonly hasMore: boolean;
 }
 
 /**
@@ -76,3 +106,7 @@ export interface AgentMessageRecordStorePort {
  */
 export type SessionReadableAgentMessageRecordStore = AgentMessageRecordStorePort &
   Required<Pick<AgentMessageRecordStorePort, "listBySession">>;
+
+/** A record store that can answer a bounded range read. */
+export type RangeReadableAgentMessageRecordStore = AgentMessageRecordStorePort &
+  Required<Pick<AgentMessageRecordStorePort, "readRange">>;

@@ -1,4 +1,5 @@
 import type { ToolName } from "@caelush/protocol";
+import type { HistoryLookupOperations } from "@caelush/agent";
 
 import type { CodingToolDefinition } from "../coding-tool-definition.js";
 import type {
@@ -22,6 +23,7 @@ import { createSearchTextTool } from "./search-text.js";
 import { createStopProcessTool } from "./stop-process.js";
 import { createWriteStdinTool } from "./write-stdin.js";
 import { createReadAttachmentTool } from "./read-attachment.js";
+import { createReadHistoryTool } from "./read-history.js";
 
 /**
  * The default Coding Tool set.
@@ -29,7 +31,7 @@ import { createReadAttachmentTool } from "./read-attachment.js";
  * ```text
  * 1  read_file        2  list_directory   3  find_files     4  search_text   5  apply_patch
  * 6  update_plan      7  exec_command     8  write_stdin    9  stop_process
- * 10 git_status      11  git_diff        12  read_attachment
+ * 10 git_status      11  git_diff        12  read_attachment  13  read_history
  * ```
  *
  * ## The order is frozen
@@ -75,6 +77,10 @@ export const DEFAULT_CODING_TOOL_ORDER = Object.freeze([
   "git_status",
   "git_diff",
   "read_attachment",
+  // Appended, not inserted: the twelve existing entries keep their exact positions so the catalog
+  // bytes a prompt cache keyed on do not move, and the new Tool is visible where a model that has
+  // just been handed a degraded checkpoint will look for it.
+  "read_history",
 ] as const satisfies readonly ToolName[]);
 
 /** The Operations the default twelve need, one port per capability family. */
@@ -104,6 +110,14 @@ export interface DefaultCodingToolOperations {
   readonly git: GitOperations;
   /** Daemon attachment authority; the fallback definition fails safely when no host adapter exists. */
   readonly attachmentRead?: AttachmentReadOperations | undefined;
+  /**
+   * Durable conversation-history authority, bound to the executing Session by the host.
+   *
+   * Absent means the Tool exists but answers `HISTORY_UNAVAILABLE`: a model told to read a reference
+   * back learns that this host cannot, which is better than a Tool that silently is not in the
+   * catalog while a checkpoint still points at it.
+   */
+  readonly historyLookup?: HistoryLookupOperations | undefined;
 }
 
 /**
@@ -136,6 +150,7 @@ export function createDefaultCodingTools(
         },
       },
     ),
+    createReadHistoryTool(operations.historyLookup),
   ]);
 }
 

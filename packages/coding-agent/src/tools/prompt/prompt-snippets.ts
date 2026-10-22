@@ -173,6 +173,17 @@ const SNIPPET_SOURCE: Readonly<Record<string, SnippetSource>> = {
     resultHandling:
       "Read the coverage line: complete, or the exact next range. Image references replay next turn.",
   },
+  read_history: {
+    purpose: "Read back the original conversation records a checkpoint set aside.",
+    whenToUse:
+      "A summary, or a continuation marked degraded, says earlier detail was replaced and you need it.",
+    whenNotToUse: "Workspace files (read_file) or attachments (read_attachment).",
+    argumentNotes:
+      "The opaque sourceRef the checkpoint gave you, plus the cursor a previous page returned. Never a path.",
+    sideEffects: "Read-only.",
+    safety: "Scoped to this session; private provider state and secrets are never returned.",
+    resultHandling: "Read the items and continue with the next cursor until it is absent.",
+  },
 };
 
 /** Render one Tool's guidance into its bounded context block. */
@@ -213,6 +224,10 @@ export const READ_ATTACHMENT_PROMPT_SNIPPET = renderSnippet(
   "read_attachment",
   SNIPPET_SOURCE.read_attachment!,
 );
+export const READ_HISTORY_PROMPT_SNIPPET = renderSnippet(
+  "read_history",
+  SNIPPET_SOURCE.read_history!,
+);
 
 /** Every Coding snippet by Tool name, for a provider that selects by the active tool set. */
 export const CODING_TOOL_PROMPT_SNIPPETS: Readonly<Record<string, string>> = Object.freeze({
@@ -228,6 +243,7 @@ export const CODING_TOOL_PROMPT_SNIPPETS: Readonly<Record<string, string>> = Obj
   git_status: GIT_STATUS_PROMPT_SNIPPET,
   git_diff: GIT_DIFF_PROMPT_SNIPPET,
   read_attachment: READ_ATTACHMENT_PROMPT_SNIPPET,
+  read_history: READ_HISTORY_PROMPT_SNIPPET,
 });
 
 /**

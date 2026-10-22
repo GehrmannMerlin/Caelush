@@ -176,9 +176,31 @@ export type {
 } from "./persistence/record.js";
 
 export type {
+  AgentMessageRangePage,
+  AgentMessageRangeQuery,
   AgentMessageRecordStorePort,
+  RangeReadableAgentMessageRecordStore,
   SessionReadableAgentMessageRecordStore,
 } from "./persistence/record-store-port.js";
+
+export {
+  createHistorySourceRef,
+  parseHistorySourceRef,
+  HISTORY_LOOKUP_DEFAULT_BYTES,
+  HISTORY_LOOKUP_MAX_BYTES,
+  HISTORY_LOOKUP_MAX_ITEMS,
+  HISTORY_SOURCE_PROJECTION_VERSION,
+} from "./history-lookup-port.js";
+export type {
+  HistorySourceIdentity,
+  HistoryLookupInput,
+  HistoryLookupOperations,
+  HistoryLookupPort,
+  SafeHistoryUnavailableReason,
+  SafeVisibleHistoryItem,
+  TrustedHistoryScope,
+  VisibleHistoryPage,
+} from "./history-lookup-port.js";
 
 export { createAgentConversationRepository } from "./persistence/conversation-repository.js";
 export type {

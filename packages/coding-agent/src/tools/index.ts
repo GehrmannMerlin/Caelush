@@ -96,6 +96,7 @@ export type {
 /* The ten builtins and the default set. */
 export { createReadAttachmentTool, readAttachmentInputSchema } from "./builtins/read-attachment.js";
 export { createReadFileTool, readFileInputSchema } from "./builtins/read-file.js";
+export { createReadHistoryTool } from "./builtins/read-history.js";
 export { createListDirectoryTool, listDirectoryInputSchema } from "./builtins/list-directory.js";
 export { createFindFilesTool, findFilesInputSchema } from "./builtins/find-files.js";
 export { createSearchTextTool, searchTextInputSchema } from "./builtins/search-text.js";
@@ -209,6 +210,7 @@ export {
   projectListDirectorySecurityFacts,
   projectReadFileSecurityFacts,
   projectReadAttachmentSecurityFacts,
+  projectReadHistorySecurityFacts,
   projectSearchTextSecurityFacts,
   projectStopProcessSecurityFacts,
   projectWriteStdinSecurityFacts,

@@ -54,6 +54,7 @@ export function toolPresentationCategory(toolName: string): ToolPresentationCate
   switch (toolName) {
     case "read_file":
     case "read_attachment":
+    case "read_history":
       return "READ";
     case "list_directory":
     case "find_files":

@@ -1,6 +1,8 @@
 import type { RunId, SessionId, StepId, TimestampMs } from "@caelush/protocol";
 import type {
   AgentMessageAudience,
+  AgentMessageRangePage,
+  AgentMessageRangeQuery,
   AgentMessageRecord,
   AgentMessageRecordDraft,
   AgentMessageSource,
@@ -376,4 +378,43 @@ export class SqliteAgentMessageRecordStore {
       .all(sessionId) as unknown as MessageRow[];
     return Object.freeze(rows.map(rowToRecord));
   }
+
+  /**
+   * One bounded, ordered slice of a Run's records.
+   *
+   * ```text
+   * one row beyond the limit is read, and dropped
+   * ```
+   *
+   * That extra row is how `hasMore` is answered without a second query and without a `COUNT(*)` over
+   * the range: the caller learns whether a continuation exists from the same index scan that produced
+   * the page. The `(run_id, sequence)` index makes the bounds a range seek, and the limit is enforced
+   * by SQLite rather than by slicing an array in memory.
+   */
+  async readRange(query: AgentMessageRangeQuery): Promise<AgentMessageRangePage> {
+    assertRangeQuery(query);
+    const rows = this.database.client
+      .prepare(
+        `SELECT ${ROW_COLUMNS} FROM agent_messages
+         WHERE run_id = ? AND sequence >= ? AND sequence <= ?
+         ORDER BY sequence ASC LIMIT ?`,
+      )
+      .all(query.runId, query.fromSequence, query.toSequence, query.limit + 1) as unknown as
+      MessageRow[];
+    const hasMore = rows.length > query.limit;
+    const page = hasMore ? rows.slice(0, query.limit) : rows;
+    return Object.freeze({
+      records: Object.freeze(page.map(rowToRecord)),
+      hasMore,
+    });
+  }
+}
+
+function assertRangeQuery(query: AgentMessageRangeQuery): void {
+  if (!Number.isSafeInteger(query.fromSequence) || query.fromSequence < 1)
+    throw new StorageError("Message range lower bound is invalid.");
+  if (!Number.isSafeInteger(query.toSequence) || query.toSequence < query.fromSequence)
+    throw new StorageError("Message range upper bound is invalid.");
+  if (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 512)
+    throw new StorageError("Message range limit is invalid.");
 }

@@ -235,6 +235,7 @@ import {
 import { DAEMON_VERSION } from "./version.js";
 import { RunEventHub, type SubscriberQueuePolicy } from "./events/index.js";
 import { createDaemonV2ContextEngine } from "./context/v2-context-composition.js";
+import { createHistoryLookupAdapter } from "./context/history-lookup-adapter.js";
 import { createDaemonPrivateReplayResolver } from "./replay/private-replay-resolver.js";
 
 /**
@@ -758,7 +759,16 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
    * same active set.
    */
   const defaultCodingTools = defaultCodingToolSet(
-    defaultCodingOperations(runtimeResolver, securityCapabilityService, options.attachmentService),
+    defaultCodingOperations(
+      runtimeResolver,
+      securityCapabilityService,
+      options.attachmentService,
+      createHistoryLookupAdapter({
+        runs: options.storage.runs,
+        messageRecords: options.storage.messageRecords,
+        codecs: messageCodecs,
+      }),
+    ),
     options.toolExposure ?? "AVAILABLE",
   );
   const activeToolRegistry = buildToolRegistry(options.toolRegistrations ?? defaultCodingTools);
@@ -2466,6 +2476,7 @@ function defaultCodingOperations(
   runtimeResolver: ReturnType<typeof createLocalRuntimeResolver>,
   securityCapabilityService: SecurityCapabilityService,
   attachmentService?: AttachmentService,
+  historyLookup?: DefaultCodingToolOperations["historyLookup"],
 ): DefaultCodingToolOperations {
   const readOnly = createRuntimeReadOnlyOperations(runtimeResolver);
   const process = createRuntimeProcessOperations(runtimeResolver, {
@@ -2513,6 +2524,7 @@ function defaultCodingOperations(
         }
       },
     } satisfies AttachmentReadOperations,
+    ...(historyLookup === undefined ? {} : { historyLookup }),
   };
 }
 

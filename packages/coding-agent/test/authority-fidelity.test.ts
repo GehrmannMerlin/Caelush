@@ -496,6 +496,9 @@ describe("default Tool set fidelity", () => {
       "search_text",
       "git_status",
       "git_diff",
+      // Reading back a checkpoint's source range touches no workspace state and no process: it is a
+      // bounded read of an append-only store, so it may share a window with other reads.
+      "read_history",
     ]);
     for (const definition of definitions) {
       expect(typeof definition.tool.execute).toBe("function");
