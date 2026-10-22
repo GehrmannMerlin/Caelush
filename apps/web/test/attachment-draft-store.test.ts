@@ -63,6 +63,47 @@ describe("AttachmentDraftStore", () => {
     expect(store.getSnapshot(workspaceOwner)).toMatchObject({ text: latest.text, revision: 7 });
   });
 
+  it("coalesces simultaneous same-content autosave and submission writes", async () => {
+    let serverDraft = emptyDraft(workspaceOwner, 3);
+    let releaseSave: (() => void) | undefined;
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const client: AttachmentDraftClient = {
+      getAttachmentDraft: vi.fn(async () => serverDraft),
+      saveAttachmentDraft: vi.fn(async (owner, input) => {
+        await saveGate;
+        if (input.expectedRevision !== serverDraft.revision) {
+          throw new CaelushClientHttpError({
+            status: 409,
+            code: "CONFLICT",
+            message: "Draft changed.",
+          });
+        }
+        serverDraft = { owner, revision: input.expectedRevision + 1, ...input };
+        return serverDraft;
+      }),
+    };
+    const store = new AttachmentDraftStore(client);
+    const loaded = await store.load(workspaceOwner);
+
+    const autosave = store.save(workspaceOwner, loaded.revision, {
+      text: "apply browser patch",
+      artifactIds: [],
+    });
+    const submissionSave = store.save(workspaceOwner, loaded.revision, {
+      text: "apply browser patch",
+      artifactIds: [],
+    });
+    setTimeout(() => releaseSave?.(), 0);
+
+    await expect(Promise.all([autosave, submissionSave])).resolves.toMatchObject([
+      { revision: 4, text: "apply browser patch" },
+      { revision: 4, text: "apply browser patch" },
+    ]);
+    expect(client.saveAttachmentDraft).toHaveBeenCalledTimes(1);
+  });
+
   it("reuses one submission id until draft content changes and clears by revision", async () => {
     let saved = emptyDraft(workspaceOwner);
     const client: AttachmentDraftClient = {

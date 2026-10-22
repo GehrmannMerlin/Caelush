@@ -23,8 +23,16 @@ export class AttachmentDraftConflictError extends Error {
   }
 }
 
+interface PendingDraftSave {
+  readonly expectedRevision: number;
+  readonly text: string;
+  readonly artifactIds: readonly AttachmentId[];
+  readonly promise: Promise<AttachmentDraft>;
+}
+
 export class AttachmentDraftStore {
   private readonly snapshots = new Map<string, AttachmentDraft>();
+  private readonly pendingSaves = new Map<string, PendingDraftSave>();
 
   constructor(
     private readonly client: AttachmentDraftClient,
@@ -51,7 +59,30 @@ export class AttachmentDraftStore {
     expectedRevision: number,
     draft: { readonly text: string; readonly artifactIds: readonly AttachmentId[] },
   ): Promise<AttachmentDraft> {
-    return this.saveRevision(owner, expectedRevision, draft);
+    const key = ownerKey(owner);
+    const pending = this.pendingSaves.get(key);
+    if (
+      pending !== undefined &&
+      pending.expectedRevision === expectedRevision &&
+      pending.text === draft.text &&
+      sameAttachmentIds(pending.artifactIds, draft.artifactIds)
+    ) {
+      return pending.promise.then((saved) => this.copy(saved));
+    }
+
+    const promise = this.saveRevision(owner, expectedRevision, draft);
+    const nextPending: PendingDraftSave = {
+      expectedRevision,
+      text: draft.text,
+      artifactIds: [...draft.artifactIds],
+      promise,
+    };
+    this.pendingSaves.set(key, nextPending);
+    const clearPending = () => {
+      if (this.pendingSaves.get(key) === nextPending) this.pendingSaves.delete(key);
+    };
+    void promise.then(clearPending, clearPending);
+    return promise;
   }
 
   async prepareSubmission(
@@ -148,6 +179,10 @@ export class AttachmentDraftStore {
   private copy(draft: AttachmentDraft): AttachmentDraft {
     return Object.freeze({ ...draft, artifactIds: [...draft.artifactIds] });
   }
+}
+
+function sameAttachmentIds(left: readonly AttachmentId[], right: readonly AttachmentId[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
 function ownerKey(owner: AttachmentOwner): string {
