@@ -474,10 +474,11 @@ jobs:
 
       - name: Run source verification
         run: |
+          # The full suite runs in the Ubuntu `check` job. Keep this cross-platform job focused on
+          # source/build checks and the release artifact; many unit fixtures are intentionally host-specific.
           corepack pnpm@11.21.0 check:architecture
           corepack pnpm@11.21.0 lint
           corepack pnpm@11.21.0 typecheck
-          corepack pnpm@11.21.0 test
           corepack pnpm@11.21.0 build
 
       - name: Build platform release artifact
