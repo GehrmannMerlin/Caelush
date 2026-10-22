@@ -5,11 +5,12 @@ import type {
 } from "@caelush/ai";
 import type {
   AgentModelTurn,
+  AgentToolCallsDecision,
   RunContinuationCheckpoint as AgentContinuation,
 } from "@caelush/agent";
 import type { z } from "zod";
 import type { RunContinuationCheckpoint as DurableContinuation } from "./agent-continuation.js";
-import { RunContinuationCheckpointSchema } from "./agent-continuation-schema.js";
+import { AgentToolCallsDecisionSchema, RunContinuationCheckpointSchema } from "./agent-continuation-schema.js";
 import { toTextOnlyAIToolResultContent } from "./ai-message-content.js";
 
 /**
@@ -45,10 +46,7 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
         type: "WAITING_TOOL_RESULTS",
         runId: checkpoint.runId,
         sourceStepId: checkpoint.sourceStepId,
-        pendingDecision: {
-          ...checkpoint.pendingDecision,
-          modelTurn: ensureAssistantItems(checkpoint.pendingDecision.modelTurn),
-        },
+        pendingDecision: canonicalPendingDecision(checkpoint.pendingDecision),
         ...(checkpoint.receivedResults === undefined
           ? {}
           : {
@@ -87,10 +85,7 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
         type: "WAITING_RESOURCE",
         runId: checkpoint.runId,
         sourceStepId: checkpoint.sourceStepId,
-        pendingDecision: {
-          ...checkpoint.pendingDecision,
-          modelTurn: ensureAssistantItems(checkpoint.pendingDecision.modelTurn),
-        },
+        pendingDecision: canonicalPendingDecision(checkpoint.pendingDecision),
         reason: checkpoint.reason,
         replanCount: checkpoint.replanCount,
       };
@@ -126,10 +121,7 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
           return {
             ...base,
             mode: "TOOL_RESULTS",
-            pendingDecision: {
-              ...checkpoint.pendingDecision,
-              modelTurn: ensureAssistantItems(checkpoint.pendingDecision.modelTurn),
-            },
+            pendingDecision: canonicalPendingDecision(checkpoint.pendingDecision),
             receivedResults: checkpoint.receivedResults.map(asTool),
             ...(checkpoint.sourceStepId === undefined
               ? {}
@@ -145,6 +137,27 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
     default:
       return assertNever(checkpoint, "canonical continuation");
   }
+}
+
+/**
+ * The canonical decision of one persisted Tool turn.
+ *
+ * A checkpoint written before rejected requests could be recorded carries no such list, and that
+ * absence is history: it had none. It is projected as an empty list here rather than being treated as
+ * "unknown", because inventing a rejection for a historical decision would add a result the model was
+ * never owed.
+ */
+function canonicalPendingDecision(
+  decision: AgentToolCallsDecision | z.output<typeof AgentToolCallsDecisionSchema>,
+): AgentToolCallsDecision {
+  const { rejectedToolRequests: rejected, ...rest } = decision;
+  return Object.freeze({
+    ...rest,
+    modelTurn: ensureAssistantItems(rest.modelTurn),
+    // Absence is preserved: a decision with no rejection must round-trip without gaining an empty
+    // list, because "no rejected request" and "no record of rejections" are different claims.
+    ...(rejected === undefined || rejected.length === 0 ? {} : { rejectedToolRequests: rejected }),
+  });
 }
 
 function ensureAssistantItems(
@@ -193,10 +206,7 @@ export function toAgentContinuation(
         type: "WAITING_TOOL_RESULTS",
         runId: checkpoint.runId,
         sourceStepId: checkpoint.sourceStepId,
-        pendingDecision: {
-          ...checkpoint.pendingDecision,
-          modelTurn: ensureAssistantItems(checkpoint.pendingDecision.modelTurn),
-        },
+        pendingDecision: canonicalPendingDecision(checkpoint.pendingDecision),
         ...(checkpoint.receivedResults === undefined
           ? {}
           : { receivedResults: checkpoint.receivedResults.map(asTool) }),
@@ -233,10 +243,7 @@ export function toAgentContinuation(
         type: "WAITING_RESOURCE",
         runId: checkpoint.runId,
         sourceStepId: checkpoint.sourceStepId,
-        pendingDecision: {
-          ...checkpoint.pendingDecision,
-          modelTurn: ensureAssistantItems(checkpoint.pendingDecision.modelTurn),
-        },
+        pendingDecision: canonicalPendingDecision(checkpoint.pendingDecision),
         reason: checkpoint.reason,
         replanCount: checkpoint.replanCount,
       };
@@ -272,10 +279,7 @@ export function toAgentContinuation(
           return {
             ...base,
             mode: "TOOL_RESULTS",
-            pendingDecision: {
-              ...checkpoint.pendingDecision,
-              modelTurn: ensureAssistantItems(checkpoint.pendingDecision.modelTurn),
-            },
+            pendingDecision: canonicalPendingDecision(checkpoint.pendingDecision),
             receivedResults: checkpoint.receivedResults.map(asTool),
             ...(checkpoint.sourceStepId === undefined
               ? {}

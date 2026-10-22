@@ -137,8 +137,10 @@ function completeTurnAnchors(
     }
 
     if (message.type === "ASSISTANT") {
+      // A rejected request is answered by a Tool result in exactly the same way, so the batch
+      // boundary must account for it or the following result looks unmatched.
       const callIds = message.content
-        .filter((part) => part.type === "TOOL_CALL")
+        .filter((part) => part.type === "TOOL_CALL" || part.type === "TOOL_CALL_REJECTED")
         .map((part) => part.toolCallId);
       if (callIds.length > 0) {
         if (new Set(callIds).size !== callIds.length) {

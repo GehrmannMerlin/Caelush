@@ -1,4 +1,5 @@
 import type { JsonObject } from "@caelush/ai";
+import type { AIRejectedToolArgumentsIssue } from "@caelush/ai";
 import type { AssistantMessagePhase } from "@caelush/protocol";
 
 /**
@@ -93,14 +94,43 @@ export interface AgentAssistantToolCallPart {
   readonly phase?: AssistantMessagePhase;
 }
 
+/**
+ * A tool call the model requested whose arguments could not be executed.
+ *
+ * It carries the provider's call identity, the Tool name and the typed reason, and it deliberately
+ * has **no** `input`: no argument object existed, so none is recorded. The received bytes live only
+ * in the provider's private replay artifact, never in a durable message.
+ */
+export interface AgentAssistantRejectedToolCallPart {
+  readonly type: "TOOL_CALL_REJECTED";
+
+  readonly toolCallId: string;
+
+  readonly toolName: string;
+
+  readonly issue: AIRejectedToolArgumentsIssue;
+
+  readonly assistantItemId?: string;
+
+  readonly phase?: AssistantMessagePhase;
+}
+
 /** What a user message may contain. */
 export type AgentUserContentPart = AgentTextPart | AgentAttachmentRefPart;
 
 /** What an assistant message may contain. */
-export type AgentAssistantContentPart = AgentAssistantTextPart | AgentAssistantToolCallPart;
+export type AgentAssistantContentPart =
+  | AgentAssistantTextPart
+  | AgentAssistantToolCallPart
+  | AgentAssistantRejectedToolCallPart;
 
 /** Every part type the Message Domain knows. */
-export const AGENT_CONTENT_PART_TYPES = ["TEXT", "ATTACHMENT_REF", "TOOL_CALL"] as const;
+export const AGENT_CONTENT_PART_TYPES = [
+  "TEXT",
+  "ATTACHMENT_REF",
+  "TOOL_CALL",
+  "TOOL_CALL_REJECTED",
+] as const;
 
 /* -------------------------------------------------------------------------- builders */
 
@@ -153,6 +183,24 @@ export function agentAssistantToolCallPart(input: {
     toolCallId: input.toolCallId,
     toolName: input.toolName,
     input: input.input,
+    ...(input.assistantItemId === undefined ? {} : { assistantItemId: input.assistantItemId }),
+    ...(input.phase === undefined ? {} : { phase: input.phase }),
+  });
+}
+
+/** Build an assistant rejected-tool-call part. */
+export function agentAssistantRejectedToolCallPart(input: {
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly issue: AIRejectedToolArgumentsIssue;
+  readonly assistantItemId?: string;
+  readonly phase?: AssistantMessagePhase;
+}): AgentAssistantRejectedToolCallPart {
+  return Object.freeze({
+    type: "TOOL_CALL_REJECTED" as const,
+    toolCallId: input.toolCallId,
+    toolName: input.toolName,
+    issue: Object.freeze({ ...input.issue }),
     ...(input.assistantItemId === undefined ? {} : { assistantItemId: input.assistantItemId }),
     ...(input.phase === undefined ? {} : { phase: input.phase }),
   });
@@ -295,6 +343,36 @@ export function assertAgentAssistantContent(
       toolCallIds.add(toolCall.toolCallId);
       continue;
     }
+    if (candidate.type === "TOOL_CALL_REJECTED") {
+      const rejected = candidate as {
+        readonly toolCallId?: unknown;
+        readonly toolName?: unknown;
+        readonly issue?: unknown;
+      };
+      if (typeof rejected.toolCallId !== "string" || rejected.toolCallId.length === 0) {
+        throw new TypeError(
+          "Agent assistant rejected tool call part toolCallId must be a non-empty string.",
+        );
+      }
+      if (typeof rejected.toolName !== "string" || rejected.toolName.length === 0) {
+        throw new TypeError(
+          "Agent assistant rejected tool call part toolName must be a non-empty string.",
+        );
+      }
+      assertRejectedIssue(rejected.issue);
+      // A rejected call and an executable call with the same id would describe one request twice.
+      if (toolCallIds.has(rejected.toolCallId)) {
+        throw new TypeError("Agent assistant message must not announce the same toolCallId twice.");
+      }
+      activeAssistantItemId = validateAssistantItemMetadata(
+        candidate,
+        itemPhases,
+        closedAssistantItemIds,
+        activeAssistantItemId,
+      );
+      toolCallIds.add(rejected.toolCallId);
+      continue;
+    }
     throw new TypeError("Agent assistant message content part type is unknown.");
   }
 }
@@ -353,6 +431,45 @@ export function assistantToolCalls(
   content: readonly AgentAssistantContentPart[],
 ): readonly AgentAssistantToolCallPart[] {
   return content.filter((part): part is AgentAssistantToolCallPart => part.type === "TOOL_CALL");
+}
+
+/**
+ * Every request an assistant content list announces, executable or rejected, in source order.
+ *
+ * This is the projection the Tool batch and the result normalizer pair against, because both a valid
+ * and a rejected request owe the model exactly one answer.
+ */
+export function assistantToolRequests(
+  content: readonly AgentAssistantContentPart[],
+): readonly (AgentAssistantToolCallPart | AgentAssistantRejectedToolCallPart)[] {
+  return content.filter(
+    (part): part is AgentAssistantToolCallPart | AgentAssistantRejectedToolCallPart =>
+      part.type === "TOOL_CALL" || part.type === "TOOL_CALL_REJECTED",
+  );
+}
+
+function assertRejectedIssue(value: unknown): void {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("Agent assistant rejected tool call part issue must be an object.");
+  }
+  const issue = value as Record<string, unknown>;
+  const keys = Object.keys(issue);
+  if (keys.length !== 2 || !Object.hasOwn(issue, "code") || !Object.hasOwn(issue, "argumentBytes")) {
+    throw new TypeError("Agent assistant rejected tool call part issue has an unexpected shape.");
+  }
+  if (
+    issue["code"] !== "MALFORMED_JSON" &&
+    issue["code"] !== "EXPECTED_OBJECT" &&
+    issue["code"] !== "INCOMPLETE_ARGUMENTS"
+  ) {
+    throw new TypeError("Agent assistant rejected tool call part issue code is unknown.");
+  }
+  const bytes = issue["argumentBytes"];
+  if (!Number.isSafeInteger(bytes) || (bytes as number) < 0) {
+    throw new TypeError(
+      "Agent assistant rejected tool call part issue argumentBytes must be a non-negative integer.",
+    );
+  }
 }
 
 function assertOptionalString(candidate: object, field: string, label: string): void {

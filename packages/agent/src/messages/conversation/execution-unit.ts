@@ -129,7 +129,9 @@ export function buildExecutionUnits(
   for (const [index, stored] of turn.messages.entries()) {
     const message: AgentMessage = stored.message;
     if (message.type !== "ASSISTANT" || !message.audience.model) continue;
-    const calls = message.content.filter((part) => part.type === "TOOL_CALL");
+    const calls = message.content.filter(
+      (part) => part.type === "TOOL_CALL" || part.type === "TOOL_CALL_REJECTED",
+    );
     if (calls.length === 0) continue;
 
     const callIds = calls.map((call) => call.toolCallId);

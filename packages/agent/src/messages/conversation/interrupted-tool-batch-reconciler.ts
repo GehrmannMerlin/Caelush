@@ -66,6 +66,14 @@ export function reconcileInterruptedToolBatches(input: {
   const callOwners = new Map<string, ReconciledInterruptedToolBatch["calls"][number]>();
   const callAssistantById = new Map<string, StoredAgentMessage<AgentAssistantMessage>>();
   const results = new Map<string, StoredAgentMessage<AgentToolResultMessage>>();
+  /**
+   * Calls the model made whose arguments were rejected.
+   *
+   * They never started, so there is no execution fact to reconcile: their result is the only durable
+   * statement about them, and it is accepted here rather than rejected as an orphan.
+   */
+  const rejectedToolNames = new Map<string, string>();
+  const rejectedResults = new Set<string>();
 
   for (const stored of input.messages) {
     const message = stored.message;
@@ -73,6 +81,13 @@ export function reconcileInterruptedToolBatches(input: {
 
     if (message.type === "ASSISTANT" && message.audience.model) {
       const assistant = stored as StoredAgentMessage<AgentAssistantMessage>;
+      for (const part of assistant.message.content) {
+        if (part.type !== "TOOL_CALL_REJECTED") continue;
+        if (rejectedToolNames.has(part.toolCallId) || callOwners.has(part.toolCallId)) {
+          throw new InterruptedToolBatchReconciliationError("HISTORY_INTEGRITY_ERROR");
+        }
+        rejectedToolNames.set(part.toolCallId, part.toolName);
+      }
       const calls = assistant.message.content.filter(
         (part): part is AgentAssistantToolCallPart => part.type === "TOOL_CALL",
       );
@@ -97,8 +112,17 @@ export function reconcileInterruptedToolBatches(input: {
     if (message.type === "TOOL_RESULT" && message.audience.model) {
       const result = stored as StoredAgentMessage<AgentToolResultMessage>;
       const callId = result.message.toolCallId;
-      if (results.has(callId)) {
+      if (results.has(callId) || rejectedResults.has(callId)) {
         throw new InterruptedToolBatchReconciliationError("HISTORY_INTEGRITY_ERROR");
+      }
+      const rejectedName = rejectedToolNames.get(callId);
+      if (rejectedName !== undefined) {
+        // A rejected call owes exactly one result and can owe nothing else.
+        if (result.message.toolName !== rejectedName) {
+          throw new InterruptedToolBatchReconciliationError("HISTORY_INTEGRITY_ERROR");
+        }
+        rejectedResults.add(callId);
+        continue;
       }
       results.set(callId, result);
     }

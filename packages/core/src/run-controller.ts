@@ -19,6 +19,7 @@ import {
   type ToolTurnResult,
 } from "@caelush/agent";
 import { ToolBatchInputError } from "@caelush/agent";
+import { orderedToolCalls } from "./agent-decision.js";
 import {
   AgentRunSchema,
   ApprovalResolutionSchema,
@@ -1026,7 +1027,9 @@ export class RunController {
     let normalized: readonly AIToolResultMessage[];
     try {
       normalized = normalizeToolResultBatch(
-        loaded.continuation.pendingDecision.toolRequests,
+        // The ordered request list, rejected requests included: every request the model made owes
+        // exactly one result, and a result that answers a rejected request is not an orphan.
+        orderedToolCalls(loaded.continuation.pendingDecision),
         results,
       );
     } catch {

@@ -32,3 +32,57 @@ export interface AgentMaxStepsReachedOutcome {
  * not decide to stop, the loop gate did.
  */
 export type AgentLoopOutcome = import("@caelush/agent").AgentDecision | AgentMaxStepsReachedOutcome;
+
+/**
+ * The ordered request list of one Tool decision, in the assistant's own order.
+ *
+ * The decision carries two arrays — executable requests and rejected ones — while the assistant
+ * message carries the *sequence* they appeared in. Both the Tool turn driver and the durable
+ * result-batch normalizer pair results against this projection, so there is exactly one answer to
+ * "which request is at position N".
+ *
+ * A decision whose arrays and message disagree is an invariant break, not an argument error: it
+ * would let a result answer a request at the wrong position.
+ */
+export function orderedToolCalls(
+  decision: import("@caelush/agent").AgentToolCallsDecision,
+): readonly import("@caelush/agent").ToolBatchCall[] {
+  const executableById = new Map(
+    decision.toolRequests.map((request) => [request.externalCallId, request]),
+  );
+  const rejectedById = new Map(
+    (decision.rejectedToolRequests ?? []).map((request) => [request.externalCallId, request]),
+  );
+  const ordered: import("@caelush/agent").ToolBatchCall[] = [];
+  for (const part of decision.modelTurn.assistantMessage.content) {
+    if (part.type === "tool-call") {
+      const request = executableById.get(part.toolCallId);
+      if (request === undefined) {
+        throw new Error("A Tool decision announced a call it does not contain.");
+      }
+      executableById.delete(part.toolCallId);
+      ordered.push({
+        externalCallId: request.externalCallId,
+        toolName: request.toolName,
+        args: request.args,
+      });
+      continue;
+    }
+    if (part.type === "tool-call-rejected") {
+      const request = rejectedById.get(part.toolCallId);
+      if (request === undefined) {
+        throw new Error("A Tool decision announced a rejected call it does not contain.");
+      }
+      rejectedById.delete(part.toolCallId);
+      ordered.push({
+        externalCallId: request.externalCallId,
+        toolName: request.toolName,
+        issue: { code: request.issue.code, argumentBytes: request.issue.argumentBytes },
+      });
+    }
+  }
+  if (executableById.size > 0 || rejectedById.size > 0) {
+    throw new Error("A Tool decision contains requests its assistant message does not announce.");
+  }
+  return Object.freeze(ordered);
+}

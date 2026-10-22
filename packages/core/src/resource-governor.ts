@@ -94,6 +94,15 @@ export interface ResourceToolBatchEvaluationInput {
   readonly correctionStage?: ResourceCorrectionStage | undefined;
 }
 
+/**
+ * The reply to a batch the Run withheld because the recent path produced no new progress.
+ *
+ * It states the observation and asks for a different approach; it never claims a call failed, because
+ * nothing ran.
+ */
+const NO_PROGRESS_REPLAN_CONTENT =
+  "No tool from this requested batch was executed. The recent execution path has produced insufficient new progress. Re-evaluate the current task state and choose a different approach. Reuse prior observations and avoid repeating equivalent operations.";
+
 const REPLAN_GUIDANCE =
   "Recent actions are producing little new information. Avoid repeating equivalent tool calls. Reuse existing evidence and choose a different approach.";
 
@@ -196,12 +205,35 @@ export class ResourceGovernor {
   static replanResults(
     calls: readonly { readonly externalCallId: string; readonly toolName: string }[],
   ): readonly SyntheticToolResult[] {
+    return ResourceGovernor.replanResultsFor(calls, "NO_PROGRESS");
+  }
+
+  /**
+   * The synthetic results of one replan, naming the reason it actually happened.
+   *
+   * The previous implementation reported every replan as "insufficient new progress", so an
+   * oversized but perfectly valid batch was answered with an accusation the model could not act on.
+   * A reason-specific message is the difference between "you are going in circles" and "you asked for
+   * eighteen calls and sixteen is the batch size".
+   */
+  static replanResultsFor(
+    calls: readonly { readonly externalCallId: string; readonly toolName: string }[],
+    reason: "BATCH_TOO_LARGE" | "NO_PROGRESS",
+    detail?: { readonly requested: number; readonly limit: number },
+  ): readonly SyntheticToolResult[] {
+    const content =
+      reason === "BATCH_TOO_LARGE"
+        ? `This batch requested ${String(detail?.requested ?? calls.length)} tool calls but at most ${String(
+            detail?.limit ?? 0,
+          )} may run in one batch. None of them was executed. Resend at most ${String(
+            detail?.limit ?? 0,
+          )} calls in the same order, then send the remainder after their results arrive.`
+        : NO_PROGRESS_REPLAN_CONTENT;
     return calls.map((call) => ({
       kind: "UNAVAILABLE_TOOL" as const,
       externalCallId: call.externalCallId,
       toolName: call.toolName,
-      content:
-        "No tool from this requested batch was executed. The recent execution path has produced insufficient new progress. Re-evaluate the current task state and choose a different approach. Reuse prior observations and avoid repeating equivalent operations.",
+      content,
       isError: true,
     }));
   }

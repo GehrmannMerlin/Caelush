@@ -23,11 +23,14 @@ import type {
   DurableToolExecutionOutcome,
 } from "../durable/durable-execution-coordinator.js";
 import { ToolExecutionAbortedError } from "../durable/durable-execution-coordinator.js";
+import type { AIRejectedToolArgumentsIssue } from "@caelush/ai";
 import type { ToolFailureFeedback } from "../types/tool-feedback.js";
 import { planSequentialToolBatch, type ToolBatchExecutionPlan } from "./batch-planner.js";
 import { runBoundedByIndex } from "./parallel-scheduler.js";
 import { ToolBatchInfrastructureError, ToolBatchInputError } from "./batch-errors.js";
+import { isModelRejectedCall } from "./batch-types.js";
 import type {
+  ToolBatchCall,
   ToolBatchCoordinator,
   ToolBatchItemOutcome,
   ToolBatchOutcome,
@@ -202,6 +205,14 @@ async function executeCallsSequentially(
     const notStartedCalls = request.calls.slice(callIndex);
     callIndex += 1;
 
+    // A rejected request never reached a handler and never will: the model has to correct it. It is
+    // reported in place rather than dropped, so the result batch still answers every request the
+    // model made, in the order it made them.
+    if (isModelRejectedCall(call)) {
+      items.push(modelRejectedItem(call));
+      continue;
+    }
+
     if (skipRemaining) {
       // The call is not prepared, not admitted, not durably recorded and not executed. It is a
       // batch-level safe statement, not a fabricated Tool execution.
@@ -312,23 +323,30 @@ async function executeCallsWithWindows(
   let index = 0;
 
   while (index < request.calls.length) {
+    const current = request.calls[index]!;
+    if (isModelRejectedCall(current)) {
+      // Reported even while the batch is skipping dependants: the request was never going to run,
+      // and its feedback is what lets the model correct it.
+      items.push(modelRejectedItem(current));
+      index += 1;
+      continue;
+    }
     if (skipRemaining) {
-      items.push(skippedItem(request.calls[index]!));
+      items.push(skippedItem(current));
       index += 1;
       continue;
     }
     if (request.signal.aborted) return cancelledOutcome(items, request.calls.slice(index));
 
-    const first = prepareCall(options, request.calls[index]!);
+    const first = prepareCall(options, current);
     if (first.kind === "REJECTED") {
-      items.push(
-        Object.freeze({ kind: "REJECTED", call: request.calls[index]!, feedback: first.feedback }),
-      );
+      items.push(Object.freeze({ kind: "REJECTED", call: current, feedback: first.feedback }));
       index += 1;
       continue;
     }
 
     const window: PreparedToolCall[] = [first.call];
+    const windowCalls: ToolCallRequest[] = [current];
     // ALWAYS_ASK or a Guard-capable admission path can park a call on approval. A later sibling must
     // never run before that decision, so both cases remain sequential regardless of Tool declaration.
     const windowingAllowed =
@@ -337,10 +355,13 @@ async function executeCallsWithWindows(
     if (windowingAllowed && first.call.resolved.tool.executionMode === "PARALLEL_SAFE") {
       let probe = index + 1;
       while (probe < request.calls.length && window.length < maxConcurrency) {
-        const prepared = prepareCall(options, request.calls[probe]!);
+        const candidate = request.calls[probe]!;
+        if (isModelRejectedCall(candidate)) break;
+        const prepared = prepareCall(options, candidate);
         if (prepared.kind !== "READY") break;
         if (prepared.call.resolved.tool.executionMode !== "PARALLEL_SAFE") break;
         window.push(prepared.call);
+        windowCalls.push(candidate);
         probe += 1;
       }
     }
@@ -359,7 +380,7 @@ async function executeCallsWithWindows(
     let cancelled = false;
 
     for (let offset = 0; offset < results.length; offset += 1) {
-      const call = request.calls[index + offset]!;
+      const call = windowCalls[offset]!;
       const result = results[offset]!;
       if (result.kind === "ABORTED") {
         items.push(skippedItem(call, TOOL_NOT_STARTED_CANCELLED_CONTENT));
@@ -514,6 +535,7 @@ function planBatch(
   const registry = options.registry;
   if (registry === undefined) return planSequentialToolBatch([]);
   const plannable = request.calls.flatMap((call) => {
+    if (isModelRejectedCall(call)) return [];
     const resolved = registry.resolve(call.toolName);
     return resolved === undefined ? [] : [{ toolName: call.toolName, args: call.args, resolved }];
   });
@@ -537,7 +559,9 @@ async function preflightBudget(
   request: ToolBatchRequest,
 ): Promise<AgentBudgetBlock | null> {
   try {
-    return await options.budget.preflight(request.runId, request.calls);
+    // Only a dispatchable call can be budgeted. A rejected request spends no Tool operation, and
+    // counting it would let a malformed turn exhaust a budget nothing was spent from.
+    return await options.budget.preflight(request.runId, executableCallsOf(request.calls));
   } catch (error) {
     throw new ToolBatchInfrastructureError("Tool budget preflight failed.", { cause: error });
   }
@@ -562,15 +586,64 @@ function skippedItem(
 
 function cancelledOutcome(
   items: readonly ToolBatchItemOutcome[],
-  notStartedCalls: readonly ToolCallRequest[] = [],
+  notStartedCalls: readonly ToolBatchCall[] = [],
 ): ToolBatchOutcome {
   const cancelledItems = notStartedCalls.map((call) =>
-    skippedItem(call, TOOL_NOT_STARTED_CANCELLED_CONTENT),
+    isModelRejectedCall(call)
+      ? // A rejected request was never going to start, so cancellation adds no new information for
+        // it; its own feedback is the accurate statement.
+        modelRejectedItem(call)
+      : skippedItem(call, TOOL_NOT_STARTED_CANCELLED_CONTENT),
   );
   return Object.freeze({
     kind: "CANCELLED",
     items: Object.freeze([...items, ...cancelledItems]),
   });
+}
+
+/** Stable model-facing code for a request whose arguments never formed an object. */
+export const TOOL_ARGUMENTS_REJECTED = "TOOL_ARGUMENTS_REJECTED";
+
+/**
+ * The feedback for a request the model sent with unexecutable arguments.
+ *
+ * It names the Tool, the reason and the fact that nothing ran, and it never repeats the received
+ * bytes: the model wrote them, so quoting them back spends context on text it already has, and the
+ * exact bytes belong to the provider replay artifact rather than to model history.
+ */
+export function modelRejectedArgumentsFeedback(
+  call: import("./batch-types.js").ModelRejectedToolCall,
+): ToolFailureFeedback {
+  const detail =
+    call.issue.code === "EXPECTED_OBJECT"
+      ? "the arguments were not a JSON object"
+      : call.issue.code === "INCOMPLETE_ARGUMENTS"
+        ? "the arguments were cut off before they formed a JSON object"
+        : "the arguments were not valid JSON";
+  return Object.freeze({
+    code: TOOL_ARGUMENTS_REJECTED,
+    content:
+      `This call to ${call.toolName} was rejected before execution because ${detail} ` +
+      `(${String(call.issue.argumentBytes)} bytes received). Nothing was executed. ` +
+      `Resend ${call.toolName} with complete arguments that match its declared schema, ` +
+      `or choose a different approach.`,
+    details: Object.freeze({}),
+    disposition: "SAFE_FAILURE",
+  });
+}
+
+function modelRejectedItem(
+  call: import("./batch-types.js").ModelRejectedToolCall,
+): ToolBatchItemOutcome {
+  return Object.freeze({
+    kind: "MODEL_REJECTED",
+    call,
+    feedback: modelRejectedArgumentsFeedback(call),
+  });
+}
+
+function executableCallsOf(calls: readonly ToolBatchCall[]): readonly ToolCallRequest[] {
+  return calls.flatMap((call) => (isModelRejectedCall(call) ? [] : [call]));
 }
 
 /**
@@ -657,7 +730,7 @@ export function assertToolBatchRequest(
     throw new ToolBatchInputError();
   }
   const seen = new Set<string>();
-  const calls: ToolCallRequest[] = [];
+  const calls: ToolBatchCall[] = [];
   for (const entry of request.calls) {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
       throw new ToolBatchInputError();
@@ -665,15 +738,42 @@ export function assertToolBatchRequest(
     const call = entry as Record<string, unknown>;
     const externalCallId =
       typeof call.externalCallId === "string" ? call.externalCallId : undefined;
+    if (
+      externalCallId === undefined ||
+      externalCallId.length === 0 ||
+      Buffer.byteLength(externalCallId, "utf8") > maxExternalCallIdBytes ||
+      seen.has(externalCallId)
+    ) {
+      throw new ToolBatchInputError();
+    }
+
+    // A rejected request shares the identity fields and carries a typed reason instead of arguments.
+    // It is validated on its own key set so neither shape can smuggle a field of the other.
+    if (Object.hasOwn(call, "issue")) {
+      const parsedToolName = ToolNameSchema.safeParse(call.toolName);
+      const issue = assertRejectedIssueShape(call.issue);
+      const keys = Object.keys(call);
+      if (
+        keys.length !== REJECTED_CALL_KEYS.length ||
+        !REJECTED_CALL_KEYS.every((key) => Object.hasOwn(call, key)) ||
+        !parsedToolName.success
+      ) {
+        throw new ToolBatchInputError();
+      }
+      seen.add(externalCallId);
+      calls.push({
+        externalCallId,
+        toolName: parsedToolName.data,
+        issue,
+      });
+      continue;
+    }
+
     const parsedToolName = ToolNameSchema.safeParse(call.toolName);
     const parsedArgs = JsonObjectSchema.safeParse(call.args);
     if (
       Object.keys(call).length !== TOOL_CALL_REQUEST_KEYS.length ||
       !TOOL_CALL_REQUEST_KEYS.every((key) => Object.hasOwn(call, key)) ||
-      externalCallId === undefined ||
-      externalCallId.length === 0 ||
-      Buffer.byteLength(externalCallId, "utf8") > maxExternalCallIdBytes ||
-      seen.has(externalCallId) ||
       !parsedToolName.success ||
       !parsedArgs.success
     ) {
@@ -709,3 +809,32 @@ const BATCH_REQUEST_KEYS = [
 ] as const;
 
 const TOOL_CALL_REQUEST_KEYS = ["externalCallId", "toolName", "args"] as const;
+
+const REJECTED_CALL_KEYS = ["externalCallId", "toolName", "issue"] as const;
+
+/**
+ * Validate a rejected-argument issue.
+ *
+ * The reason code is a closed set and the byte count is the *only* numeric fact carried, so a caller
+ * can never attach the received text, a parser message or an exception to this contract.
+ */
+function assertRejectedIssueShape(value: unknown): AIRejectedToolArgumentsIssue {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ToolBatchInputError();
+  }
+  const issue = value as Record<string, unknown>;
+  const keys = Object.keys(issue);
+  if (
+    keys.length !== 2 ||
+    !Object.hasOwn(issue, "code") ||
+    !Object.hasOwn(issue, "argumentBytes") ||
+    (issue.code !== "MALFORMED_JSON" &&
+      issue.code !== "EXPECTED_OBJECT" &&
+      issue.code !== "INCOMPLETE_ARGUMENTS") ||
+    !Number.isSafeInteger(issue.argumentBytes) ||
+    (issue.argumentBytes as number) < 0
+  ) {
+    throw new ToolBatchInputError();
+  }
+  return { code: issue.code, argumentBytes: issue.argumentBytes as number };
+}

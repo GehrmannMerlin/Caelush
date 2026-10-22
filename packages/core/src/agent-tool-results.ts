@@ -1,4 +1,4 @@
-import type { ToolCallRequest, ToolResultBatchNormalizer } from "@caelush/agent";
+import type { ToolBatchCall, ToolResultBatchNormalizer } from "@caelush/agent";
 import { createToolResultBatchNormalizer } from "@caelush/agent";
 import type { AIToolResultMessage } from "@caelush/ai";
 import type { AgentToolRequest } from "./agent-decision.js";
@@ -32,7 +32,7 @@ import type { AgentToolRequest } from "./agent-decision.js";
 const canonicalNormalizer: ToolResultBatchNormalizer = createToolResultBatchNormalizer();
 
 export function normalizeToolResultBatch(
-  requests: readonly AgentToolRequest[],
+  requests: readonly (AgentToolRequest | ToolBatchCall)[],
   results: readonly AIToolResultMessage[],
 ): readonly AIToolResultMessage[] {
   const normalized = canonicalNormalizer.normalize({
@@ -43,8 +43,15 @@ export function normalizeToolResultBatch(
   return normalized;
 }
 
-/** The legacy call shape as the canonical Tool Layer's own call request. */
-function toCanonicalRequest(request: AgentToolRequest): ToolCallRequest {
+/**
+ * The legacy call shape as the canonical Tool Layer's own call request.
+ *
+ * A batch call that already is a `ToolCallRequest` is passed through unchanged, and a rejected
+ * request keeps its identity and reason with no invented arguments — the normalizer only needs the
+ * identity to answer "one result per request".
+ */
+function toCanonicalRequest(request: AgentToolRequest | ToolBatchCall): ToolBatchCall {
+  if ("issue" in request) return request;
   return {
     externalCallId: request.externalCallId,
     toolName: request.toolName,

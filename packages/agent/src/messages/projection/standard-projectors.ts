@@ -4,6 +4,7 @@ import type { AgentUserMessage } from "../types/user-message.js";
 import type { AgentAssistantMessage } from "../types/assistant-message.js";
 import type { AgentToolResultMessage } from "../types/tool-result-message.js";
 import { createAgentMessageAIProjection } from "./projector.js";
+import { AgentMessageProjectionError } from "./errors.js";
 import type { AgentMessageProjector } from "./projector.js";
 
 /**
@@ -121,6 +122,9 @@ export const AGENT_USER_MESSAGE_PROJECTOR_V2: AgentMessageProjector<AgentUserMes
 /** The version of the assistant projection. */
 export const AGENT_ASSISTANT_MESSAGE_PROJECTOR_VERSION = 1;
 
+/** The current version: it adds the rejected-tool-request part and changes nothing else. */
+export const AGENT_ASSISTANT_MESSAGE_PROJECTOR_VERSION_V2 = 2;
+
 /**
  * The canonical `ASSISTANT` projector.
  *
@@ -154,16 +158,70 @@ export const AGENT_ASSISTANT_MESSAGE_PROJECTOR_V1: AgentMessageProjector<AgentAs
   type: "ASSISTANT",
   version: AGENT_ASSISTANT_MESSAGE_PROJECTOR_VERSION,
   project(message: AgentAssistantMessage) {
-    const content = message.content.map((part) =>
-      part.type === "TEXT"
-        ? ({ type: "text", text: part.text } as const)
-        : ({
-            type: "tool-call",
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-            input: part.input,
-          } as const),
-    );
+    const content = message.content.map((part) => {
+      if (part.type === "TEXT") return { type: "text", text: part.text } as const;
+      if (part.type === "TOOL_CALL_REJECTED") {
+        // A v1 record cannot hold this part, so reaching here means the record was decoded by a
+        // newer codec and then projected by an older projector — an explicit mismatch, not a
+        // message to degrade.
+        throw new AgentMessageProjectionError(
+          "PROJECTION_VERSION_UNAVAILABLE",
+          "ASSISTANT",
+          undefined,
+        );
+      }
+      return {
+        type: "tool-call",
+        toolCallId: part.toolCallId,
+        toolName: part.toolName,
+        input: part.input,
+      } as const;
+    });
+    return createAgentMessageAIProjection([
+      {
+        role: "assistant",
+        content,
+        ...(message.providerState === undefined ? {} : { providerState: message.providerState }),
+      },
+    ]);
+  },
+};
+
+/**
+ * The rejected-tool-request-aware assistant projection.
+ *
+ * ```text
+ * AgentAssistantTextPart              → { type: "text", text }
+ * AgentAssistantToolCallPart          → { type: "tool-call", toolCallId, toolName, input }
+ * AgentAssistantRejectedToolCallPart  → { type: "tool-call-rejected", toolCallId, toolName, issue }
+ * ```
+ *
+ * A v1 record can never contain the third part, so the two projectors cannot disagree about the
+ * same message. The rejected part is projected without any `input`, which is what lets the wire
+ * pairing stay exact: the assistant describes the call the model made, and the Tool result that
+ * follows says it was not executed.
+ */
+export const AGENT_ASSISTANT_MESSAGE_PROJECTOR_V2: AgentMessageProjector<AgentAssistantMessage> = {
+  type: "ASSISTANT",
+  version: 2,
+  project(message: AgentAssistantMessage) {
+    const content = message.content.map((part) => {
+      if (part.type === "TEXT") return { type: "text", text: part.text } as const;
+      if (part.type === "TOOL_CALL_REJECTED") {
+        return {
+          type: "tool-call-rejected",
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          issue: { code: part.issue.code, argumentBytes: part.issue.argumentBytes },
+        } as const;
+      }
+      return {
+        type: "tool-call",
+        toolCallId: part.toolCallId,
+        toolName: part.toolName,
+        input: part.input,
+      } as const;
+    });
     return createAgentMessageAIProjection([
       {
         role: "assistant",
@@ -175,7 +233,6 @@ export const AGENT_ASSISTANT_MESSAGE_PROJECTOR_V1: AgentMessageProjector<AgentAs
 };
 
 /* -------------------------------------------------------------------------- TOOL_RESULT */
-
 /** The version of the Tool result projection. */
 export const AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_VERSION = 1;
 
@@ -240,6 +297,7 @@ export const STANDARD_AGENT_MESSAGE_PROJECTORS = [
   AGENT_USER_MESSAGE_PROJECTOR_V1,
   AGENT_USER_MESSAGE_PROJECTOR_V2,
   AGENT_ASSISTANT_MESSAGE_PROJECTOR_V1,
+  AGENT_ASSISTANT_MESSAGE_PROJECTOR_V2,
   AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_V1,
 ] as const;
 
@@ -247,7 +305,7 @@ export const STANDARD_AGENT_MESSAGE_PROJECTORS = [
 export const STANDARD_AGENT_MESSAGE_PROJECTION_VERSIONS: Readonly<Record<string, number>> =
   Object.freeze({
     USER: 2,
-    ASSISTANT: AGENT_ASSISTANT_MESSAGE_PROJECTOR_VERSION,
+    ASSISTANT: AGENT_ASSISTANT_MESSAGE_PROJECTOR_VERSION_V2,
     TOOL_RESULT: AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_VERSION,
   });
 

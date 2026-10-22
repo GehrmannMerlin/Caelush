@@ -123,6 +123,25 @@ export const AgentToolRequestSchema = z
   })
   .strict();
 
+/**
+ * A request the model made whose arguments were not executable.
+ *
+ * It has no `args`, because no argument object existed. The three reasons are the frozen AI set, so
+ * an unknown reason is refused here rather than decoded into a plausible-looking one.
+ */
+export const AgentRejectedToolRequestSchema = z
+  .object({
+    externalCallId: z.string().min(1),
+    toolName: ToolNameSchema,
+    issue: z
+      .object({
+        code: z.enum(["MALFORMED_JSON", "EXPECTED_OBJECT", "INCOMPLETE_ARGUMENTS"]),
+        argumentBytes: z.number().int().nonnegative(),
+      })
+      .strict(),
+  })
+  .strict();
+
 function assistantToolCalls(
   message: AIAssistantMessage,
 ): readonly { toolCallId: string; toolName: string; input: unknown }[] {
@@ -133,16 +152,52 @@ function assistantToolCalls(
   );
 }
 
+function assistantRejectedToolCalls(
+  message: AIAssistantMessage,
+): readonly {
+  toolCallId: string;
+  toolName: string;
+  issue: { code: string; argumentBytes: number };
+}[] {
+  return message.content.flatMap((part) =>
+    part.type === "tool-call-rejected"
+      ? [
+          {
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            issue: { code: part.issue.code, argumentBytes: part.issue.argumentBytes },
+          },
+        ]
+      : [],
+  );
+}
+
 export const AgentToolCallsDecisionSchema = z
   .object({
     type: z.literal("TOOL_CALLS_REQUESTED"),
     modelTurn: AgentModelTurnSchema,
-    toolRequests: z.array(AgentToolRequestSchema).min(1),
+    toolRequests: z.array(AgentToolRequestSchema),
+    /**
+     * Absent on every checkpoint written before rejected requests could be recorded.
+     *
+     * That absence is meaningful: a historical decision had no rejected request, so nothing is
+     * inferred for it and no result is invented for a call it never contained.
+     */
+    rejectedToolRequests: z.array(AgentRejectedToolRequestSchema).optional(),
   })
   .strict()
   .superRefine((decision, context) => {
+    const rejected = decision.rejectedToolRequests ?? [];
+    if (decision.toolRequests.length + rejected.length === 0) {
+      context.addIssue({ code: "custom", message: "a Tool decision must request something" });
+      return;
+    }
     const calls = assistantToolCalls(decision.modelTurn.assistantMessage);
-    if (calls.length !== decision.toolRequests.length) {
+    const rejectedCalls = assistantRejectedToolCalls(decision.modelTurn.assistantMessage);
+    if (
+      calls.length !== decision.toolRequests.length ||
+      rejectedCalls.length !== rejected.length
+    ) {
       context.addIssue({ code: "custom", message: "assistant tool calls do not match requests" });
       return;
     }
@@ -157,6 +212,22 @@ export const AgentToolCallsDecisionSchema = z
         context.addIssue({
           code: "custom",
           message: "assistant tool call identity does not match",
+        });
+        return;
+      }
+    }
+    for (const [index, call] of rejectedCalls.entries()) {
+      const request = rejected[index];
+      if (
+        request === undefined ||
+        call.toolCallId !== request.externalCallId ||
+        call.toolName !== request.toolName ||
+        call.issue.code !== request.issue.code ||
+        call.issue.argumentBytes !== request.issue.argumentBytes
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "assistant rejected tool call identity does not match",
         });
         return;
       }

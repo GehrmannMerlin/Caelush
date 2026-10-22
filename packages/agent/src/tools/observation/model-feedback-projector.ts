@@ -10,6 +10,7 @@ import type { ToolResultObservationRef } from "../../messages/types/tool-result-
 import type { ToolObservationPolicySnapshot } from "../../loop/types.js";
 import type { ToolBatchItemOutcome } from "../batch/batch-types.js";
 import { AgentToolResultBatchError } from "../batch/batch-errors.js";
+import type { ToolBatchCall } from "../batch/batch-types.js";
 import type { ToolCallRequest } from "../call/tool-call-preparer.js";
 
 /**
@@ -62,7 +63,7 @@ export interface ProjectedToolFeedback {
 
 export interface ModelToolFeedbackProjector {
   project(input: {
-    readonly calls: readonly ToolCallRequest[];
+    readonly calls: readonly ToolBatchCall[];
     readonly items: readonly ToolBatchItemOutcome[];
     readonly policy: ToolObservationPolicySnapshot;
   }): readonly ProjectedToolFeedback[];
@@ -130,7 +131,7 @@ export function createModelToolFeedbackProjector(
 ): ModelToolFeedbackProjector {
   return {
     project(input: {
-      readonly calls: readonly ToolCallRequest[];
+      readonly calls: readonly ToolBatchCall[];
       readonly items: readonly ToolBatchItemOutcome[];
       readonly policy: ToolObservationPolicySnapshot;
     }): readonly ProjectedToolFeedback[] {
@@ -307,8 +308,8 @@ function estimateTokens(text: string): number {
 /**
  * The model-view candidate of one batch item.
  *
- * `OBSERVATION` takes the durable observation's own content and error flag. `REJECTED` and `SKIPPED`
- * take only the safe feedback's content. Neither arm can reach a raw execution result, because neither
+ * `OBSERVATION` takes the durable observation's own content and error flag. `MODEL_REJECTED`,
+ * `REJECTED` and `SKIPPED` take only the safe feedback's content. Neither arm can reach a raw execution result, because neither
  * arm was given one.
  */
 function candidateOf(item: ToolBatchItemOutcome): ModelObservationCandidate {
@@ -323,6 +324,7 @@ function candidateOf(item: ToolBatchItemOutcome): ModelObservationCandidate {
           ? {}
           : { rawArtifactRef: item.observation.rawArtifactRef }),
       };
+    case "MODEL_REJECTED":
     case "REJECTED":
     case "SKIPPED":
       return {
@@ -348,6 +350,7 @@ function isErrorOf(item: ToolBatchItemOutcome): boolean {
   switch (item.kind) {
     case "OBSERVATION":
       return item.observation.isError;
+    case "MODEL_REJECTED":
     case "REJECTED":
     case "SKIPPED":
       return true;
@@ -373,7 +376,7 @@ function isErrorOf(item: ToolBatchItemOutcome): boolean {
  * Tool's output is worse than a failed Run.
  */
 function assertItemBatchMatchesCalls(
-  calls: readonly ToolCallRequest[],
+  calls: readonly ToolBatchCall[],
   items: readonly ToolBatchItemOutcome[],
 ): void {
   if (items.length !== calls.length) {

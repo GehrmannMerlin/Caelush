@@ -379,7 +379,10 @@ function validateModelVisibleToolStructure(turn: ConversationTurn): void {
       // message's own calls are announced, so a new batch is not mistaken for the old one.
       assertNoOpenBatch(turn, announced, answered, message.id);
       for (const part of message.content) {
-        if (part.type !== "TOOL_CALL") continue;
+        // A rejected request is still a request: it owes exactly one result, so it is announced
+        // here as well. Only the executable/not-executable distinction differs, and that is a Tool
+        // layer fact, not a conversation-shape fact.
+        if (part.type !== "TOOL_CALL" && part.type !== "TOOL_CALL_REJECTED") continue;
         if (announced.has(part.toolCallId)) {
           // Two model-visible announcements of one id: the answers that follow cannot be
           // paired unambiguously, so the model's Tool protocol has no meaning here.

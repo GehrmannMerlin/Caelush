@@ -182,6 +182,58 @@ export const AGENT_ASSISTANT_MESSAGE_CODEC_V3: AgentMessageCodec<AgentAssistantM
 /** @deprecated Use the canonical assistant codec name; it still reads historical v1 rows. */
 export const AGENT_ASSISTANT_MESSAGE_CODEC_V1 = AGENT_ASSISTANT_MESSAGE_CODEC_V2;
 
+/**
+ * The rejected-tool-request-aware assistant codec.
+ *
+ * v3 records keep their exact meaning; v4 only *adds* the `TOOL_CALL_REJECTED` part, which records a
+ * request the model really made whose arguments were never a JSON object. Reading it is therefore a
+ * version question, not an inference: a v3 record cannot contain the part, and a v4 reader refuses
+ * one it does not recognise instead of downgrading it to a text part or an empty-argument call.
+ */
+export const AGENT_ASSISTANT_MESSAGE_CODEC_V4: AgentMessageCodec<AgentAssistantMessage> = {
+  type: "ASSISTANT",
+  currentVersion: 4,
+  canDecode(version: AgentMessageSchemaVersion): boolean {
+    return version === 1 || version === 2 || version === 3 || version === 4;
+  },
+  encode(message: AgentAssistantMessage): JsonObject {
+    return {
+      content: message.content.map(encodeAssistantContentPartV4),
+      phase: message.phase,
+      model: encodeModelProvenance(message.model),
+      ...(message.providerState === undefined
+        ? {}
+        : { providerState: encodeProviderState(message.providerState) }),
+    };
+  },
+  decode(record: AgentMessageRecord): AgentAssistantMessage {
+    if (
+      record.schemaVersion !== 1 &&
+      record.schemaVersion !== 2 &&
+      record.schemaVersion !== 3 &&
+      record.schemaVersion !== 4
+    ) {
+      throw new AgentMessageCodecError(
+        "UNSUPPORTED_SCHEMA_VERSION",
+        "ASSISTANT",
+        record.schemaVersion,
+      );
+    }
+    const base = decodeEnvelope(record, "ASSISTANT", record.schemaVersion);
+    const content =
+      record.schemaVersion === 4
+        ? decodeAssistantContentVersion(record.data, true, true)
+        : record.schemaVersion === 3
+          ? decodeAssistantContentV3(record.data)
+          : decodeAssistantContent(record.data);
+    const phase =
+      record.schemaVersion === 1 ? "UNKNOWN" : decodeAssistantPhase(record.data["phase"]);
+    const model = decodeModelProvenance(record.data["model"], record);
+    const providerState = decodeProviderState(record.data["providerState"]);
+    return createAgentAssistantMessage(base, content, model, phase, providerState);
+  },
+};
+
 /* -------------------------------------------------------------------------- TOOL_RESULT */
 
 /** The canonical `TOOL_RESULT` codec. */
@@ -299,7 +351,7 @@ export const AGENT_TOOL_RESULT_MESSAGE_CODEC_V3: AgentMessageCodec<AgentToolResu
 /** The three standard codecs, in canonical order. */
 export const STANDARD_AGENT_MESSAGE_CODECS = [
   AGENT_USER_MESSAGE_CODEC_V1,
-  AGENT_ASSISTANT_MESSAGE_CODEC_V3,
+  AGENT_ASSISTANT_MESSAGE_CODEC_V4,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V2,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V3,
@@ -447,6 +499,11 @@ function decodeUserContent(data: JsonObject): readonly AgentUserContentPart[] {
 
 function encodeAssistantContentPart(part: AgentAssistantContentPart): JsonValue {
   if (part.type === "TEXT") return { type: "TEXT", text: part.text };
+  // A pre-v4 record cannot express a rejected request; refusing is the only alternative to writing
+  // one into a version that no reader would interpret correctly.
+  if (part.type === "TOOL_CALL_REJECTED") {
+    throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT", 2);
+  }
   return {
     type: "TOOL_CALL",
     toolCallId: part.toolCallId,
@@ -461,6 +518,33 @@ function encodeAssistantContentPartV3(part: AgentAssistantContentPart): JsonValu
     ...(part.phase === undefined ? {} : { phase: part.phase }),
   };
   if (part.type === "TEXT") return { type: "TEXT", text: part.text, ...itemMetadata };
+  if (part.type === "TOOL_CALL_REJECTED") {
+    throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT", 3);
+  }
+  return {
+    type: "TOOL_CALL",
+    toolCallId: part.toolCallId,
+    toolName: part.toolName,
+    input: part.input,
+    ...itemMetadata,
+  };
+}
+
+function encodeAssistantContentPartV4(part: AgentAssistantContentPart): JsonValue {
+  const itemMetadata = {
+    ...(part.assistantItemId === undefined ? {} : { assistantItemId: part.assistantItemId }),
+    ...(part.phase === undefined ? {} : { phase: part.phase }),
+  };
+  if (part.type === "TEXT") return { type: "TEXT", text: part.text, ...itemMetadata };
+  if (part.type === "TOOL_CALL_REJECTED") {
+    return {
+      type: "TOOL_CALL_REJECTED",
+      toolCallId: part.toolCallId,
+      toolName: part.toolName,
+      issue: { code: part.issue.code, argumentBytes: part.issue.argumentBytes },
+      ...itemMetadata,
+    };
+  }
   return {
     type: "TOOL_CALL",
     toolCallId: part.toolCallId,
@@ -471,16 +555,17 @@ function encodeAssistantContentPartV3(part: AgentAssistantContentPart): JsonValu
 }
 
 function decodeAssistantContent(data: JsonObject): readonly AgentAssistantContentPart[] {
-  return decodeAssistantContentVersion(data, false);
+  return decodeAssistantContentVersion(data, false, false);
 }
 
 function decodeAssistantContentV3(data: JsonObject): readonly AgentAssistantContentPart[] {
-  return decodeAssistantContentVersion(data, true);
+  return decodeAssistantContentVersion(data, true, false);
 }
 
 function decodeAssistantContentVersion(
   data: JsonObject,
   includesItemMetadata: boolean,
+  includesRejectedParts: boolean,
 ): readonly AgentAssistantContentPart[] {
   const content = data["content"];
   if (!Array.isArray(content) || content.length === 0) {
@@ -497,7 +582,9 @@ function decodeAssistantContentVersion(
           ? includesItemMetadata
             ? ["type", "toolCallId", "toolName", "input", "assistantItemId", "phase"]
             : ["type", "toolCallId", "toolName", "input"]
-          : [];
+          : part["type"] === "TOOL_CALL_REJECTED" && includesRejectedParts
+            ? ["type", "toolCallId", "toolName", "issue", "assistantItemId", "phase"]
+            : [];
     if (Object.keys(part).some((key) => !allowedKeys.includes(key))) {
       throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
     }
@@ -522,8 +609,47 @@ function decodeAssistantContentVersion(
       if (!isJsonObject(input)) throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
       return { type: "TOOL_CALL" as const, toolCallId, toolName, input, ...itemMetadata };
     }
+    if (part["type"] === "TOOL_CALL_REJECTED") {
+      const toolCallId = part["toolCallId"];
+      const toolName = part["toolName"];
+      const issue = part["issue"];
+      if (typeof toolCallId !== "string" || toolCallId.length === 0) {
+        throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
+      }
+      if (typeof toolName !== "string" || toolName.length === 0) {
+        throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
+      }
+      return {
+        type: "TOOL_CALL_REJECTED" as const,
+        toolCallId,
+        toolName,
+        issue: decodeRejectedIssue(issue),
+        ...itemMetadata,
+      };
+    }
     throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
   });
+}
+
+/** Decode a rejected-argument issue, refusing any shape the frozen contract does not name. */
+function decodeRejectedIssue(value: unknown): {
+  code: "MALFORMED_JSON" | "EXPECTED_OBJECT" | "INCOMPLETE_ARGUMENTS";
+  argumentBytes: number;
+} {
+  if (!isJsonObject(value)) throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
+  const keys = Object.keys(value);
+  if (keys.length !== 2 || !Object.hasOwn(value, "code") || !Object.hasOwn(value, "argumentBytes")) {
+    throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
+  }
+  const code = value["code"];
+  const argumentBytes = value["argumentBytes"];
+  if (code !== "MALFORMED_JSON" && code !== "EXPECTED_OBJECT" && code !== "INCOMPLETE_ARGUMENTS") {
+    throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
+  }
+  if (!Number.isSafeInteger(argumentBytes) || (argumentBytes as number) < 0) {
+    throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
+  }
+  return { code, argumentBytes: argumentBytes as number };
 }
 
 function decodeAssistantItemMetadata(

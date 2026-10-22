@@ -1,6 +1,7 @@
 import type { AIMessage, AIToolResultMessage, AIUserMessage } from "@caelush/ai";
 import type { AgentRun, StepId } from "@caelush/protocol";
 import {
+  agentAssistantRejectedToolCallPart,
   agentAssistantTextPart,
   agentAssistantToolCallPart,
   createAgentMessageFactory,
@@ -149,11 +150,17 @@ function createStoredMessage(
         content: message.content.map((part) =>
           part.type === "text"
             ? agentAssistantTextPart(part.text)
-            : agentAssistantToolCallPart({
-                toolCallId: part.toolCallId,
-                toolName: part.toolName,
-                input: part.input,
-              }),
+            : part.type === "tool-call-rejected"
+              ? agentAssistantRejectedToolCallPart({
+                  toolCallId: part.toolCallId,
+                  toolName: part.toolName,
+                  issue: part.issue,
+                })
+              : agentAssistantToolCallPart({
+                  toolCallId: part.toolCallId,
+                  toolName: part.toolName,
+                  input: part.input,
+                }),
         ),
         model: {
           kind: "MODEL_TURN",

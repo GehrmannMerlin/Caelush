@@ -4,6 +4,8 @@ import type {
   AIAssistantMessage,
   AIFinishReason,
   AIModelTurnResult,
+  AIReceivedToolRequest,
+  AIRejectedToolArgumentsIssue,
   AIToolCall,
   AIModelTurnAssistantItem,
   ModelUsage,
@@ -66,11 +68,31 @@ export interface AgentToolRequest {
   readonly args: JsonObject;
 }
 
+/**
+ * One request the model made whose arguments were not executable.
+ *
+ * It has no `args`, because there was no argument object. The Tool layer cannot dispatch it, and the
+ * model still owes it exactly one result: "not executed, here is why".
+ */
+export interface AgentRejectedToolRequest {
+  readonly externalCallId: string;
+  readonly toolName: ToolName;
+  readonly issue: AIRejectedToolArgumentsIssue;
+}
+
 /** The model asked for tools, and the turn stops at the Tool boundary. */
 export interface AgentToolCallsDecision {
   readonly type: "TOOL_CALLS_REQUESTED";
   readonly modelTurn: AgentModelTurn;
+  /** The executable requests, in source order. */
   readonly toolRequests: readonly AgentToolRequest[];
+  /**
+   * The requests that were identifiable but not executable.
+   *
+   * Absent — not empty — when the turn had none, so a historical decision and a decision that simply
+   * had no rejection stay distinguishable, and a checkpoint round-trips byte-identically.
+   */
+  readonly rejectedToolRequests?: readonly AgentRejectedToolRequest[];
 }
 
 /**
@@ -145,15 +167,26 @@ export function toAssistantMessage(result: AIModelTurnResult): AIAssistantMessag
 
 function normalizeAssistantItems(result: AIModelTurnResult): readonly AIModelTurnAssistantItem[] {
   if (result.assistantItems !== undefined) return result.assistantItems;
+  // No items were produced, so the fallback restates the turn from its ordered requests. A rejected
+  // request is part of the turn the model made and must not disappear from the assistant message.
   const content: AIAssistantContent[] = [];
   if (result.text.length > 0) content.push({ type: "text", text: result.text });
-  for (const toolCall of result.toolCalls) {
-    content.push({
-      type: "tool-call",
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      input: toolCall.input,
-    });
+  for (const request of orderedRequests(result)) {
+    content.push(
+      request.kind === "EXECUTABLE"
+        ? {
+            type: "tool-call",
+            toolCallId: request.call.id,
+            toolName: request.call.name,
+            input: request.call.input,
+          }
+        : {
+            type: "tool-call-rejected",
+            toolCallId: request.id,
+            toolName: request.name,
+            issue: request.issue,
+          },
+    );
   }
   return [
     Object.freeze({
@@ -164,12 +197,46 @@ function normalizeAssistantItems(result: AIModelTurnResult): readonly AIModelTur
   ];
 }
 
+/**
+ * The turn's requests in source order.
+ *
+ * A host-built result may omit `toolRequests`; its `toolCalls` are then the only requests it knows,
+ * and they are executable by construction. The canonical assembler always supplies the ordered list.
+ */
+function orderedRequests(result: AIModelTurnResult): readonly AIReceivedToolRequest[] {
+  const requests = result.toolRequests;
+  if (requests !== undefined && requests.length > 0) return requests;
+  return result.toolCalls.map((call, index) => ({
+    kind: "EXECUTABLE" as const,
+    sourceOrdinal: index,
+    call,
+  }));
+}
+
 /** One tool call, projected onto the frozen request shape. Not exported by the package root. */
 export function toAgentToolRequest(toolCall: AIToolCall): AgentToolRequest {
   return {
     externalCallId: toolCall.id,
     toolName: toolCall.name,
     args: toProtocolJsonObject(toolCall.input),
+  };
+}
+
+/**
+ * One rejected request, projected onto the frozen agent shape.
+ *
+ * The projection copies only what the AI contract established — identity, name and the typed reason —
+ * so nothing the provider sent (and nothing a parser said about it) can reach the Tool layer.
+ */
+export function toAgentRejectedToolRequest(request: {
+  readonly id: string;
+  readonly name: string;
+  readonly issue: AIRejectedToolArgumentsIssue;
+}): AgentRejectedToolRequest {
+  return {
+    externalCallId: request.id,
+    toolName: request.name as ToolName,
+    issue: { code: request.issue.code, argumentBytes: request.issue.argumentBytes },
   };
 }
 

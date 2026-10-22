@@ -1,8 +1,13 @@
-import { isAIFinishReason } from "@caelush/ai";
-import type { AIModelTurnResult, AIToolCall } from "@caelush/ai";
+import { isAIFinishReason, rejectedToolRequests } from "@caelush/ai";
+import type { AIReceivedToolRequest, AIModelTurnResult, AIToolCall } from "@caelush/ai";
 
 import type { AgentDecision, AgentModelTurn, AgentToolCallsDecision } from "./decision.js";
-import { toAgentModelTurn, toAgentToolRequest, toAssistantMessage } from "./decision.js";
+import {
+  toAgentModelTurn,
+  toAgentRejectedToolRequest,
+  toAgentToolRequest,
+  toAssistantMessage,
+} from "./decision.js";
 import { AgentModelOutputError } from "./decision-error.js";
 import type { AgentModelOutputMetadata } from "./decision-error.js";
 
@@ -85,6 +90,9 @@ export function classifyAgentDecision(result: AIModelTurnResult): AgentDecision 
   }
 
   assertUniqueToolCallIds(result.toolCalls, metadata);
+  // A rejected request is an identifiable request too, so a repeated id across the whole turn is a
+  // protocol fault rather than two ordinary argument errors.
+  assertUniqueRequestIds(result, metadata);
 
   const assistantMessage = toAssistantMessage(result);
   if (assistantMessage.content.length === 0) {
@@ -94,11 +102,15 @@ export function classifyAgentDecision(result: AIModelTurnResult): AgentDecision 
   // The finish reason was validated above, so the shared projection is total here.
   const modelTurn = toAgentModelTurn(result) as AgentModelTurn;
 
-  if (result.toolCalls.length > 0) {
+  const executable = result.toolCalls.map(toAgentToolRequest);
+  const rejected = rejectedToolRequests(orderRequests(result)).map(toAgentRejectedToolRequest);
+
+  if (executable.length > 0 || rejected.length > 0) {
     return {
       type: "TOOL_CALLS_REQUESTED",
       modelTurn,
-      toolRequests: result.toolCalls.map(toAgentToolRequest),
+      toolRequests: executable,
+      ...(rejected.length === 0 ? {} : { rejectedToolRequests: rejected }),
     } satisfies AgentToolCallsDecision;
   }
   if (result.finishReason === "TOOL_CALLS") {
@@ -108,6 +120,36 @@ export function classifyAgentDecision(result: AIModelTurnResult): AgentDecision 
     throw new AgentModelOutputError("EMPTY_RESPONSE", metadata);
   }
   return { type: "FINAL_CANDIDATE", modelTurn, candidateText: result.text };
+}
+
+/**
+ * The turn's requests in source order.
+ *
+ * The assembler always supplies them; a host-built result falls back to its executable calls, which
+ * is the only request information such a result carries.
+ */
+function orderRequests(result: AIModelTurnResult): readonly AIReceivedToolRequest[] {
+  const requests = result.toolRequests;
+  if (requests !== undefined && requests.length > 0) return requests;
+  return result.toolCalls.map((call, index) => ({
+    kind: "EXECUTABLE" as const,
+    sourceOrdinal: index,
+    call,
+  }));
+}
+
+function assertUniqueRequestIds(
+  result: AIModelTurnResult,
+  metadata: AgentModelOutputMetadata,
+): void {
+  const seen = new Set<string>();
+  for (const request of orderRequests(result)) {
+    const id = request.kind === "EXECUTABLE" ? request.call.id : request.id;
+    if (seen.has(id)) {
+      throw new AgentModelOutputError("DUPLICATE_TOOL_CALL_ID", metadata);
+    }
+    seen.add(id);
+  }
 }
 
 function assertUniqueToolCallIds(

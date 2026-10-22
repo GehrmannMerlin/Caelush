@@ -50,13 +50,25 @@ export function fixtureDescriptor(
   };
 }
 
-/** The model metadata authority a daemon fixture composes with. */
+/**
+ * The model metadata authority a daemon fixture composes with.
+ *
+ * `adapterMetadata` is how a test selects an adapter capability profile — for example
+ * `{"openai-compatible": {requiresReasoningReplayWithTools: true}}` to exercise the production
+ * DeepSeek native-replay path — without inventing a second descriptor source.
+ */
 export function fixtureModelSource(
   limits?: { readonly contextWindowTokens: number; readonly maxOutputTokens: number },
+  adapterMetadata?: ModelDescriptor["adapterMetadata"],
+  api?: string,
 ): ModelDescriptorSourcePort & {
   list(): readonly ModelDescriptor[];
 } {
-  const descriptor = fixtureDescriptor(limits);
+  const descriptor: ModelDescriptor = {
+    ...fixtureDescriptor(limits),
+    ...(api === undefined ? {} : { api }),
+    ...(adapterMetadata === undefined ? {} : { adapterMetadata }),
+  };
   return {
     id: "daemon-fixture",
     priority: 0,

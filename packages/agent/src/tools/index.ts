@@ -326,8 +326,14 @@ export type {
   AgentToolResultBatchErrorMetadata,
   AgentToolResultBatchErrorReason,
 } from "./batch/batch-errors.js";
-export { TOOL_BATCH_ITEM_OUTCOME_KINDS, TOOL_BATCH_OUTCOME_KINDS } from "./batch/batch-types.js";
+export {
+  isModelRejectedCall,
+  TOOL_BATCH_ITEM_OUTCOME_KINDS,
+  TOOL_BATCH_OUTCOME_KINDS,
+} from "./batch/batch-types.js";
 export type {
+  ModelRejectedToolCall,
+  ToolBatchCall,
   ToolBatchCoordinator,
   ToolBatchItemOutcome,
   ToolBatchOutcome,
@@ -335,6 +341,8 @@ export type {
 } from "./batch/batch-types.js";
 export {
   createToolBatchCoordinator,
+  modelRejectedArgumentsFeedback,
+  TOOL_ARGUMENTS_REJECTED,
   TOOL_NOT_STARTED,
   TOOL_NOT_STARTED_CONTENT,
   SKIPPED_AFTER_UNCERTAIN_CONTENT,

@@ -376,6 +376,7 @@ export type {
   AgentDecision,
   AgentFinalCandidateDecision,
   AgentModelTurn,
+  AgentRejectedToolRequest,
   AgentToolCallsDecision,
   AgentToolRequest,
 } from "./decision/decision.js";

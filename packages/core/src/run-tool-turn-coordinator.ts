@@ -19,7 +19,8 @@ import type {
   ToolTurnResult,
   WaitingApprovalBoundary,
 } from "@caelush/agent";
-import { fingerprintProjection } from "@caelush/agent";
+import { fingerprintProjection, isModelRejectedCall, modelRejectedArgumentsFeedback } from "@caelush/agent";
+import type { ToolBatchCall } from "@caelush/agent";
 import {
   AttachmentModelContentReferenceSchema,
   MAX_ATTACHMENT_MODEL_CONTENT_REFERENCES,
@@ -365,7 +366,7 @@ async function executeRunToolTurn(
     // settlement, so a lost Run commit cannot have advanced it.
     return {
       kind: "REPLAN",
-      syntheticResults: await replanResults(dependencies, context, observation),
+      syntheticResults: await replanResults(dependencies, context, observation, admission),
     };
   }
   if (admission.kind === "WAIT_FOR_RESOURCE_DECISION") {
@@ -418,19 +419,38 @@ async function replanResults(
   dependencies: RunToolTurnDriverDependencies,
   context: RunToolTurnContext,
   observation: RunToolTurnObservation,
+  admission: Extract<ResourceAdmission, { kind: "REPLAN" }>,
 ): Promise<readonly AgentToolResult[]> {
   const calls = callsOf(context);
-  const messages = ResourceGovernor.replanResults(calls);
-  const items: ToolBatchItemOutcome[] = calls.map((call, index) => ({
-    kind: "REJECTED",
-    call,
-    feedback: {
-      code: "RESOURCE_REPLAN_REQUIRED",
-      content: messages[index]?.content ?? "",
-      details: {},
-      disposition: "SAFE_FAILURE",
-    },
-  }));
+  const messages = ResourceGovernor.replanResultsFor(
+    calls.filter((call) => !isModelRejectedCall(call)),
+    admission.replanReason,
+    { requested: admission.requestedToolCalls, limit: admission.batchLimit },
+  );
+  let index = 0;
+  const items: ToolBatchItemOutcome[] = calls.map((call) => {
+    if (isModelRejectedCall(call)) {
+      // A rejected request keeps the feedback about its own arguments: the replan says nothing about
+      // them, and replacing it would hide the correction the model still owes.
+      return Object.freeze({
+        kind: "MODEL_REJECTED" as const,
+        call,
+        feedback: modelRejectedArgumentsFeedback(call),
+      });
+    }
+    const message = messages[index];
+    index += 1;
+    return {
+      kind: "REJECTED" as const,
+      call,
+      feedback: {
+        code: "RESOURCE_REPLAN_REQUIRED",
+        content: message?.content ?? "",
+        details: {},
+        disposition: "SAFE_FAILURE" as const,
+      },
+    };
+  });
   const projected = await projectAndNormalize(dependencies, context, observation, calls, items);
   return projected.map(({ message }) => ({
     externalCallId: message.toolCallId,
@@ -482,25 +502,72 @@ function toToolBatchRequest(
 }
 
 /**
- * The model's Tool calls, projected onto the Tool Layer's canonical call shape.
+ * The model's Tool requests, projected onto the Tool Layer's canonical call shape.
  *
  * ```text
  * externalCallId  carried unchanged — never regenerated
  * toolName        carried unchanged
- * args            carried unchanged
+ * args            carried unchanged, and absent for a rejected request
  * order           assistant source order, preserved exactly
  * ```
+ *
+ * The order comes from the assistant message, because that is the only record of how the model
+ * interleaved valid and rejected requests. The two decision arrays are the *sets*; the message is the
+ * *sequence*. Reading the sequence from anywhere else would let a result answer a call at the wrong
+ * position.
  *
  * The identity is the load-bearing part: `(runId, sourceStepId, externalCallId)` is what decides whether
  * a call has already run, so a projection that minted a new id would make every recovery look like a
  * fresh batch.
  */
-function callsOf(context: RunToolTurnContext): readonly ToolCallRequest[] {
-  return context.pendingDecision.toolRequests.map((request) => ({
-    externalCallId: request.externalCallId,
-    toolName: request.toolName,
-    args: request.args,
-  }));
+function callsOf(context: RunToolTurnContext): readonly ToolBatchCall[] {
+  const decision = context.pendingDecision;
+  const rejectedById = new Map(
+    (decision.rejectedToolRequests ?? []).map((request) => [request.externalCallId, request]),
+  );
+  const executableById = new Map(
+    decision.toolRequests.map((request) => [request.externalCallId, request]),
+  );
+  const ordered: ToolBatchCall[] = [];
+  for (const part of decision.modelTurn.assistantMessage.content) {
+    if (part.type === "tool-call") {
+      const request = executableById.get(part.toolCallId);
+      if (request === undefined) {
+        throw new RunControllerInvariantError(
+          "A Tool continuation announced a call that its decision does not contain.",
+        );
+      }
+      executableById.delete(part.toolCallId);
+      ordered.push({
+        externalCallId: request.externalCallId,
+        toolName: request.toolName,
+        args: request.args,
+      });
+      continue;
+    }
+    if (part.type === "tool-call-rejected") {
+      const request = rejectedById.get(part.toolCallId);
+      if (request === undefined) {
+        // A rejected part whose decision entry is missing is a broken continuation, not an ordinary
+        // argument error: there is no result to give and no invocation that could have run.
+        throw new RunControllerInvariantError(
+          "A Tool continuation announced a rejected call that its decision does not contain.",
+        );
+      }
+      rejectedById.delete(part.toolCallId);
+      ordered.push({
+        externalCallId: request.externalCallId,
+        toolName: request.toolName,
+        issue: { code: request.issue.code, argumentBytes: request.issue.argumentBytes },
+      });
+    }
+  }
+  if (executableById.size > 0 || rejectedById.size > 0) {
+    throw new RunControllerInvariantError(
+      "A Tool continuation decision contains requests its assistant message does not announce.",
+    );
+  }
+  return ordered;
 }
 
 /* ------------------------------------------------------ resource admission */
@@ -514,7 +581,16 @@ function callsOf(context: RunToolTurnContext): readonly ToolCallRequest[] {
 type ResourceAdmission =
   | { readonly kind: undefined }
   | {
-      readonly kind: Exclude<RunToolResourceDecision, "HARD_STOP">;
+      readonly kind: "REPLAN";
+      readonly replanCount: number;
+      /** The reason the governor actually returned; the model feedback names it. */
+      readonly replanReason: "BATCH_TOO_LARGE" | "NO_PROGRESS";
+      readonly requestedToolCalls: number;
+      readonly batchLimit: number;
+      readonly correction?: RunToolCorrection | undefined;
+    }
+  | {
+      readonly kind: Exclude<RunToolResourceDecision, "HARD_STOP" | "REPLAN">;
       readonly replanCount: number;
       /** The corrective advice this admission produced, when it produced one. */
       readonly correction?: RunToolCorrection | undefined;
@@ -739,10 +815,18 @@ async function admitResource(
         accounted: decision.accounted,
         limit: decision.limit,
       };
+    case "REPLAN":
+      return {
+        kind: "REPLAN",
+        replanCount,
+        replanReason: decision.reason,
+        requestedToolCalls: decision.requestedToolCalls,
+        batchLimit: effectivePolicy.batch.maxToolCallsPerTurn,
+        ...(correction === undefined ? {} : { correction }),
+      };
     case "ALLOW":
     case "ALLOW_WITH_NUDGE":
     case "RENEW_AND_ALLOW":
-    case "REPLAN":
     case "WAIT_FOR_RESOURCE_DECISION":
       return {
         kind: decision.kind,
@@ -964,7 +1048,7 @@ async function projectAndNormalize(
   dependencies: RunToolTurnDriverDependencies,
   context: RunToolTurnContext,
   observation: RunToolTurnObservation,
-  calls: readonly ToolCallRequest[],
+  calls: readonly ToolBatchCall[],
   items: readonly ToolBatchItemOutcome[],
 ): Promise<readonly RunToolFeedbackProjection[]> {
   const projected = context.feedback.project({

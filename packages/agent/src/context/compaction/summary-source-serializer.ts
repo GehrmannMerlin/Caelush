@@ -115,6 +115,16 @@ function serializeUserPart(part: AgentUserContentPart): JsonObject {
 
 function serializeAssistantPart(part: AgentAssistantContentPart): JsonObject {
   if (part.type === "TEXT") return { type: part.type, text: redactText(part.text) };
+  if (part.type === "TOOL_CALL_REJECTED") {
+    // A summary source never carries the received bytes; it carries the fact that the request was
+    // rejected and why, which is all the summarizer is allowed to see.
+    return {
+      type: part.type,
+      toolCallId: part.toolCallId,
+      toolName: redactText(part.toolName),
+      issue: { code: part.issue.code, argumentBytes: part.issue.argumentBytes },
+    };
+  }
   return {
     type: part.type,
     toolCallId: part.toolCallId,

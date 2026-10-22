@@ -16,6 +16,7 @@ import {
   type ModelObservationBatchProjector,
   type ModelObservationCandidate,
   type ModelToolFeedbackProjector,
+  type ToolBatchCall,
   type ToolBatchItemOutcome,
   type ToolCallRequest,
   type ToolObservationPolicySnapshot,
@@ -44,7 +45,7 @@ const GENEROUS: ToolObservationPolicySnapshot = {
 function modelMessages(
   projector: ModelToolFeedbackProjector,
   input: {
-    readonly calls: readonly ToolCallRequest[];
+    readonly calls: readonly ToolBatchCall[];
     readonly items: readonly ToolBatchItemOutcome[];
     readonly policy: ToolObservationPolicySnapshot;
   },
@@ -299,7 +300,9 @@ describe("canonical model feedback — the raw result never enters", () => {
       source.indexOf("export interface ModelObservationCandidate"),
     );
     expect(declaration).toContain("readonly items: readonly ToolBatchItemOutcome[]");
-    expect(declaration).toContain("readonly calls: readonly ToolCallRequest[]");
+    // The call list is the merged request order: a rejected request owes a result too, so the
+    // projector is given the batch's own call union rather than only the executable subset.
+    expect(declaration).toContain("readonly calls: readonly ToolBatchCall[]");
     for (const forbidden of [
       "AgentToolResult",
       "ToolExecutionUpdate",

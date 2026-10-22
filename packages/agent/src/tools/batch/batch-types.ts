@@ -6,6 +6,7 @@ import type {
   ToolInvocationId,
   ToolObservation,
 } from "@caelush/protocol";
+import type { AIRejectedToolArgumentsIssue } from "@caelush/ai";
 
 import type { AgentBudgetBlock } from "../../loop/ports/model-request-admission.js";
 import type { ToolCallRequest } from "../call/tool-call-preparer.js";
@@ -53,22 +54,49 @@ import type { ToolSecurityContext } from "../admission/security-context.js";
  */
 
 /**
+ * A request the model made whose arguments were never an executable object.
+ *
+ * ```text
+ * identity   the provider's own call id and Tool name
+ * issue      the typed reason, never the received text
+ * ```
+ *
+ * It is a batch *call* rather than an item outcome so the batch can emit its one result at the right
+ * position: results preserve the assistant's source order, and a rejected request occupies exactly
+ * the place the model put it.
+ */
+export interface ModelRejectedToolCall {
+  readonly externalCallId: string;
+  readonly toolName: string;
+  readonly issue: AIRejectedToolArgumentsIssue;
+}
+
+/** One entry of a batch's ordered request list. */
+export type ToolBatchCall = ToolCallRequest | ModelRejectedToolCall;
+
+/** True when this entry describes a request that cannot be dispatched. */
+export function isModelRejectedCall(call: ToolBatchCall): call is ModelRejectedToolCall {
+  return "issue" in call;
+}
+
+/**
  * What happened to one Tool call in a batch.
  *
  * ```ts
  * export type ToolBatchItemOutcome =
- *   | { readonly kind: "OBSERVATION";
- *       readonly call: ToolCallRequest;
- *       readonly invocationId: ToolInvocationId;
- *       readonly finalStatus: "COMPLETED" | "FAILED" | "CANCELLED";
- *       readonly observation: ToolObservation; }
- *   | { readonly kind: "REJECTED"; readonly call: ToolCallRequest; readonly feedback: ToolFailureFeedback; }
- *   | { readonly kind: "SKIPPED"; readonly call: ToolCallRequest; readonly feedback: ToolFailureFeedback; };
+ *   | { readonly kind: "OBSERVATION";    call: ToolCallRequest; ... }
+ *   | { readonly kind: "MODEL_REJECTED"; call: ModelRejectedToolCall; feedback: ToolFailureFeedback }
+ *   | { readonly kind: "REJECTED";       call: ToolCallRequest; feedback: ToolFailureFeedback }
+ *   | { readonly kind: "SKIPPED";        call: ToolCallRequest; feedback: ToolFailureFeedback };
  * ```
  *
- * Three arms, and the list is closed. There is deliberately no arm for an infrastructure failure:
- * "the settlement transaction did not commit" is not a fact about a Tool call, so it is **thrown**
- * rather than returned beside real outcomes.
+ * Four arms, and the list is closed. `MODEL_REJECTED` exists because the existing `REJECTED` arm
+ * carries a well-formed `ToolCallRequest` — a request whose arguments passed shape validation — and
+ * a malformed request cannot be expressed as one without fabricating the arguments it lacked.
+ *
+ * There is deliberately no arm for an infrastructure failure: "the settlement transaction did not
+ * commit" is not a fact about a Tool call, so it is **thrown** rather than returned beside real
+ * outcomes.
  */
 export type ToolBatchItemOutcome =
   | {
@@ -77,6 +105,11 @@ export type ToolBatchItemOutcome =
       readonly invocationId: ToolInvocationId;
       readonly finalStatus: "COMPLETED" | "FAILED" | "CANCELLED";
       readonly observation: ToolObservation;
+    }
+  | {
+      readonly kind: "MODEL_REJECTED";
+      readonly call: ModelRejectedToolCall;
+      readonly feedback: ToolFailureFeedback;
     }
   | {
       readonly kind: "REJECTED";
@@ -118,7 +151,13 @@ export interface ToolBatchRequest {
   readonly runId: RunId;
   readonly sessionId: SessionId;
   readonly sourceStepId: StepId;
-  readonly calls: readonly ToolCallRequest[];
+  /**
+   * The turn's requests in source order, executable and rejected alike.
+   *
+   * A rejected entry is not dispatched and never creates an invocation; it exists so its one result
+   * appears exactly where the model put the request.
+   */
+  readonly calls: readonly ToolBatchCall[];
   readonly environment: ToolExecutionEnvironment;
   readonly securityContext: ToolSecurityContext;
   readonly signal: AbortSignal;
@@ -188,6 +227,7 @@ export interface ToolBatchCoordinator {
 /** Every Tool batch item discriminant, in canonical order. */
 export const TOOL_BATCH_ITEM_OUTCOME_KINDS = [
   "OBSERVATION",
+  "MODEL_REJECTED",
   "REJECTED",
   "SKIPPED",
 ] as const satisfies readonly ToolBatchItemOutcome["kind"][];

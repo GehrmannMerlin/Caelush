@@ -52,6 +52,15 @@ export interface ReliabilityFixtureOptions {
   readonly contextBudgetPolicy?: FixtureContextBudgetPolicy;
   /** Model limits for scenarios that must reproduce a large-window provider. */
   readonly modelLimits?: { readonly contextWindowTokens: number; readonly maxOutputTokens: number };
+  /** Adapter capability metadata, e.g. the DeepSeek native-replay requirement. */
+  readonly adapterMetadata?: Record<string, unknown>;
+  /**
+   * Dialect id the model declares.
+   *
+   * A fixture that wraps the real OpenAI-compatible adapter must declare that dialect, because the
+   * provider's own private replay payload is bound to it.
+   */
+  readonly api?: string;
 }
 
 /** A real daemon composition and SQLite database with only its external model wire scripted. */
@@ -95,7 +104,9 @@ export async function createReliabilityFixture(
       composeDaemon({
         storage: storage!,
         providerBindings: [fixtureBinding()],
-        modelSources: [fixtureModelSource(options.modelLimits)],
+        modelSources: [
+          fixtureModelSource(options.modelLimits, options.adapterMetadata, options.api),
+        ],
         adapterOverrides: [options.adapter],
         defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
         ...(recoveryPolicy === undefined

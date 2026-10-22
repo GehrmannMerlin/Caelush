@@ -15,6 +15,7 @@ import {
   isValidProjectedConversation,
   projectStoredMessages,
   AGENT_ASSISTANT_MESSAGE_PROJECTOR_V1,
+  AGENT_ASSISTANT_MESSAGE_PROJECTOR_V2,
   AGENT_ATTACHMENT_MARKER_VERSION,
   AGENT_MESSAGE_PROJECTION_ERROR_CODES,
   AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_V1,
@@ -411,16 +412,18 @@ describe("Phase 5A projection — registry immutability and construction", () =>
 
   it("reports the current version per type, which is the codec registry's authority", () => {
     expect(projectors.currentVersion("USER")).toBe(2);
-    expect(projectors.currentVersion("ASSISTANT")).toBe(1);
+    // v2 adds the rejected-tool-request part; v1 records keep their own version and projector.
+    expect(projectors.currentVersion("ASSISTANT")).toBe(2);
     expect(projectors.currentVersion("TOOL_RESULT")).toBe(1);
     expect(projectors.currentVersion("CUSTOM_THING")).toBeUndefined();
   });
 
   it("registers all standard projector versions", () => {
-    expect(STANDARD_AGENT_MESSAGE_PROJECTORS).toHaveLength(4);
+    expect(STANDARD_AGENT_MESSAGE_PROJECTORS).toHaveLength(5);
     expect(AGENT_USER_MESSAGE_PROJECTOR_V1.type).toBe("USER");
     expect(AGENT_USER_MESSAGE_PROJECTOR_V2.type).toBe("USER");
     expect(AGENT_ASSISTANT_MESSAGE_PROJECTOR_V1.type).toBe("ASSISTANT");
+    expect(AGENT_ASSISTANT_MESSAGE_PROJECTOR_V2.type).toBe("ASSISTANT");
     expect(AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_V1.type).toBe("TOOL_RESULT");
   });
 });

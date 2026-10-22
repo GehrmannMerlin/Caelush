@@ -15,6 +15,7 @@ import type {
 } from "@caelush/agent";
 import {
   NO_TOOL_RESULT_OBSERVATION,
+  agentAssistantRejectedToolCallPart,
   agentAssistantTextPart,
   agentAssistantToolCallPart,
   agentAttachmentRefPart,
@@ -308,6 +309,15 @@ function assistantContent(
       for (const part of item.content) {
         if (part.type === "text") {
           content.push(agentAssistantTextPart(part.text, metadata));
+        } else if (part.type === "tool-call-rejected") {
+          content.push(
+            agentAssistantRejectedToolCallPart({
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+              issue: part.issue,
+              ...metadata,
+            }),
+          );
         } else {
           content.push(
             agentAssistantToolCallPart({
@@ -324,6 +334,14 @@ function assistantContent(
     for (const part of modelTurn.assistantMessage.content) {
       if (part.type === "text") {
         content.push(agentAssistantTextPart(part.text));
+      } else if (part.type === "tool-call-rejected") {
+        content.push(
+          agentAssistantRejectedToolCallPart({
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            issue: part.issue,
+          }),
+        );
       } else {
         content.push(
           agentAssistantToolCallPart({

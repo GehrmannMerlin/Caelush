@@ -1,6 +1,6 @@
 import { assertAIMessage, type AIToolResultMessage } from "@caelush/ai";
 
-import type { ToolCallRequest } from "../call/tool-call-preparer.js";
+import type { ToolBatchCall } from "../batch/batch-types.js";
 import { AgentToolResultBatchError } from "../batch/batch-errors.js";
 
 /**
@@ -9,7 +9,7 @@ import { AgentToolResultBatchError } from "../batch/batch-errors.js";
  * ```ts
  * export interface ToolResultBatchNormalizer {
  *   normalize(input: {
- *     readonly requests: readonly ToolCallRequest[];
+ *     readonly requests: readonly ToolBatchCall[];
  *     readonly results: readonly AIToolResultMessage[];
  *   }): readonly AIToolResultMessage[];
  * }
@@ -42,7 +42,7 @@ import { AgentToolResultBatchError } from "../batch/batch-errors.js";
  */
 export interface ToolResultBatchNormalizer {
   normalize(input: {
-    readonly requests: readonly ToolCallRequest[];
+    readonly requests: readonly ToolBatchCall[];
     readonly results: readonly AIToolResultMessage[];
   }): readonly AIToolResultMessage[];
 }
@@ -56,7 +56,7 @@ export interface ToolResultBatchNormalizer {
 export function createToolResultBatchNormalizer(): ToolResultBatchNormalizer {
   return {
     normalize(input: {
-      readonly requests: readonly ToolCallRequest[];
+      readonly requests: readonly ToolBatchCall[];
       readonly results: readonly AIToolResultMessage[];
     }): readonly AIToolResultMessage[] {
       return normalizeToolResultBatch(input.requests, input.results);
@@ -82,10 +82,10 @@ export function createToolResultBatchNormalizer(): ToolResultBatchNormalizer {
  * arbitrary winner. Two results claiming the same call must never be reconciled by "first one wins".
  */
 export function normalizeToolResultBatch(
-  requests: readonly ToolCallRequest[],
+  requests: readonly ToolBatchCall[],
   results: readonly AIToolResultMessage[],
 ): readonly AIToolResultMessage[] {
-  const requestById = new Map<string, ToolCallRequest>();
+  const requestById = new Map<string, ToolBatchCall>();
   for (const request of requests) {
     if (requestById.has(request.externalCallId)) {
       throw new AgentToolResultBatchError("DUPLICATE_REQUEST_ID", {

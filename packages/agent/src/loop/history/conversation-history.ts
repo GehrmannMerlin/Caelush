@@ -209,10 +209,17 @@ function assertToolResultsTurn(turn: ToolResultsTurn): void {
   }
 
   const requests = decision.toolRequests;
-  assertUniqueRequestIds(requests.map((request) => request.externalCallId));
+  // A rejected request is a request: it was announced to the model and it owes one result, so the
+  // batch that answers this decision must contain a result for it too.
+  const rejected = decision.rejectedToolRequests ?? [];
+  const requestIds = [
+    ...requests.map((request) => request.externalCallId),
+    ...rejected.map((request) => request.externalCallId),
+  ];
+  assertUniqueRequestIds(requestIds);
   assertUniqueResultIds(messageIds);
 
-  if (requests.length !== messageIds.length) {
+  if (requestIds.length !== messageIds.length) {
     throw new AgentTurnInputError("TOOL_RESULT_COUNT_MISMATCH");
   }
 }

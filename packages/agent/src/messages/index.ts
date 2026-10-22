@@ -64,10 +64,12 @@ export type { AgentMessageSource } from "./types/source.js";
 
 export {
   agentAssistantTextPart,
+  agentAssistantRejectedToolCallPart,
   agentAssistantToolCallPart,
   agentAttachmentRefPart,
   agentTextPart,
   assistantToolCalls,
+  assistantToolRequests,
   assertAgentAssistantContent,
   assertAgentUserContent,
   isMeaningfulAttachmentRefPart,
@@ -77,6 +79,7 @@ export {
 export type {
   AgentAssistantContentPart,
   AgentAssistantTextPart,
+  AgentAssistantRejectedToolCallPart,
   AgentAssistantToolCallPart,
   AgentAttachmentRefPart,
   AgentTextPart,
@@ -195,6 +198,7 @@ export type { AgentMessageCodec, AgentMessageCodecErrorReason } from "./codec/co
 
 export {
   AGENT_ASSISTANT_MESSAGE_CODEC_V3,
+  AGENT_ASSISTANT_MESSAGE_CODEC_V4,
   AGENT_ASSISTANT_MESSAGE_CODEC_V2,
   AGENT_ASSISTANT_MESSAGE_CODEC_V1,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,
@@ -245,6 +249,7 @@ export {
   attachmentMarkerV2,
   isValidProjectedConversation,
   AGENT_ASSISTANT_MESSAGE_PROJECTOR_V1,
+  AGENT_ASSISTANT_MESSAGE_PROJECTOR_V2,
   AGENT_ATTACHMENT_MARKER_VERSION,
   AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_V1,
   AGENT_USER_MESSAGE_PROJECTOR_V1,
