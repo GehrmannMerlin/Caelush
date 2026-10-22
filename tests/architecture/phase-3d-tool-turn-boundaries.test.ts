@@ -428,12 +428,16 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
       );
     }
 
-    // And the adapter asks the Tool Layer for exactly one batch per turn: one `execute` call site,
-    // never a per-item loop and never a second entry point.
+    // And the adapter asks the Tool Layer for exactly one *logical* batch per turn, dispatched in
+    // source-ordered chunks through the same canonical entry point. There is never a per-item loop
+    // and never a second scheduler: the two `execute` sites below are the chunk loop and the
+    // single-chunk fast path, both calling `dependencies.batches.execute`.
     const adapter = executable("packages/core/src/run-tool-turn-coordinator.ts");
     expect(adapter).not.toContain("Promise.all");
     const callSites = adapter.match(/dependencies\.batches\.(?:recover|execute)\(/g) ?? [];
-    expect(callSites).toEqual(["dependencies.batches.execute("]);
+    expect(callSites).toHaveLength(2);
+    expect(callSites.every((site) => site === "dependencies.batches.execute(")).toBe(true);
+    expect(adapter).not.toMatch(/dependencies\.batches\.recover\(/);
   });
 
   it("keeps the Tool result batch a complete, ordered set", () => {
