@@ -89,7 +89,7 @@ class TimelineProvider implements ApiAdapter {
       return this.text(JSON.stringify({ verdict: "PASS", summary: "The task is acceptable." }));
     }
     if (this.calls === 1) return this.readFileCall();
-    return this.text("The verified workspace report is complete.");
+    return this.text("The workspace report is complete.");
   }
 
   private async *readFileCall(): AsyncGenerator<AIAdapterEvent> {
@@ -136,7 +136,7 @@ class ApprovalTimelineProvider implements ApiAdapter {
 }
 
 describe("real daemon to CLI timeline E2E", () => {
-  it("renders real SSE activity, safe output, verification, and verified completion in Ink", async () => {
+  it("renders real SSE activity and safely completes a simple task without forced verification", async () => {
     const workspacePath = await makeWorkspace("caelush-cli-timeline-e2e-", "API_KEY=real-value\n");
     const provider = new TimelineProvider();
     daemon = await startDaemon({
@@ -161,8 +161,8 @@ describe("real daemon to CLI timeline E2E", () => {
 
     const frame = rendered.lastFrame();
     expect(frame).toContain("Read file");
-    expect(frame).toContain("Verification");
-    expect(frame).toContain("The verified workspace report is complete.");
+    expect(frame).not.toContain("Verification");
+    expect(frame).toContain("The workspace report is complete.");
     expect(frame).not.toContain("API_KEY=real-value");
     expect(frame).not.toContain("read-call");
     expect(await readFile(join(workspacePath, "src", "message.txt"), "utf8")).toContain(

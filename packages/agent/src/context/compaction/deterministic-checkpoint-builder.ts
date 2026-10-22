@@ -2,6 +2,7 @@ import {
   createStructuredCheckpoint,
   type StructuredCheckpoint,
 } from "../checkpoint/structured-checkpoint.js";
+import { createHistorySourceRef } from "../../messages/history-lookup-port.js";
 import type { ContextMessageRange } from "./context-compaction-contracts.js";
 import type { DeterministicCompactionFacts } from "./deterministic-compaction-facts.js";
 
@@ -25,6 +26,13 @@ export function createDeterministicCheckpointBuilder(): DeterministicCheckpointB
       if (!blocked.includes(DETERMINISTIC_SUMMARY_FALLBACK_MARKER)) {
         blocked.push(DETERMINISTIC_SUMMARY_FALLBACK_MARKER);
       }
+      const sourceRef = createHistorySourceRef({
+        runId: input.sourceRange.runId,
+        firstSequence: input.sourceRange.firstSequence,
+        lastSequence: input.sourceRange.lastSequence,
+      });
+      const criticalReferences = [...(previous?.criticalReferences ?? [])];
+      if (!criticalReferences.includes(sourceRef)) criticalReferences.push(sourceRef);
       return createStructuredCheckpoint({
         version: 1,
         goal: input.goal,
@@ -41,7 +49,7 @@ export function createDeterministicCheckpointBuilder(): DeterministicCheckpointB
         activeProcesses: input.facts.activeProcesses,
         pendingApprovals: input.facts.pendingApprovals,
         resourceGovernance: input.facts.resourceGovernance,
-        criticalReferences: previous?.criticalReferences ?? [],
+        criticalReferences,
         nextIntent: previous?.nextIntent ?? "Continue from the durable source range.",
         sourceRange: {
           from: input.sourceRange.firstSequence,

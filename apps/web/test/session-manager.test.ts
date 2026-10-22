@@ -5,12 +5,14 @@ import {
   createRunId,
   createSessionId,
   createStepId,
+  createEventId,
   createTimestampMs,
   createToolInvocationId,
   createVerificationPlanId,
   createWorkspaceId,
   ATTACHMENT_ONLY_RUN_GOAL,
   type PublicRunEvent,
+  PublicRunEventSchema,
   type ClientAgentRun,
   type ClientAgentSession,
   type ContextUsageProjection,
@@ -46,6 +48,59 @@ const otherWorkspace: WorkspaceRef = {
 };
 
 describe("WebSessionManager", () => {
+  it("projects live compaction stages into the shared context process panel and clears them", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const run = makeRun({ sessionId: session.id, status: "WAITING_RESOURCE", startedAt: 2 });
+    const usage = makeContextUsage(run, 320);
+    const stepId = createStepId();
+    const progress = (stage: "SUMMARIZING" | "FINISHED") =>
+      PublicRunEventSchema.parse({
+        eventId: createEventId(),
+        schemaVersion: 1,
+        runId: run.id,
+        sessionId: session.id,
+        stepId,
+        timestamp: createTimestampMs(10),
+        visibility: "USER_VISIBLE",
+        durability: {
+          kind: "EPHEMERAL",
+          version: 1,
+          deliveryClass: "COALESCIBLE",
+          streamKey: `context:compaction:${run.id}:${stepId}`,
+        },
+        type: "context.compaction.progress",
+        payload: { stage, reason: "SELECTION_PRESSURE" },
+      });
+    const inProgress = progress("SUMMARIZING");
+    const finished = progress("FINISHED");
+    const releaseFinish = deferred<void>();
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [run]]]),
+      contextUsage: usage,
+    });
+    client.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      options?.onOpen?.();
+      yield inProgress;
+      await releaseFinish.promise;
+      yield finished;
+    });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    await manager.loadSessions();
+    await manager.selectSession(session.id);
+    await waitFor(() => manager.getSnapshot().contextProcess?.kind === "COMPACTING");
+    expect(manager.getSnapshot().contextProcess).toEqual({
+      kind: "COMPACTING",
+      stage: "SUMMARIZING",
+      reason: "SELECTION_PRESSURE",
+    });
+
+    releaseFinish.resolve();
+    await waitFor(() => manager.getSnapshot().contextProcess === undefined);
+    manager.dispose();
+  });
+
   it("reattaches historical resource waits without calling a user continuation endpoint", async () => {
     // ```text
     // the historical snapshot says WAITING_RESOURCE  the backend owns recovery

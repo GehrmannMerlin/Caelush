@@ -1141,9 +1141,11 @@ describe("production ADVANCE_AGENT settlement", () => {
     expect(result.run.status).toBe("FAILED");
     expect(h.notifications.filter((event) => event.type === "error")).toHaveLength(1);
     expect(
-      (h.notifications.find((event) => event.type === "error")?.payload as {
-        error?: Record<string, unknown>;
-      }).error,
+      (
+        h.notifications.find((event) => event.type === "error")?.payload as {
+          error?: Record<string, unknown>;
+        }
+      ).error,
     ).toMatchObject({
       details: {
         contextPreparation: { reasonCode: "CONTEXT_SURFACE_BASELINE_TOO_LARGE" },
@@ -1263,7 +1265,7 @@ describe("production ADVANCE_AGENT settlement", () => {
     expect(h.executor.callCount()).toBe(2);
   });
 
-  it("runs one initial attempt plus five retries before terminal failure", async () => {
+  it("preserves provider progress after an exhausted retry episode and resumes a new episode", async () => {
     const call = fakeFrozenModelTurnExecutor(async () => {
       throw aiError("AI_NETWORK");
     });
@@ -1286,10 +1288,16 @@ describe("production ADVANCE_AGENT settlement", () => {
     expect(h.allocatedSteps.map((stepId) => h.store.steps.get(stepId)?.status)).toEqual(
       Array.from({ length: 6 }, () => "FAILED"),
     );
-    expect(h.store.snapshot.run.status).toBe("FAILED");
-    expect(h.store.snapshot.continuation).toBeUndefined();
+    expect(h.store.snapshot.run.status).toBe("RUNNING");
+    expect(h.store.snapshot.continuation).toMatchObject({
+      type: "WAITING_PROVIDER",
+      attempt: 1,
+      maxAttempts: 6,
+      episode: 2,
+      totalAttempts: 6,
+    });
     expect(h.notifications.filter((event) => event.type === "llm.failed")).toHaveLength(6);
-    expect(h.notifications.filter((event) => event.type === "retry.scheduled")).toHaveLength(5);
+    expect(h.notifications.filter((event) => event.type === "retry.scheduled")).toHaveLength(6);
     expect(h.notifications.filter((event) => event.type === "retry.started")).toHaveLength(5);
     const exhausted = h.notifications.filter((event) => event.type === "retry.exhausted");
     expect(exhausted).toHaveLength(1);
@@ -1306,15 +1314,35 @@ describe("production ADVANCE_AGENT settlement", () => {
     expect(h.store.commits.at(-1)?.events.map((event) => event.type)).toEqual([
       "llm.failed",
       "retry.exhausted",
-      "error",
-      "status.changed",
-      "run.failed",
+      "retry.scheduled",
     ]);
     expect(
       h.store.commits
         .filter((commit) => commit.events.some((event) => event.type === "llm.failed"))
         .flatMap((commit) => commit.messagesToAppend),
     ).toHaveLength(0);
+
+    const nextEpisode = h.store.snapshot.continuation;
+    if (nextEpisode?.type !== "WAITING_PROVIDER") {
+      throw new Error("expected provider cooldown boundary");
+    }
+    const held = await h.controller.recover(h.store.snapshot.run.id);
+    expect(held.status).toBe("WAITING_PROVIDER");
+    expect(call.callCount()).toBe(6);
+    h.store.snapshot = {
+      ...h.store.snapshot,
+      continuation: { ...nextEpisode, nextAttemptAt: createTimestampMs(0) },
+    };
+    await h.controller.recover(h.store.snapshot.run.id);
+
+    expect(call.callCount()).toBe(7);
+    expect(h.store.snapshot.run.status).toBe("RUNNING");
+    expect(h.store.snapshot.continuation).toMatchObject({
+      type: "WAITING_RETRY",
+      attempt: 2,
+      episode: 2,
+      totalAttempts: 7,
+    });
   });
 
   it("persists and resumes a same-provider transport selection before retry I/O", async () => {
@@ -1399,7 +1427,7 @@ describe("production ADVANCE_AGENT settlement", () => {
       makeRun(),
       () => aiError("AI_RATE_LIMIT", { retryAfterMs: 300_001 }),
       "RETRY_AFTER_EXCEEDS_POLICY",
-      "FAILED",
+      "RUNNING",
     ],
   ] as const)(
     "records retry exhaustion when %s prevents another attempt",
@@ -1415,7 +1443,16 @@ describe("production ADVANCE_AGENT settlement", () => {
       expect(h.notifications.filter((event) => event.type === "retry.exhausted")).toMatchObject([
         { payload: { attempt: 1, retriesUsed: 0, reason } },
       ]);
-      expect(h.notifications.filter((event) => event.type === "retry.scheduled")).toHaveLength(0);
+      if (reason === "RETRY_AFTER_EXCEEDS_POLICY") {
+        expect(h.store.snapshot.continuation).toMatchObject({
+          type: "WAITING_PROVIDER",
+          episode: 2,
+          totalAttempts: 1,
+        });
+        expect(h.notifications.filter((event) => event.type === "retry.scheduled")).toHaveLength(1);
+      } else {
+        expect(h.notifications.filter((event) => event.type === "retry.scheduled")).toHaveLength(0);
+      }
     },
   );
 

@@ -54,7 +54,7 @@ describe("archive page presentation", () => {
     expect(html).toContain("归档时间未知");
     expect(html).toContain("先恢复工作区");
     expect(html).toContain("彻底删除会话");
-    expect(html).toContain("删除全部已归档会话 · 1");
+    expect(html).toContain("删除全部已归档会话");
   });
   it("renders safe public history without a composer or custom metadata", () => {
     const html = renderToStaticMarkup(

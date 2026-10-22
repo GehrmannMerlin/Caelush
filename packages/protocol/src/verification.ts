@@ -72,17 +72,12 @@ export const VerificationProjectCheckPurposeSchema = z.enum([
 ]);
 export type VerificationProjectCheckPurpose = z.infer<typeof VerificationProjectCheckPurposeSchema>;
 
-export const VerificationCheckPurposeSchema = z.enum([
-  "LINT",
-  "TYPECHECK",
-  "TEST",
-  "BUILD",
-  "ARCHITECTURE",
-  "CHANGESET_SANITY",
-  "CHANGESET_REVIEW",
-  "ACCEPTANCE",
+export const CompletionRequirementSourceSchema = z.enum([
+  "USER_EXPLICIT",
+  "HOST_CONTRACT",
+  "MODEL_PROPOSAL",
 ]);
-export type VerificationCheckPurpose = z.infer<typeof VerificationCheckPurposeSchema>;
+export type CompletionRequirementSource = z.infer<typeof CompletionRequirementSourceSchema>;
 
 const VerificationProjectRelativeDirectorySchema = z
   .string()
@@ -99,6 +94,27 @@ const VerificationProjectRelativeDirectorySchema = z
     },
     { message: "Package directory must be workspace-relative" },
   );
+
+export const CompletionRequirementSchema = z
+  .object({
+    source: CompletionRequirementSourceSchema,
+    purpose: VerificationProjectCheckPurposeSchema,
+    packageRelativePath: VerificationProjectRelativeDirectorySchema.optional(),
+  })
+  .strict();
+export type CompletionRequirement = z.infer<typeof CompletionRequirementSchema>;
+
+export const VerificationCheckPurposeSchema = z.enum([
+  "LINT",
+  "TYPECHECK",
+  "TEST",
+  "BUILD",
+  "ARCHITECTURE",
+  "CHANGESET_SANITY",
+  "CHANGESET_REVIEW",
+  "ACCEPTANCE",
+]);
+export type VerificationCheckPurpose = z.infer<typeof VerificationCheckPurposeSchema>;
 
 const VerificationProjectCheckSpecSchema = z
   .object({
@@ -374,6 +390,7 @@ export const VerificationPlanningInputSchema = z
     workspace: WorkspaceRefSchema,
     changedFiles: z.array(FileChangeSummarySchema).max(4096),
     projectFacts: VerificationProjectFactsSchema.optional(),
+    acceptanceRequirements: z.array(CompletionRequirementSchema).max(8).optional(),
   })
   .strict();
 export type VerificationPlanningInput = z.infer<typeof VerificationPlanningInputSchema>;

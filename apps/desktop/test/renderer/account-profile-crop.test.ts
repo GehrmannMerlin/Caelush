@@ -124,6 +124,7 @@ describe.skipIf(!existsSync(chromium.executablePath()))("account profile editing
       platform: "browser",
       format: "iife",
       jsx: "automatic",
+      loader: { ".svg": "dataurl" },
       define: { "process.env.NODE_ENV": JSON.stringify("production") },
     });
     bundle = output.outputFiles[0]!.text;
@@ -259,13 +260,14 @@ describe.skipIf(!existsSync(chromium.executablePath()))("account profile editing
 
     await page.getByRole("button", { name: "继续会话：修复登录流程" }).click();
     await page.getByRole("button", { name: /管理模型/u }).click();
+    expect(await page.getByRole("dialog", { name: "设置" }).isVisible()).toBe(true);
+    await page.getByRole("button", { name: "关闭设置" }).click();
     await page.getByRole("button", { name: /管理设备/u }).click();
     await page.locator(".account-center-row.is-danger").click();
 
     expect(await page.evaluate("window.avatarTest.openedSession")).toBe(
       "ses_00000000-0000-7000-8000-000000000001",
     );
-    expect(await page.evaluate("window.avatarTest.openedModelSettings")).toBe(true);
     expect(await page.evaluate("window.avatarTest.managedDevices")).toBe(true);
     expect(await page.evaluate("window.avatarTest.loggedOut")).toBe(true);
   });

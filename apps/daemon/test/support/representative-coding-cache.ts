@@ -13,7 +13,7 @@ export interface RepresentativeCodingScenarioManifest {
   readonly api: "openai-compatible-chat";
   readonly reasoningLevel: "HIGH";
   readonly contextWindowTokens: 64_000 | 16_384;
-  readonly offlineCompactionContextWindowTokens?: 8_192;
+  readonly offlineCompactionContextWindowTokens?: 16_384;
   readonly cacheSettings: {
     readonly retention: "LONG";
     readonly key: "caelush-c5-representative-v1";
@@ -134,7 +134,7 @@ function fingerprintFixture(files: Readonly<Record<string, string>>): string {
 function manifest(input: {
   readonly scenarioId: RepresentativeScenarioId;
   readonly contextWindowTokens: 64_000 | 16_384;
-  readonly offlineCompactionContextWindowTokens?: 8_192;
+  readonly offlineCompactionContextWindowTokens?: 16_384;
   readonly expectedTaskType: string;
   readonly expectedFileChanges: readonly string[];
   readonly expectedVerification: readonly string[];
@@ -188,7 +188,7 @@ export const representativeCodingScenarioManifests: readonly RepresentativeCodin
     manifest({
       scenarioId: "SCENARIO_C_LONG_TASK_RECOVERY",
       contextWindowTokens: 64_000,
-      offlineCompactionContextWindowTokens: 8_192,
+      offlineCompactionContextWindowTokens: 16_384,
       expectedTaskType: "LONG_TASK_RECOVERY_AND_CROSS_RUN",
       expectedFileChanges: ["src/utils.js"],
       expectedVerification: [

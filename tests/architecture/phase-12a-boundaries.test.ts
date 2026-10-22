@@ -52,7 +52,14 @@ describe("Phase 12A daemon and shared-client boundaries", () => {
     expect(routes).not.toMatch(
       /new\s+(?:RunController|LocalRuntime|ToolDispatcher|LLMGateway)\s*\(/,
     );
-    expect(routes).not.toMatch(/from\s+["']@caelush\/(?:core|runtime|agent|coding-agent|llm)["']/);
+    expect(routes).not.toMatch(/from\s+["']@caelush\/(?:core|runtime|coding-agent|llm)["']/);
+    // The history endpoint consumes only the Agent-owned port as a type. Route handlers do not
+    // import or construct Agent runtime behavior; the daemon adapter and composition root own that.
+    expect(routes).toMatch(
+      /import\s+type\s+\{\s*HistoryLookupOperations\s*\}\s+from\s+["']@caelush\/agent["']/,
+    );
+    // Do not let `\s+` consume the `type` keyword when classifying an import.
+    expect(routes).not.toMatch(/\bimport[ \t]+(?!type\b)[^;]*?from\s+["']@caelush\/agent["']/s);
   });
 
   it("keeps the Security policy Gate on the live Tool owners", async () => {

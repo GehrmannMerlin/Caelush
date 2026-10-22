@@ -504,7 +504,7 @@ async function handleFixtureRequest(
       response.end(JSON.stringify({ error: { message: "fixture authentication failed" } }));
       return;
     }
-    let isReview = false;
+    let isReview: boolean;
     try {
       isReview = JSON.stringify(JSON.parse(body)).includes("Review the supplied");
     } catch {
@@ -681,7 +681,11 @@ async function api(
     readonly body?: unknown;
     readonly allowFailure?: boolean;
   } = {},
-): Promise<{ readonly status: number; readonly value: any; readonly text: string }> {
+): Promise<{
+  readonly status: number;
+  readonly value: JsonObject | undefined;
+  readonly text: string;
+}> {
   const method = options.method ?? "GET";
   const serializedBody = options.body === undefined ? undefined : JSON.stringify(options.body);
   const requestBody =
@@ -701,16 +705,17 @@ async function api(
   } as Request;
   const response = await proxy.handle(request);
   const text = await response.text();
-  let value: any = undefined;
+  let value: JsonObject | undefined;
   if (text.length > 0) {
     try {
-      value = JSON.parse(text);
+      value = parseJsonObject(text);
     } catch {
       throw new Error("local API response was invalid");
     }
   }
   if (!options.allowFailure && (response.status < 200 || response.status >= 300)) {
-    const responseCode = value?.error?.code;
+    const error = value?.["error"];
+    const responseCode = isJsonObject(error) ? error["code"] : undefined;
     failureStage = `HTTP_${method}_${response.status}_${
       typeof responseCode === "string" && /^[A-Z0-9_]{1,64}$/u.test(responseCode)
         ? responseCode
@@ -721,10 +726,26 @@ async function api(
   return { status: response.status, value, text };
 }
 
-function provider(payload: any, id: string): any {
-  const item =
-    payload.providers?.find((entry: any) => entry.id === id) ??
-    (payload.provider?.id === id ? payload.provider : undefined);
+type JsonObject = Record<string, unknown>;
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseJsonObject(text: string): JsonObject {
+  const value: unknown = JSON.parse(text);
+  if (!isJsonObject(value)) throw new Error("local API response was invalid");
+  return value;
+}
+
+function provider(payload: unknown, id: string): JsonObject {
+  const object = isJsonObject(payload) ? payload : {};
+  const providers = object["providers"];
+  const listItem = Array.isArray(providers)
+    ? providers.find((entry) => isJsonObject(entry) && entry["id"] === id)
+    : undefined;
+  const fallback = object["provider"];
+  const item = listItem ?? (isJsonObject(fallback) && fallback["id"] === id ? fallback : undefined);
   assert.ok(item);
   return item;
 }

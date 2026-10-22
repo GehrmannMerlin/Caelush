@@ -59,7 +59,7 @@ export async function readLegacyImportReceipt(
     return parsed.data;
   } catch (error) {
     if (isFsError(error) && error.code === "ENOENT") return undefined;
-    throw new Error("The local data import needs protected recovery.");
+    throw new Error("The local data import needs protected recovery.", { cause: error });
   }
 }
 

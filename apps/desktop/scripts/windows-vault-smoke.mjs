@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";

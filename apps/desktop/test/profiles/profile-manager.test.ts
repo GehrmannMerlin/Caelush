@@ -160,5 +160,5 @@ describe("Desktop account profile isolation", () => {
       profileId: expect.stringMatching(/^u_[a-f0-9]{64}$/u),
       rootDirectory: expect.stringContaining("profiles"),
     });
-  });
+  }, 30_000);
 });

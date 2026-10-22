@@ -8,7 +8,6 @@ import {
 
 const MAX_JSON_BYTES = 1_048_576;
 const MAX_JSON_DEPTH = 64;
-const SAFE_INTEGER_MAX = Number.MAX_SAFE_INTEGER;
 const OFFLINE_GRANT_TTL_MS = 15 * 24 * 60 * 60 * 1000;
 const MAX_CLOCK_ROLLBACK_MS = 5 * 60 * 1000;
 const KEY_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
@@ -71,7 +70,7 @@ export function parseStrictJcsJson(source: string | Uint8Array): unknown {
   }
   let position = 0;
   const whitespace = () => {
-    while (position < text.length && /[\u0009\u000a\u000d\u0020]/.test(text[position] ?? "")) {
+    while (position < text.length && isJcsWhitespace(text.charCodeAt(position))) {
       position += 1;
     }
   };
@@ -204,6 +203,10 @@ export function parseStrictJcsJson(source: string | Uint8Array): unknown {
   return result;
 }
 
+function isJcsWhitespace(code: number): boolean {
+  return code === 0x09 || code === 0x0a || code === 0x0d || code === 0x20;
+}
+
 export function createDeviceProof(
   privateKey: KeyObject,
   grantId: string,
@@ -244,6 +247,23 @@ export function publicKeyRawFromPrivate(privateKey: KeyObject): Buffer {
     return spki.subarray(ED25519_SPKI_PREFIX.length);
   } catch {
     throw new OfflineGrantError("DEVICE_KEY_INVALID", "The local device key is invalid.");
+  }
+}
+
+function verifyEd25519(
+  rawPublicKey: Uint8Array,
+  message: Uint8Array,
+  signature: Uint8Array,
+): boolean {
+  try {
+    const key = createPublicKey({
+      key: Buffer.concat([ED25519_SPKI_PREFIX, Buffer.from(rawPublicKey)]),
+      format: "der",
+      type: "spki",
+    });
+    return verifySignature(null, message, key, signature);
+  } catch {
+    return false;
   }
 }
 
@@ -306,17 +326,7 @@ export function verifyOfflineGrant(
   }
   const signatureBytes = decodeBase64Url(signature, 64, "offline signature");
   const canonicalPayload = Buffer.from(canonicalizeJcs(payload), "utf8");
-  let validSignature = false;
-  try {
-    const key = createPublicKey({
-      key: Buffer.concat([ED25519_SPKI_PREFIX, publicBytes]),
-      format: "der",
-      type: "spki",
-    });
-    validSignature = verifySignature(null, canonicalPayload, key, signatureBytes);
-  } catch {
-    validSignature = false;
-  }
+  const validSignature = verifyEd25519(publicBytes, canonicalPayload, signatureBytes);
   if (!validSignature) {
     throw new OfflineGrantError(
       "SIGNATURE_INVALID",
@@ -343,22 +353,11 @@ export function verifyOfflineGrant(
   }
   const localPublicKey = publicKeyRawFromPrivate(input.devicePrivateKey);
   const proof = decodeBase64Url(input.proofSignature, 64, "device proof");
-  let validProof = false;
-  try {
-    const key = createPublicKey({
-      key: Buffer.concat([ED25519_SPKI_PREFIX, localPublicKey]),
-      format: "der",
-      type: "spki",
-    });
-    validProof = verifySignature(
-      null,
-      deviceProofMessage(payload.grantId, input.challenge),
-      key,
-      proof,
-    );
-  } catch {
-    validProof = false;
-  }
+  const validProof = verifyEd25519(
+    localPublicKey,
+    deviceProofMessage(payload.grantId, input.challenge),
+    proof,
+  );
   if (!validProof) {
     throw new OfflineGrantError(
       "DEVICE_PROOF_INVALID",

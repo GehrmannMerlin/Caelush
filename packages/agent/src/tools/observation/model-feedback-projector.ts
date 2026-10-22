@@ -11,7 +11,6 @@ import type { ToolObservationPolicySnapshot } from "../../loop/types.js";
 import type { ToolBatchItemOutcome } from "../batch/batch-types.js";
 import { AgentToolResultBatchError } from "../batch/batch-errors.js";
 import type { ToolBatchCall } from "../batch/batch-types.js";
-import type { ToolCallRequest } from "../call/tool-call-preparer.js";
 
 /**
  * The canonical Model Tool Feedback Projector.

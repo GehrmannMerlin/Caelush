@@ -69,7 +69,7 @@ describe("Desktop external editor resolver", () => {
     await mkdir(path.join(workspaceRoot, "src"), { recursive: true });
     await writeFile(path.join(installRoot, "Code.exe"), "fixture");
     await writeFile(path.join(workspaceRoot, "src", "hello world.ts"), "export {};");
-    const spawn = vi.fn((_executable: string, _args: readonly string[], _options: unknown) => {
+    const spawn = vi.fn(() => {
       const child = new EventEmitter();
       Object.assign(child, { unref: vi.fn() });
       queueMicrotask(() => child.emit("spawn"));

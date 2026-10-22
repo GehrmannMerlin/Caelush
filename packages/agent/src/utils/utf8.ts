@@ -59,7 +59,7 @@ export function utf8SuffixByBytes(value: string, maxBytes: number): string {
   let bytes = 0;
   let start = value.length;
   while (start > 0) {
-    let codeUnit = value.charCodeAt(start - 1);
+    const codeUnit = value.charCodeAt(start - 1);
     let width: number;
     if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff && start > 1) {
       const high = value.charCodeAt(start - 2);

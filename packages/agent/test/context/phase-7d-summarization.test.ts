@@ -167,6 +167,57 @@ describe("Phase 7D semantic summarization", () => {
     });
   });
 
+  it("rejects a summary that drops a protected decision from the previous checkpoint", async () => {
+    const previousCheckpoint = {
+      version: 1 as const,
+      goal: identity.goal,
+      constraints: ["Do not change the public API."],
+      completedWork: [],
+      inProgress: ["finish the persistence adapter"],
+      blocked: ["migration is not verified"],
+      importantDiscoveries: ["the reader is append-only"],
+      keyDecisions: ["use one shared daemon composition root"],
+      changedFiles: [],
+      readFiles: [],
+      recentErrors: [],
+      verificationState: "NOT_RUN",
+      activeProcesses: [],
+      pendingApprovals: [],
+      resourceGovernance: "BOUNDED",
+      criticalReferences: ["history:v1:prior:1:3#0123456789abcdef"],
+      nextIntent: "Continue the adapter.",
+      sourceRange: { from: 1, to: 3 },
+    };
+    const runner = createContextSummarizationRunner({
+      summarizer: {
+        async summarize() {
+          return {
+            semantic: semantic({
+              constraints: ["Do not change the public API."],
+              inProgress: ["finish the persistence adapter"],
+              blocked: ["migration is not verified"],
+              importantDiscoveries: ["the reader is append-only"],
+              keyDecisions: [],
+              criticalReferences: ["history:v1:prior:1:3#0123456789abcdef"],
+            }),
+            modelRef: MODEL.ref,
+            finishReason: "STOP",
+            summaryPromptVersion: 3,
+            sourceDigest: "ignored",
+            semanticDigest: "ignored",
+          };
+        },
+      },
+    });
+
+    const result = await runner.summarize(
+      { ...input(), previousCheckpoint },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result).toMatchObject({ kind: "FALLBACK_REQUIRED", outcome: "MALFORMED" });
+  });
+
   it("propagates cancellation and never creates a fallback checkpoint", async () => {
     let calls = 0;
     const controller = new AbortController();

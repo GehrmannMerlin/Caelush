@@ -133,6 +133,7 @@ describe("daemon production composition", () => {
       "git_status",
       "git_diff",
       "read_attachment",
+      "read_history",
     ]);
     // Phase 4E moved usage guidance out of the provider-visible tool catalog: the defaults carry
     // no guidance folded into a description, because their guidance travels as a Coding `promptSnippet`
@@ -240,6 +241,7 @@ describe("daemon production composition", () => {
       "write_stdin",
       "stop_process",
       "read_attachment",
+      "read_history",
     ]);
     expect(composition.toolTurn.modelSpecs().map((tool) => tool.name)).toEqual(
       composition.toolRegistry.names(),

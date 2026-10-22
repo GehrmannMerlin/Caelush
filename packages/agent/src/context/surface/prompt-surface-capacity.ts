@@ -1,8 +1,5 @@
 import { UTF8_BYTES_PER_TOKEN } from "../token/context-token-estimator.js";
-import {
-  PROMPT_SURFACE_LIMITS,
-  type PromptSurfaceRecordKind,
-} from "./prompt-surface.js";
+import { PROMPT_SURFACE_LIMITS, type PromptSurfaceRecordKind } from "./prompt-surface.js";
 import {
   diffPromptSurfaceSections,
   renderPromptSurfaceRecord,
@@ -133,7 +130,7 @@ export function decidePromptSurfaceCapacity(
     },
   ]);
   if (overflow === undefined) {
-    return earlyRollover(input, records, nextEpochBytes, visibleRecords);
+    return earlyRollover(input, records, nextEpochBytes);
   }
 
   // A rollover is only allowed when the complete target view still fits in one epoch. Rotating
@@ -183,14 +180,8 @@ export function promptSurfaceReplaySoftBudgetBytes(input: {
 }): number {
   const budgetTokens =
     input.workingSetTargetTokens === undefined
-      ? Math.min(
-          MAX_REPLAY_SOFT_BUDGET_TOKENS,
-          Math.floor(input.effectiveInputLimitTokens * 0.1),
-        )
-      : Math.min(
-          MAX_REPLAY_SOFT_BUDGET_TOKENS,
-          Math.floor(input.workingSetTargetTokens * 0.25),
-        );
+      ? Math.min(MAX_REPLAY_SOFT_BUDGET_TOKENS, Math.floor(input.effectiveInputLimitTokens * 0.1))
+      : Math.min(MAX_REPLAY_SOFT_BUDGET_TOKENS, Math.floor(input.workingSetTargetTokens * 0.25));
   if (!Number.isSafeInteger(budgetTokens) || budgetTokens < 1) {
     throw new RangeError("Prompt Surface replay budget is not a positive token count.");
   }
@@ -220,7 +211,6 @@ function earlyRollover(
   input: PromptSurfaceCapacityInput,
   records: readonly { readonly byteLength: number }[],
   replayBytes: number,
-  visibleRecords: number,
 ): PromptSurfaceCapacityDecision {
   const softBudget = input.replaySoftBudgetBytes;
   if (softBudget === undefined) return Object.freeze({ kind: "APPEND" });

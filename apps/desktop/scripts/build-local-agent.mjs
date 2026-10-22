@@ -18,7 +18,6 @@ const terminalHelperSource = path.join(
   "user-terminal-helper.mjs",
 );
 const terminalHelperDestination = path.join(stageDirectory, "user-terminal-helper.mjs");
-const terminalPackageSource = await realpath(path.join(appRoot, "node_modules", "node-pty"));
 const terminalPackageDestination = path.join(stageDirectory, "node_modules", "node-pty");
 const expectedNodeHash = "9a4eb5f1c29c6a2e93852ead46b999e284a6a5ca8bab4d4e241d587d025a52de";
 const excludedAccessSids = ["S-1-1-0", "S-1-5-11", "S-1-5-32-545"];
@@ -30,61 +29,68 @@ runPnpm(["--filter", "@caelush/ui-theme", "build"]);
 runPnpm(["--filter", "@caelush/web", "build:desktop"]);
 
 if (process.platform !== "win32") {
-  throw new Error("D4-1 Daemon runtime staging requires Windows x64 Node 24.18.0.");
+  process.stdout.write(
+    "Skipped Windows-only Daemon runtime staging; shared packages and Desktop assets were built.\n",
+  );
+} else {
+  await stageWindowsDaemonRuntime();
 }
 
-const nodeSource = process.env.CAELUSH_NODE_24_PATH || process.execPath;
-const sourceBytes = await readFile(nodeSource);
-const actualHash = createHash("sha256").update(sourceBytes).digest("hex");
-if (actualHash !== expectedNodeHash) {
-  throw new Error(
-    "Node runtime staging requires the D0-C verified Node 24.18.0 Windows x64 executable. Set CAELUSH_NODE_24_PATH to that node.exe.",
+async function stageWindowsDaemonRuntime() {
+  const terminalPackageSource = await realpath(path.join(appRoot, "node_modules", "node-pty"));
+  const nodeSource = process.env.CAELUSH_NODE_24_PATH || process.execPath;
+  const sourceBytes = await readFile(nodeSource);
+  const actualHash = createHash("sha256").update(sourceBytes).digest("hex");
+  if (actualHash !== expectedNodeHash) {
+    throw new Error(
+      "Node runtime staging requires the D0-C verified Node 24.18.0 Windows x64 executable. Set CAELUSH_NODE_24_PATH to that node.exe.",
+    );
+  }
+
+  const version = spawnSync(nodeSource, ["--version"], { encoding: "utf8", windowsHide: true });
+  if (version.status !== 0 || version.stdout.trim() !== "v24.18.0") {
+    throw new Error("The staged Node executable did not report the D0-C verified version.");
+  }
+
+  const currentUserSid = readCurrentUserSid();
+  await mkdir(stageRoot, { recursive: true });
+  secureRuntimePath(stageRoot, currentUserSid, true);
+  await mkdir(stageDirectory, { recursive: true });
+  secureRuntimePath(stageDirectory, currentUserSid, true);
+  await rm(nodeDestination, { force: true });
+  await copyFile(nodeSource, nodeDestination);
+  secureRuntimePath(nodeDestination, currentUserSid, false);
+  await rm(terminalPackageDestination, { recursive: true, force: true });
+  await mkdir(path.dirname(terminalPackageDestination), { recursive: true });
+  await cp(terminalPackageSource, terminalPackageDestination, {
+    recursive: true,
+    filter: (source) => {
+      const relative = path.relative(terminalPackageSource, source);
+      if (relative === "") return true;
+      return (
+        relative === "package.json" ||
+        relative === "lib" ||
+        relative.startsWith(`lib${path.sep}`) ||
+        relative === "prebuilds" ||
+        relative === path.join("prebuilds", "win32-x64") ||
+        relative.startsWith(`${path.join("prebuilds", "win32-x64")}${path.sep}`)
+      );
+    },
+  });
+  const stagedPtyPackage = JSON.parse(
+    await readFile(path.join(terminalPackageDestination, "package.json"), "utf8"),
+  );
+  if (stagedPtyPackage.name !== "node-pty" || stagedPtyPackage.version !== "1.1.0") {
+    throw new Error("The staged USER_TERMINAL PTY package did not match the pinned version.");
+  }
+  await access(path.join(terminalPackageDestination, "prebuilds", "win32-x64", "conpty.node"));
+  await copyFile(terminalHelperSource, terminalHelperDestination);
+  secureRuntimePath(path.join(stageDirectory, "node_modules"), currentUserSid, true);
+  secureRuntimePath(terminalHelperDestination, currentUserSid, false);
+  process.stdout.write(
+    `Staged D0-C Node 24.18.0 and node-pty 1.1.0 for USER_TERMINAL with current-user ACL at ${path.relative(repoRoot, nodeDestination)} (${actualHash}).\n`,
   );
 }
-
-const version = spawnSync(nodeSource, ["--version"], { encoding: "utf8", windowsHide: true });
-if (version.status !== 0 || version.stdout.trim() !== "v24.18.0") {
-  throw new Error("The staged Node executable did not report the D0-C verified version.");
-}
-
-const currentUserSid = readCurrentUserSid();
-await mkdir(stageRoot, { recursive: true });
-secureRuntimePath(stageRoot, currentUserSid, true);
-await mkdir(stageDirectory, { recursive: true });
-secureRuntimePath(stageDirectory, currentUserSid, true);
-await rm(nodeDestination, { force: true });
-await copyFile(nodeSource, nodeDestination);
-secureRuntimePath(nodeDestination, currentUserSid, false);
-await rm(terminalPackageDestination, { recursive: true, force: true });
-await mkdir(path.dirname(terminalPackageDestination), { recursive: true });
-await cp(terminalPackageSource, terminalPackageDestination, {
-  recursive: true,
-  filter: (source) => {
-    const relative = path.relative(terminalPackageSource, source);
-    if (relative === "") return true;
-    return (
-      relative === "package.json" ||
-      relative === "lib" ||
-      relative.startsWith(`lib${path.sep}`) ||
-      relative === "prebuilds" ||
-      relative === path.join("prebuilds", "win32-x64") ||
-      relative.startsWith(`${path.join("prebuilds", "win32-x64")}${path.sep}`)
-    );
-  },
-});
-const stagedPtyPackage = JSON.parse(
-  await readFile(path.join(terminalPackageDestination, "package.json"), "utf8"),
-);
-if (stagedPtyPackage.name !== "node-pty" || stagedPtyPackage.version !== "1.1.0") {
-  throw new Error("The staged USER_TERMINAL PTY package did not match the pinned version.");
-}
-await access(path.join(terminalPackageDestination, "prebuilds", "win32-x64", "conpty.node"));
-await copyFile(terminalHelperSource, terminalHelperDestination);
-secureRuntimePath(path.join(stageDirectory, "node_modules"), currentUserSid, true);
-secureRuntimePath(terminalHelperDestination, currentUserSid, false);
-process.stdout.write(
-  `Staged D0-C Node 24.18.0 and node-pty 1.1.0 for USER_TERMINAL with current-user ACL at ${path.relative(repoRoot, nodeDestination)} (${actualHash}).\n`,
-);
 
 function readCurrentUserSid() {
   const executable = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "whoami.exe");

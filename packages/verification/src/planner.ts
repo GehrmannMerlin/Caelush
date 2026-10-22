@@ -161,6 +161,32 @@ function appendArchitectureCheck(
   });
 }
 
+function appendExplicitAcceptanceChecks(
+  checks: VerificationCheckDraft[],
+  requirements: VerificationPlanningInput["acceptanceRequirements"],
+): void {
+  for (const requirement of requirements ?? []) {
+    checks.push({
+      ordinal: checks.length,
+      stage:
+        requirement.purpose === "TEST"
+          ? "BEHAVIORAL"
+          : requirement.purpose === "BUILD"
+            ? "BROAD"
+            : "FAST_STATIC",
+      requirement: requirement.source === "MODEL_PROPOSAL" ? "ADVISORY" : "REQUIRED",
+      spec: {
+        kind: "PROJECT",
+        purpose: requirement.purpose,
+        source: requirement.source === "MODEL_PROPOSAL" ? "PROJECT" : "USER",
+        ...(requirement.packageRelativePath === undefined
+          ? {}
+          : { packageRelativePath: requirement.packageRelativePath }),
+      },
+    });
+  }
+}
+
 function explicitlyRequestsArchitectureCheck(goal: string): boolean {
   return (
     /\b(?:run|execute|perform)\s+(?:the\s+)?architecture\s+(?:check|verification)\b/i.test(goal) ||
@@ -195,12 +221,15 @@ export class DefaultVerificationPlanner implements VerificationPlanner {
     const checks: VerificationCheckDraft[] = [];
     const facts = planningInput.projectFacts;
     const hasRunChanges = planningInput.changedFiles.length > 0;
+    const explicitAcceptance = (planningInput.acceptanceRequirements?.length ?? 0) > 0;
     const fullVerificationRequested = explicitlyRequestsFullVerification(planningInput.goal);
     const architectureCheckRequirement = architectureRequirement(planningInput);
     const runPaths = planningInput.changedFiles.map((file) => file.path);
     const hasCodeProject = facts?.isCodeProject !== false || fullVerificationRequested;
 
-    if (fullVerificationRequested && hasCodeProject) {
+    if (explicitAcceptance) {
+      appendExplicitAcceptanceChecks(checks, planningInput.acceptanceRequirements);
+    } else if (fullVerificationRequested && hasCodeProject) {
       if (architectureCheckRequirement !== undefined) {
         appendArchitectureCheck(checks, architectureCheckRequirement);
       }
@@ -252,12 +281,14 @@ export class DefaultVerificationPlanner implements VerificationPlanner {
         spec: { kind: "GIT", purpose: "CHANGESET_REVIEW", source: "SYSTEM" },
       });
     }
-    checks.push({
-      ordinal: checks.length,
-      stage: "ACCEPTANCE",
-      requirement: "REQUIRED",
-      spec: { kind: "TASK", purpose: "ACCEPTANCE", source: "SYSTEM" },
-    });
+    if (!explicitAcceptance) {
+      checks.push({
+        ordinal: checks.length,
+        stage: "ACCEPTANCE",
+        requirement: "REQUIRED",
+        spec: { kind: "TASK", purpose: "ACCEPTANCE", source: "SYSTEM" },
+      });
+    }
 
     const draft = {
       runId: planningInput.runId,

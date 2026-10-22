@@ -10,6 +10,7 @@ import {
   type ContextPolicy,
   type StoredAgentMessage,
 } from "@caelush/agent";
+import { createContextPolicy } from "../../src/context/policy/context-policy.js";
 import {
   SESSION_ID,
   assistantMessage,
@@ -142,5 +143,31 @@ describe("WORKING_SET_V2 current-turn protocol prefix", () => {
     expect(plan?.sourceRange.lastSequence).toBeLessThan(
       newestCompletedProtocol?.messages[0]?.sequence ?? Number.MAX_SAFE_INTEGER,
     );
+  });
+});
+
+describe("HEADROOM_V1 current-turn protocol prefix", () => {
+  it("plans a safe prefix cut for the production headroom policy", () => {
+    const { history, turn } = indexCurrentTurn();
+    const policy = createContextPolicy({
+      model: MODEL,
+      options: {
+        outputReserveTokens: 8_192,
+        safetyReserveTokens: 512,
+        requestHeadroom: { expectedGrowthTokens: 4_096, postCompactionRatio: 0.8 },
+      },
+    });
+
+    expect(policy.allowCurrentTurnPrefix).toBe(true);
+    const plan = createContextCompactionPlanner().plan({
+      history,
+      policy,
+      reason: "PROACTIVE_PRESSURE",
+    });
+
+    expect(plan?.cut.kind).toBe("PROTOCOL_SAFE_SPLIT");
+    expect(plan?.sourceRange.conversationTurnId).toBe(turn.id);
+    expect(plan?.sourceRange.firstSequence).toBeGreaterThan(1);
+    expect(plan?.sourceRange.lastSequence).toBeLessThan(12);
   });
 });

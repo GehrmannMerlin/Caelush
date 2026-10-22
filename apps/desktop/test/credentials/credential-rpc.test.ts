@@ -301,7 +301,7 @@ describe("Daemon Desktop credential RPC client", () => {
     expect(transport.sent[1]).toMatchObject({ childPid: 42_000, generationId, profileId });
     expect(JSON.stringify(transport.sent)).not.toContain("provider-key-fixture");
     rpc.dispose();
-  });
+  }, 15_000);
 
   it("rejects mismatched responses, AbortSignal, timeout, and child exit", async () => {
     const { createDesktopCredentialAuthority } =

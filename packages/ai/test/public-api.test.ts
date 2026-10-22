@@ -91,7 +91,7 @@ describe("@caelush/ai subpaths", () => {
   it("exposes the error contract only", () => {
     expect(typeof errors.AIError).toBe("function");
     expect(typeof errors.createAIErrorSanitizer).toBe("function");
-    expect(errors.AI_ERROR_CODES).toHaveLength(14);
+    expect(errors.AI_ERROR_CODES).toHaveLength(15);
     expect(surface(errors).createAIGateway).toBeUndefined();
   });
 

@@ -9,6 +9,7 @@ import {
   type ApiAdapterStreamInput,
   type ResolvedAIModelRequest,
 } from "@caelush/ai";
+import { assertPromptSurfaceEpochWithSnapshots } from "@caelush/agent";
 import { CaelushClient } from "@caelush/client";
 import { openCaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
@@ -104,8 +105,52 @@ describe("Context Runtime production recovery E2E", () => {
       settled = await client.getRun(run.id);
     }
 
-    expect(settled.status).toBe("COMPLETED");
-    expect(await client.getRunContextUsage(run.id)).toMatchObject({
+    const contextUsage = await client.getRunContextUsage(run.id);
+    const diagnosticStorage = await openCaelushStorage({ path: join(directory, "caelush.db") });
+    let failureEvents: readonly unknown[];
+    let surfaceReadFailure: readonly string[] = [];
+    try {
+      const throughSequence = await diagnosticStorage.eventReader.latestSequence(run.id);
+      const events = await diagnosticStorage.eventReader.replay(run.id, {
+        afterSequence: 0,
+        throughSequence,
+        limit: 512,
+      });
+      failureEvents = events
+        .filter((event) => event.type === "llm.failed" || event.type === "run.failed")
+        .map((event) => ({ type: event.type, payload: event.payload }));
+      const currentSurface = await diagnosticStorage.promptSurface.getCurrent(run.id);
+      if (currentSurface !== undefined) {
+        try {
+          const surface = await diagnosticStorage.promptSurface.readEpoch(
+            run.id,
+            currentSurface.epochId,
+          );
+          if (surface !== undefined) assertPromptSurfaceEpochWithSnapshots(surface);
+        } catch (error) {
+          let cause: unknown = error;
+          const messages: string[] = [];
+          while (cause instanceof Error && messages.length < 5) {
+            messages.push(`${cause.name}: ${cause.message}`);
+            cause = cause.cause;
+          }
+          surfaceReadFailure = messages;
+        }
+      }
+    } finally {
+      await diagnosticStorage.close();
+    }
+    expect(
+      settled.status,
+      JSON.stringify({
+        status: settled.status,
+        providerCalls: provider.calls,
+        contextUsage,
+        failureEvents,
+        surfaceReadFailure,
+      }),
+    ).toBe("COMPLETED");
+    expect(contextUsage).toMatchObject({
       lastBuildStatus: "SUCCESS",
       lastRecoveryStages: [
         "DEFER_LOW_RETRIEVABLE",
@@ -113,7 +158,7 @@ describe("Context Runtime production recovery E2E", () => {
         "TIGHTEN_RECENT_TAIL",
       ],
     });
-    expect(provider.calls).toBeGreaterThanOrEqual(4);
+    expect(provider.calls).toBe(3);
     const firstToolRequest = provider.requests[1];
     const recoveredRequest = provider.requests[2];
     expect(firstToolRequest).toBeDefined();
@@ -161,17 +206,17 @@ describe("Context Runtime production recovery E2E", () => {
       const usage = await storage.contextUsage.getByRun(run.id);
       expect(usage?.compactionCount).toBe(0);
       const currentSurfaceEpoch = await storage.promptSurface.getCurrent(run.id);
-      // This fixture has no closed history eligible for compaction, so forced recovery keeps the
-      // existing prompt epoch compatible without scheduling a history checkpoint.
-      expect(currentSurfaceEpoch?.resetReason).toBe("INITIAL");
+      // Provider overflow changes the request projection at this Step, so recovery closes the
+      // rejected projection and records a separately auditable forced-recovery baseline.
+      expect(currentSurfaceEpoch?.resetReason).toBe("FORCED_RECOVERY");
       const currentSurface =
         currentSurfaceEpoch === undefined
           ? undefined
           : await storage.promptSurface.readEpoch(run.id, currentSurfaceEpoch.epochId);
-      const currentSnapshots = currentSurface?.snapshots ?? [];
-      expect(currentSnapshots.length).toBeGreaterThan(0);
-      expect(new Set(currentSnapshots.map((snapshot) => snapshot.sourceStepSequence)).size).toBe(
-        currentSnapshots.length,
+      const currentRecords = currentSurface?.records ?? [];
+      expect(currentRecords.length).toBeGreaterThan(0);
+      expect(new Set(currentRecords.map((record) => record.sourceStepSequence)).size).toBe(
+        currentRecords.length,
       );
 
       const invocation = (await storage.toolInvocations.listByRun(run.id)).find(

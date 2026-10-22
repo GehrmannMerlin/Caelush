@@ -33,6 +33,8 @@ import {
   markAgentStateMaxStepsReached,
   markAgentStateTimedOut,
   markAgentStateWaitingApproval,
+  markAgentRunWaitingResource,
+  markAgentStateWaitingResource,
   timeOutAgentRun,
 } from "./state/run-transition-state.js";
 import { cancelAgentStep, completeAgentStep, failAgentStep } from "./turn/step-lifecycle.js";
@@ -438,6 +440,8 @@ function planToolTurn(
       return planBudgetExceeded(snapshot, now);
     case "WAITING_APPROVAL":
       return planWaitingApproval(snapshot, continuation, result.waiting, now);
+    case "EFFECT_UNCONFIRMED":
+      return planEffectUnconfirmed(snapshot, continuation, result, now);
     case "RESOURCE_WAIT":
       throw compatibilityRequired(
         "TOOLS RESOURCE_WAIT",
@@ -447,6 +451,42 @@ function planToolTurn(
     default:
       return assertNeverToolResult(result);
   }
+}
+
+/** Persist an explicit pause while a recovered side effect has no safe outcome yet. */
+function planEffectUnconfirmed(
+  snapshot: RunExecutionSnapshot,
+  continuation: Extract<
+    NonNullable<RunExecutionSnapshot["continuation"]>,
+    { type: "WAITING_TOOL_RESULTS" }
+  >,
+  result: Extract<ToolTurnResult, { kind: "EFFECT_UNCONFIRMED" }>,
+  now: TimestampMs,
+): RunExecutionCommit {
+  const state = requireState(snapshot, "TOOLS EFFECT_UNCONFIRMED");
+  return {
+    ...base(snapshot),
+    run: markAgentRunWaitingResource(snapshot.run),
+    state: markAgentStateWaitingResource(state, now),
+    continuation: {
+      operation: "SET",
+      checkpoint: {
+        type: "WAITING_RESOURCE",
+        runId: continuation.runId,
+        sourceStepId: continuation.sourceStepId,
+        pendingDecision: continuation.pendingDecision,
+        reason: "EFFECT_UNCONFIRMED",
+        ...(continuation.observationPolicy === undefined
+          ? {}
+          : { observationPolicy: continuation.observationPolicy }),
+        invocationId: result.invocationId,
+        toolName: result.toolName,
+        reasonCode: result.reasonCode,
+      },
+      updatedAt: now,
+    },
+    events: [],
+  };
 }
 
 /** Write accepted results back onto the open Tool continuation. The Run stays RUNNING. */

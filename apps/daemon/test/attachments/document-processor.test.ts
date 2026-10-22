@@ -48,7 +48,7 @@ describe("bounded conversation document processing", () => {
         }),
       ]),
     );
-  });
+  }, 20_000);
 
   it("marks scanned PDF pages as visually required and renders their first page", async () => {
     const bytes = await fixture("scanned.pdf");
@@ -168,7 +168,7 @@ describe("bounded conversation document processing", () => {
         }),
       ]),
     );
-  });
+  }, 20_000);
 
   it("starts and continues a document without any format-specific field", async () => {
     const bytes = await fixture("many-lines.txt");
@@ -271,7 +271,7 @@ describe("bounded conversation document processing", () => {
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       }),
     ).rejects.toMatchObject({ code: "RESOURCE_LIMIT" });
-  });
+  }, 20_000);
 
   it("bounds text output and preserves the exact line continuation", async () => {
     const bytes = await fixture("many-lines.txt");

@@ -124,7 +124,7 @@ app.whenReady().then(async () => {
     evidence.sse = vertical.sse;
     evidence.sqlite = vertical.sqlite;
     evidence.lifecycle = vertical.lifecycle;
-    evidence.shutdownExperiments = await runShutdownIsolationScenarios(dataRoot, env, vertical);
+    evidence.shutdownExperiments = await runShutdownIsolationScenarios(dataRoot, env);
     evidence.gates.G2 = { status: vertical.sqlite.status, evidence: vertical.sqlite };
     evidence.gates.G5 = {
       status: "PASS",
@@ -400,13 +400,12 @@ async function runDaemonVertical(dataRoot, env, evidence) {
   const liveController = new AbortController();
   let signalOpened;
   const opened = new Promise((resolvePromise) => (signalOpened = resolvePromise));
-  const liveIterator = client
-    .watchRunEvents(run.id, {
-      afterSequence: 0,
-      signal: liveController.signal,
-      onOpen: signalOpened,
-    })
-    [Symbol.asyncIterator]();
+  const liveEventStream = client.watchRunEvents(run.id, {
+    afterSequence: 0,
+    signal: liveController.signal,
+    onOpen: signalOpened,
+  });
+  const liveIterator = liveEventStream[Symbol.asyncIterator]();
   const firstLiveEvent = liveIterator.next();
   await withTimeout(opened, 5000, "SSE_OPEN_TIMEOUT");
   await client.startRun(run.id);
@@ -529,6 +528,8 @@ async function runDaemonVertical(dataRoot, env, evidence) {
   const shutdownEvidence = shutdownAttemptEvidence(daemon);
   shutdownEvidence.repeatedShutdownSharedAttempt = repeatedShutdownSharedAttempt;
   await closeMainWindow();
+  // Release the closed child handle before the independent SQLite integrity probe starts.
+  // eslint-disable-next-line no-useless-assignment
   daemon = undefined;
   const sqlite = await runJsonProcess(
     NODE_EXECUTABLE,
@@ -591,6 +592,8 @@ async function runDaemonVertical(dataRoot, env, evidence) {
   const restartedInfo = await secondClient.getInfo();
   if (gracefulShutdown === "PASS") await stopDaemonChild(daemon);
   else await killOwnedChild(daemon);
+  // Release the fully stopped child handle before building the next generation's evidence.
+  // eslint-disable-next-line no-useless-assignment
   daemon = undefined;
 
   const daemonEvidence = {
@@ -654,7 +657,7 @@ async function runDaemonVertical(dataRoot, env, evidence) {
   };
 }
 
-async function runShutdownIsolationScenarios(dataRoot, env, vertical) {
+async function runShutdownIsolationScenarios(dataRoot, env) {
   const results = {};
   results.A = await runShutdownIsolationCase({
     name: "A_IDLE_NO_WINDOW",
@@ -771,13 +774,12 @@ async function runShutdownIsolationCase(options) {
       activeSseController = new AbortController();
       let signalOpened;
       const opened = new Promise((resolvePromise) => (signalOpened = resolvePromise));
-      activeSseIterator = client
-        .watchRunEvents(fixture.run.id, {
-          afterSequence: 0,
-          signal: activeSseController.signal,
-          onOpen: signalOpened,
-        })
-        [Symbol.asyncIterator]();
+      const activeEventStream = client.watchRunEvents(fixture.run.id, {
+        afterSequence: 0,
+        signal: activeSseController.signal,
+        onOpen: signalOpened,
+      });
+      activeSseIterator = activeEventStream[Symbol.asyncIterator]();
       activeSseFirstRead = activeSseIterator.next();
       await withTimeout(opened, 5000, "SSE_OPEN_TIMEOUT");
       activeSseOpen = true;
@@ -1093,7 +1095,6 @@ async function importProductPackage(name) {
 async function startDaemonChild({
   databasePath,
   dataRoot,
-  env,
   generation,
   fault = "",
   timeoutMs = STARTUP_TIMEOUT_MS,

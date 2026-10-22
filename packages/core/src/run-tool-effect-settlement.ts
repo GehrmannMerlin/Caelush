@@ -71,6 +71,7 @@ export function classifyToolEffectSettlement(
     case "COMPLETED":
     case "REPLAN":
     case "WAITING_APPROVAL":
+    case "EFFECT_UNCONFIRMED":
       return { route: "CANONICAL_TOOL_EFFECT", result };
     case "RESOURCE_WAIT":
       // The frozen planner refuses this branch on purpose: `WAITING_RESOURCE` has always persisted

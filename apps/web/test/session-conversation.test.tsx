@@ -165,7 +165,7 @@ describe("SessionConversation V3 rendering", () => {
     const scheduler = new TestScrollFrameScheduler();
     const pending: { current: FrameHandle | undefined } = { current: undefined };
     let mounted = true;
-    let nearBottom = true;
+    const nearBottom = true;
     let scrollTop = 100;
     let reconciliations = 0;
 

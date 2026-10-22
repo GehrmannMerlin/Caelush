@@ -67,13 +67,22 @@ afterEach(async () => {
 
 async function fixtureFor(
   scenario: FeedbackScenario,
-  options: { readonly contextBudgetPolicy?: ContextBudgetPolicySnapshot } = {},
+  options: {
+    readonly contextBudgetPolicy?: ContextBudgetPolicySnapshot;
+    readonly modelLimits?: {
+      readonly contextWindowTokens: number;
+      readonly maxOutputTokens: number;
+    };
+    readonly goal?: string;
+  } = {},
 ): Promise<{ readonly adapter: FeedbackDrivenAdapter; readonly fixture: ReliabilityFixture }> {
   const adapter = new FeedbackDrivenAdapter(scenario);
   const fixture = await createReliabilityFixture({
     adapter,
     permissionPreset: "FULL_ACCESS",
     limits: { maxSteps: 40, maxToolCalls: 80, timeoutMs: 120_000 },
+    ...(options.goal === undefined ? {} : { goal: options.goal }),
+    ...(options.modelLimits === undefined ? {} : { modelLimits: options.modelLimits }),
     ...(options.contextBudgetPolicy === undefined
       ? {}
       : { contextBudgetPolicy: options.contextBudgetPolicy }),
@@ -144,6 +153,8 @@ describe("feedback-driven reliability scenarios", () => {
 
   it("keeps the plan and the newest failure in the request after a working-set compaction", async () => {
     const { adapter, fixture } = await fixtureFor("post-compaction", {
+      modelLimits: { contextWindowTokens: 32_768, maxOutputTokens: 2_048 },
+      goal: "Continue the reliability scenario from its accepted feedback.",
       contextBudgetPolicy: {
         version: "WORKING_SET_V2",
         requestBudget: { version: "LEGACY_FULL_OUTPUT_V1" },
@@ -167,7 +178,19 @@ describe("feedback-driven reliability scenarios", () => {
 
     const result = await fixture.composition.controller.start(fixture.run.id);
 
-    expect(result.run.status).toBe("COMPLETED");
+    expect(
+      result.run.status,
+      JSON.stringify({
+        status: result.run.status,
+        failure: adapter.contractFailure,
+        summaryCalls: adapter.summaryCalls,
+        consumptions: adapter.consumptions,
+        mainRequestCount: adapter.mainRequests.length,
+        finalMessageCount: adapter.mainRequests.at(-1)?.request.messages.length,
+        checkpoints: (await fixture.storage.contextCheckpointsV2.listByRun(fixture.run.id)).length,
+        usage: await fixture.composition.contextUsage.getContextUsage(String(fixture.run.id)),
+      }),
+    ).toBe("COMPLETED");
     // Compaction really ran; otherwise nothing about surviving it was proven.
     expect(adapter.summaryCalls).toBeGreaterThan(0);
     expect(
@@ -188,6 +211,50 @@ describe("feedback-driven reliability scenarios", () => {
     expect(new Set(sequences).size).toBe(sequences.length);
     expect(sequences).toEqual([...sequences].sort((left, right) => left - right));
   }, 60_000);
+
+  it("keeps the original history when an elective semantic summary fails", async () => {
+    const { adapter, fixture } = await fixtureFor("keep-original-post-compaction", {
+      modelLimits: { contextWindowTokens: 32_768, maxOutputTokens: 2_048 },
+      goal: "Continue the reliability scenario from its accepted feedback.",
+      contextBudgetPolicy: {
+        version: "WORKING_SET_V2",
+        requestBudget: { version: "LEGACY_FULL_OUTPUT_V1" },
+        workingSet: {
+          targetTokens: 4_000,
+          triggerRatio: 0.75,
+          postCompactionRatio: 0.5,
+          allowCurrentTurnPrefix: true,
+          cooldownTurns: 1,
+        },
+      },
+    });
+    await writeFile(join(fixture.workspacePath, "failing-check.mjs"), FAILING_SCRIPT, "utf8");
+    for (const name of PADDING_READS) {
+      await writeFile(join(fixture.workspacePath, name), PADDING, "utf8");
+    }
+
+    const result = await fixture.composition.controller.start(fixture.run.id);
+
+    expect(
+      result.run.status,
+      JSON.stringify({ run: result.run, failure: adapter.contractFailure }),
+    ).toBe("COMPLETED");
+    expect(adapter.summaryCalls).toBeGreaterThan(0);
+    const checkpoints = await fixture.storage.contextCheckpointsV2.listByRun(fixture.run.id);
+    expect(checkpoints).toHaveLength(0);
+    expect(JSON.stringify(adapter.mainRequests.at(-1)?.request.messages)).toContain(
+      CHECK_FAILED_TOKEN,
+    );
+    const invocations = await fixture.storage.toolInvocations.listByRun(fixture.run.id);
+    expect(invocations.filter((invocation) => invocation.toolName === "read_history")).toHaveLength(
+      0,
+    );
+    expect(adapter.consumptions.at(-1)).toMatchObject({
+      consumedCallId: "read-back",
+      observation: "SUCCEEDED",
+    });
+    expect(adapter.contractFailure).toBeUndefined();
+  }, 90_000);
 
   it("re-issues a call that provably never started, and inspects an unknown outcome first", async () => {
     const notStarted = await seedFailedRun("NONE");

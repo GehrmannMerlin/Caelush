@@ -42,12 +42,36 @@ export type RunControllerResult =
       readonly replanCount: number;
     }
   | {
+      readonly status: "WAITING_RESOURCE";
+      readonly run: AgentRun;
+      readonly state: AgentState;
+      readonly sourceStepId: StepId;
+      readonly requestedToolCalls: number;
+      readonly reason: "EFFECT_UNCONFIRMED";
+      readonly invocationId: ToolInvocationId;
+      readonly toolName: ToolName;
+      readonly reasonCode: "DOES_NOT_MATCH" | "INCONCLUSIVE" | "UNSUPPORTED" | "UNAVAILABLE";
+    }
+  | {
       readonly status: "WAITING_RETRY";
       readonly run: AgentRun;
       readonly state: AgentState;
       readonly nextAttemptAt: AgentRun["createdAt"];
       readonly attempt: number;
       readonly maxAttempts: number;
+      readonly episode?: number;
+      readonly totalAttempts?: number;
+      readonly errorCode: RetryErrorCode;
+    }
+  | {
+      readonly status: "WAITING_PROVIDER";
+      readonly run: AgentRun;
+      readonly state: AgentState;
+      readonly nextAttemptAt: AgentRun["createdAt"];
+      readonly attempt: number;
+      readonly maxAttempts: number;
+      readonly episode?: number;
+      readonly totalAttempts?: number;
       readonly errorCode: RetryErrorCode;
     }
   | {

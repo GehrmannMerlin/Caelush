@@ -50,6 +50,12 @@ describe("Web production build", () => {
       expect(hasNodeOnlyMarker(source), source).toBe(true);
     }
     expect(hasNodeOnlyMarker("process.started")).toBe(false);
+    expect(
+      hasNodeOnlyMarker(
+        'typeof process !== "undefined" && typeof process?.versions?.node === "string"',
+      ),
+    ).toBe(false);
+    expect(hasNodeOnlyMarker('typeof process !== "undefined" && process.env.NODE_ENV')).toBe(false);
   });
 
   it("contains no Node-only dependency markers", async () => {
@@ -72,7 +78,29 @@ describe("Web production build", () => {
 });
 
 function hasNodeOnlyMarker(source: string): boolean {
-  return nodeOnlyMarkerPatterns.some((marker) => marker.test(source));
+  const processMarkers = nodeOnlyMarkerPatterns.slice(2, 4);
+  const nonProcessMarkers = [
+    ...nodeOnlyMarkerPatterns.slice(0, 2),
+    ...nodeOnlyMarkerPatterns.slice(4),
+  ];
+  if (nonProcessMarkers.some((marker) => marker.test(source))) return true;
+
+  return processMarkers.some((marker) => {
+    const global = new RegExp(marker.source, "gu");
+    for (const match of source.matchAll(global)) {
+      const start = match.index ?? 0;
+      const previousStatement = Math.max(
+        source.lastIndexOf(";", start),
+        source.lastIndexOf("{", start),
+      );
+      const prefix = source.slice(previousStatement + 1, start);
+      if (/(?:typeof\s+(?:globalThis(?:\?\.|\.)?)?process[^;{}]*&&|typeof\s*)$/u.test(prefix)) {
+        continue;
+      }
+      return true;
+    }
+    return false;
+  });
 }
 
 async function filesIn(directory: URL): Promise<readonly URL[]> {

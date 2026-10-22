@@ -68,7 +68,10 @@ import { BudgetExceededEventSchema } from "./budget.js";
 import { ResourceGuardEventSchema } from "./resource.js";
 import { createPublicRunEventSchema, type PublicRunEventFrom } from "./public.js";
 import { ConversationMessageCommittedEventSchema } from "./conversation.js";
-import { ContextCompactionCompletedEventSchema } from "./context.js";
+import {
+  ContextCompactionCompletedEventSchema,
+  ContextCompactionProgressEventSchema,
+} from "./context.js";
 import { RunSecurityPolicyBoundEventSchema } from "./security-policy.js";
 import { RunInputAcceptedEventSchema, RunInputAssignedEventSchema } from "./run-input.js";
 
@@ -132,6 +135,8 @@ export { ConversationMessageCommittedEventSchema } from "./conversation.js";
 export type { ConversationMessageCommittedEvent } from "./conversation.js";
 export { ContextCompactionCompletedEventSchema } from "./context.js";
 export type { ContextCompactionCompletedEvent } from "./context.js";
+export { ContextCompactionProgressEventSchema } from "./context.js";
+export type { ContextCompactionProgressEvent } from "./context.js";
 export { RunInputAcceptedEventSchema, RunInputAssignedEventSchema } from "./run-input.js";
 export type { RunInputAcceptedEvent, RunInputAssignedEvent } from "./run-input.js";
 export { RunSecurityPolicyBoundEventSchema } from "./security-policy.js";
@@ -220,6 +225,7 @@ const currentRunEventSchema = z.union([
   ResourceGuardEventSchema,
   ConversationMessageCommittedEventSchema,
   ContextCompactionCompletedEventSchema,
+  ContextCompactionProgressEventSchema,
   RunInputAcceptedEventSchema,
   RunInputAssignedEventSchema,
   ModelTextDeltaEventSchema,

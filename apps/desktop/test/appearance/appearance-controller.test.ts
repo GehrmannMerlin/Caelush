@@ -22,7 +22,7 @@ function fixture(
   const listeners = new Set<() => void>();
   const store = {
     read: vi.fn(async () => initialPreference),
-    write: vi.fn(async (_preference: ThemePreference) => undefined),
+    write: vi.fn(async () => undefined),
   };
   const nativeTheme: DesktopAppearanceNativeTheme = {
     themeSource: "system",

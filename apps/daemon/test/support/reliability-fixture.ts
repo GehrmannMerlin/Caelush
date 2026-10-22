@@ -12,6 +12,7 @@ import {
   createTimestampMs,
   createWorkspaceId,
   type ContextBudgetPolicySnapshot,
+  type CompletionRequirement,
   type RunLimits,
 } from "@caelush/protocol";
 import { createInjectedReplayKeyProvider, expandPermissionPreset } from "@caelush/security";
@@ -23,6 +24,7 @@ import {
   effectsChangeAgentState,
 } from "@caelush/coding-agent";
 import { composeDaemon, type DaemonComposition } from "../../src/daemon-composition.js";
+import type { RunExecutionSupervisorLogger } from "../../src/execution/run-execution-supervisor.js";
 import type { ResourceCorrectionRecoveryPolicy } from "@caelush/core";
 import {
   FIXTURE_API,
@@ -59,6 +61,8 @@ export interface ReliabilityFixtureOptions {
   readonly providerBindingOverrides?: Record<string, unknown>;
   readonly rootDirectory?: string;
   readonly limits?: RunLimits;
+  readonly goal?: string;
+  readonly acceptanceRequirements?: readonly CompletionRequirement[];
   readonly resourcePolicy?: unknown;
   readonly permissionPreset?: "VIEW_ONLY" | "WORKSPACE_WRITE" | "FULL_ACCESS";
   readonly resourceCorrectionRecoveryPolicy?: ResourceCorrectionRecoveryPolicy | null;
@@ -74,6 +78,7 @@ export interface ReliabilityFixtureOptions {
    * provider's own private replay payload is bound to it.
    */
   readonly api?: string;
+  readonly logger?: RunExecutionSupervisorLogger;
 }
 
 /** A real daemon composition and SQLite database with only its external model wire scripted. */
@@ -124,6 +129,7 @@ export async function createReliabilityFixture(
         modelSources: [
           fixtureModelSource(options.modelLimits, options.adapterMetadata, options.api),
         ],
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
         adapterOverrides: options.useBuiltinAdapter
           ? []
           : options.adapter === undefined
@@ -186,7 +192,7 @@ export async function createReliabilityFixture(
     const runDraft = AgentRunSchema.parse({
       id: createRunId(),
       sessionId,
-      goal: "exercise the real daemon reliability path",
+      goal: options.goal ?? "exercise the real daemon reliability path",
       status: "PENDING",
       workspace: { id: workspaceId, path: workspacePath },
       model,
@@ -194,9 +200,11 @@ export async function createReliabilityFixture(
       permissionProfile: securityPolicy.permissionProfile,
       approvalPolicy: securityPolicy.approvalPolicy,
       securityPolicy,
-      completionContract: "NATURAL_V1",
       limits,
       resourcePolicy,
+      ...(options.acceptanceRequirements === undefined
+        ? { completionContract: "NATURAL_V1" as const }
+        : { acceptanceRequirements: [...options.acceptanceRequirements] }),
       createdAt: now,
     });
     const contextBudgetPolicy =

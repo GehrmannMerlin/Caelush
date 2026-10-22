@@ -10,7 +10,10 @@ import type {
 } from "@caelush/agent";
 import type { z } from "zod";
 import type { RunContinuationCheckpoint as DurableContinuation } from "./agent-continuation.js";
-import { AgentToolCallsDecisionSchema, RunContinuationCheckpointSchema } from "./agent-continuation-schema.js";
+import {
+  AgentToolCallsDecisionSchema,
+  RunContinuationCheckpointSchema,
+} from "./agent-continuation-schema.js";
 import { toTextOnlyAIToolResultContent } from "./ai-message-content.js";
 
 /**
@@ -81,13 +84,28 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
         repairCycle: checkpoint.repairCycle,
       };
     case "WAITING_RESOURCE":
+      if (checkpoint.reason === "NO_PROGRESS") {
+        return {
+          type: "WAITING_RESOURCE",
+          runId: checkpoint.runId,
+          sourceStepId: checkpoint.sourceStepId,
+          pendingDecision: canonicalPendingDecision(checkpoint.pendingDecision),
+          reason: "NO_PROGRESS",
+          replanCount: checkpoint.replanCount,
+        };
+      }
       return {
         type: "WAITING_RESOURCE",
         runId: checkpoint.runId,
         sourceStepId: checkpoint.sourceStepId,
         pendingDecision: canonicalPendingDecision(checkpoint.pendingDecision),
-        reason: checkpoint.reason,
-        replanCount: checkpoint.replanCount,
+        reason: "EFFECT_UNCONFIRMED",
+        ...(checkpoint.observationPolicy === undefined
+          ? {}
+          : { observationPolicy: checkpoint.observationPolicy }),
+        invocationId: checkpoint.invocationId,
+        toolName: checkpoint.toolName,
+        reasonCode: checkpoint.reasonCode,
       };
     case "WAITING_STEERING":
       return {
@@ -96,13 +114,18 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
         sourceStepId: checkpoint.sourceStepId,
         messageIds: [...checkpoint.messageIds],
       };
+    case "WAITING_PROVIDER":
     case "WAITING_RETRY": {
       const base = {
-        type: "WAITING_RETRY" as const,
+        type: checkpoint.type,
         runId: checkpoint.runId,
         failedStepId: checkpoint.failedStepId,
         attempt: checkpoint.attempt,
         maxAttempts: checkpoint.maxAttempts,
+        ...(checkpoint.episode === undefined ? {} : { episode: checkpoint.episode }),
+        ...(checkpoint.totalAttempts === undefined
+          ? {}
+          : { totalAttempts: checkpoint.totalAttempts }),
         nextAttemptAt: checkpoint.nextAttemptAt,
         errorCode: checkpoint.errorCode,
         ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
@@ -239,13 +262,28 @@ export function toAgentContinuation(
         repairCycle: checkpoint.repairCycle,
       };
     case "WAITING_RESOURCE":
+      if (checkpoint.reason === "NO_PROGRESS") {
+        return {
+          type: "WAITING_RESOURCE",
+          runId: checkpoint.runId,
+          sourceStepId: checkpoint.sourceStepId,
+          pendingDecision: canonicalPendingDecision(checkpoint.pendingDecision),
+          reason: "NO_PROGRESS",
+          replanCount: checkpoint.replanCount,
+        };
+      }
       return {
         type: "WAITING_RESOURCE",
         runId: checkpoint.runId,
         sourceStepId: checkpoint.sourceStepId,
         pendingDecision: canonicalPendingDecision(checkpoint.pendingDecision),
-        reason: checkpoint.reason,
-        replanCount: checkpoint.replanCount,
+        reason: "EFFECT_UNCONFIRMED",
+        ...(checkpoint.observationPolicy === undefined
+          ? {}
+          : { observationPolicy: checkpoint.observationPolicy }),
+        invocationId: checkpoint.invocationId,
+        toolName: checkpoint.toolName,
+        reasonCode: checkpoint.reasonCode,
       };
     case "WAITING_STEERING":
       return {
@@ -254,13 +292,18 @@ export function toAgentContinuation(
         sourceStepId: checkpoint.sourceStepId,
         messageIds: [...checkpoint.messageIds],
       };
+    case "WAITING_PROVIDER":
     case "WAITING_RETRY": {
       const base = {
-        type: "WAITING_RETRY" as const,
+        type: checkpoint.type,
         runId: checkpoint.runId,
         failedStepId: checkpoint.failedStepId,
         attempt: checkpoint.attempt,
         maxAttempts: checkpoint.maxAttempts,
+        ...(checkpoint.episode === undefined ? {} : { episode: checkpoint.episode }),
+        ...(checkpoint.totalAttempts === undefined
+          ? {}
+          : { totalAttempts: checkpoint.totalAttempts }),
         nextAttemptAt: checkpoint.nextAttemptAt,
         errorCode: checkpoint.errorCode,
         ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),

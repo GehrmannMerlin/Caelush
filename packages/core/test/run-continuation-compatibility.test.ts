@@ -138,9 +138,53 @@ const CHECKPOINTS: readonly RunContinuationCheckpoint[] = [
     failedStepId: STEP_ID,
     attempt: 1,
     maxAttempts: 3,
+    episode: 4,
+    totalAttempts: 28,
     nextAttemptAt: createTimestampMs(500),
     errorCode: "LLM_TIMEOUT",
     transport: { currentTransportId: "backup", attemptedTransportIds: ["default", "backup"] },
+  },
+  {
+    type: "WAITING_PROVIDER",
+    mode: "START",
+    runId: RUN_ID,
+    failedStepId: STEP_ID,
+    attempt: 1,
+    maxAttempts: 3,
+    episode: 2,
+    totalAttempts: 8,
+    nextAttemptAt: createTimestampMs(700),
+    errorCode: "LLM_NETWORK",
+  },
+  {
+    type: "WAITING_PROVIDER",
+    mode: "TOOL_RESULTS",
+    runId: RUN_ID,
+    failedStepId: STEP_ID,
+    attempt: 1,
+    maxAttempts: 3,
+    episode: 2,
+    totalAttempts: 8,
+    nextAttemptAt: createTimestampMs(700),
+    errorCode: "LLM_RATE_LIMIT",
+    pendingDecision: PENDING_DECISION,
+    receivedResults: [TOOL_RESULT],
+    sourceStepId: STEP_ID,
+    observationPolicy: OBSERVATION_POLICY,
+  },
+  {
+    type: "WAITING_PROVIDER",
+    mode: "STEERING",
+    runId: RUN_ID,
+    failedStepId: STEP_ID,
+    attempt: 1,
+    maxAttempts: 3,
+    episode: 2,
+    totalAttempts: 8,
+    nextAttemptAt: createTimestampMs(700),
+    errorCode: "LLM_TIMEOUT",
+    messageIds: ["msg_steering_1"],
+    sourceStepId: STEP_ID,
   },
   {
     type: "WAITING_RETRY",
@@ -149,6 +193,8 @@ const CHECKPOINTS: readonly RunContinuationCheckpoint[] = [
     failedStepId: STEP_ID,
     attempt: 2,
     maxAttempts: 3,
+    episode: 4,
+    totalAttempts: 29,
     nextAttemptAt: createTimestampMs(500),
     errorCode: "LLM_RATE_LIMIT",
     pendingDecision: PENDING_DECISION,
@@ -162,7 +208,7 @@ const CHECKPOINTS: readonly RunContinuationCheckpoint[] = [
 describe("Run continuation compatibility codec", () => {
   it("round-trips every discriminant and every variant of the union", () => {
     for (const checkpoint of CHECKPOINTS) {
-      const label = `${checkpoint.type}${checkpoint.type === "WAITING_RETRY" ? `/${checkpoint.mode}` : ""}`;
+      const label = `${checkpoint.type}${checkpoint.type === "WAITING_RETRY" || checkpoint.type === "WAITING_PROVIDER" ? `/${checkpoint.mode}` : ""}`;
       expect(toAgentContinuation(toDurableContinuation(checkpoint)), label).toEqual(checkpoint);
     }
   });

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { AIMessage, AIModelSettings } from "@caelush/ai";
-import type { EventId, TimestampMs } from "@caelush/protocol";
+import type { EventId, StepId, TimestampMs, TransientRunEvent } from "@caelush/protocol";
 
 import type { RunEventNotifierPort } from "../../events/notifier-port.js";
 import type { DurableRunEventDraft } from "../../events/durable-run-event-draft.js";
@@ -17,6 +17,7 @@ import {
   createPromptSurfaceFingerprint,
   createPromptSurfaceRecord,
   PromptSurfaceIntegrityError,
+  PromptSurfaceStepRetryConflictError,
 } from "../surface/prompt-surface.js";
 import type {
   PromptSurfaceAnchor,
@@ -44,9 +45,11 @@ import {
 import { renderStableContextHead } from "../surface/prompt-surface-renderer.js";
 import { promptSurfaceEpochIdentity } from "../surface/prompt-surface-identity.js";
 import {
+  assertPromptSurfaceSectionStates,
   applyPromptSurfaceSectionUpdates,
   createPromptSurfaceSectionStates,
   diffPromptSurfaceSections,
+  promptSurfaceStateProviderId,
   renderPromptSurfaceRecord,
 } from "../surface/prompt-surface-v3.js";
 import type { PromptSurfaceSectionState } from "../surface/prompt-surface-v3.js";
@@ -177,6 +180,14 @@ import type { SemanticSummaryValidator } from "../compaction/semantic-summary-va
 import { createSemanticSummaryValidator } from "../compaction/semantic-summary-validator.js";
 
 export interface ContextCompactionEventFactory {
+  progress(input: {
+    readonly identity: AgentExecutionIdentity;
+    readonly stepId: StepId;
+    readonly stage: "PREPARING" | "SUMMARIZING" | "REBUILDING" | "FINISHED";
+    readonly reason: ContextCompactionReason;
+    readonly eventId: EventId;
+    readonly timestamp: TimestampMs;
+  }): TransientRunEvent;
   completed(input: {
     readonly identity: AgentExecutionIdentity;
     readonly checkpoint: import("../compaction/context-compaction-contracts.js").ContextCheckpointCreateInputV2;
@@ -191,6 +202,25 @@ export interface ContextCompactionEventFactory {
 
 export function createContextCompactionEventFactory(): ContextCompactionEventFactory {
   return Object.freeze({
+    progress(input: Parameters<ContextCompactionEventFactory["progress"]>[0]): TransientRunEvent {
+      return {
+        eventId: input.eventId,
+        schemaVersion: 1,
+        runId: input.identity.runId,
+        sessionId: input.identity.sessionId,
+        stepId: input.stepId,
+        timestamp: input.timestamp,
+        visibility: "USER_VISIBLE" as const,
+        durability: {
+          kind: "EPHEMERAL" as const,
+          version: 1 as const,
+          deliveryClass: "COALESCIBLE" as const,
+          streamKey: `context:compaction:${input.identity.runId}:${input.stepId}`,
+        },
+        type: "context.compaction.progress" as const,
+        payload: { stage: input.stage, reason: input.reason },
+      };
+    },
     completed(
       input: Parameters<ContextCompactionEventFactory["completed"]>[0],
     ): DurableRunEventDraft {
@@ -385,8 +415,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                 total +
                 turn.messages.reduce(
                   (turnTotal, stored) =>
-                    turnTotal +
-                    tokenEstimator.estimateAgentMessage(stored.message, input.model),
+                    turnTotal + tokenEstimator.estimateAgentMessage(stored.message, input.model),
                   0,
                 ),
               0,
@@ -444,11 +473,11 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
               safetyReserveTokens: headroomPolicy.safetyTokens,
               expectedGrowthTokens: headroomPolicy.expectedGrowthTokens,
             }
-          : options.requestBudget ?? {
+          : (options.requestBudget ?? {
               version: "LEGACY_FULL_OUTPUT_V1" as const,
               outputReserveTokens: policy.outputReserveTokens,
               safetyReserveTokens: policy.safetyReserveTokens,
-            },
+            }),
       );
       throwIfAborted(input.signal);
 
@@ -480,6 +509,27 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       let activeSources = sourceResults;
       let compactionReceipt: ContextCompactionReceipt | undefined;
       let compactionCount = 0;
+      // Prove a protocol-safe history cut before letting an over-budget pinned/current projection
+      // reach pressure evaluation. Without this preflight exception, the planner throws first and
+      // the coordinator never gets a chance to compact the eligible prefix.
+      const compactionCandidate = compactionPlanner.plan({
+        history: activeCoverage.history,
+        policy,
+        reason: "PROACTIVE_PRESSURE",
+      });
+      const hasCompactionCandidate = compactionCandidate !== null;
+      const canCompactMandatoryOverflow =
+        compactionCandidate?.cut.kind === "PROTOCOL_SAFE_SPLIT" &&
+        compactionCandidate.cut.preserveLeadingMessages === true;
+      const compactionAwarePlanner: ContextPlanner = canCompactMandatoryOverflow
+        ? Object.freeze({
+            plan: (plannerInput: Parameters<ContextPlanner["plan"]>[0]) =>
+              planner.plan({
+                ...plannerInput,
+                allowMandatoryOverflowForCompaction: true,
+              }),
+          })
+        : planner;
       const sourceCriticality = contextSourceCriticality(options.sourceRegistry.list());
       const atomicGroupByItemId = contextHistoryAtomicGroups(history);
       const authorities = await options.authorityProvider.snapshot({
@@ -504,7 +554,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                   : { structuredCheckpoint: latestCheckpoint.structuredCheckpoint },
             }),
         authorities,
-        planner,
+        planner: compactionAwarePlanner,
         sourcePriorities: sourcePriorityMap(options.sourceRegistry),
         rehydrator,
         documentBuilder,
@@ -538,6 +588,13 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         compacted: false,
       });
       compactionSchedules.set(String(input.identity.runId), schedule);
+      // A closed Tool protocol is only potentially compressible: the cut selector also needs a
+      // complete protocol batch to retain while compacting an older prefix. If we mark a single
+      // closed batch as "compressible", the pressure schedule consumes its cooldown on a no-op
+      // planner result, then suppresses the first later turn that actually has a safe cut. Ask the
+      // same planner used by the coordinator whether a candidate exists before spending that
+      // attempt. This keeps a long open Run eligible to compact as soon as its history has a safe
+      // protocol boundary.
       const pressure = pressureEvaluator.evaluate({
         estimatedInputTokens,
         selectedPlanningTokens: initialProjection.plan.budget.selectedTokens,
@@ -552,9 +609,8 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           : { targetPostCompactionTokens: policy.targetPostCompactionTokens }),
         minRecentTailTokens: policy.minRecentTailTokens,
         mode: input.mode,
-        hasCompressibleHistory: activeCoverage.history.units.some(
-          (unit) => unit.status === "CLOSED" && unit.compactionEligible,
-        ),
+        hasCompressibleHistory: hasCompactionCandidate,
+        canCompactMandatoryOverflow,
         proactive: {
           enabled: policy.proactiveCompaction.enabled,
           armed: schedule.armed,
@@ -566,9 +622,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         mode: input.mode,
         pressure,
         policy,
-        hasCompressibleHistory: activeCoverage.history.units.some(
-          (unit) => unit.status === "CLOSED" && unit.compactionEligible,
-        ),
+        hasCompressibleHistory: hasCompactionCandidate,
       });
       const recoveryStages =
         input.mode === "FORCED_RECOVERY"
@@ -605,7 +659,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
             ? {}
             : { activeCheckpoint: activeCheckpointProjection(activeCheckpoint) }),
           authorities,
-          planner,
+          planner: compactionAwarePlanner,
           sourcePriorities: sourcePriorityMap(options.sourceRegistry),
           rehydrator,
           documentBuilder,
@@ -643,7 +697,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                           : { structuredCheckpoint: activeCheckpoint.structuredCheckpoint },
                     }),
                 authorities,
-                planner,
+                planner: compactionAwarePlanner,
                 sourcePriorities: sourcePriorityMap(options.sourceRegistry),
                 rehydrator,
                 documentBuilder,
@@ -690,7 +744,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           input,
           history,
           collected,
-          planner,
+          planner: compactionAwarePlanner,
           rehydrator,
           documentBuilder,
           receiptBuilder,
@@ -710,6 +764,25 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         const coordinator = createContextCompactionCoordinator({
           dependencies: composition.dependencies,
           latest: latestState,
+          onProgress: (stage, progressReason) => {
+            if (options.compactionEvents === undefined || options.eventIdFactory === undefined) {
+              return;
+            }
+            try {
+              options.notifier?.emitTransient(
+                options.compactionEvents.progress({
+                  identity: input.identity,
+                  stepId: input.turn.stepId,
+                  stage,
+                  reason: progressReason,
+                  eventId: options.eventIdFactory.create(),
+                  timestamp: options.clock.now(),
+                }),
+              );
+            } catch {
+              // Live progress is diagnostic. A broken observer must not affect checkpoint truth.
+            }
+          },
           createEvents: ({ request, checkpoint, degraded }) =>
             options.compactionEvents === undefined || options.eventIdFactory === undefined
               ? []
@@ -762,6 +835,23 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           if (!elective) throw error;
           // Bounded, silent fallback: the uncompacted projection is what this turn already had.
           outcome = undefined;
+        } finally {
+          if (options.compactionEvents !== undefined && options.eventIdFactory !== undefined) {
+            try {
+              options.notifier?.emitTransient(
+                options.compactionEvents.progress({
+                  identity: input.identity,
+                  stepId: input.turn.stepId,
+                  stage: "FINISHED",
+                  reason,
+                  eventId: options.eventIdFactory.create(),
+                  timestamp: options.clock.now(),
+                }),
+              );
+            } catch {
+              // Live progress is diagnostic. A broken observer must not affect checkpoint truth.
+            }
+          }
         }
         if (outcome?.kind === "COMPACTED") {
           activeCheckpoint = outcome.checkpoint;
@@ -803,7 +893,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                   : { structuredCheckpoint: activeCheckpoint.structuredCheckpoint },
             }),
         authorities: finalAuthorities,
-        planner,
+        planner: compactionAwarePlanner,
         sourcePriorities: sourcePriorityMap(options.sourceRegistry),
         rehydrator,
         documentBuilder,
@@ -1012,6 +1102,9 @@ async function buildPreparedProjectionWithoutCompaction(input: {
       ? {}
       : { checkpointId: String(promptSurfaceCheckpointId) }),
     tools: input.contextInput.tools,
+    uncertainSourceProviderIds: input.sourceResults
+      .filter((result) => result.diagnostics.some((diagnostic) => diagnostic.severity !== "INFO"))
+      .map((result) => result.providerId),
     ...(input.modelSettings === undefined ? {} : { modelSettings: input.modelSettings }),
     clock: input.clock,
     ...(input.promptSurfaceEpochIdFactory === undefined
@@ -1204,6 +1297,8 @@ function createCompactionComposition(input: CompactionCompositionInput): Compact
     tentativeRebuilder,
     commit,
     clock: input.options.clock,
+    summarySourceTokenEstimator:
+      input.options.tokenEstimator ?? createUtf8HeuristicTokenEstimator(),
     checkpointIdFactory: {
       create: () => createContextCheckpointId(requireCheckpointId(input.options)),
     },
@@ -1415,6 +1510,10 @@ interface PromptSurfacePreparationInput {
   readonly compactionCommitted: boolean;
   readonly persist: boolean;
   readonly replayOnly: boolean;
+  /** Sources whose failed or incomplete collection must not be interpreted as a Section CLEAR. */
+  readonly uncertainSourceProviderIds: readonly string[];
+  /** A forced-recovery baseline after preserving prior state for uncertain sources. */
+  readonly forcedRecoverySectionStates?: readonly PromptSurfaceSectionState[];
   /**
    * The replay cost this epoch may reach before an early rollover is worth it, in UTF-8 bytes.
    *
@@ -1518,7 +1617,56 @@ async function preparePromptSurface(
       "V2 Prompt Surface must be reset before a new Step executes.",
     );
   }
-  return prepareV3PromptSurface(input, surface);
+  try {
+    return await prepareV3PromptSurface(input, surface);
+  } catch (error) {
+    if (
+      !(error instanceof PromptSurfaceStepRetryConflictError) ||
+      input.contextInput.mode !== "FORCED_RECOVERY" ||
+      surface.records?.at(-1)?.sourceStepSequence !== input.contextInput.turn.sequence
+    ) {
+      throw error;
+    }
+
+    // The provider rejected the prior request, so no model result exists for this Step. Preserve
+    // that projection in its closed epoch and record the reduced retry as a complete new baseline.
+    // Ordinary retries and unverified same-Step drift still fail closed above.
+    const recoveryStates = mergeForcedRecoverySectionStates({
+      previous: surface.sectionStates ?? [],
+      current: createPromptSurfaceSectionStates(input.document),
+      uncertainProviderIds: new Set(input.uncertainSourceProviderIds),
+    });
+    const recoveryEpoch = createPromptSurfaceEpoch({
+      runId: input.contextInput.identity.runId,
+      epochId: createPromptSurfaceEpochId(input.epochIdFactory?.create() ?? randomUUID()),
+      modelRef: input.contextInput.model.ref,
+      formatVersion: 3,
+      stableHeadFingerprint: identity.stableHeadFingerprint,
+      toolSchemaFingerprint: identity.toolSchemaFingerprint,
+      cacheSettingsFingerprint: identity.cacheSettingsFingerprint,
+      resetReason: "FORCED_RECOVERY",
+      createdStepSequence: input.contextInput.turn.sequence,
+      createdAt: input.clock.now(),
+    });
+    try {
+      await input.store.createEpoch(recoveryEpoch);
+    } catch (createError) {
+      throw new PromptSurfaceIntegrityError(
+        "Forced-recovery Prompt Surface epoch could not be committed.",
+        { cause: createError },
+      );
+    }
+    const committedEpoch = await readCurrentSurface(input.store, recoveryEpoch.runId);
+    if (committedEpoch === undefined || !samePromptSurfaceIdentity(recoveryEpoch, committedEpoch)) {
+      throw new PromptSurfaceIntegrityError(
+        "Forced-recovery Prompt Surface epoch could not be read back.",
+      );
+    }
+    return prepareV3PromptSurface(
+      { ...input, forcedRecoverySectionStates: recoveryStates },
+      committedEpoch,
+    );
+  }
 }
 
 function preparePreviewSurface(
@@ -1631,6 +1779,7 @@ function decidePromptSurface(input: {
   readonly contextInput: ContextPrepareInput;
   readonly document: import("../document/context-document.js").ContextDocument;
   readonly allowSectionClear: boolean;
+  readonly forcedRecoverySectionStates?: readonly PromptSurfaceSectionState[];
   readonly conversationMessages: readonly StoredAgentMessage[];
   readonly clock: { now(): TimestampMs };
   readonly replaySoftBudgetBytes?: number;
@@ -1661,7 +1810,8 @@ function decidePromptSurface(input: {
 
   const priorRecords = existingIndex >= 0 ? records.slice(0, existingIndex) : records;
   const priorStates = replayPromptSurfaceSectionStates(priorRecords);
-  const currentStates = createPromptSurfaceSectionStates(input.document);
+  const currentStates =
+    input.forcedRecoverySectionStates ?? createPromptSurfaceSectionStates(input.document);
   const anchor = latestCompletePromptSurfaceAnchor(input.conversationMessages);
   const priorAnchor = priorRecords.at(-1)?.anchor;
   if (
@@ -1691,9 +1841,7 @@ function decidePromptSurface(input: {
 
   if (existingIndex >= 0) {
     if (records[existingIndex]!.contentHash !== candidate.contentHash) {
-      throw new PromptSurfaceIntegrityError(
-        "Prompt Surface Step retry differs from its durable Section decision.",
-      );
+      throw new PromptSurfaceStepRetryConflictError();
     }
     return { kind: "EXISTING", committed: surface };
   }
@@ -1775,9 +1923,7 @@ function decidePromptSurface(input: {
 }
 
 /** The CAS token for the source epoch's last decision; `null` only when it has no decisions. */
-function lastDurableDecisionFingerprint(
-  surface: PromptSurfaceEpochWithSnapshots,
-): string | null {
+function lastDurableDecisionFingerprint(surface: PromptSurfaceEpochWithSnapshots): string | null {
   return surface.records?.at(-1)?.decisionFingerprint ?? null;
 }
 
@@ -1799,6 +1945,9 @@ async function commitPromptSurfaceDecision(
     contextInput: input.contextInput,
     document: input.document,
     allowSectionClear: input.allowSectionClear,
+    ...(input.forcedRecoverySectionStates === undefined
+      ? {}
+      : { forcedRecoverySectionStates: input.forcedRecoverySectionStates }),
     conversationMessages: input.conversationMessages,
     clock: input.clock,
     ...(input.replaySoftBudgetBytes === undefined
@@ -2040,6 +2189,27 @@ function replayPromptSurfaceSectionStates(
     states = applyPromptSurfaceSectionUpdates(states, record.kind, record.updates);
   }
   return states;
+}
+
+function mergeForcedRecoverySectionStates(input: {
+  readonly previous: readonly PromptSurfaceSectionState[];
+  readonly current: readonly PromptSurfaceSectionState[];
+  readonly uncertainProviderIds: ReadonlySet<string>;
+}): readonly PromptSurfaceSectionState[] {
+  const merged = new Map(input.current.map((state) => [state.stateKey, state] as const));
+  for (const previous of input.previous) {
+    const providerId = promptSurfaceStateProviderId(previous);
+    const preserve =
+      providerId === undefined
+        ? !merged.has(previous.stateKey)
+        : input.uncertainProviderIds.has(providerId);
+    if (preserve) merged.set(previous.stateKey, previous);
+  }
+  const result = Object.freeze(
+    [...merged.values()].sort((left, right) => left.stateKey.localeCompare(right.stateKey)),
+  );
+  assertPromptSurfaceSectionStates(result);
+  return result;
 }
 
 /** Reconstruct the request surface without creating epochs or appending snapshots. */

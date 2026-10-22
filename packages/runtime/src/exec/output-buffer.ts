@@ -164,7 +164,6 @@ export class HeadTailOutputBuffer {
       const suffix = utf8SuffixByBytes(chunk.text, remaining);
       if (suffix.length > 0) {
         reversedParts.push(suffix);
-        remaining -= utf8ByteLength(suffix);
       }
       break;
     }

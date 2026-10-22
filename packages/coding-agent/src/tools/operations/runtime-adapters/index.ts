@@ -40,6 +40,7 @@ import type {
 
 export { createRuntimeGitOperations } from "./runtime-git-operations.js";
 export { createRuntimePatchOperations } from "./runtime-patch-operations.js";
+export { createRuntimeEffectReconciliationPort } from "./runtime-effect-reconciliation.js";
 export {
   createRuntimeProcessOperations,
   type RuntimeProcessOperationsOptions,

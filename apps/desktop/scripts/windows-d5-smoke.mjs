@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { once } from "node:events";
@@ -130,14 +130,15 @@ try {
     }
   }, 240_000);
   try {
-    const [code, signal] = await once(child, "exit");
-    child.stdout?.destroy();
-    child.stderr?.destroy();
+    // `exit` fires before Node has closed the child pipes. The Electron harness appends its
+    // durable marker during shutdown, so wait for `close` before reading that marker.
+    const [code, signal] = await once(child, "close");
     const markerPath = path.join(testRoot, "d5-smoke.marker");
     const marker = await readFile(markerPath, "utf8").catch(() => "");
     if (code !== 0 || !marker.includes("D5_MAIN_RUNTIME_CHECKS=PASS")) {
+      const rootEntries = await readdir(testRoot).catch(() => []);
       throw new Error(
-        `D5 Windows Electron smoke failed (${code ?? signal}).\n${marker.trim()}\n${childOutput.trim()}`,
+        `D5 Windows Electron smoke failed (${code ?? signal}; markerBytes=${Buffer.byteLength(marker)}; rootEntries=${rootEntries.join(",")}).\n${marker.trim()}\n${childOutput.trim()}`,
       );
     }
     await appendFile(markerPath, "D5_WINDOWS_ELECTRON_SMOKE=PASS\n", "utf8");

@@ -122,17 +122,15 @@ describe("daemon production composition E2E", () => {
       preset: { id: "FULL_ACCESS", expectedVersion: 1 },
       limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 10_000 },
     });
-    // A Run created without a policy gets the bounded working set, frozen at creation.
+    // A Run created without a policy freezes the per-turn headroom policy at creation.
     expect(run.contextBudgetPolicy).toEqual({
-      version: "WORKING_SET_V2",
-      requestBudget: { version: "LEGACY_FULL_OUTPUT_V1" },
-      workingSet: {
-        targetTokens: 96_000,
-        triggerRatio: 0.75,
-        postCompactionRatio: 0.5,
-        allowCurrentTurnPrefix: true,
-        cooldownTurns: 5,
-      },
+      version: "TURN_BUDGET_V3",
+      algorithm: "HEADROOM_V1",
+      minOutputTokens: 2_048,
+      preferredOutputTokens: 8_192,
+      safetyTokens: 640,
+      expectedGrowthTokens: 2_560,
+      postCompactionRatio: 0.8,
     });
     await client.startRun(run.id);
 

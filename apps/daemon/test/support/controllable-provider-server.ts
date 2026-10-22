@@ -129,6 +129,23 @@ export function sendRateLimit(response: ServerResponse, retryAfter: string): voi
   response.end(JSON.stringify({ error: { message: "fixture rate limit", type: "rate_limit" } }));
 }
 
+export function sendServiceUnavailable(response: ServerResponse, retryAfter?: string): void {
+  response.writeHead(503, {
+    "content-type": "application/json",
+    ...(retryAfter === undefined ? {} : { "retry-after": retryAfter }),
+  });
+  response.end(
+    JSON.stringify({ error: { message: "fixture service unavailable", type: "server_error" } }),
+  );
+}
+
+export function sendUnauthorized(response: ServerResponse): void {
+  response.writeHead(401, { "content-type": "application/json" });
+  response.end(
+    JSON.stringify({ error: { message: "fixture unauthorized", type: "authentication_error" } }),
+  );
+}
+
 async function captureRequest(incoming: IncomingMessage): Promise<{
   readonly path: string;
   readonly method: string;

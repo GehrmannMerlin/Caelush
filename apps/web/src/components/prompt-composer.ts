@@ -17,7 +17,15 @@ import {
   resolvePromptPrimaryAction,
   type PromptPrimaryAction,
 } from "../application/composer-state.js";
-import type { ContextUsageProjection, AttachmentId, AttachmentOwner } from "@caelush/protocol";
+import type {
+  ContextUsageProjection,
+  RunProcessProjection,
+  AttachmentId,
+  AttachmentOwner,
+  HistoryLookupQuery,
+  HistoryLookupResponse,
+  RunId,
+} from "@caelush/protocol";
 import { ContextUsageRing } from "./context-usage-ring.js";
 import type { AttachmentQueueItem } from "../application/attachment-manager.js";
 import type { WebRunInputItem } from "../application/run-input-state.js";
@@ -29,6 +37,11 @@ export interface PromptComposerProps {
   readonly submission: WebSubmissionState;
   readonly error?: WebSessionError | undefined;
   readonly contextUsage?: ContextUsageProjection | null;
+  readonly contextProcess?: RunProcessProjection | undefined;
+  readonly contextProcessRunId?: RunId | undefined;
+  readonly onReadHistory?:
+    ((runId: RunId, query: HistoryLookupQuery) => Promise<HistoryLookupResponse>) | undefined;
+  readonly onContinueResourceGuard?: (() => Promise<boolean>) | undefined;
   readonly modelReady?: boolean | undefined;
   readonly placeholder?: string | undefined;
   readonly modelPicker?: ReactElement;
@@ -403,7 +416,15 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
         ),
         props.permissionSelector ?? null,
       ),
-      createElement(ContextUsageRing, { usage: props.contextUsage ?? null }),
+      createElement(ContextUsageRing, {
+        usage: props.contextUsage ?? null,
+        process: props.contextProcess,
+        runId: props.contextProcessRunId,
+        ...(props.onReadHistory === undefined ? {} : { onReadHistory: props.onReadHistory }),
+        ...(props.onContinueResourceGuard === undefined
+          ? {}
+          : { onContinueResourceGuard: props.onContinueResourceGuard }),
+      }),
       createElement(
         "div",
         { className: "prompt-composer-right-controls" },

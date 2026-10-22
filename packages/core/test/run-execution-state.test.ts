@@ -78,6 +78,63 @@ describe("durable Run execution state", () => {
     expect(failedState).not.toHaveProperty("currentStepId");
   });
 
+  it("rejects an INCOMPLETE disposition outside a failed Run with explicit acceptance requirements", () => {
+    const pending = AgentRunSchema.parse({
+      ...run(),
+      acceptanceRequirements: [{ source: "USER_EXPLICIT", purpose: "TEST" }],
+    });
+    const running = { ...pending, status: "RUNNING" as const, startedAt: createTimestampMs(2) };
+    const state = startAgentState(
+      createInitialAgentState(pending, createTimestampMs(1)),
+      createTimestampMs(2),
+    );
+    const disposition = {
+      version: "COMPLETION_DISPOSITION_V1" as const,
+      type: "INCOMPLETE" as const,
+      reasonCode: "ACCEPTANCE_NOT_MET" as const,
+      requirementSources: ["USER_EXPLICIT" as const],
+      failedCheckIds: [],
+    };
+
+    expect(() =>
+      assertRunExecutionInvariant({
+        run: { ...running, completionDisposition: disposition },
+        state,
+        conversationRecords: [],
+      }),
+    ).toThrow();
+    const failed = {
+      ...running,
+      status: "FAILED" as const,
+      finishedAt: createTimestampMs(3),
+      completionDisposition: disposition,
+    };
+    expect(() =>
+      assertRunExecutionInvariant({
+        run: failed,
+        state: { ...state, status: "FAILED" },
+        conversationRecords: [],
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertRunExecutionInvariant({
+        run: {
+          ...failed,
+          completionDisposition: { ...disposition, requirementSources: ["HOST_CONTRACT"] },
+        },
+        state: { ...state, status: "FAILED" },
+        conversationRecords: [],
+      }),
+    ).toThrow();
+    expect(() =>
+      assertRunExecutionInvariant({
+        run: { ...failed, acceptanceRequirements: undefined },
+        state: { ...state, status: "FAILED" },
+        conversationRecords: [],
+      }),
+    ).toThrow();
+  });
+
   it("rejects an active Step on a terminal Run and accepts the PENDING exception", () => {
     const pending = run();
     expect(() =>
@@ -287,6 +344,50 @@ describe("durable Run execution state", () => {
       failedStepId: createStepId(),
       attempt: 2,
       maxAttempts: 3,
+      nextAttemptAt: 100,
+      errorCode: "LLM_NETWORK",
+      mode: "START",
+    });
+    expect(() =>
+      assertRunExecutionInvariant({
+        run: running,
+        state,
+        continuation: checkpoint,
+        conversationRecords: [],
+      }),
+    ).not.toThrow();
+    const step = createRunningAgentStep({
+      id: createStepId(),
+      runId: running.id,
+      sequence: 1,
+      startedAt: createTimestampMs(3),
+    });
+    expect(() =>
+      assertRunExecutionInvariant({
+        run: { ...running, currentStepId: step.id },
+        state: beginAgentStepState(state, step.id, createTimestampMs(3)),
+        activeStep: step,
+        continuation: checkpoint,
+        conversationRecords: [],
+      }),
+    ).toThrow();
+  });
+
+  it("allows WAITING_PROVIDER only at a RUNNING no-active-Step boundary", () => {
+    const pending = run();
+    const running = { ...pending, status: "RUNNING" as const, startedAt: createTimestampMs(2) };
+    const state = startAgentState(
+      createInitialAgentState(pending, createTimestampMs(1)),
+      createTimestampMs(2),
+    );
+    const checkpoint = RunContinuationCheckpointSchema.parse({
+      type: "WAITING_PROVIDER",
+      runId: running.id,
+      failedStepId: createStepId(),
+      attempt: 1,
+      maxAttempts: 3,
+      episode: 2,
+      totalAttempts: 8,
       nextAttemptAt: 100,
       errorCode: "LLM_NETWORK",
       mode: "START",

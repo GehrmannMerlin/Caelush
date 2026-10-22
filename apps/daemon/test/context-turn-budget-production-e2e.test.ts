@@ -90,8 +90,7 @@ describe("M2 — production turn budget under HEADROOM_V1", () => {
             const maxOutputTokens =
               body["max_tokens"] ?? body["max_completion_tokens"] ?? body["maxOutputTokens"];
             wires.push({
-              maxOutputTokens:
-                typeof maxOutputTokens === "number" ? maxOutputTokens : undefined,
+              maxOutputTokens: typeof maxOutputTokens === "number" ? maxOutputTokens : undefined,
               messageCount: Array.isArray(body["messages"]) ? body["messages"].length : 0,
             });
             return sseText("The workspace contains a probe file.");
@@ -120,6 +119,17 @@ describe("M2 — production turn budget under HEADROOM_V1", () => {
 
       const end = await fixture.composition.controller.start(fixture.run.id);
       expect(end.run.status).toBe("COMPLETED");
+
+      const publicUsage = await fixture.composition.contextUsage.getContextUsage(
+        String(fixture.run.id),
+      );
+      expect(publicUsage?.turnBudget).toMatchObject({
+        algorithm: "HEADROOM_V1",
+        windowTokens: MEGA_WINDOW,
+        decision: "KEEP",
+        outputSource: "PREFERRED_ALLOWANCE",
+        windowSource: "MODEL_LIMITS",
+      });
 
       expect(wires).toHaveLength(1);
       const wire = wires[0]!;

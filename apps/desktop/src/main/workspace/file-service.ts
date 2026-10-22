@@ -429,7 +429,15 @@ export function isSafePathSegment(
   value: string,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  if (value.length === 0 || value === "." || value === ".." || /[\u0000-\u001f\u007f]/u.test(value))
+  if (
+    value.length === 0 ||
+    value === "." ||
+    value === ".." ||
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || code === 0x7f;
+    })
+  )
     return false;
   if (/%(?:2e|2f|5c)/iu.test(value)) return false;
   if (platform === "win32") {
@@ -575,10 +583,20 @@ async function verifyWorkspaceRoot(value: string, platform: NodeJS.Platform): Pr
   }
   const rootPath = pathFor(platform).resolve(value);
   try {
-    const metadata = await lstat(rootPath);
-    if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw new Error("unsafe root");
+    const before = await lstat(rootPath);
+    if (before.isSymbolicLink() || !before.isDirectory()) throw new Error("unsafe root");
     const canonical = await realpath(rootPath);
-    if (!samePath(rootPath, canonical, platform)) throw new Error("changed root");
+    const [after, canonicalMetadata] = await Promise.all([lstat(rootPath), lstat(canonical)]);
+    if (
+      after.isSymbolicLink() ||
+      !after.isDirectory() ||
+      canonicalMetadata.isSymbolicLink() ||
+      !canonicalMetadata.isDirectory() ||
+      !sameFileIdentity(before, after) ||
+      !sameFileIdentity(after, canonicalMetadata)
+    ) {
+      throw new Error("changed root");
+    }
     return canonical;
   } catch {
     throw new DesktopWorkspaceError(
@@ -668,14 +686,6 @@ function isWithinRoot(rootPath: string, candidatePath: string, platform: NodeJS.
     implementation.resolve(candidatePath),
   );
   return relative === "" || (!relative.startsWith("..") && !implementation.isAbsolute(relative));
-}
-
-function samePath(left: string, right: string, platform: NodeJS.Platform): boolean {
-  const implementation = pathFor(platform);
-  const normalize = (value: string) => implementation.resolve(value).replace(/[\\/]+$/u, "");
-  const a = normalize(left);
-  const b = normalize(right);
-  return platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 function sameFileIdentity(

@@ -280,6 +280,8 @@ export {
   VerificationCheckSkipReasonSchema,
   VerificationEvidenceKindSchema,
   VerificationProjectCheckPurposeSchema,
+  CompletionRequirementSourceSchema,
+  CompletionRequirementSchema,
   VerificationCheckPurposeSchema,
   VerificationCheckSpecSchema,
   VerificationCheckSchema,
@@ -306,6 +308,8 @@ export type {
   VerificationCheckSkipReason,
   VerificationEvidenceKind,
   VerificationProjectCheckPurpose,
+  CompletionRequirementSource,
+  CompletionRequirement,
   VerificationCheckPurpose,
   VerificationCheckSpec,
   VerificationCheck,
@@ -335,6 +339,7 @@ export type { UsageState } from "./usage.js";
 export {
   AgentEventSchema,
   ConversationMessageCommittedEventSchema,
+  ContextCompactionProgressEventSchema,
   RunSecurityPolicyBoundEventSchema,
   CoalescibleTransientEventMetaSchema,
   DurableEventSchema,
@@ -374,6 +379,7 @@ export {
 export type {
   AgentEvent,
   ConversationMessageCommittedEvent,
+  ContextCompactionProgressEvent,
   RunSecurityPolicyBoundEvent,
   CoalescibleTransientEventMeta,
   DurableEvent,
@@ -421,6 +427,7 @@ export { AgentSessionSchema } from "./session.js";
 export type { AgentSession } from "./session.js";
 export {
   AgentRunSchema,
+  CompletionDispositionSchema,
   ContextBudgetPolicySnapshotSchema,
   ContextRequestBudgetSnapshotSchema,
   CurrentAgentRunSchema,
@@ -431,6 +438,7 @@ export {
 } from "./run.js";
 export type {
   AgentRun,
+  CompletionDisposition,
   ContextBudgetPolicySnapshot,
   ContextRequestBudgetSnapshot,
   CurrentAgentRun,
@@ -483,6 +491,8 @@ export {
   DaemonInfoSchema,
   DefaultRunConfigurationSchema,
   EventStreamQuerySchema,
+  HistoryLookupQuerySchema,
+  HistoryLookupResponseSchema,
   HealthResponseSchema,
   RunActionDispositionSchema,
   RunActionSchema,
@@ -601,6 +611,8 @@ export type {
   DaemonInfo,
   DefaultRunConfiguration,
   EventStreamQuery,
+  HistoryLookupQuery,
+  HistoryLookupResponse,
   HealthResponse,
   RunAction,
   RunActionDisposition,
@@ -631,6 +643,7 @@ export type {
   CacheMetricsV2,
   ContextUsageProjection,
   ContextUsageResponse,
+  RunProcessProjection,
   PromptCacheRequestPurpose,
   PromptCachePurposeUsage,
   PromptCacheSurfaceSegments,

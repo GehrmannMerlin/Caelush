@@ -39,3 +39,44 @@ describe("resource guard client control", () => {
     expect(await request?.text()).toBe("");
   });
 });
+
+describe("history reference client", () => {
+  it("reads a bounded, cursor-addressed source page through the owning Run", async () => {
+    const runId = createRunId();
+    const sourceRef = `history:v1:${runId}:1:8#1234567890abcdef`;
+    let request: Request | undefined;
+    const client = new CaelushClient({
+      baseUrl: "http://daemon.test",
+      fetch: async (input, init) => {
+        request = new Request(input, init);
+        return new Response(
+          JSON.stringify({
+            kind: "PAGE",
+            items: [
+              {
+                messageId: "msg_1",
+                sequence: 1,
+                role: "USER",
+                text: "请读取原文",
+                byteLength: 15,
+              },
+            ],
+            nextCursor: "c2",
+            sourceRef,
+            integrity: "VERIFIED",
+            byteCount: 15,
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    await expect(
+      client.getRunHistory(runId, { sourceRef, cursor: "c1", maxBytes: 2048 }),
+    ).resolves.toMatchObject({ kind: "PAGE", nextCursor: "c2" });
+    expect(request?.url).toContain(`/api/v1/runs/${runId}/history?`);
+    expect(request?.url).toContain(`sourceRef=${encodeURIComponent(sourceRef)}`);
+    expect(request?.url).toContain("cursor=c1");
+    expect(request?.url).toContain("maxBytes=2048");
+  });
+});

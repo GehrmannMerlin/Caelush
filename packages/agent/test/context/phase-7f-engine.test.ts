@@ -760,7 +760,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       sessionId: createSessionId(),
       goal: "current goal",
     };
-    const warmPrepared = await engine.prepare({
+    await engine.prepare({
       identity: runIdentity,
       turn: { stepId: "step:phase-7f-compaction" as never, sequence: 1 },
       conversation: warmConversation,
@@ -795,10 +795,10 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     expect(authoritySnapshotPhases).toContain("AFTER_COMMIT");
     expect(summaryCallCount).toBe(1);
     expect(summaryPurpose).toBe("COMPACTION");
-    expect(summaryCacheEligibility).toBe("CACHE_REUSE_ELIGIBLE");
-    expect(summaryPrefixFingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect(summaryReplayMessages).toEqual(warmPrepared.messages);
-    expect(summaryReplayTools).toEqual([]);
+    expect(summaryCacheEligibility).toBe("NOT_ELIGIBLE");
+    expect(summaryPrefixFingerprint).toBeUndefined();
+    expect(summaryReplayMessages).toBeUndefined();
+    expect(summaryReplayTools).toBeUndefined();
     expect(summaryTargetTokens).toBe(7);
     expect(summarySourceSequences).toEqual([2]);
     expect(summarySourceRange).toMatchObject({ firstSequence: 1, lastSequence: 2 });

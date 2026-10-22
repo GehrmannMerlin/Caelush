@@ -177,6 +177,9 @@ function planCandidateBoundary(
     goal: dependencies.run.goal,
     workspace: dependencies.run.workspace,
     changedFiles: dependencies.state.changedFiles,
+    ...(dependencies.run.acceptanceRequirements === undefined
+      ? {}
+      : { acceptanceRequirements: dependencies.run.acceptanceRequirements }),
     ...(dependencies.projectFacts === undefined ? {} : { projectFacts: dependencies.projectFacts }),
   });
   const planId = dependencies.planIdFactory?.() ?? createVerificationPlanId();

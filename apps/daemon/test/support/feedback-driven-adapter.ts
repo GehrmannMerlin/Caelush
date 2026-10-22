@@ -35,6 +35,8 @@ export type FeedbackScenario =
   | "argument-correction"
   | "failed-check-repair"
   | "post-compaction"
+  | "degraded-post-compaction"
+  | "keep-original-post-compaction"
   | "historical-not-started"
   | "historical-unknown";
 
@@ -100,6 +102,16 @@ export class FeedbackDrivenAdapter implements ApiAdapter {
   }
 
   private async *summary(): AsyncGenerator<AIAdapterEvent> {
+    if (
+      this.scenario === "degraded-post-compaction" ||
+      this.scenario === "keep-original-post-compaction"
+    ) {
+      // Force the production summarization runner down its deterministic fallback path. The next
+      // main turn must discover and read the durable source reference instead of trusting a made-up
+      // semantic summary.
+      yield* answer('{"goal":"truncated summary');
+      return;
+    }
     yield* answer(
       JSON.stringify({
         goal: "Continue the reliability scenario from its accepted feedback.",
@@ -136,6 +148,8 @@ export class FeedbackDrivenAdapter implements ApiAdapter {
         yield* this.failedCheckRepair(input);
         return;
       case "post-compaction":
+      case "degraded-post-compaction":
+      case "keep-original-post-compaction":
         yield* this.postCompaction(input);
         return;
       case "historical-not-started":
@@ -386,6 +400,18 @@ export class FeedbackDrivenAdapter implements ApiAdapter {
       if (this.summaryCalls === 0) {
         throw new FeedbackContractError("compaction never ran, so nothing was proven about it");
       }
+      if (this.scenario === "degraded-post-compaction") {
+        const sourceRef = input.request.messages
+          .flatMap((message) => (typeof message.content === "string" ? [message.content] : []))
+          .join("\n")
+          .match(/history:v1:[^\s"\\]+/u)?.[0];
+        if (sourceRef === undefined) {
+          throw new FeedbackContractError("degraded checkpoint omitted a readable history ref");
+        }
+        yield* toolCall("degraded-history", "read_history", { sourceRef, maxBytes: 32_768 });
+        yield finish("TOOL_CALLS");
+        return;
+      }
       // The whole point: after compaction the request still carries the accepted plan and the
       // failure it has to repair.
       this.requirePlanSays(input, "PLAN_COMPACTION");
@@ -393,6 +419,16 @@ export class FeedbackDrivenAdapter implements ApiAdapter {
       this.requirePlanSays(input, CHECK_FAILED_TOKEN);
       yield* toolCall("read-back", "read_file", { path: PADDING_READS[0], limit: 1 });
       yield finish("TOOL_CALLS");
+      return;
+    }
+    if (this.scenario === "degraded-post-compaction" && this.step === lastPaddingStep + 2) {
+      const { text } = this.consume(input, "degraded-history", ["SUCCEEDED"]);
+      if (!text.includes(CHECK_FAILED_TOKEN)) {
+        throw new FeedbackContractError(
+          "read_history did not restore the original failed-check fact",
+        );
+      }
+      yield* answer("I restored the original failed-check evidence from the verified history ref.");
       return;
     }
     this.consume(input, "read-back", ["SUCCEEDED"]);

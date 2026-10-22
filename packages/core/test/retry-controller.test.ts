@@ -30,6 +30,7 @@ describe("RetryController", () => {
       maxDelayMs: 30_000,
       jitterRatio: 0.1,
       maxProviderRetryAfterMs: 300_000,
+      episodePauseMs: 300_000,
     });
   });
 

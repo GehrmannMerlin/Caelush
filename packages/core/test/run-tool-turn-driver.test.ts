@@ -1,4 +1,4 @@
-import { createTimestampMs, type StepId } from "@caelush/protocol";
+import { createTimestampMs, createToolInvocationId, type StepId } from "@caelush/protocol";
 import {
   ToolBatchInfrastructureError,
   ToolBatchInputError,
@@ -17,6 +17,8 @@ import {
   testApprovalBoundary,
   stubToolBatches,
   stubToolTurnPipeline,
+  rejectedItem,
+  skippedItem,
   toolResultItem,
   toolTurn,
   type ToolBatchAnswer,
@@ -171,6 +173,59 @@ describe("Phase 3D Tool turn driver", () => {
     ).toBe(true);
     expect(result.status).toBe("TERMINAL");
     expect(h.store.snapshot.run.status).toBe("COMPLETED");
+  });
+
+  it("persists an unconfirmed effect wait and only rechecks after an explicit continue", async () => {
+    const invocationId = createToolInvocationId();
+    const batches = scriptedBatches({
+      kind: "EFFECT_UNCONFIRMED",
+      items: [],
+      pendingCall: {
+        externalCallId: "call_patch",
+        toolName: "apply_patch",
+        args: { patch: "*** Begin Patch\n*** End Patch" },
+      },
+      invocationId,
+      reasonCode: "INCONCLUSIVE",
+    });
+    const h = harness3e({
+      script: () =>
+        toolTurn([
+          {
+            id: "call_patch",
+            name: "apply_patch",
+            input: { patch: "*** Begin Patch\n*** End Patch" },
+          },
+        ]),
+      extra: { toolTurn: stubToolTurnPipeline(batches) },
+    });
+
+    const first = await h.controller.start(h.store.snapshot.run.id);
+    expect(first.status).toBe("WAITING_RESOURCE");
+    expect(first).toMatchObject({
+      reason: "EFFECT_UNCONFIRMED",
+      invocationId,
+      toolName: "apply_patch",
+      reasonCode: "INCONCLUSIVE",
+    });
+    expect(h.turns).toHaveLength(1);
+    expect(h.store.snapshot.continuation).toMatchObject({
+      type: "WAITING_RESOURCE",
+      reason: "EFFECT_UNCONFIRMED",
+      invocationId,
+      toolName: "apply_patch",
+      reasonCode: "INCONCLUSIVE",
+    });
+
+    const recovered = await h.controller.recover(h.store.snapshot.run.id);
+    expect(recovered.status).toBe("WAITING_RESOURCE");
+    expect(batches.calls).toHaveLength(1);
+    expect(h.turns).toHaveLength(1);
+
+    const rechecked = await h.controller.continueResourceGuard(h.store.snapshot.run.id);
+    expect(rechecked.status).toBe("WAITING_RESOURCE");
+    expect(batches.calls).toHaveLength(2);
+    expect(h.turns).toHaveLength(1);
   });
 
   it("persists successful Tool image pointers on the durable Tool result", async () => {
@@ -418,6 +473,107 @@ describe("Phase 3D Tool turn driver", () => {
     expect(
       resumeTools.map((message) => (message.role === "tool" ? message.toolCallId : "")),
     ).toEqual(["call_a", "call_b", "call_c"]);
+  });
+
+  it("carries scheduling facts and whole-batch source ordinals across 16-call segments", async () => {
+    const schedulingBarrier = {
+      kind: "DEPENDENCY_UNPROVEN" as const,
+      sourceOrdinal: 0,
+      code: "TOOL_ARGUMENT_ERROR",
+    };
+    const calls = Array.from({ length: 18 }, (_, index) => ({
+      id: `call_${String(index).padStart(2, "0")}`,
+      name: index === 0 ? "read_file" : index === 16 ? "write_file" : "read_file",
+    }));
+    const batches = scriptedBatches((requested) => {
+      const request = batches.calls.at(-1)?.request;
+      if (requested[0]?.externalCallId === "call_00") {
+        return {
+          kind: "COMPLETED",
+          items: requested.map((call, index) =>
+            index === 0
+              ? rejectedItem({
+                  externalCallId: call.externalCallId,
+                  toolName: call.toolName,
+                  code: "TOOL_ARGUMENT_ERROR",
+                })
+              : toolResultItem({
+                  externalCallId: call.externalCallId,
+                  toolName: call.toolName,
+                  content: "read",
+                  index,
+                }),
+          ),
+          segment: {
+            version: "TOOL_BATCH_SEGMENT_V1",
+            nextSourceOrdinal: requested.length,
+            barrier: schedulingBarrier,
+          },
+        };
+      }
+      expect(request?.segment).toEqual({
+        version: "TOOL_BATCH_SEGMENT_V1",
+        sourceOrdinalOffset: 16,
+        priorBarrier: schedulingBarrier,
+      });
+      return {
+        kind: "COMPLETED",
+        items: requested.map((call, index) =>
+          index === 0
+            ? skippedItem({
+                externalCallId: call.externalCallId,
+                toolName: call.toolName,
+                content: "Dependency is not proven.",
+              })
+            : toolResultItem({
+                externalCallId: call.externalCallId,
+                toolName: call.toolName,
+                content: "read",
+                index: 20 + index,
+              }),
+        ),
+        segment: {
+          version: "TOOL_BATCH_SEGMENT_V1",
+          nextSourceOrdinal: 18,
+          barrier: schedulingBarrier,
+        },
+      };
+    });
+    const h = harness3d({
+      run: makeRunD({
+        permissionProfile: "PROJECT_ACCESS",
+        approvalPolicy: "DANGEROUS_ONLY",
+        resourcePolicy: {
+          mode: "ADAPTIVE",
+          correctionVersion: "AUTONOMOUS_CORRECTION_V2",
+          operationalLease: { maxAgentTurns: 32, maxToolOperations: 64 },
+          batch: { maxToolCallsPerTurn: 16 },
+          progress: {
+            windowTurns: 4,
+            identicalCallNudgeThreshold: 2,
+            noProgressTurnsBeforeReplan: 3,
+            replansBeforePause: 2,
+          },
+          hardLimits: {},
+          inactivity: {},
+        },
+      }),
+      script: (turn) => (turn === 0 ? toolTurn(calls) : answerTurn()),
+      toolBatches: batches,
+    });
+
+    await h.controller.start(h.store.snapshot.run.id);
+
+    expect(batches.calls.map((batch) => batch.request.calls.length)).toEqual([16, 2]);
+    expect(batches.calls[1]!.request.segment).toMatchObject({
+      sourceOrdinalOffset: 16,
+      priorBarrier: { sourceOrdinal: 0, code: "TOOL_ARGUMENT_ERROR" },
+    });
+    const toolResults = h.turns[1]!.request.messages.filter((message) => message.role === "tool");
+    expect(
+      toolResults.map((message) => (message.role === "tool" ? message.toolCallId : "")),
+    ).toEqual(calls.map((call) => call.id));
+    expect(h.turns).toHaveLength(2);
   });
 
   it("shows the model the projected summary and nothing internal", async () => {

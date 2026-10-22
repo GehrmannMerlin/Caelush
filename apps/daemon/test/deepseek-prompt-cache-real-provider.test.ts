@@ -8,8 +8,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createAISubsystem,
   type AIMessage,
-  type AIProviderBinding,
   type AIModelRequest,
+  type AIProviderBinding,
   type AIToolSpec,
   type ModelDescriptor,
 } from "@caelush/ai";
@@ -19,7 +19,6 @@ import {
   STAGE7_LIMITS,
   createIrreversibleFingerprint,
   createRequestStartPacer,
-  createStage7AuditRequests,
   getAuditArtifactNames,
   createAuditCheckpoint,
   acquireAuditAttemptLock,
@@ -164,6 +163,41 @@ const STAGE7_SETTINGS = Object.freeze({
 });
 const REAL_PROVIDER_MINIMUM_REQUEST_INTERVAL_MS = 2_000;
 
+function createStage7AuditRequests(
+  model: ModelDescriptor,
+  mode: "probe" | "run-42",
+  configurationFingerprint: string,
+) {
+  const expectedReusablePrefixFingerprint = createIrreversibleFingerprint({
+    stableHead: createIrreversibleFingerprint(STABLE_HEAD),
+    toolCatalog: createIrreversibleFingerprint(STAGE7_TOOL),
+    model: model.ref,
+    cache: STAGE7_SETTINGS.cache,
+  });
+  const count = mode === "probe" ? 3 : 42;
+  return Array.from({ length: count }, (_, index) => {
+    const purpose = mode === "probe" || index < 2 ? "WARMUP" : "MAIN_AGENT";
+    const messages: readonly AIMessage[] = [
+      { role: "system", content: STABLE_HEAD },
+      { role: "user", content: "请简短确认审计回合 " + String(index + 1) + "。" },
+    ];
+    const request: AIModelRequest = {
+      model: model.ref,
+      messages,
+      tools: [STAGE7_TOOL],
+      settings: STAGE7_SETTINGS,
+    };
+    return {
+      purpose,
+      request,
+      eligible: purpose === "MAIN_AGENT",
+      expectedReusablePrefixFingerprint,
+      epochId: "stage-7-" + configurationFingerprint,
+      resetReason: index === 0 ? "INITIAL" : undefined,
+    };
+  });
+}
+
 function deepSeekPreset() {
   const preset = listBuiltinProviderPresets().find((entry) => entry.id === "deepseek");
   if (preset === undefined) throw new Error("DeepSeek preset is unavailable.");
@@ -306,41 +340,6 @@ function stage7ConfigurationFingerprint(model: ModelDescriptor): string {
     snapshotAccountingVersion: 1,
     requestStartPacingVersion: 1,
     minimumProviderRequestIntervalMs: REAL_PROVIDER_MINIMUM_REQUEST_INTERVAL_MS,
-  });
-}
-
-export function createStage7AuditRequests(
-  model: ModelDescriptor,
-  mode: "probe" | "run-42",
-  configurationFingerprint: string,
-) {
-  const expectedReusablePrefixFingerprint = createIrreversibleFingerprint({
-    stableHead: createIrreversibleFingerprint(STABLE_HEAD),
-    toolCatalog: createIrreversibleFingerprint(STAGE7_TOOL),
-    model: model.ref,
-    cache: STAGE7_SETTINGS.cache,
-  });
-  const count = mode === "probe" ? 3 : 42;
-  return Array.from({ length: count }, (_, index) => {
-    const purpose = mode === "probe" || index < 2 ? "WARMUP" : "MAIN_AGENT";
-    const messages: readonly AIMessage[] = [
-      { role: "system", content: STABLE_HEAD },
-      { role: "user", content: "请简短确认审计回合 " + String(index + 1) + "。" },
-    ];
-    const request: AIModelRequest = {
-      model: model.ref,
-      messages,
-      tools: [STAGE7_TOOL],
-      settings: STAGE7_SETTINGS,
-    };
-    return {
-      purpose,
-      request,
-      eligible: purpose === "MAIN_AGENT",
-      expectedReusablePrefixFingerprint,
-      epochId: "stage-7-" + configurationFingerprint,
-      resetReason: index === 0 ? "INITIAL" : undefined,
-    };
   });
 }
 

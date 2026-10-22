@@ -170,6 +170,7 @@ export {
   createReadFileTool,
   createReadHistoryTool,
   createRuntimeGitOperations,
+  createRuntimeEffectReconciliationPort,
   createRuntimePatchOperations,
   createRuntimeProcessOperations,
   createRuntimeProgressSignalProjector,

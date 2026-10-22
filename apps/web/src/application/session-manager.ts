@@ -53,6 +53,9 @@ import type {
   WorkspaceRef,
   WorkspaceSessionSummary,
   ContextUsageProjection,
+  RunProcessProjection,
+  HistoryLookupQuery,
+  HistoryLookupResponse,
   AIModelDirectoryResponse,
   AIProvidersResponse,
   ConnectProviderRequest,
@@ -155,6 +158,8 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
   recoverRun(runId: RunId): Promise<RunActionResponse>;
   cancelRun(runId: RunId): Promise<RunActionResponse>;
   getRunContextUsage?(runId: RunId): Promise<ContextUsageProjection | null>;
+  getRunHistory?(runId: RunId, query: HistoryLookupQuery): Promise<HistoryLookupResponse>;
+  continueResourceGuard?(runId: RunId): Promise<RunActionResponse>;
   watchRunEvents(runId: RunId, options?: WatchRunEventsOptions): AsyncIterable<PublicRunEvent>;
 }
 
@@ -163,6 +168,7 @@ export interface WebPromptSubmission {
   readonly attachmentIds?: readonly AttachmentId[];
   readonly submissionId?: SubmissionId;
   readonly attachmentMetadata?: readonly TranscriptAttachmentRef[];
+  readonly acceptanceRequirements?: CreateRunRequest["acceptanceRequirements"];
 }
 
 export type ProviderConnectionResult =
@@ -218,6 +224,8 @@ export interface WebSessionSnapshot {
   readonly timeline: TimelineState;
   readonly liveActivity: LiveActivityState;
   readonly contextUsage?: ContextUsageProjection | null;
+  /** Live-only state overlay carried by the active Run event stream. */
+  readonly contextProcess?: RunProcessProjection | undefined;
   readonly continuityWarning: boolean;
   readonly aiProviders?: AIProvidersResponse["providers"];
   readonly modelDirectory?: AIModelDirectoryResponse["models"];
@@ -427,6 +435,7 @@ export class WebSessionManager {
       timeline: createInitialTimelineState(),
       liveActivity: createInitialLiveActivityState(),
       contextUsage: null,
+      contextProcess: undefined,
       isDraft: true,
       composerEnabled: true,
       submission: "IDLE",
@@ -474,6 +483,7 @@ export class WebSessionManager {
             activeRuns: [],
             activeRun: undefined,
             contextUsage: null,
+            contextProcess: undefined,
             continuityWarning: false,
             isDraft: false,
             composerEnabled: false,
@@ -498,6 +508,7 @@ export class WebSessionManager {
         timeline: createInitialTimelineState(),
         liveActivity: createInitialLiveActivityState(),
         contextUsage: null,
+        contextProcess: undefined,
         isDraft: false,
         composerEnabled: false,
         error: sessionError("SESSION_SELECTION_FAILED"),
@@ -705,6 +716,9 @@ export class WebSessionManager {
       const run = await this.options.client.createRun(session.id, {
         goal,
         userText,
+        ...(request.acceptanceRequirements === undefined
+          ? {}
+          : { acceptanceRequirements: request.acceptanceRequirements }),
         ...(attachmentIds.length === 0 ? {} : { attachmentIds }),
         ...(submissionId === undefined
           ? {}
@@ -750,6 +764,7 @@ export class WebSessionManager {
         timeline: createInitialTimelineState(run.id),
         liveActivity: createInitialLiveActivityState(run.id),
         contextUsage: null,
+        contextProcess: undefined,
         selectedPreset: boundPreset,
         permissionPresetError: undefined,
         isDraft: false,
@@ -920,6 +935,7 @@ export class WebSessionManager {
         timeline: createInitialTimelineState(),
         liveActivity: createInitialLiveActivityState(),
         contextUsage: null,
+        contextProcess: undefined,
         continuityWarning: false,
         modelSelection: selection,
         isDraft: false,
@@ -1446,6 +1462,33 @@ export class WebSessionManager {
     }
   }
 
+  async readRunHistory(runId: RunId, query: HistoryLookupQuery): Promise<HistoryLookupResponse> {
+    const readHistory = this.options.client.getRunHistory;
+    if (readHistory === undefined) return { kind: "UNAVAILABLE", reason: "SOURCE_UNAVAILABLE" };
+    return readHistory.call(this.options.client, runId, query);
+  }
+
+  async continueResourceGuard(): Promise<boolean> {
+    const run = this.snapshot.activeRun;
+    const continueResourceGuard = this.options.client.continueResourceGuard;
+    if (
+      this.disposed ||
+      run === undefined ||
+      run.status !== "WAITING_RESOURCE" ||
+      continueResourceGuard === undefined
+    ) {
+      return false;
+    }
+    try {
+      const response = await continueResourceGuard.call(this.options.client, run.id);
+      this.publishActiveRun(response.run, "ACTIVE");
+      return true;
+    } catch {
+      this.publish({ error: sessionError("RUN_REFRESH_FAILED") });
+      return false;
+    }
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -1577,6 +1620,7 @@ export class WebSessionManager {
         activeRuns.length === 1 ? activeRuns[0]?.id : undefined,
       ),
       contextUsage: null,
+      contextProcess: undefined,
       continuityWarning: false,
       modelSelection:
         session.defaultModel === undefined
@@ -1721,6 +1765,21 @@ export class WebSessionManager {
           { timeline, liveActivity },
           shouldPublishEventOnFrame(event) ? "FRAME" : "IMMEDIATE",
         );
+        if (event.type === "context.compaction.progress") {
+          this.publish({
+            contextProcess:
+              event.payload.stage === "FINISHED"
+                ? undefined
+                : {
+                    kind: "COMPACTING",
+                    stage: event.payload.stage,
+                    reason: event.payload.reason,
+                  },
+          });
+          if (event.payload.stage === "FINISHED") {
+            this.scheduleContextUsageRefresh(active.run.id);
+          }
+        }
         this.reconcileRunInputEvent(event);
         if (
           event.type === "conversation.message.committed" &&
@@ -1771,6 +1830,7 @@ export class WebSessionManager {
         const terminalTimeline = isTimelineTerminalRunStatus(refreshed.status)
           ? flushTimelineForTerminal(this.snapshot.timeline, refreshed.status)
           : this.snapshot.timeline;
+        if (isTerminalRunStatus(refreshed.status)) this.publish({ contextProcess: undefined });
         this.publishActiveRun(refreshed, "ACTIVE", terminalTimeline);
         if (isTerminalRunStatus(refreshed.status)) {
           await this.settleLifecycle(active, refreshed);
@@ -2566,6 +2626,7 @@ function initialSnapshot(): WebSessionSnapshot {
     timeline: createInitialTimelineState(),
     liveActivity: createInitialLiveActivityState(),
     contextUsage: null,
+    contextProcess: undefined,
     continuityWarning: false,
     availablePresets: [],
     runInputs: [],

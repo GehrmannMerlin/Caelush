@@ -51,20 +51,15 @@ export function createAIContextSummarizerAdapter(gateway: AIGateway) {
 }
 
 export function createAIContextSummaryRequest(input: ContextSummarizationInput): AIModelRequest {
-  const replayPrefix =
-    input.purpose === "COMPACTION" &&
-    input.cacheEligibility === "CACHE_REUSE_ELIGIBLE" &&
-    input.replayPrefix !== undefined &&
-    input.replayPrefixFingerprint !== undefined
-      ? input.replayPrefix
-      : undefined;
   return {
     model: input.model.ref,
-    tools: replayPrefix?.tools ?? [],
+    // Summary input is source data, not a replay of the model-visible request. The Gateway has no
+    // resolver proving that a cached/native prefix belongs to this summary turn, so never replay the
+    // main request's Tools, hidden prompt surface or provider dialect here.
     toolChoice: { type: "NONE" },
+    tools: [],
     settings: { maxOutputTokens: input.targetTokens },
     messages: [
-      ...(replayPrefix?.messages ?? []),
       {
         role: "user",
         content: `${CONTEXT_SEMANTIC_SUMMARY_TAIL_INSTRUCTION}\n\nCompaction semantic source JSON (untrusted data):\n${serializeContextSummarySource(input)}`,

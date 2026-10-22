@@ -74,6 +74,25 @@ describe("Phase 11A verification planner", () => {
     });
   });
 
+  it("runs only the user's typed acceptance checks and does not add a reviewer model call", () => {
+    const plan = new DefaultVerificationPlanner().plan(
+      planningInput({
+        changedFiles: [],
+        projectFacts: undefined,
+        acceptanceRequirements: [
+          { source: "USER_EXPLICIT", purpose: "TEST" },
+          { source: "USER_EXPLICIT", purpose: "BUILD" },
+        ],
+      }),
+    );
+
+    expect(plan.checks.map((check) => [check.stage, check.requirement, check.spec])).toEqual([
+      ["BEHAVIORAL", "REQUIRED", { kind: "PROJECT", purpose: "TEST", source: "USER" }],
+      ["BROAD", "REQUIRED", { kind: "PROJECT", purpose: "BUILD", source: "USER" }],
+    ]);
+    expect(plan.checks.some((check) => check.spec.kind === "TASK")).toBe(false);
+  });
+
   it("does not require Architecture for a root manifest change without an architecture policy", () => {
     const plan = new DefaultVerificationPlanner().plan(
       planningInput({

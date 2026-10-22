@@ -335,10 +335,10 @@ describe("RunController failure and maxSteps boundaries", () => {
     await fixture.storage.close();
   });
 
-  it("exhausts bounded provider attempts without appending partial output", async () => {
+  it("opens a recoverable provider wait after one bounded retry episode without partial output", async () => {
     const fixture = await setup({
       maxSteps: 8,
-      timeoutMs: 120_000,
+      timeoutMs: 900_000,
       complete: async () => {
         throw aiError("AI_NETWORK", { message: "provider secret" });
       },
@@ -355,7 +355,7 @@ describe("RunController failure and maxSteps boundaries", () => {
       result = await fixture.controller.recover(fixture.run.id);
     }
 
-    expect(result.status).toBe("FAILED");
+    expect(result.status).toBe("WAITING_PROVIDER");
     expect(fixture.providerCalls()).toBe(6);
     expect(await fixture.storage.steps.listByRun(fixture.run.id)).toHaveLength(6);
     expect(
@@ -364,15 +364,43 @@ describe("RunController failure and maxSteps boundaries", () => {
     expect((await fixture.storage.runStates.get(fixture.run.id))?.usage.steps).toBe(6);
     expect(
       fixture.events.map((event) => event.type).filter((type) => type === "retry.scheduled"),
-    ).toHaveLength(5);
+    ).toHaveLength(6);
     expect(fixture.events.filter((event) => event.type === "retry.exhausted")).toHaveLength(1);
-    expect(fixture.events.slice(-5).map((event) => event.type)).toEqual([
+    expect(fixture.events.slice(-3).map((event) => event.type)).toEqual([
       "llm.failed",
       "retry.exhausted",
-      "error",
-      "status.changed",
-      "run.failed",
+      "retry.scheduled",
     ]);
+    expect(await fixture.storage.runs.get(fixture.run.id)).toMatchObject({ status: "RUNNING" });
+    expect(await fixture.storage.continuations.get(fixture.run.id)).toMatchObject({
+      checkpoint: {
+        type: "WAITING_PROVIDER",
+        mode: "START",
+        attempt: 1,
+        maxAttempts: 6,
+        episode: 2,
+        totalAttempts: 6,
+      },
+    });
+    if (result.status !== "WAITING_PROVIDER") {
+      throw new Error("expected a durable provider cooldown");
+    }
+    const stillWaiting = await fixture.controller.recover(fixture.run.id);
+    expect(stillWaiting.status).toBe("WAITING_PROVIDER");
+    expect(fixture.providerCalls()).toBe(6);
+
+    fixture.setNow(Number(result.nextAttemptAt));
+    const resumed = await fixture.controller.recover(fixture.run.id);
+    expect(resumed.status).toBe("WAITING_RETRY");
+    expect(fixture.providerCalls()).toBe(7);
+    expect(await fixture.storage.continuations.get(fixture.run.id)).toMatchObject({
+      checkpoint: {
+        type: "WAITING_RETRY",
+        attempt: 2,
+        episode: 2,
+        totalAttempts: 7,
+      },
+    });
     await fixture.storage.close();
   });
 

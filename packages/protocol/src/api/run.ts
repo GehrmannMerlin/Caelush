@@ -12,6 +12,9 @@ import {
   ATTACHMENT_ONLY_RUN_GOAL,
   SubmissionIdSchema,
 } from "../attachment.js";
+import { CompletionRequirementSchema } from "../verification.js";
+
+const UserCompletionRequirementSchema = CompletionRequirementSchema.omit({ source: true });
 
 export const CreateRunRequestSchema = z
   .object({
@@ -20,6 +23,8 @@ export const CreateRunRequestSchema = z
     userText: z.string().max(200_000).optional(),
     attachmentIds: AttachmentIdsSchema.optional(),
     submissionId: SubmissionIdSchema.optional(),
+    /** Explicit project checks the Run must pass before completion. Their persisted source is USER_EXPLICIT. */
+    acceptanceRequirements: z.array(UserCompletionRequirementSchema).min(1).max(8).optional(),
     workspace: WorkspaceRefSchema,
     model: ClientModelSelectionSchema.optional(),
     reasoningLevel: ReasoningLevelSchema.optional(),

@@ -223,7 +223,7 @@ describe("Phase 4D canonical batch boundaries", () => {
     // the missing arms are missing.
     const types = executable(`${BATCH}batch-types.ts`);
 
-    // The request has exactly seven fields, and the list is closed.
+    // The base request has seven fields; a versioned segment cursor is the only optional extension.
     const request = interfaceBody(types, "export interface ToolBatchRequest");
     expect(request).toContain("readonly runId: RunId;");
     expect(request).toContain("readonly sessionId: SessionId;");
@@ -235,6 +235,7 @@ describe("Phase 4D canonical batch boundaries", () => {
     expect(request).toContain("readonly environment: ToolExecutionEnvironment;");
     expect(request).toContain("readonly securityContext: ToolSecurityContext;");
     expect(request).toContain("readonly signal: AbortSignal;");
+    expect(request).toContain("readonly segment?: ToolBatchSegmentInput | undefined;");
     for (const forbidden of [
       "mode",
       "registry",

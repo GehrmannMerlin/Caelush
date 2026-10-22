@@ -40,6 +40,9 @@ export interface RunApprovalReader {
 export interface RunExecutionSupervisorLogger {
   error?(error: unknown, context: { readonly operation: string; readonly runId: RunId }): void;
   toolFailure?(entry: import("../services/run-failure-diagnostics.js").ToolFailureLogEntry): void;
+  contextPreparationFailure?(
+    entry: import("../services/run-failure-diagnostics.js").ContextPreparationFailureLogEntry,
+  ): void;
 }
 
 export interface RunExecutionSupervisorOptions {

@@ -1,16 +1,14 @@
 import {
   ContextExhaustedError,
   ContextMandatoryInputTooLargeError,
+  ContextPlanningError,
   ContextPressureAccountingError,
   PromptSurfaceCapacityError,
   PromptSurfaceIntegrityError,
   PromptSurfaceRolloverConflictError,
 } from "@caelush/agent";
 import type { RunContextPreparationDiagnostic } from "@caelush/core";
-import {
-  classifyContextPreparationFailure,
-  contextPreparationAgentError,
-} from "@caelush/core";
+import { classifyContextPreparationFailure, contextPreparationAgentError } from "@caelush/core";
 import { createRunId, createStepId } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 
@@ -61,10 +59,7 @@ describe("Context preparation failure classification", () => {
       observed: 4_194_305,
       limit: 4_194_304,
     });
-    expect(diagnostic.causeKinds).toEqual([
-      "PromptSurfaceCapacityError",
-      "RangeError",
-    ]);
+    expect(diagnostic.causeKinds).toEqual(["PromptSurfaceCapacityError", "RangeError"]);
     expect(JSON.stringify(diagnostic)).not.toContain("CANARY");
     expect(JSON.stringify(diagnostic)).not.toContain("Users");
   });
@@ -88,8 +83,9 @@ describe("Context preparation failure classification", () => {
   });
 
   it("classifies the remaining typed context errors by their class", () => {
-    expect(classify(new PromptSurfaceIntegrityError("digest mismatch", { cause: new Error(CANARY) })))
-      .toMatchObject({ stage: "surface_read", reasonCode: "CONTEXT_SURFACE_INTEGRITY_FAILED" });
+    expect(
+      classify(new PromptSurfaceIntegrityError("digest mismatch", { cause: new Error(CANARY) })),
+    ).toMatchObject({ stage: "surface_read", reasonCode: "CONTEXT_SURFACE_INTEGRITY_FAILED" });
     expect(classify(new PromptSurfaceRolloverConflictError("epoch moved"))).toMatchObject({
       stage: "surface_capacity",
       reasonCode: "CONTEXT_SURFACE_ROLLOVER_CONFLICT",
@@ -101,6 +97,11 @@ describe("Context preparation failure classification", () => {
     expect(classify(new ContextMandatoryInputTooLargeError())).toMatchObject({
       stage: "pressure_accounting",
       reasonCode: "CONTEXT_PRESSURE_ACCOUNTING_FAILED",
+    });
+    expect(classify(new ContextPlanningError("DUPLICATE_ITEM_ID"))).toMatchObject({
+      stage: "pressure_accounting",
+      reasonCode: "CONTEXT_PRESSURE_ACCOUNTING_FAILED",
+      planningErrorCode: "DUPLICATE_ITEM_ID",
     });
     // The reachable production condition: reserves plus the request's own overhead exceed the window,
     // so there is no positive input allowance to plan against.

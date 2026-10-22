@@ -25,10 +25,29 @@ function document(...sections: ReturnType<typeof file>[]): ContextDocument {
 }
 
 describe("Prompt Surface V3 semantic sections", () => {
+  it("renders dynamic Context Hook sections in their dedicated bounded contribution block", () => {
+    const contribution = {
+      ...file("safe extension value"),
+      id: "agent.extension-contributions:hook:item",
+      sourceRef: "agent.extension-contributions@extension-contributions-v1:hook/item",
+      cacheStability: "DYNAMIC" as const,
+    };
+    const states = createPromptSurfaceSectionStates(document(contribution));
+    const rendered = renderPromptSurfaceRecord(
+      "BASELINE",
+      diffPromptSurfaceSections([], states, true).updates,
+    );
+
+    expect(rendered).toContain("<context_contributions>");
+    expect(rendered).toContain('<contribution source_ref="sha256:');
+    expect(rendered).toContain("safe extension value");
+    expect(rendered).not.toContain('label="context contribution"');
+  });
+
   it("does not re-emit an unchanged 10 KB file over eight steps", () => {
     const currentDocument = document(file("x".repeat(10_000)));
     const initial = createPromptSurfaceSectionStates(currentDocument);
-    let previous = [];
+    const previous = [];
     const emissions = [
       diffPromptSurfaceSections(previous, initial, true),
       ...Array.from({ length: 7 }, () => diffPromptSurfaceSections(initial, initial, false)),

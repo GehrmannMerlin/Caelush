@@ -19,6 +19,8 @@ import {
   ClientAgentRunSchema,
   ClientAgentSessionSchema,
   ContextUsageResponseSchema,
+  HistoryLookupQuerySchema,
+  HistoryLookupResponseSchema,
   CreateRunRequestSchema,
   CreateSessionRequestSchema,
   CreateWorkspaceRequestSchema,
@@ -1004,6 +1006,24 @@ export class CaelushClient {
       `/api/v1/runs/${encodeURIComponent(runId)}/context-usage`,
       { method: "GET" },
       ContextUsageResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async getRunHistory(
+    runId: RunId,
+    query: import("@caelush/protocol").HistoryLookupQuery,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<import("@caelush/protocol").HistoryLookupResponse> {
+    const parsed = HistoryLookupQuerySchema.parse(query);
+    const search = new URLSearchParams({ sourceRef: parsed.sourceRef });
+    if (parsed.cursor !== undefined) search.set("cursor", parsed.cursor);
+    if (parsed.maxBytes !== undefined) search.set("maxBytes", String(parsed.maxBytes));
+    return this.request(
+      `/api/v1/runs/${encodeURIComponent(runId)}/history?${search.toString()}`,
+      { method: "GET" },
+      HistoryLookupResponseSchema,
       [200],
       options,
     );

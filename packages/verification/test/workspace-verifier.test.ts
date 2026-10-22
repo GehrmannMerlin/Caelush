@@ -66,7 +66,7 @@ function oversizedT013EquivalentResult(): {
     inspectionHash: "a".repeat(64),
     contentFingerprints,
     workspaceFreshnessHash: computeWorkspaceFreshnessHash(fingerprintEntries),
-    artifactEvidence: changed.map(({ path }, index) => ({
+    artifactEvidence: changed.map(({ path }) => ({
       path,
       kind: "TEXT" as const,
       sha256: contentFingerprints[path]!.sha256,

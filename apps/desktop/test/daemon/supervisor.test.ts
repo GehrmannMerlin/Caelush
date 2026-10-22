@@ -131,7 +131,9 @@ function createAuthorizedState(userId = "8d5cc9cb-f70d-4f5f-9d95-69c8e8eb8857"):
     },
     offlineGrant: {
       issuedAt: "2026-01-01T00:00:00.000Z",
-      expiresAt: "2026-10-20T00:00:00.000Z",
+      // Keep this fixture valid beyond the present so default-clock tests do not expire on the
+      // calendar day they are executed. Expiry-specific cases replace this value with their clock.
+      expiresAt: "2030-10-20T00:00:00.000Z",
       entitlements: [],
       remainingHours: 360,
     },
@@ -309,6 +311,30 @@ describe("DesktopDaemonSupervisor", () => {
     lease?.release();
     await setup.supervisor.beginAccountBoundary();
     expect(setup.supervisor.acquireProxyLease(new AbortController().signal)).toBeNull();
+  });
+
+  it("bounds long authorization timers to Node's maximum delay", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const now = Date.parse("2026-10-22T12:00:00.000Z");
+    const expiry = now + 365 * 24 * 60 * 60 * 1000;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const setup = createSupervisor({ now: () => now });
+    const base = createAuthorizedState();
+    const state: AccountState = {
+      ...base,
+      offlineGrant: { ...base.offlineGrant!, expiresAt: new Date(expiry).toISOString() },
+    };
+
+    try {
+      await setup.supervisor.synchronizeAccountState(state);
+      const delays = setTimeoutSpy.mock.calls.map(([, delay]) => Number(delay));
+      expect(delays).toContain(2_147_483_647);
+      expect(setup.supervisor.getAgentEntry(state)).toEqual({ available: true });
+    } finally {
+      await setup.supervisor.closeForApplicationQuit();
+      setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("routes credential RPC through Main with the generation's User and Profile binding", async () => {

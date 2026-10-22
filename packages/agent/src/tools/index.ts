@@ -323,6 +323,7 @@ export type {
   DurableToolExecutionOutcome,
   DurableToolExecutionRequest,
 } from "./durable/durable-execution-coordinator.js";
+export type { EffectReconciliationPort } from "./durable/effect-reconciliation-port.js";
 
 /* The canonical Tool batch: request, item outcome, batch outcome, errors and the scheduler. */
 export {
@@ -346,6 +347,9 @@ export type {
   ToolBatchItemOutcome,
   ToolBatchOutcome,
   ToolBatchRequest,
+  ToolBatchSchedulingBarrier,
+  ToolBatchSegmentInput,
+  ToolBatchSegmentOutput,
 } from "./batch/batch-types.js";
 export {
   createToolBatchCoordinator,

@@ -83,13 +83,13 @@ function compactionFixture(options: {
       runId: historicalRunId,
       turnId: historicalTurnId,
       sequence: 1,
-      text: "historical intent ".repeat(800),
+      text: "historical intent ".repeat(80),
     }),
     userMessage({
       runId: historicalRunId,
       turnId: historicalTurnId,
       sequence: 2,
-      text: "historical evidence ".repeat(200),
+      text: "historical evidence ".repeat(40),
     }),
   ];
   const current = userMessage({
@@ -211,7 +211,7 @@ function compactionFixture(options: {
     engine,
     input: {
       identity: {
-        runId: historicalRunId as never,
+        runId: currentRunId as never,
         sessionId: createSessionId(),
         goal: "current goal",
       },
@@ -278,7 +278,7 @@ describe("Phase 8C Context Engine failure boundaries", () => {
     expect(fixture.commitCalls).toBe(0);
   });
 
-  it("builds a degraded deterministic checkpoint for semantic fallback", async () => {
+  it("keeps the original projection when semantic summary fails but the input still fits", async () => {
     const fixture = compactionFixture({
       summarizer: {
         async summarize() {
@@ -293,20 +293,20 @@ describe("Phase 8C Context Engine failure boundaries", () => {
 
     const prepared = await fixture.engine.prepare(fixture.input);
 
-    expect(fixture.commitCalls).toBe(1);
-    expect(prepared.report.compactionCount).toBe(1);
-    expect(fixture.lastCheckpoint?.degraded).toBe(true);
-    expect(fixture.lastCheckpoint?.structuredCheckpoint.verificationState).toBe("CURRENT");
-    expect(fixture.lastCheckpoint?.structuredCheckpoint.blocked).toContain(
-      "Semantic summarization was unavailable; continue from deterministic durable state.",
-    );
+    expect(fixture.commitCalls).toBe(0);
+    expect(prepared.report.compactionCount).toBe(0);
+    expect(fixture.lastCheckpoint).toBeUndefined();
   });
 
   it("stops after semantic output is cancelled and never collects facts or commits", async () => {
     const controller = new AbortController();
+    let summaryCalls = 0;
     let factsCalls = 0;
     const fixture = compactionFixture({
-      summarizer: acceptedSummarizer(() => controller.abort()),
+      summarizer: acceptedSummarizer(() => {
+        summaryCalls += 1;
+        controller.abort();
+      }),
       factsProvider: {
         async collect() {
           factsCalls += 1;
@@ -318,11 +318,17 @@ describe("Phase 8C Context Engine failure boundaries", () => {
         },
       },
       signal: controller.signal,
+      mode: "FORCED_RECOVERY",
     });
 
-    await expect(fixture.engine.prepare(fixture.input)).rejects.toMatchObject({
-      name: "AbortError",
-    });
+    let caught: unknown;
+    try {
+      await fixture.engine.prepare(fixture.input);
+    } catch (error) {
+      caught = error;
+    }
+    expect(summaryCalls, "the test must reach the cancelled semantic summary").toBe(1);
+    expect(caught).toMatchObject({ name: "AbortError" });
     expect(factsCalls).toBe(0);
     expect(fixture.commitCalls).toBe(0);
   });

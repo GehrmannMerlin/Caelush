@@ -179,7 +179,7 @@ describe("OpenAI-compatible stream golden: text", () => {
         },
       });
       for await (const _event of createOpenAICompatibleApiAdapter().stream(input)) {
-        /* drain */
+        void _event;
       }
       expect(completion?.completeness).toBe("INCOMPLETE");
     },

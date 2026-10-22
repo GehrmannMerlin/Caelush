@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createWorkspaceId } from "@caelush/protocol";
@@ -82,6 +83,26 @@ describe("Desktop workspace file authority", () => {
     expect(result.items.map((item) => item.name)).toEqual(["src"]);
     expect(result.items[0]?.kind).toBe("DIRECTORY");
     expect(JSON.stringify(result)).not.toContain(root);
+  });
+
+  it("accepts a safe Workspace root addressed through its Windows short-path alias", async (context) => {
+    if (process.platform !== "win32") context.skip();
+    const root = await makeRoot();
+    await writeFile(path.join(root, "visible.txt"), "safe alias\n", "utf8");
+    const shortRoot = execFileSync(
+      process.env.ComSpec ?? "cmd.exe",
+      ["/d", "/u", "/c", `for %I in (${root}) do @echo %~sI`],
+      { encoding: "utf16le", windowsHide: true },
+    ).trim();
+    if (shortRoot.toLowerCase() === root.toLowerCase()) {
+      context.skip();
+      return;
+    }
+
+    const { service } = serviceFor(shortRoot);
+    await expect(
+      service.previewText({ workspaceId: WORKSPACE_ID, relativePath: "visible.txt" }),
+    ).resolves.toMatchObject({ supported: true, text: "safe alias\n" });
   });
 
   it("previews bounded UTF-8 text and reports binary files without decoding them", async () => {

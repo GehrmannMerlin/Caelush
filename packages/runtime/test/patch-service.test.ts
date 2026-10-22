@@ -87,4 +87,40 @@ describe("RuntimePatchService", () => {
     );
     expect(await readFile(path.join(scope.logicalRoot, "old.txt"), "utf8")).toBe("external\n");
   });
+
+  it("reconciles an exact patch postcondition with read-only inspection", async () => {
+    const scope = await scopeFixture();
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: old.txt",
+      "@@",
+      "-old",
+      "+updated",
+      "*** End Patch",
+    ].join("\n");
+    expect(await scope.patch.reconcile({ patch })).toEqual({ kind: "INCONCLUSIVE" });
+    await scope.patch.apply({ patch });
+    const beforeInspection = await readFile(path.join(scope.logicalRoot, "old.txt"));
+
+    await expect(scope.patch.reconcile({ patch })).resolves.toEqual({
+      kind: "MATCHED_EXPECTED_STATE",
+    });
+    expect(await readFile(path.join(scope.logicalRoot, "old.txt"))).toEqual(beforeInspection);
+  });
+
+  it("does not treat a concurrent change to a patch target as proof of completion", async () => {
+    const scope = await scopeFixture();
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: old.txt",
+      "@@",
+      "-old",
+      "+updated",
+      "*** End Patch",
+    ].join("\n");
+    await writeFile(path.join(scope.logicalRoot, "old.txt"), "external\n");
+
+    await expect(scope.patch.reconcile({ patch })).resolves.toEqual({ kind: "INCONCLUSIVE" });
+    expect(await readFile(path.join(scope.logicalRoot, "old.txt"), "utf8")).toBe("external\n");
+  });
 });

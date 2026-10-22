@@ -47,8 +47,14 @@ class RecordingAdapter implements ApiAdapter {
 describe("Context preparation failure in the production daemon", () => {
   it("settles as a local context failure, reports no provider call and publishes only the classification", async () => {
     const adapter = new RecordingAdapter();
+    const contextDiagnostics: unknown[] = [];
     const fixture = await createReliabilityFixture({
       adapter,
+      logger: {
+        contextPreparationFailure(entry) {
+          contextDiagnostics.push(entry);
+        },
+      },
       // Too small for the system prompt, the authoritative state and the Run's goal together.
       modelLimits: { contextWindowTokens: 600, maxOutputTokens: 128 },
     });
@@ -66,8 +72,7 @@ describe("Context preparation failure in the production daemon", () => {
     const error = snapshot?.state?.errors.at(-1) as AgentError | undefined;
     expect(error).toBeDefined();
     const details = error?.details as
-      | { contextPreparation?: { reasonCode?: string; stage?: string } }
-      | undefined;
+      { contextPreparation?: { reasonCode?: string; stage?: string } } | undefined;
     /*
      * The exact classification, not a membership check.
      *
@@ -83,6 +88,12 @@ describe("Context preparation failure in the production daemon", () => {
     expect(details?.contextPreparation).toStrictEqual({
       reasonCode: "CONTEXT_PRESSURE_ACCOUNTING_FAILED",
       stage: "pressure_accounting",
+    });
+    expect(contextDiagnostics).toHaveLength(1);
+    expect(contextDiagnostics[0]).toMatchObject({
+      reasonCode: "CONTEXT_PRESSURE_ACCOUNTING_FAILED",
+      stage: "pressure_accounting",
+      causeKinds: ["ContextPressureAccountingError"],
     });
     // The misreport this replaced: a local projection failure settled as a model failure.
     expect(error?.code).toBe("INTERNAL_ERROR");

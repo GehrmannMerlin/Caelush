@@ -9,18 +9,12 @@ const sessionWorkspaceSource = readFileSync(
   "utf8",
 );
 
-function lastCssRule(selector: string): string {
-  const marker = `${selector} {`;
-  const start = styles.lastIndexOf(marker);
-  if (start < 0) return "";
-  const end = styles.indexOf("}", start);
-  return end < 0 ? styles.slice(start) : styles.slice(start, end + 1);
-}
-
 describe("responsive workspace layout", () => {
   it("does not render a desktop top navigation bar outside the two-panel shell", () => {
     expect(appSource).not.toContain('className: "web-topbar"');
-    expect(appSource).toContain('className: "workspace-frame"');
+    expect(appSource).toMatch(
+      /className:\s*input\.desktopPanelApi === null\s*\?\s*"workspace-frame"\s*:\s*"workspace-frame workspace-frame--desktop"/,
+    );
     expect(appSource).toContain('className: "sidebar-toggle-button"');
   });
 
@@ -101,13 +95,15 @@ describe("responsive workspace layout", () => {
   });
 
   it("keeps sidebar labels high-contrast and makes the add-workspace action full width", () => {
-    expect(lastCssRule(".workspace-sidebar")).toContain("color: #111827");
-    expect(lastCssRule(".workspace-add-button")).toContain("width: 100%");
-    expect(lastCssRule(".workspace-add-button")).toContain("justify-content: center");
-    expect(lastCssRule(".workspace-add-button")).toContain("text-align: center");
-    expect(lastCssRule(".workspace-add-button")).toContain("color: #111827");
-    expect(lastCssRule(".workspace-list-button")).toContain("color: #111827");
-    expect(lastCssRule(".workspace-session-item")).toContain("color: #111827");
+    // Theme-specific rules below this block intentionally use their own colors. Inspect the explicit
+    // light-workbench accessibility override instead of whichever selector happens to be last.
+    const sidebarOverride = styles.slice(styles.lastIndexOf("/* Keep sidebar copy readable"));
+    expect(sidebarOverride).toMatch(/\.workspace-sidebar\s*\{[^}]*color:\s*#111827/u);
+    expect(sidebarOverride).toMatch(
+      /\.workspace-add-button\s*\{[^}]*width:\s*100%;[^}]*justify-content:\s*center;[^}]*color:\s*#111827;[^}]*text-align:\s*center;/u,
+    );
+    expect(sidebarOverride).toMatch(/\.workspace-list-button\s*\{[^}]*color:\s*#111827/u);
+    expect(sidebarOverride).toMatch(/\.workspace-session-item\s*\{[^}]*color:\s*#111827/u);
   });
 
   it("renders a compact left-aligned session title without the kicker", () => {

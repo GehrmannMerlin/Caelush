@@ -3128,6 +3128,105 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.context-inspector-process {
+  display: grid;
+  margin-top: 12px;
+  padding: 10px;
+  gap: 7px;
+  border: 1px solid #e3ebf5;
+  border-radius: 9px;
+  background: #f8fbff;
+  line-height: 1.45;
+}
+
+.context-inspector-process > strong {
+  color: #263b55;
+  font-size: 0.79rem;
+}
+
+.context-inspector-process > p,
+.context-history-reference-content > p {
+  margin: 0;
+  color: #60738b;
+  font-size: 0.74rem;
+}
+
+.context-inspector-process > button,
+.context-history-reference button {
+  justify-self: start;
+  min-height: 28px;
+  padding: 3px 9px;
+  border: 1px solid #cbd9eb;
+  border-radius: 7px;
+  background: #fff;
+  color: #315d9b;
+  cursor: pointer;
+  font-size: 0.73rem;
+}
+
+.context-inspector-process > button:disabled,
+.context-history-reference button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.context-history-reference {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.context-history-reference > code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #71839a;
+  font-size: 0.64rem;
+}
+
+.context-history-reference-content {
+  display: grid;
+  max-height: 260px;
+  overflow: auto;
+  gap: 8px;
+  overscroll-behavior: contain;
+}
+
+.context-history-item {
+  padding: 7px;
+  border: 1px solid #e3ebf5;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.context-history-item > strong {
+  color: #60738b;
+  font-size: 0.68rem;
+}
+
+.context-history-item > pre {
+  max-height: 180px;
+  margin: 5px 0 0;
+  overflow: auto;
+  color: #31445c;
+  font: inherit;
+  font-size: 0.72rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+:root[data-caelush-theme="dark"] .context-inspector-process,
+:root[data-caelush-theme="dark"] .context-history-item {
+  border-color: var(--caelush-border);
+  background: var(--caelush-page);
+}
+
+:root[data-caelush-theme="dark"] .context-inspector-process > button,
+:root[data-caelush-theme="dark"] .context-history-reference button {
+  border-color: var(--caelush-border-strong);
+  background: var(--caelush-card);
+  color: var(--caelush-text);
+}
+
 @media (max-width: 480px) {
   .context-inspector {
     width: min(320px, calc(100vw - 28px));

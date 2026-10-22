@@ -1,4 +1,5 @@
 import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -65,6 +66,50 @@ function updatePatch(filePath: string, before: string, after: string): string {
 }
 
 describe("policy-aware host filesystem scope", () => {
+  it("compares canonical targets with Windows short-path host and protected roots", async (context) => {
+    if (process.platform !== "win32") context.skip();
+    const { parent, workspace, outside, protectedRoot } = await fixture();
+    const shortPath = (value: string) =>
+      execFileSync(
+        process.env.ComSpec ?? "cmd.exe",
+        ["/d", "/u", "/c", `for %I in (${value}) do @echo %~sI`],
+        { encoding: "utf16le", windowsHide: true },
+      ).trim();
+    const shortParent = shortPath(parent);
+    const shortProtectedRoot = shortPath(protectedRoot);
+    if (
+      shortParent.toLowerCase() === parent.toLowerCase() ||
+      shortProtectedRoot.toLowerCase() === protectedRoot.toLowerCase()
+    ) {
+      context.skip();
+    }
+    const workspaceId = createWorkspaceId();
+    const runtime = new LocalRuntime();
+    const scope = await runtime.openWorkspace(workspaceRef(workspace, workspaceId), {
+      filesystemPolicy: {
+        ...policy(workspace, shortParent, "HOST_USER_SCOPE", [shortProtectedRoot]),
+        workspaceId,
+      },
+    });
+
+    await expect(
+      scope.pathResolver.resolveFilesystemTarget({
+        path: path.join(outside, "external.txt"),
+        policy: scope.filesystemPolicy,
+        operation: "READ",
+      }),
+    ).resolves.toMatchObject({ relation: "HOST_USER", kind: "FILE" });
+    await expect(
+      scope.patch.apply({
+        patch: updatePatch(path.join(protectedRoot, "locked.txt"), "locked", "tampered"),
+      }),
+    ).rejects.toThrowError(expect.objectContaining({ code: "PROTECTED_ROOT_MUTATION" }));
+    await expect(readFile(path.join(protectedRoot, "locked.txt"), "utf8")).resolves.toBe(
+      "locked\n",
+    );
+    await runtime.dispose();
+  });
+
   it("classifies and reads an external host-user target only in Full Access", async () => {
     const { parent, workspace, outside } = await fixture();
     const workspaceId = createWorkspaceId();

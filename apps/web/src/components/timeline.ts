@@ -311,7 +311,7 @@ function renderRetry(retry: TimelineRetry, now: number): ReactElement {
   const isExhausted = retry.exhaustedReason !== undefined;
   const remainingSeconds = Math.ceil(Math.max(0, (retry.nextAttemptAt ?? now) - now) / 1_000);
   const text = isExhausted
-    ? `重试已耗尽：${retry.maxRetries}/${retry.maxRetries} 次重试后模型请求失败`
+    ? "本轮重试次数已用完，任务进度已保存"
     : retry.status === "FAILED"
       ? `模型重试失败 ${retryCount}`
       : retry.status === "PENDING"
@@ -325,9 +325,8 @@ function renderRetry(retry: TimelineRetry, now: number): ReactElement {
     {
       className: `timeline-retry timeline-retry--${retry.status.toLowerCase()}`,
       key: retry.id,
-      ...(isExhausted || retry.status === "FAILED"
-        ? { role: "alert" }
-        : { role: "status", "aria-live": "polite" }),
+      role: "status",
+      "aria-live": "polite",
     },
     createElement(
       "span",

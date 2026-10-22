@@ -4,6 +4,8 @@ import {
   ApprovalResolutionRequestSchema,
   RunActionResponseSchema,
   ContextUsageResponseSchema,
+  HistoryLookupQuerySchema,
+  HistoryLookupResponseSchema,
   type ApprovalResolutionRequest,
   type RunId,
   type ContextUsageProjection,
@@ -14,6 +16,7 @@ import type {
   RunExecutionSupervisor,
   RunExecutionSupervisorResult,
 } from "../execution/run-execution-supervisor.js";
+import type { HistoryLookupOperations } from "@caelush/agent";
 import { toClientAgentRun } from "../services/public-projection.js";
 import { registerRunInputRoutes } from "./run-inputs.js";
 import type { RunInputService } from "../services/run-input-intake.js";
@@ -30,6 +33,7 @@ export interface DaemonExecutionSurface {
   readonly contextUsage?: {
     getContextUsage(runId: RunId): Promise<ContextUsageProjection | undefined>;
   };
+  readonly historyLookup?: HistoryLookupOperations;
   /**
    * Present only when the durable intake → canonical USER → next model step path is composed.
    * A daemon without it must not advertise `runInputV1`.
@@ -123,6 +127,34 @@ export function registerExecutionRoutes(
         throw new StorageNotFoundError("AgentRun", runId);
       }
       return (await surface.contextUsage?.getContextUsage(runId as RunId)) ?? null;
+    },
+  );
+
+  app.get(
+    "/api/v1/runs/:runId/history",
+    {
+      schema: {
+        querystring: HistoryLookupQuerySchema,
+        response: { 200: HistoryLookupResponseSchema },
+      },
+    },
+    async (request) => {
+      const { runId } = request.params as { runId: string };
+      const run = await surface.runs.get(runId as RunId);
+      if (run === null) throw new StorageNotFoundError("AgentRun", runId);
+      if (surface.historyLookup === undefined) {
+        return { kind: "UNAVAILABLE", reason: "SOURCE_UNAVAILABLE" } as const;
+      }
+      const query = request.query as import("@caelush/protocol").HistoryLookupQuery;
+      return surface.historyLookup.read(
+        {
+          sourceRef: query.sourceRef,
+          ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+          ...(query.maxBytes === undefined ? {} : { maxBytes: query.maxBytes }),
+        },
+        { runId: run.id, sessionId: run.sessionId },
+        new AbortController().signal,
+      );
     },
   );
 

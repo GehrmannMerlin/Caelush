@@ -7,7 +7,6 @@ import {
 import type {
   VerificationCheckExecutionResult,
   VerificationExecutionRecoveryStorePort,
-  VerificationExecutionStorePort,
   VerificationSettlementCommitResult,
   VerificationStageRunnerInput,
   VerificationStageRunnerResult,

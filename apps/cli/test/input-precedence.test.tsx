@@ -4,7 +4,6 @@ import {
   createRunId,
   createSessionId,
   createToolInvocationId,
-  createWorkspaceId,
 } from "@caelush/protocol";
 import { render } from "ink-testing-library";
 import React from "react";

@@ -1,10 +1,21 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopApp } from "../../src/renderer/App.js";
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("desktop page chrome", () => {
   it("omits the shared top and bottom bars while rendering the active screen", () => {
+    vi.stubGlobal("window", {
+      caelushDesktop: {
+        appearance: {
+          initialSnapshot: { preference: "system", resolvedTheme: "light", revision: 0 },
+        },
+      },
+      location: { protocol: "http:", search: "" },
+      matchMedia: () => ({ matches: true }),
+    });
     const html = renderToStaticMarkup(createElement(DesktopApp));
 
     expect(html).toContain('class="auth-layout"');

@@ -18,6 +18,31 @@ import { RunExecutionInvariantError } from "../ports/run-execution-store.js";
 export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): void {
   const { run, state, activeStep, continuation } = snapshot;
 
+  if (run.completionDisposition !== undefined) {
+    if (run.status !== "FAILED") {
+      throw new RunExecutionInvariantError(
+        "INCOMPLETE completion disposition is only valid on a failed Run",
+      );
+    }
+    const requirements = run.acceptanceRequirements;
+    if (requirements === undefined || requirements.length === 0) {
+      throw new RunExecutionInvariantError(
+        "INCOMPLETE completion disposition needs persisted acceptance requirements",
+      );
+    }
+    const expectedSources = new Set(requirements.map(({ source }) => source));
+    const actualSources = new Set(run.completionDisposition.requirementSources);
+    if (
+      actualSources.size !== run.completionDisposition.requirementSources.length ||
+      actualSources.size !== expectedSources.size ||
+      [...expectedSources].some((source) => !actualSources.has(source))
+    ) {
+      throw new RunExecutionInvariantError(
+        "INCOMPLETE completion disposition sources must match the Run's acceptance requirements",
+      );
+    }
+  }
+
   if (run.status === "PENDING") {
     if (
       state !== undefined ||
@@ -109,13 +134,17 @@ export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): voi
       continuation.type !== "WAITING_TOOL_RESULTS" &&
       continuation.type !== "WAITING_RESOURCE" &&
       continuation.type !== "WAITING_STEERING" &&
+      continuation.type !== "WAITING_PROVIDER" &&
       continuation.type !== "WAITING_RETRY" &&
       continuation.type !== "WAITING_VERIFICATION_REPAIR"
     ) {
       throw new RunExecutionInvariantError("RUNNING Run has an invalid continuation");
     }
-    if (continuation?.type === "WAITING_RETRY" && activeStep !== undefined) {
-      throw new RunExecutionInvariantError("WAITING_RETRY Run cannot retain an active Step");
+    if (
+      (continuation?.type === "WAITING_RETRY" || continuation?.type === "WAITING_PROVIDER") &&
+      activeStep !== undefined
+    ) {
+      throw new RunExecutionInvariantError("Provider retry wait cannot retain an active Step");
     }
     if (continuation?.type === "WAITING_STEERING") {
       if (activeStep !== undefined) {

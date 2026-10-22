@@ -261,6 +261,57 @@ describe("daemon execution routes", () => {
   });
 });
 
+describe("daemon history lookup route", () => {
+  let app: ReturnType<typeof makeApp> | undefined;
+
+  afterEach(async () => {
+    await app?.close();
+    app = undefined;
+  });
+
+  it("reads source references with scope bound to the requested Run's Session", async () => {
+    const surface = makeSurface();
+    const read = vi.fn(async () => ({
+      kind: "PAGE" as const,
+      items: [
+        {
+          messageId: "msg_1",
+          sequence: 1,
+          role: "USER" as const,
+          text: "原始用户要求",
+          byteLength: 18,
+        },
+      ],
+      nextCursor: "c2",
+      sourceRef: "history:v1:source-run:1:4#1234567890abcdef",
+      integrity: "VERIFIED" as const,
+      byteCount: 18,
+    }));
+    surface.historyLookup = { read };
+    app = makeApp(surface);
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/runs/${currentRun.id}/history?sourceRef=history%3Av1%3Asource-run%3A1%3A4%231234567890abcdef&maxBytes=2048`,
+      headers: { host: "127.0.0.1" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      kind: "PAGE",
+      items: [{ text: "原始用户要求" }],
+      nextCursor: "c2",
+    });
+    expect(read).toHaveBeenCalledWith(
+      {
+        sourceRef: "history:v1:source-run:1:4#1234567890abcdef",
+        maxBytes: 2048,
+      },
+      { runId: currentRun.id, sessionId: currentRun.sessionId },
+      expect.any(AbortSignal),
+    );
+  });
+});
+
 describe("daemon run input routes", () => {
   let app: ReturnType<typeof makeApp> | undefined;
   afterEach(async () => {

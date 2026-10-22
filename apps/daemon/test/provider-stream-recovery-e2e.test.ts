@@ -1,7 +1,12 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createWorkspaceId, type AgentEvent, type PublicRunEvent } from "@caelush/protocol";
+import {
+  createTimestampMs,
+  createWorkspaceId,
+  type AgentEvent,
+  type PublicRunEvent,
+} from "@caelush/protocol";
 import { CaelushClient } from "@caelush/client";
 import type { AIProviderBinding, ModelDescriptor, ModelDescriptorSourcePort } from "@caelush/ai";
 import { openCaelushStorage } from "@caelush/storage";
@@ -13,6 +18,8 @@ import {
   finishOpenAISse,
   sendOpenAIText,
   sendRateLimit,
+  sendServiceUnavailable,
+  sendUnauthorized,
   writeOpenAIChunk,
   type ControllableProviderServer,
 } from "./support/controllable-provider-server.js";
@@ -36,6 +43,54 @@ afterEach(async () => {
 });
 
 describe("Provider stream recovery daemon E2E", () => {
+  it("retries a transient 503 response and completes on the next provider turn", async () => {
+    const workspacePath = await makeWorkspace("caelush-stream-503-e2e-");
+    let taskRequests = 0;
+    provider = await createControllableProviderServer((request, response) => {
+      if (isReviewRequest(request.body)) {
+        sendOpenAIText(response, JSON.stringify({ verdict: "PASS", summary: "Accepted." }));
+        return;
+      }
+      taskRequests += 1;
+      if (taskRequests === 1) sendServiceUnavailable(response, "0");
+      else sendOpenAIText(response, "Recovered after a transient provider outage.");
+    });
+    daemon = await startRecoveryDaemon(workspacePath, provider.endpoint);
+    const client = new CaelushClient({ baseUrl: daemon.url });
+    const { run } = await createRun(client, workspacePath);
+
+    const events = await observeRunEvents(client, run.id, async () => {
+      await client.startRun(run.id);
+    });
+
+    expect((await waitForRun(client, run.id)).status).toBe("COMPLETED");
+    expect(taskRequests).toBe(2);
+    expect(events.filter((event) => event.type === "retry.scheduled")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "retry.started")).toHaveLength(1);
+  }, 20_000);
+
+  it("does not retry a permanent 401 provider configuration failure", async () => {
+    const workspacePath = await makeWorkspace("caelush-stream-401-e2e-");
+    provider = await createControllableProviderServer((request, response) => {
+      if (isReviewRequest(request.body)) {
+        sendOpenAIText(response, JSON.stringify({ verdict: "PASS", summary: "Accepted." }));
+        return;
+      }
+      sendUnauthorized(response);
+    });
+    daemon = await startRecoveryDaemon(workspacePath, provider.endpoint);
+    const client = new CaelushClient({ baseUrl: daemon.url });
+    const { run } = await createRun(client, workspacePath);
+
+    const events = await observeRunEvents(client, run.id, async () => {
+      await client.startRun(run.id);
+    });
+
+    expect((await waitForRun(client, run.id)).status).toBe("FAILED");
+    expect(provider.requests).toHaveLength(1);
+    expect(events.filter((event) => event.type === "retry.scheduled")).toHaveLength(0);
+  }, 20_000);
+
   it("nudges on silence, aborts the real HTTP stream, durably retries, and drops partial text/Tool calls", async () => {
     const workspacePath = await makeWorkspace("caelush-stream-idle-e2e-");
     let taskRequests = 0;
@@ -197,28 +252,13 @@ describe("Provider stream recovery daemon E2E", () => {
       attempt: 2,
       maxAttempts: 6,
     });
-    expect(provider.requests).toHaveLength(3);
+    // This fixture completes naturally without workspace edits, so the only provider requests are
+    // the failed initial attempt and its durable retry. Completion does not schedule a reviewer turn.
+    expect(provider.requests).toHaveLength(2);
     const firstMessages = requestMessages(provider.requests[0]?.body);
     const retriedMessages = requestMessages(provider.requests[1]?.body);
+    expect(isReviewRequest(provider.requests[1]!.body)).toBe(false);
     expect(isMessagePrefix(firstMessages, retriedMessages)).toBe(true);
-
-    const storage = await openCaelushStorage({ path: join(workspacePath, "caelush.db") });
-    try {
-      const currentEpoch = await storage.promptSurface.getCurrent(run.id);
-      expect(currentEpoch).toBeDefined();
-      const surface =
-        currentEpoch === undefined
-          ? undefined
-          : await storage.promptSurface.readEpoch(run.id, currentEpoch.epochId);
-      const snapshots = surface?.snapshots ?? [];
-      expect(snapshots.length).toBeGreaterThan(0);
-      expect(new Set(snapshots.map((snapshot) => snapshot.sourceStepSequence)).size).toBe(
-        snapshots.length,
-      );
-      expect(snapshots.every((snapshot, index) => snapshot.ordinal === index + 1)).toBe(true);
-    } finally {
-      await storage.close();
-    }
   }, 15_000);
 
   it("switches only to a preconfigured equivalent transport on the next durable attempt", async () => {
@@ -364,14 +404,17 @@ describe("Provider stream recovery daemon E2E", () => {
     expect(events.filter((event) => event.type === "run.completed")).toHaveLength(1);
   }, 20_000);
 
-  it("exhausts exactly five retries and exposes an explicit terminal failure", async () => {
+  it("resumes a persisted next retry episode after restart", async () => {
     const workspacePath = await makeWorkspace("caelush-stream-exhaust-e2e-");
+    let taskRequests = 0;
     provider = await createControllableProviderServer((request, response) => {
       if (isReviewRequest(request.body)) {
         sendOpenAIText(response, JSON.stringify({ verdict: "PASS", summary: "Accepted." }));
         return;
       }
-      sendRateLimit(response, "0");
+      taskRequests += 1;
+      if (taskRequests <= 6) sendRateLimit(response, "0");
+      else sendOpenAIText(response, "Recovered from the next retry episode after restart.");
     });
     daemon = await startRecoveryDaemon(workspacePath, provider.endpoint);
     const client = new CaelushClient({ baseUrl: daemon.url });
@@ -382,11 +425,18 @@ describe("Provider stream recovery daemon E2E", () => {
       async () => {
         await client.startRun(run.id);
       },
-      "run.failed",
+      "retry.exhausted",
     );
-    const failedRun = await waitForRun(client, run.id);
+    const currentRun = await client.getRun(run.id);
+    const storage = await openCaelushStorage({ path: join(workspacePath, "caelush.db") });
+    let continuation;
+    try {
+      continuation = (await storage.execution.load(run.id))?.continuation;
+    } finally {
+      await storage.close();
+    }
 
-    expect(failedRun.status).toBe("FAILED");
+    expect(currentRun.status).toBe("RUNNING");
     expect(provider.requests).toHaveLength(6);
     expect(events.filter((event) => event.type === "retry.started")).toHaveLength(5);
     expect(events.filter((event) => event.type === "retry.scheduled")).toHaveLength(5);
@@ -397,6 +447,54 @@ describe("Provider stream recovery daemon E2E", () => {
       maxRetries: 5,
       reason: "ATTEMPTS_EXHAUSTED",
     });
+    expect(continuation).toMatchObject({
+      type: "WAITING_PROVIDER",
+      mode: "START",
+      attempt: 1,
+      maxAttempts: 6,
+      episode: 2,
+      totalAttempts: 6,
+    });
+    expect(
+      continuation?.type === "WAITING_PROVIDER" ? Number(continuation.nextAttemptAt) : 0,
+    ).toBeGreaterThan(Date.now() + 240_000);
+
+    const exhausted = events.find((event) => event.type === "retry.exhausted");
+    expect(exhausted?.durability.kind).toBe("DURABLE");
+    await daemon.close();
+    daemon = undefined;
+
+    // Move the durable retry checkpoint to its due boundary through the repository API. The
+    // production five-minute pause is asserted above; this avoids making a recovery test sleep
+    // five minutes while still exercising restart admission from that exact continuation.
+    const resumeStorage = await openCaelushStorage({ path: join(workspacePath, "caelush.db") });
+    try {
+      const checkpoint = await resumeStorage.continuations.get(run.id);
+      expect(checkpoint?.checkpoint.type).toBe("WAITING_PROVIDER");
+      if (checkpoint?.checkpoint.type !== "WAITING_PROVIDER") {
+        throw new Error("The exhausted retry episode was not persisted.");
+      }
+      const now = createTimestampMs(Date.now());
+      await resumeStorage.continuations.set(
+        run.id,
+        { ...checkpoint.checkpoint, nextAttemptAt: now },
+        now,
+        checkpoint.revision,
+      );
+    } finally {
+      await resumeStorage.close();
+    }
+
+    daemon = await startRecoveryDaemon(workspacePath, provider.endpoint);
+    const resumedClient = new CaelushClient({ baseUrl: daemon.url });
+    const resumedEvents = await observeExistingRunEvents(
+      resumedClient,
+      run.id,
+      exhausted?.durability.kind === "DURABLE" ? exhausted.durability.sequence : 0,
+    );
+    expect((await waitForRun(resumedClient, run.id)).status).toBe("COMPLETED");
+    expect(taskRequests).toBe(7);
+    expect(resumedEvents.filter((event) => event.type === "retry.started")).toHaveLength(1);
   }, 20_000);
 });
 

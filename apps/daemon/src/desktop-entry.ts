@@ -160,10 +160,15 @@ async function startFromBootstrap(
       .sort()
       .some((capability, index) => capability !== SORTED_REQUIRED_CAPABILITIES[index])
   ) {
+    // Best-effort release of the local credential reference before asynchronous failure handling.
+    // The immutable string cannot be zeroized in place, but this avoids retaining its reference.
+    // eslint-disable-next-line no-useless-assignment
     bootstrapSecret = "";
     await failStartup(message.generationId, "BOOTSTRAP_INCOMPATIBLE");
     return;
   }
+  // Best-effort release of the local credential reference before startup work continues.
+  // eslint-disable-next-line no-useless-assignment
   bootstrapSecret = "";
 
   let failureCode = "DAEMON_START_FAILED";

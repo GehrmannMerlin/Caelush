@@ -152,9 +152,7 @@ function assistantToolCalls(
   );
 }
 
-function assistantRejectedToolCalls(
-  message: AIAssistantMessage,
-): readonly {
+function assistantRejectedToolCalls(message: AIAssistantMessage): readonly {
   toolCallId: string;
   toolName: string;
   issue: { code: string; argumentBytes: number };
@@ -194,10 +192,7 @@ export const AgentToolCallsDecisionSchema = z
     }
     const calls = assistantToolCalls(decision.modelTurn.assistantMessage);
     const rejectedCalls = assistantRejectedToolCalls(decision.modelTurn.assistantMessage);
-    if (
-      calls.length !== decision.toolRequests.length ||
-      rejectedCalls.length !== rejected.length
-    ) {
+    if (calls.length !== decision.toolRequests.length || rejectedCalls.length !== rejected.length) {
       context.addIssue({ code: "custom", message: "assistant tool calls do not match requests" });
       return;
     }
@@ -317,16 +312,31 @@ export const WaitingVerificationRepairContinuationSchema = z
   })
   .strict();
 
-export const WaitingResourceContinuationSchema = z
-  .object({
-    type: z.literal("WAITING_RESOURCE"),
-    runId: RunIdSchema,
-    sourceStepId: StepIdSchema,
-    pendingDecision: AgentToolCallsDecisionSchema,
-    reason: z.literal("NO_PROGRESS"),
-    replanCount: z.number().int().nonnegative().safe().max(100),
-  })
-  .strict();
+export const WaitingResourceContinuationSchema = z.discriminatedUnion("reason", [
+  z
+    .object({
+      type: z.literal("WAITING_RESOURCE"),
+      runId: RunIdSchema,
+      sourceStepId: StepIdSchema,
+      pendingDecision: AgentToolCallsDecisionSchema,
+      reason: z.literal("NO_PROGRESS"),
+      replanCount: z.number().int().nonnegative().safe().max(100),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("WAITING_RESOURCE"),
+      runId: RunIdSchema,
+      sourceStepId: StepIdSchema,
+      pendingDecision: AgentToolCallsDecisionSchema,
+      reason: z.literal("EFFECT_UNCONFIRMED"),
+      observationPolicy: ToolObservationPolicySnapshotSchema.optional(),
+      invocationId: ToolInvocationIdSchema,
+      toolName: ToolNameSchema,
+      reasonCode: z.enum(["DOES_NOT_MATCH", "INCONCLUSIVE", "UNSUPPORTED", "UNAVAILABLE"]),
+    })
+    .strict(),
+]);
 
 export const WaitingSteeringContinuationSchema = z
   .object({
@@ -365,60 +375,69 @@ const ModelTransportRecoverySchema = z
     }
   });
 const WaitingRetryBase = {
-  type: z.literal("WAITING_RETRY"),
   runId: RunIdSchema,
   failedStepId: StepIdSchema,
   attempt: RetryAttemptSchema,
   maxAttempts: RetryAttemptSchema,
+  episode: z.number().int().positive().safe().optional(),
+  totalAttempts: z.number().int().positive().safe().optional(),
   nextAttemptAt: TimestampMsSchema,
   errorCode: RetryErrorCodeSchema,
   transport: ModelTransportRecoverySchema.optional(),
 };
 
-export const WaitingRetryContinuationSchema = z.discriminatedUnion("mode", [
-  z
-    .object({ ...WaitingRetryBase, mode: z.literal("START") })
-    .strict()
-    .superRefine((value, context) => {
-      if (value.attempt > value.maxAttempts) {
-        context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
-      }
-    }),
-  z
-    .object({
-      ...WaitingRetryBase,
-      mode: z.literal("TOOL_RESULTS"),
-      pendingDecision: AgentToolCallsDecisionSchema,
-      receivedResults: z.array(AIToolResultMessageSchema).min(1),
-      observationPolicy: ToolObservationPolicySnapshotSchema.optional(),
-      // Backward-compatible JSON evolution: the field is optional so a checkpoint written
-      // before it existed still decodes. Recovery treats a missing value as "not determined"
-      // and refuses to resume rather than inventing one, and every new write persists it.
-      sourceStepId: StepIdSchema.optional(),
-    })
-    .strict()
-    .superRefine((value, context) => {
-      if (value.attempt > value.maxAttempts) {
-        context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
-      }
-    }),
-  z
-    .object({
-      ...WaitingRetryBase,
-      mode: z.literal("STEERING"),
-      messageIds: z.array(z.string().min(1)).min(1).max(64),
-      sourceStepId: StepIdSchema,
-    })
-    .strict()
-    .superRefine((value, context) => {
-      if (value.attempt > value.maxAttempts) {
-        context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
-      }
-      if (new Set(value.messageIds).size !== value.messageIds.length) {
-        context.addIssue({ code: "custom", message: "steering message ids must be unique" });
-      }
-    }),
-]);
+function createRetryBoundarySchema<const Type extends "WAITING_RETRY" | "WAITING_PROVIDER">(
+  type: Type,
+) {
+  const base = { ...WaitingRetryBase, type: z.literal(type) };
+  return z.discriminatedUnion("mode", [
+    z
+      .object({ ...base, mode: z.literal("START") })
+      .strict()
+      .superRefine((value, context) => {
+        if (value.attempt > value.maxAttempts) {
+          context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
+        }
+      }),
+    z
+      .object({
+        ...base,
+        mode: z.literal("TOOL_RESULTS"),
+        pendingDecision: AgentToolCallsDecisionSchema,
+        receivedResults: z.array(AIToolResultMessageSchema).min(1),
+        observationPolicy: ToolObservationPolicySnapshotSchema.optional(),
+        // Backward-compatible JSON evolution: the field is optional so a checkpoint written
+        // before it existed still decodes. Recovery treats a missing value as "not determined"
+        // and refuses to resume rather than inventing one, and every new write persists it.
+        sourceStepId: StepIdSchema.optional(),
+      })
+      .strict()
+      .superRefine((value, context) => {
+        if (value.attempt > value.maxAttempts) {
+          context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
+        }
+      }),
+    z
+      .object({
+        ...base,
+        mode: z.literal("STEERING"),
+        messageIds: z.array(z.string().min(1)).min(1).max(64),
+        sourceStepId: StepIdSchema,
+      })
+      .strict()
+      .superRefine((value, context) => {
+        if (value.attempt > value.maxAttempts) {
+          context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
+        }
+        if (new Set(value.messageIds).size !== value.messageIds.length) {
+          context.addIssue({ code: "custom", message: "steering message ids must be unique" });
+        }
+      }),
+  ]);
+}
+
+export const WaitingRetryContinuationSchema = createRetryBoundarySchema("WAITING_RETRY");
+export const WaitingProviderContinuationSchema = createRetryBoundarySchema("WAITING_PROVIDER");
 
 export const RunContinuationCheckpointSchema = z.discriminatedUnion("type", [
   WaitingToolResultsContinuationSchema,
@@ -426,5 +445,6 @@ export const RunContinuationCheckpointSchema = z.discriminatedUnion("type", [
   WaitingVerificationRepairContinuationSchema,
   WaitingResourceContinuationSchema,
   WaitingSteeringContinuationSchema,
+  WaitingProviderContinuationSchema,
   WaitingRetryContinuationSchema,
 ]);

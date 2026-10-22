@@ -382,7 +382,9 @@ describe("Prompt Surface Context Engine integration", () => {
     const engine = value.engine();
     const first = await engine.prepare(firstRequest);
     const firstSurface = value.store.inspect(value.runId)!;
-    const firstRecord = firstSurface.records?.[0]!;
+    const firstRecord = firstSurface.records?.[0];
+    expect(firstRecord).toBeDefined();
+    if (firstRecord === undefined) throw new Error("Prompt Surface did not persist its baseline.");
 
     const sameRetry = await engine.prepare(firstRequest);
     expect(sameRetry.messages).toEqual(first.messages);
@@ -491,6 +493,80 @@ describe("Prompt Surface Context Engine integration", () => {
       { ...MODEL, ref: { provider: "fixture", model: "surface-b" } },
     );
     expect(value.state.usage.every((usage) => usage.promptSurface !== undefined)).toBe(true);
+  });
+
+  it("reprojects a failed same-Step context attempt into a new forced-recovery epoch", async () => {
+    const value = fixture();
+    const engine = value.engine();
+    const history = fullHistory(value.runId, value.sessionId, 2);
+    await engine.prepare(request(value.runId, value.sessionId, 1, history));
+    const originalEpoch = value.store.inspectEpochs(value.runId)[0];
+    expect(originalEpoch).toBeDefined();
+    expect(
+      originalEpoch?.sectionStates?.some((state) =>
+        state.content.includes("workspace state: clean"),
+      ),
+    ).toBe(true);
+
+    value.state.dynamicText = "workspace state: recovered selection";
+    const recovered = await engine.prepare(
+      request(value.runId, value.sessionId, 1, history, { mode: "FORCED_RECOVERY" }),
+    );
+
+    const epochs = value.store.inspectEpochs(value.runId);
+    expect(epochs).toHaveLength(2);
+    expect(epochs[0]).toEqual(originalEpoch);
+    expect(epochs[1]?.resetReason).toBe("FORCED_RECOVERY");
+    expect(epochs[1]?.records).toHaveLength(1);
+    expect(
+      epochs[1]?.sectionStates?.some((state) =>
+        state.content.includes("workspace state: recovered selection"),
+      ),
+    ).toBe(false);
+    expect(
+      recovered.messages.some(
+        (message) =>
+          message.role === "system" &&
+          message.content.includes("workspace state: recovered selection"),
+      ),
+    ).toBe(false);
+    expect(
+      recovered.messages.every(
+        (message) =>
+          message.role !== "system" || !message.content.includes("workspace state: clean"),
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves the previous Sections of a Context source that failed during forced recovery", async () => {
+    const value = fixture();
+    const engine = value.engine();
+    const history = fullHistory(value.runId, value.sessionId, 2);
+    await engine.prepare(request(value.runId, value.sessionId, 1, history));
+    const originalEpoch = value.store.inspectEpochs(value.runId)[0];
+    expect(
+      originalEpoch?.sectionStates?.some((state) =>
+        state.content.includes("workspace state: clean"),
+      ),
+    ).toBe(true);
+
+    value.state.dynamicSourceFails = true;
+    await engine.prepare(
+      request(value.runId, value.sessionId, 1, history, { mode: "FORCED_RECOVERY" }),
+    );
+
+    const epochs = value.store.inspectEpochs(value.runId);
+    expect(epochs).toHaveLength(2);
+    expect(epochs[0]).toEqual(originalEpoch);
+    expect(epochs[1]?.resetReason).toBe("FORCED_RECOVERY");
+    expect(
+      epochs[1]?.sectionStates?.some((state) => state.content.includes("workspace state: clean")),
+    ).toBe(true);
+    expect(
+      epochs[1]?.records?.[0]?.updates.some(
+        (update) => update.op === "SET" && update.content.includes("workspace state: clean"),
+      ),
+    ).toBe(true);
   });
 
   it("starts a new epoch for a changed stable prompt and preserves the old surface byte for byte", async () => {

@@ -24,14 +24,20 @@ import {
   type ContextCheckpointRepositoryPort,
   type ContextSourceProvider,
   type ContextSourceResult,
-  type ContextUsageSnapshot,
   type ContextUsageStorePort,
   type PromptSurfaceSectionState,
   type StoredAgentMessage,
 } from "@caelush/agent";
 import { createRunId, createSessionId } from "@caelush/protocol";
 
-import { assistantMessage, factory, snapshot, toolResultMessage, turn, turnIdFor } from "../messages/fixtures.js";
+import {
+  assistantMessage,
+  factory,
+  snapshot,
+  toolResultMessage,
+  turn,
+  turnIdFor,
+} from "../messages/fixtures.js";
 import {
   createPromptSurfaceMemoryStore,
   type PromptSurfaceMemoryStore,
@@ -258,7 +264,7 @@ function engine(store: PromptSurfaceMemoryStore, workingSetTargetTokens: number)
       },
     },
     usageStore: {
-      async upsert(_value: ContextUsageSnapshot) {},
+      async upsert() {},
       async getByRun() {
         return undefined;
       },

@@ -114,15 +114,27 @@ export interface WaitingSteeringContinuation {
   readonly messageIds: readonly string[];
 }
 
-/** Execution paused on a resource decision. */
-export interface WaitingResourceContinuation {
-  readonly type: "WAITING_RESOURCE";
-  readonly runId: RunId;
-  readonly sourceStepId: StepId;
-  readonly pendingDecision: AgentToolCallsDecision;
-  readonly reason: "NO_PROGRESS";
-  readonly replanCount: number;
-}
+/** Execution paused on a resource or side-effect reconciliation decision. */
+export type WaitingResourceContinuation =
+  | {
+      readonly type: "WAITING_RESOURCE";
+      readonly runId: RunId;
+      readonly sourceStepId: StepId;
+      readonly pendingDecision: AgentToolCallsDecision;
+      readonly reason: "NO_PROGRESS";
+      readonly replanCount: number;
+    }
+  | {
+      readonly type: "WAITING_RESOURCE";
+      readonly runId: RunId;
+      readonly sourceStepId: StepId;
+      readonly pendingDecision: AgentToolCallsDecision;
+      readonly reason: "EFFECT_UNCONFIRMED";
+      readonly observationPolicy?: ToolObservationPolicySnapshot | undefined;
+      readonly invocationId: ToolInvocationId;
+      readonly toolName: ToolName;
+      readonly reasonCode: "DOES_NOT_MATCH" | "INCONCLUSIVE" | "UNSUPPORTED" | "UNAVAILABLE";
+    };
 
 /** The durable retry error spellings, which are part of the persisted contract. */
 export type RetryErrorCode = "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT";
@@ -145,6 +157,10 @@ interface WaitingRetryContinuationBase {
   readonly failedStepId: StepId;
   readonly attempt: number;
   readonly maxAttempts: number;
+  /** Number of provider retry episodes already entered (first episode is 1). */
+  readonly episode?: number | undefined;
+  /** Total provider requests that failed across all episodes; never reset on episode rotation. */
+  readonly totalAttempts?: number | undefined;
   readonly nextAttemptAt: TimestampMs;
   readonly errorCode: RetryErrorCode;
   /** Optional for backward decoding of checkpoints written before transport recovery. */
@@ -188,6 +204,16 @@ export type WaitingRetryContinuation =
       readonly receivedResults?: never;
     });
 
+type ReplaceContinuationType<T, Type extends string> = T extends { readonly type: string }
+  ? Omit<T, "type"> & { readonly type: Type }
+  : never;
+
+/** A durable wait after one provider retry episode is exhausted. */
+export type WaitingProviderContinuation = ReplaceContinuationType<
+  WaitingRetryContinuation,
+  "WAITING_PROVIDER"
+>;
+
 /** Every durable continuation a Run may hold. */
 export type RunContinuationCheckpoint =
   | WaitingToolResultsContinuation
@@ -195,6 +221,7 @@ export type RunContinuationCheckpoint =
   | WaitingVerificationRepairContinuation
   | WaitingResourceContinuation
   | WaitingSteeringContinuation
+  | WaitingProviderContinuation
   | WaitingRetryContinuation;
 
 /** Every durable continuation discriminant, in canonical order. */
@@ -204,6 +231,7 @@ export const RUN_CONTINUATION_TYPES = [
   "WAITING_VERIFICATION_REPAIR",
   "WAITING_RESOURCE",
   "WAITING_STEERING",
+  "WAITING_PROVIDER",
   "WAITING_RETRY",
 ] as const satisfies readonly RunContinuationCheckpoint["type"][];
 
@@ -213,6 +241,7 @@ export const RUNNING_CONTINUATION_TYPES = [
   "WAITING_VERIFICATION_REPAIR",
   "WAITING_RESOURCE",
   "WAITING_STEERING",
+  "WAITING_PROVIDER",
   "WAITING_RETRY",
 ] as const satisfies readonly RunContinuationCheckpoint["type"][];
 

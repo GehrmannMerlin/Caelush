@@ -357,8 +357,9 @@ describe("ToolCallPreparer side-effect freedom", () => {
       "WAITING_APPROVAL",
       "BUDGET_EXCEEDED",
       "RESOURCE_WAIT",
+      "EFFECT_UNCONFIRMED",
       "REPLAN",
     ]);
-    expect(toolTurn.TOOL_TURN_RESULT_KINDS).toHaveLength(5);
+    expect(toolTurn.TOOL_TURN_RESULT_KINDS).toHaveLength(6);
   });
 });

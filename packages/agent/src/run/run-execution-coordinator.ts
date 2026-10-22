@@ -155,6 +155,7 @@ function routeRunning(snapshot: RunExecutionSnapshot, now: TimestampMs): RunExec
         reason: "STEERING",
         messageIds: continuation.messageIds as readonly AgentMessageId[],
       });
+    case "WAITING_PROVIDER":
     case "WAITING_RETRY":
       if (now < continuation.nextAttemptAt) return suspend("RETRY", continuation.nextAttemptAt);
       if (continuation.mode === "TOOL_RESULTS") {

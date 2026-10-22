@@ -11,10 +11,12 @@ import { execFileSync } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
-import { appendFile, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFileSync } from "node:fs";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   app,
+  nativeTheme,
   protocol,
   safeStorage,
   session,
@@ -40,6 +42,7 @@ import {
 import { DesktopLocalProxy } from "../src/main/protocol/local-proxy.js";
 import { registerAppProtocol } from "../src/main/protocol/app-protocol.js";
 import { AccountController, type CloudAccountPort } from "../src/main/account/controller.js";
+import { DesktopAppearanceController } from "../src/main/appearance/appearance-controller.js";
 import { canonicalizeJcs } from "../src/main/offline/grant.js";
 import {
   ProfileManager,
@@ -49,7 +52,6 @@ import {
 import { DesktopWorkspacePanelController } from "../src/main/workspace/panel-controller.js";
 import { registerDesktopIpc } from "../src/main/ipc/handlers.js";
 import { createMainWindow, loadMainWindow } from "../src/main/windows/create-window.js";
-import type { AccountState } from "../src/main/account/state.js";
 import { assertSuccessfulShutdown } from "../scripts/windows-d6-acceptance-helpers.mjs";
 
 protocol.registerSchemesAsPrivileged([
@@ -98,6 +100,7 @@ let mainWindow: BrowserWindow | undefined;
 let disposeIpc: (() => void) | undefined;
 let account: AccountController | undefined;
 let vault: DpapiVault | undefined;
+let appearanceController: DesktopAppearanceController | undefined;
 
 app.whenReady().then(async () => {
   try {
@@ -210,6 +213,7 @@ app.whenReady().then(async () => {
     assert.equal(JSON.stringify(connected.value).includes(providerKey), false);
     const workspaceA = await createWorkspace(proxy, workspaceAPath, "D5 Account A Workspace");
     const workspaceA2 = await createWorkspace(proxy, workspaceA2Path, "D5 Account A Secondary");
+    assert.notEqual(workspaceA2.id, workspaceA.id);
     await writeFile(
       path.join(testRoot, "d5-account-a-workspace.json"),
       `${JSON.stringify({ workspaceId: workspaceA.id, rootPath: workspaceAPath, userId: userA })}\n`,
@@ -236,6 +240,11 @@ app.whenReady().then(async () => {
       rendererTrust: { developmentOrigin: null },
       backgroundColor: "#ffffff",
     });
+    appearanceController = new DesktopAppearanceController({
+      store: { read: async () => "light", write: async () => undefined },
+      nativeTheme,
+    });
+    await appearanceController.initialize();
     mainWindow.webContents.on("console-message", (_event, details) => {
       if (details.level >= 2) {
         process.stderr.write(
@@ -246,13 +255,17 @@ app.whenReady().then(async () => {
     mainWindow.webContents.on(
       "did-fail-load",
       (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-        if (isMainFrame) {
-          process.stderr.write(
-            `D5_RENDERER_LOAD_FAILED=${errorCode}:${errorDescription}:${validatedURL}\n`,
-          );
-        }
+        process.stderr.write(
+          `D5_RENDERER_LOAD_FAILED=${isMainFrame ? "MAIN" : "SUBFRAME"}:${errorCode}:${errorDescription}:${validatedURL}\n`,
+        );
       },
     );
+    mainWindow.webContents.on("did-finish-load", () => {
+      process.stdout.write(`D5_RENDERER_DID_FINISH_LOAD=${mainWindow?.webContents.getURL()}\n`);
+    });
+    mainWindow.webContents.on("did-navigate", (_event, url) => {
+      process.stdout.write(`D5_RENDERER_DID_NAVIGATE=${url}\n`);
+    });
     mainWindow.webContents.on("render-process-gone", (_event, details) => {
       process.stderr.write(`D5_RENDERER_PROCESS_GONE=${details.reason}:${details.exitCode}\n`);
     });
@@ -296,6 +309,7 @@ app.whenReady().then(async () => {
       synchronizeAccountState: (state) => supervisor!.synchronizeAccountState(state),
       legacyImporter,
       desktopPanels: panels,
+      appearanceController,
     });
     loadMainWindow(mainWindow, { developmentOrigin: null });
     await waitFor(
@@ -308,7 +322,13 @@ app.whenReady().then(async () => {
     );
 
     setFailureStage("LOAD_AGENT_UI");
-    await mainWindow.loadURL("caelush-app://app/agent/");
+    await waitFor(
+      () =>
+        mainWindow!.webContents.getURL().startsWith("caelush-app://app/agent/") &&
+        mainWindow!.webContents.isLoadingMainFrame() === false,
+      "Agent UI navigation",
+      30_000,
+    );
     await waitForRenderer(
       mainWindow.webContents,
       "window.caelushDesktop !== undefined",
@@ -338,10 +358,11 @@ app.whenReady().then(async () => {
       mainWindow.webContents,
       `window.caelushDesktop.workspace.listEntries({workspaceId:${JSON.stringify(workspaceA.id)},relativePath:'',offset:0,limit:200})`,
     );
+    assert.ok(isRecord(selectedWorkspaceEntries));
+    const selectedEntries = selectedWorkspaceEntries["items"];
     assert.ok(
-      selectedWorkspaceEntries.items.some(
-        (entry: { readonly name: string }) => entry.name === "src",
-      ),
+      Array.isArray(selectedEntries) &&
+        selectedEntries.some((entry) => isRecord(entry) && entry["name"] === "src"),
     );
     const desktopNamespaces = await execute(
       mainWindow.webContents,
@@ -349,8 +370,12 @@ app.whenReady().then(async () => {
     );
     assert.deepEqual(desktopNamespaces, [
       "account",
+      "appearance",
+      "archive",
       "browser",
       "legacyData",
+      "profileCenter",
+      "protocolVersion",
       "update",
       "window",
       "workspace",
@@ -426,11 +451,14 @@ app.whenReady().then(async () => {
       mainWindow.webContents,
       `window.caelushDesktop.workspace.listEntries({workspaceId:${JSON.stringify(workspaceA.id)},relativePath:'',offset:0,limit:200})`,
     );
+    assert.ok(isRecord(filePage));
+    const filePageItems = filePage["items"];
     assert.ok(
-      filePage.items.some(
-        (entry: { name: string; kind: string }) =>
-          entry.name === "outside-junction" && entry.kind === "SYMLINK",
-      ),
+      Array.isArray(filePageItems) &&
+        filePageItems.some(
+          (entry) =>
+            isRecord(entry) && entry["name"] === "outside-junction" && entry["kind"] === "SYMLINK",
+        ),
     );
     const largeResult = await rendererCall(
       mainWindow.webContents,
@@ -456,14 +484,16 @@ app.whenReady().then(async () => {
     );
     assert.ok(
       Array.isArray(editors) &&
-        editors.every((editor: { id: string }) => ["vscode", "cursor"].includes(editor.id)),
+        editors.every(
+          (editor) => isRecord(editor) && ["vscode", "cursor"].includes(String(editor["id"])),
+        ),
     );
     const injectedEditorInput = await rendererCall(
       mainWindow.webContents,
       `(async()=>{try{await window.caelushDesktop.workspace.openInEditor({editorId:'vscode',workspaceId:${JSON.stringify(workspaceA.id)},executablePath:'cmd.exe',command:'whoami'});return 'unexpected'}catch(error){return error.message}})()`,
     );
     assert.equal(injectedEditorInput, "The desktop request did not match the supported input.");
-    const installedEditor = editors[0] as { readonly id: "vscode" | "cursor" } | undefined;
+    const installedEditor = Array.isArray(editors) ? editors.find(isSupportedEditor) : undefined;
     if (installedEditor !== undefined) {
       const opened = await rendererCall(
         mainWindow.webContents,
@@ -508,7 +538,7 @@ app.whenReady().then(async () => {
     recordMarker("AGENT_RUN_PERMISSION=FULL_ACCESS_CONFIRMED_TEXT_ONLY_PROVIDER_FIXTURE");
     await click(
       mainWindow.webContents,
-      ".workspace-list-item--selected .workspace-new-session-button",
+      ".workspace-list-item--selected .workspace-new-session-icon-button",
     );
     await waitForRenderer(
       mainWindow.webContents,
@@ -904,12 +934,12 @@ app.whenReady().then(async () => {
     await clickByText(mainWindow.webContents, ".workspace-list-button", "D5 Account B Workspace");
     await waitForRenderer(
       mainWindow.webContents,
-      "document.querySelector('.workspace-list-item--selected .workspace-new-session-button') !== null",
+      "document.querySelector('.workspace-list-item--selected .workspace-new-session-icon-button') !== null",
       "Account B workspace session controls",
     );
     await click(
       mainWindow.webContents,
-      ".workspace-list-item--selected .workspace-new-session-button",
+      ".workspace-list-item--selected .workspace-new-session-icon-button",
     );
     await waitForRenderer(
       mainWindow.webContents,
@@ -943,13 +973,45 @@ app.whenReady().then(async () => {
       "document.querySelector('.active-run-status') !== null",
       "Account B fixture Run status",
     );
-    await waitForRenderer(
-      mainWindow.webContents,
-      "document.body.innerText.includes('The local D5 Electron fixture run completed.')",
-      "Account B completed fixture Run",
-      90_000,
-    );
     const workspaceBProfile = await profileManager.selectForUser(userB);
+    await waitFor(
+      () =>
+        readRunStatusCounts(workspaceBProfile.databasePath).some(
+          (entry) => entry.status === "COMPLETED",
+        ),
+      "Account B durable Run completion",
+    );
+    const runRef = readLatestRunReference(workspaceBProfile.databasePath);
+    assert.ok(runRef, "Account B did not persist a Run.");
+    const accountBPresentation = await localApi(
+      proxy,
+      `/api/v1/sessions/${encodeURIComponent(runRef.sessionId)}/presentation?limit=1&runId=${encodeURIComponent(runRef.id)}`,
+    );
+    assert.equal(
+      presentationIncludesText(
+        accountBPresentation.value,
+        "The local D5 Electron fixture run completed.",
+      ),
+      true,
+      `Account B daemon presentation omitted its persisted final answer: ${JSON.stringify(compactPresentationDiagnostic(accountBPresentation.value))}`,
+    );
+    try {
+      await waitForRenderer(
+        mainWindow.webContents,
+        "document.body.innerText.includes('The local D5 Electron fixture run completed.')",
+        "Account B completed fixture Run",
+        15_000,
+      );
+    } catch (error) {
+      const rendererSnapshot = await execute(
+        mainWindow.webContents,
+        `(()=>({runs:[...document.querySelectorAll('.turn-presentation-turn')].map(turn=>({runId:turn.getAttribute('data-run-id'),status:turn.getAttribute('data-run-status'),textLength:turn.innerText.length})),selectedWorkspace:document.querySelector('.workspace-list-item--selected')?.innerText??null}))()`,
+      ).catch((diagnosticError: unknown) => ({ error: String(diagnosticError) }));
+      throw new Error(
+        `${error instanceof Error ? error.message : "Account B Run did not complete."} (providerRequests=${chatCalls.length}, runStatuses=${JSON.stringify(readRunStatusCounts(workspaceBProfile.databasePath))}, renderer=${JSON.stringify(rendererSnapshot)}, apiPresentation=${JSON.stringify(compactPresentationDiagnostic(accountBPresentation.value))})`,
+        { cause: error },
+      );
+    }
     const installedRunFixture = readLatestCompletedRun(workspaceBProfile.databasePath);
     assert.equal(installedRunFixture.status, "COMPLETED");
     await writeFile(
@@ -976,6 +1038,7 @@ app.whenReady().then(async () => {
     );
     recordMarker(`ACCOUNT_B_BROWSER_VIEWPORT=${JSON.stringify(accountBBrowserViewport)}`);
     const browserLeaseB = await ensureBrowserGuestLease(mainWindow.webContents);
+    assert.ok(browserLeaseB);
     await setInputValue(
       mainWindow.webContents,
       'input[aria-label="浏览器网址"]',
@@ -1038,6 +1101,8 @@ app.whenReady().then(async () => {
     } catch (error) {
       cleanupFailures.push(`IPC:${safeMarkerError(error)}`);
     }
+    appearanceController?.dispose();
+    appearanceController = undefined;
     try {
       await panels?.closeAll();
     } catch (error) {
@@ -1055,7 +1120,6 @@ app.whenReady().then(async () => {
     } catch (error) {
       cleanupFailures.push(`DAEMON:${safeMarkerError(error)}`);
     }
-    if (mainWindow !== undefined && !mainWindow.isDestroyed()) mainWindow.destroy();
     if (fixture !== undefined) {
       try {
         await closeServer(fixture);
@@ -1077,11 +1141,14 @@ app.whenReady().then(async () => {
     }
     await rm(outsidePath, { recursive: true, force: true }).catch(() => undefined);
     try {
-      await appendFile(markerPath, `${markerLines.join("\n")}\n`, "utf8");
+      appendFileSync(markerPath, `${markerLines.join("\n")}\n`, "utf8");
     } catch (error) {
       process.exitCode = 1;
       process.stderr.write(`D5_MARKER_WRITE_FAILURE=${safeMarkerError(error)}\n`);
     }
+    // Destroying the final BrowserWindow can trigger Electron's window-all-closed shutdown path.
+    // Persist the marker before that lifecycle event so the outer smoke can verify this run.
+    if (mainWindow !== undefined && !mainWindow.isDestroyed()) mainWindow.destroy();
     app.quit();
   }
 });
@@ -1265,6 +1332,7 @@ async function handleProviderRequest(
       return;
     }
     chatCalls.push(body.slice(0, 4096));
+    process.stdout.write(`D5_PROVIDER_REQUEST_COUNT=${chatCalls.length}\n`);
     await new Promise((resolve) => setTimeout(resolve, 4_000));
     const chunk = (delta: Record<string, unknown>, finishReason: string | null = null) =>
       `data: ${JSON.stringify({
@@ -1292,7 +1360,7 @@ async function localApi(
   proxy: DesktopLocalProxy,
   route: string,
   options: { readonly method?: string; readonly body?: unknown } = {},
-): Promise<{ readonly status: number; readonly value: any }> {
+): Promise<{ readonly status: number; readonly value: JsonObject | undefined }> {
   const method = options.method ?? "GET";
   const serialized = options.body === undefined ? undefined : JSON.stringify(options.body);
   const body =
@@ -1310,18 +1378,39 @@ async function localApi(
   } as Request;
   const response = await proxy.handle(request);
   const text = await response.text();
-  let value: any = undefined;
-  if (text.length > 0) value = JSON.parse(text);
+  let value: JsonObject | undefined;
+  if (text.length > 0) value = parseJsonObject(text);
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`protected local request failed (${response.status})`);
   }
   return { status: response.status, value };
 }
 
-function provider(payload: any, id: string): any {
-  const item =
-    payload.providers?.find((entry: any) => entry.id === id) ??
-    (payload.provider?.id === id ? payload.provider : undefined);
+type JsonObject = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonObject {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseJsonObject(text: string): JsonObject {
+  const value: unknown = JSON.parse(text);
+  if (!isRecord(value)) throw new Error("protected local response was invalid");
+  return value;
+}
+
+function isSupportedEditor(value: unknown): value is { readonly id: "vscode" | "cursor" } {
+  if (!isRecord(value)) return false;
+  return value["id"] === "vscode" || value["id"] === "cursor";
+}
+
+function provider(payload: unknown, id: string): JsonObject {
+  const object = isRecord(payload) ? payload : {};
+  const providers = object["providers"];
+  const listItem = Array.isArray(providers)
+    ? providers.find((entry) => isRecord(entry) && entry["id"] === id)
+    : undefined;
+  const fallback = object["provider"];
+  const item = listItem ?? (isRecord(fallback) && fallback["id"] === id ? fallback : undefined);
   assert.ok(item);
   return item;
 }
@@ -1406,6 +1495,66 @@ function readRunCounts(databasePath: string): {
   } finally {
     database.close();
   }
+}
+
+function readRunStatusCounts(
+  databasePath: string,
+): readonly { readonly status: string; readonly count: number }[] {
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return database
+      .prepare("SELECT status, count(*) AS count FROM agent_runs GROUP BY status ORDER BY status")
+      .all() as { status: string; count: number }[];
+  } finally {
+    database.close();
+  }
+}
+
+function readLatestRunReference(
+  databasePath: string,
+): { readonly id: string; readonly sessionId: string; readonly status: string } | undefined {
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const run = database
+      .prepare("SELECT id, session_id, status FROM agent_runs ORDER BY created_at_ms DESC LIMIT 1")
+      .get() as { id: string; session_id: string; status: string } | undefined;
+    return run === undefined
+      ? undefined
+      : { id: run.id, sessionId: run.session_id, status: run.status };
+  } finally {
+    database.close();
+  }
+}
+
+function compactPresentationDiagnostic(value: JsonObject | undefined): unknown {
+  if (value === undefined) return null;
+  const turns = Array.isArray(value.turns) ? value.turns.filter(isRecord) : [];
+  return {
+    capabilityVersion: value.capabilityVersion,
+    turns: turns.map((turn) => ({
+      runStatus: turn.runStatus,
+      items: Array.isArray(turn.items)
+        ? turn.items.filter(isRecord).map((item) => ({
+            kind: item.kind,
+            phase: item.phase,
+            runStatus: item.runStatus,
+            textLength: typeof item.text === "string" ? item.text.length : undefined,
+          }))
+        : [],
+    })),
+  };
+}
+
+function presentationIncludesText(value: JsonObject | undefined, expected: string): boolean {
+  if (value === undefined || !Array.isArray(value.turns)) return false;
+  return value.turns.some(
+    (turn) =>
+      isRecord(turn) &&
+      Array.isArray(turn.items) &&
+      turn.items.some(
+        (item) => isRecord(item) && typeof item.text === "string" && item.text.includes(expected),
+      ),
+  );
 }
 
 function readLatestCompletedRun(databasePath: string): {
@@ -1586,11 +1735,11 @@ async function click(contents: WebContents, selector: string): Promise<void> {
   assert.equal(clicked, true, `UI control not found: ${selector}`);
 }
 
-async function rendererCall(contents: WebContents, expression: string): Promise<any> {
+async function rendererCall(contents: WebContents, expression: string): Promise<unknown> {
   return execute(contents, `(${expression})`);
 }
 
-async function execute(contents: WebContents, source: string): Promise<any> {
+async function execute(contents: WebContents, source: string): Promise<unknown> {
   return contents.executeJavaScript(source, true);
 }
 

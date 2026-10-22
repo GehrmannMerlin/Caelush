@@ -1,7 +1,9 @@
-const assert = require("node:assert/strict");
-const { EventEmitter } = require("node:events");
-const { test } = require("node:test");
-const { sendIpcAndWaitForMessage } = require("./poc-ipc.cjs");
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { test } from "vitest";
+import ipc from "./poc-ipc.cjs";
+
+const { sendIpcAndWaitForMessage } = ipc;
 
 function makeChild(send) {
   const child = new EventEmitter();

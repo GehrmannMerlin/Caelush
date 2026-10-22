@@ -197,7 +197,7 @@ describe("Phase 8E budgeted Context summarizer", () => {
     expect(budget.calls.settle).toBe(0);
   });
 
-  it("reuses the same bounded owner for an identical replay and separates a changed prefix", async () => {
+  it("budgets summaries from durable source without replaying provider-specific prefixes", async () => {
     const fixture = gatewayThat(async () => result);
     const budget = budgetFixture();
     const summarizer = createBudgetedContextSummarizer({
@@ -238,6 +238,6 @@ describe("Phase 8E budgeted Context summarizer", () => {
 
     expect(budget.owners).toHaveLength(3);
     expect(budget.owners[0]).toBe(budget.owners[1]);
-    expect(budget.owners[2]).not.toBe(budget.owners[0]);
+    expect(budget.owners[2]).toBe(budget.owners[0]);
   });
 });

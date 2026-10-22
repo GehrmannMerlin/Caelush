@@ -251,7 +251,7 @@ describe("Timeline", () => {
     expect(html).not.toContain("NO_PROGRESS");
   });
 
-  it("renders retry countdown, safe transport switching, and an actionable exhausted alert", () => {
+  it("renders retry countdown, safe transport switching, and a non-terminal exhausted episode", () => {
     const now = new Date(2026, 9, 4, 12, 0, 0).getTime();
     const runId = createRunId();
     const liveActivity = {
@@ -321,8 +321,9 @@ describe("Timeline", () => {
       const exhausted = renderToStaticMarkup(
         <Timeline timeline={exhaustedTimeline} isActive={false} />,
       );
-      expect(exhausted).toContain("重试已耗尽：5/5 次重试后模型请求失败");
-      expect(exhausted).toContain('role="alert"');
+      expect(exhausted).toContain("本轮重试次数已用完，任务进度已保存");
+      expect(exhausted).toContain('role="status"');
+      expect(exhausted).not.toContain('role="alert"');
     } finally {
       vi.useRealTimers();
     }

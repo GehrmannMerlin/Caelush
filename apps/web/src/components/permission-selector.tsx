@@ -56,6 +56,25 @@ export function PermissionSelector(props: PermissionSelectorProps): ReactElement
     setPendingConfirmation(undefined);
   };
 
+  const confirmation =
+    pendingConfirmation === undefined ? null : (
+      // Keep this outside the query-container composer so fixed positioning uses the viewport.
+      <div className="permission-selector-confirmation" role="dialog" aria-modal="true">
+        <h2>确认完全权限</h2>
+        {fullAccessConfirmationCopy().map((line) => (
+          <p key={line}>{line}</p>
+        ))}
+        <div className="permission-selector-confirmation-actions">
+          <button type="button" onClick={() => setPendingConfirmation(undefined)}>
+            取消
+          </button>
+          <button type="button" onClick={confirmFullAccess}>
+            确认使用完全权限
+          </button>
+        </div>
+      </div>
+    );
+
   return (
     <div className="permission-selector">
       <select
@@ -105,26 +124,11 @@ export function PermissionSelector(props: PermissionSelectorProps): ReactElement
           {props.error}
         </p>
       )}
-      {pendingConfirmation === undefined
+      {confirmation === null
         ? null
-        : createPortal(
-            // Keep this outside the query-container composer so fixed positioning uses the viewport.
-            <div className="permission-selector-confirmation" role="dialog" aria-modal="true">
-              <h2>确认完全权限</h2>
-              {fullAccessConfirmationCopy().map((line) => (
-                <p key={line}>{line}</p>
-              ))}
-              <div className="permission-selector-confirmation-actions">
-                <button type="button" onClick={() => setPendingConfirmation(undefined)}>
-                  取消
-                </button>
-                <button type="button" onClick={confirmFullAccess}>
-                  确认使用完全权限
-                </button>
-              </div>
-            </div>,
-            document.body,
-          )}
+        : typeof document === "undefined"
+          ? confirmation
+          : createPortal(confirmation, document.body)}
     </div>
   );
 }

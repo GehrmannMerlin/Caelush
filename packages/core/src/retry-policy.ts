@@ -4,6 +4,8 @@ export interface RetryPolicy {
   readonly maxDelayMs: number;
   readonly jitterRatio: number;
   readonly maxProviderRetryAfterMs: number;
+  /** Delay before opening a fresh automatic retry episode after one episode is exhausted. */
+  readonly episodePauseMs?: number;
 }
 
 export const DEFAULT_RETRY_POLICY: RetryPolicy = Object.freeze({
@@ -12,6 +14,7 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = Object.freeze({
   maxDelayMs: 30_000,
   jitterRatio: 0.1,
   maxProviderRetryAfterMs: 300_000,
+  episodePauseMs: 300_000,
 });
 
 export const MAX_RETRY_ATTEMPTS = 10;
@@ -32,8 +35,17 @@ export function validateRetryPolicy(policy: RetryPolicy): RetryPolicy {
   if (!Number.isFinite(policy.jitterRatio) || policy.jitterRatio < 0 || policy.jitterRatio > 1) {
     throw new Error("Retry jitterRatio must be a finite number between 0 and 1.");
   }
-  if (!Number.isSafeInteger(policy.maxProviderRetryAfterMs) || policy.maxProviderRetryAfterMs <= 0) {
+  if (
+    !Number.isSafeInteger(policy.maxProviderRetryAfterMs) ||
+    policy.maxProviderRetryAfterMs <= 0
+  ) {
     throw new Error("Retry maxProviderRetryAfterMs must be a safe positive integer.");
+  }
+  if (
+    policy.episodePauseMs !== undefined &&
+    (!Number.isSafeInteger(policy.episodePauseMs) || policy.episodePauseMs <= 0)
+  ) {
+    throw new Error("Retry episodePauseMs must be a safe positive integer when configured.");
   }
   return Object.freeze({ ...policy });
 }

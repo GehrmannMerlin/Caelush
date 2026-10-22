@@ -5,6 +5,7 @@ import {
   PromptSurfaceCapacityError,
   PromptSurfaceIntegrityError,
   PromptSurfaceRolloverConflictError,
+  type ContextPlanningErrorCode,
 } from "@caelush/agent";
 import type {
   AgentError,
@@ -66,6 +67,8 @@ export interface RunContextPreparationDiagnostic {
   readonly limit?: number;
   /** Class names only, outermost first, at most `MAX_DIAGNOSTIC_CAUSE_LINKS`. */
   readonly causeKinds: readonly string[];
+  /** A closed ContextPlanner failure code; never carries the rejected item or source text. */
+  readonly planningErrorCode?: ContextPlanningErrorCode;
 }
 
 /**
@@ -163,6 +166,7 @@ export function classifyContextPreparationFailure(input: {
         ...base,
         stage: "pressure_accounting",
         reasonCode: "CONTEXT_PRESSURE_ACCOUNTING_FAILED",
+        planningErrorCode: link.code,
       });
     }
   }

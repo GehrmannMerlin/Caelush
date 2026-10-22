@@ -439,12 +439,16 @@ jobs:
         include:
           - os: windows-latest
             label: windows-x64
+            nodeVersion: 24.18.0
           - os: ubuntu-latest
             label: linux-x64
+            nodeVersion: 24
           - os: macos-14
             label: macos-arm64
+            nodeVersion: 24
           - os: macos-15-intel
             label: macos-x64
+            nodeVersion: 24
     runs-on: ${{ matrix.os }}
     name: release-smoke (${{ matrix.label }})
     steps:
@@ -459,7 +463,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: ${{ matrix.nodeVersion }}
           cache: pnpm
 
       - name: Enable Corepack

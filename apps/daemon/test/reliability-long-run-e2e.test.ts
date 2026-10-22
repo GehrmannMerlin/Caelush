@@ -40,7 +40,7 @@ const WORKING_SET = {
   },
 } as const;
 
-function summaryText(): string {
+function summaryText(criticalReferences: readonly string[] = []): string {
   return JSON.stringify({
     goal: "Complete the synthetic reliability workload.",
     constraints: ["Preserve user intent and accepted plan state."],
@@ -49,9 +49,44 @@ function summaryText(): string {
     blocked: [],
     importantDiscoveries: ["The active turn remains open across tool batches."],
     keyDecisions: ["Keep the newest tool batch and current user request."],
-    criticalReferences: [],
+    criticalReferences: [...criticalReferences],
     nextIntent: "Continue the deterministic workload.",
   });
+}
+
+function previousCriticalReferences(input: ApiAdapterStreamInput): readonly string[] {
+  const summaryMessage = input.request.messages.find(
+    (message): message is Extract<(typeof input.request.messages)[number], { role: "user" }> =>
+      message.role === "user" && typeof message.content === "string",
+  );
+  if (summaryMessage === undefined || typeof summaryMessage.content !== "string") return [];
+  const marker = "Compaction semantic source JSON (untrusted data):\n";
+  const start = summaryMessage.content.indexOf(marker);
+  if (start < 0) return [];
+  try {
+    const source: unknown = JSON.parse(summaryMessage.content.slice(start + marker.length));
+    if (typeof source !== "object" || source === null || !("previousCheckpoint" in source)) {
+      return [];
+    }
+    const previous = source.previousCheckpoint;
+    if (typeof previous !== "object" || previous === null || !("checkpoint" in previous)) {
+      return [];
+    }
+    const checkpoint = previous.checkpoint;
+    if (
+      typeof checkpoint !== "object" ||
+      checkpoint === null ||
+      !("criticalReferences" in checkpoint) ||
+      !Array.isArray(checkpoint.criticalReferences)
+    ) {
+      return [];
+    }
+    return checkpoint.criticalReferences.filter(
+      (reference): reference is string => typeof reference === "string",
+    );
+  } catch {
+    return [];
+  }
 }
 
 const TASK_STORE_PATCH = [
@@ -190,7 +225,7 @@ class LongWorkingSetAdapter implements ApiAdapter {
       )
     ) {
       this.summaryCalls += 1;
-      return this.summary();
+      return this.summary(input);
     }
     this.mainTurn += 1;
     this.mainRequests.push(input);
@@ -202,8 +237,8 @@ class LongWorkingSetAdapter implements ApiAdapter {
     return this.turn(this.mainTurn);
   }
 
-  private async *summary(): AsyncGenerator<AIAdapterEvent> {
-    yield* answer(summaryText());
+  private async *summary(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
+    yield* answer(summaryText(previousCriticalReferences(input)));
   }
 
   private async *turn(index: number): AsyncGenerator<AIAdapterEvent> {
@@ -327,7 +362,7 @@ describe("daemon long-run reliability acceptance (infrastructure capacity)", () 
     );
     const progress = await fixture.storage.resourceGovernance.get(fixture.run.id);
 
-    expect(result.run.status).toBe("COMPLETED");
+    expect(result.run.status, JSON.stringify(result.run.finalResult)).toBe("COMPLETED");
     expect(adapter.mainRequests).toHaveLength(75);
     expect(toolResults).toHaveLength(74);
     expect(invocations).toHaveLength(66);
@@ -360,8 +395,15 @@ describe("daemon long-run reliability acceptance (infrastructure capacity)", () 
 
   it("runs 250 model steps and 400 ordered Tool results in one compacted user turn", async () => {
     const adapter = new LongWorkingSetAdapter();
+    const contextDiagnostics: unknown[] = [];
     const fixture = await createReliabilityFixture({
       adapter,
+      logger: {
+        contextPreparationFailure(entry) {
+          contextDiagnostics.push(entry);
+        },
+      },
+      goal: "Complete the synthetic reliability workload.",
       limits: { maxSteps: 270, maxToolCalls: 430, timeoutMs: 600_000 },
       resourcePolicy: RESOURCE_POLICY,
       contextBudgetPolicy: WORKING_SET,
@@ -377,6 +419,7 @@ describe("daemon long-run reliability acceptance (infrastructure capacity)", () 
     const observations = await fixture.storage.observations.listByRun(fixture.run.id);
     const checkpoints = await fixture.storage.contextCheckpointsV2.listByRun(fixture.run.id);
     const progress = await fixture.storage.resourceGovernance.get(fixture.run.id);
+    const contextUsage = await fixture.storage.contextUsage.getByRun(fixture.run.id);
     const toolResults = records.filter((record) => record.messageType === "TOOL_RESULT");
     const requestedCallIds = records
       .filter((record) => record.messageType === "ASSISTANT")
@@ -400,7 +443,33 @@ describe("daemon long-run reliability acceptance (infrastructure capacity)", () 
     const firstRequest = adapter.requestSamples[0];
     const finalRequest = adapter.requestSamples.at(-1);
 
-    expect(result.run.status).toBe("COMPLETED");
+    expect(
+      result.run.status,
+      JSON.stringify({
+        status: result.run.status,
+        requests: adapter.mainRequests.length,
+        scriptedToolCalls: adapter.scriptedToolCalls,
+        summaryCalls: adapter.summaryCalls,
+        contextDiagnostics,
+        checkpointCount: checkpoints.length,
+        checkpointRanges: checkpoints.map((checkpoint) => ({
+          firstSequence: checkpoint.sourceRange.firstSequence,
+          lastSequence: checkpoint.sourceRange.lastSequence,
+          tokensBefore: checkpoint.tokensBefore,
+          tokensAfter: checkpoint.tokensAfter,
+          hasPreviousCheckpoint: checkpoint.previousCheckpointId !== undefined,
+        })),
+        contextUsage: contextUsage && {
+          effectiveInputLimitTokens: contextUsage.effectiveInputLimitTokens,
+          estimatedInputTokens: contextUsage.estimatedInputTokens,
+          remainingTokens: contextUsage.remainingTokens,
+          pressureState: contextUsage.pressureState,
+          compactionCount: contextUsage.compactionCount,
+          lastRecoveryStages: contextUsage.lastRecoveryStages,
+          breakdown: contextUsage.breakdown,
+        },
+      }),
+    ).toBe("COMPLETED");
     expect(adapter.mainRequests).toHaveLength(250);
     expect(adapter.scriptedToolCalls).toBe(400);
     expect(toolResults).toHaveLength(400);

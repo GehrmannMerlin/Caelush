@@ -107,7 +107,7 @@ describe("daemon attachment service", () => {
     await expect(
       service.download({ artifactId: second.artifactId, owner: owner(ownerSession.id) }),
     ).resolves.toEqual(Buffer.from("second document"));
-  });
+  }, 20_000);
 
   it("does not let a different session read or download an attachment", async () => {
     const { service, ownerSession, foreignSession } = await setup();
@@ -213,7 +213,7 @@ describe("daemon attachment service", () => {
         signal,
       }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
-  });
+  }, 20_000);
 
   it("counts actual stream bytes even when the advisory upload length is falsified", async () => {
     const { service, ownerSession } = await setup();

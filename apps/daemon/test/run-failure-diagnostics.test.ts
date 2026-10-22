@@ -136,6 +136,19 @@ describe("Context preparation diagnostics adapter", () => {
     });
   });
 
+  it("passes only a whitelisted ContextPlanner code into the bounded host log", () => {
+    const safe = toContextPreparationLogEntry(
+      contextDiagnostic({ planningErrorCode: "DUPLICATE_ITEM_ID" }),
+    );
+    const unsafe = toContextPreparationLogEntry(
+      contextDiagnostic({ planningErrorCode: "DUPLICATE_ITEM_ID C:\\repo\\.env" as never }),
+    );
+
+    expect(safe.planningErrorCode).toBe("DUPLICATE_ITEM_ID");
+    expect(unsafe).not.toHaveProperty("planningErrorCode");
+    expect(JSON.stringify(unsafe)).not.toContain("repo");
+  });
+
   it("re-checks the closed vocabulary and degrades an unknown classification", () => {
     const entry = toContextPreparationLogEntry(
       contextDiagnostic({

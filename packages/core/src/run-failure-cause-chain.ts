@@ -39,9 +39,12 @@ const BUILT_IN_CAUSE_KINDS: ReadonlySet<string> = new Set([
 
 export const UNKNOWN_CAUSE_KIND = "UnknownCause";
 
+/** The error constructors a bounded diagnostic is allowed to recognize. */
+export type CauseErrorConstructor = abstract new (...args: never[]) => Error;
+
 /** One entry of a classifier's private whitelist. Order matters: subclasses come first. */
 export interface CauseLabel {
-  readonly type: Function;
+  readonly type: CauseErrorConstructor;
   readonly label: string;
 }
 

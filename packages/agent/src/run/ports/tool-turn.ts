@@ -79,6 +79,13 @@ export type ToolTurnResult =
       readonly reason: "NO_PROGRESS";
     }
   | {
+      /** Read-only reconciliation could not confirm an interrupted side effect. */
+      readonly kind: "EFFECT_UNCONFIRMED";
+      readonly invocationId: ToolInvocationId;
+      readonly toolName: ToolName;
+      readonly reasonCode: "DOES_NOT_MATCH" | "INCONCLUSIVE" | "UNSUPPORTED" | "UNAVAILABLE";
+    }
+  | {
       readonly kind: "REPLAN";
       readonly syntheticResults: readonly AgentToolResult[];
     };
@@ -89,6 +96,7 @@ export const TOOL_TURN_RESULT_KINDS = [
   "WAITING_APPROVAL",
   "BUDGET_EXCEEDED",
   "RESOURCE_WAIT",
+  "EFFECT_UNCONFIRMED",
   "REPLAN",
 ] as const satisfies readonly ToolTurnResult["kind"][];
 

@@ -32,6 +32,12 @@ export interface ContextPlannerInput {
   readonly history?: ContextHistoryIndex;
   readonly currentTurnId?: ConversationTurnId;
   readonly sourcePriorities?: Readonly<Record<string, number>>;
+  /**
+   * Allow aggregate pinned overflow to reach the compaction coordinator when the caller has already
+   * proved a protocol-safe current-turn prefix can reduce mandatory input. Individually oversized
+   * current or pinned groups still fail.
+   */
+  readonly allowMandatoryOverflowForCompaction?: boolean;
 }
 
 export interface ContextPlanner {
@@ -141,6 +147,7 @@ export function planContext(input: ContextPlannerInput): ContextPlan {
     mandatoryGroups,
     mandatoryTokens,
     input.policy.effectiveInputLimitTokens,
+    input.allowMandatoryOverflowForCompaction === true,
   );
 
   const mandatoryOverflow = mandatoryTokens > input.policy.effectiveInputLimitTokens;
@@ -421,6 +428,7 @@ function enforceMandatoryOverflow(
   groups: readonly PlanningGroup[],
   mandatoryTokens: number,
   limit: number,
+  allowMandatoryOverflowForCompaction: boolean,
 ): void {
   if (mandatoryTokens <= limit) return;
   const current = groups.find((group) => group.currentTurn && group.tokenEstimate > limit);
@@ -431,6 +439,15 @@ function enforceMandatoryOverflow(
       ...(sourceId === undefined ? {} : { sourceId }),
     });
   }
+  const oversizedPinned = groups.find((group) => group.pinned && group.tokenEstimate > limit);
+  if (oversizedPinned !== undefined) {
+    const sourceId = oversizedPinned.items[0]?.item.source.providerId;
+    throw new ContextMandatoryInputTooLargeError({
+      itemId: oversizedPinned.firstItemId,
+      ...(sourceId === undefined ? {} : { sourceId }),
+    });
+  }
+  if (allowMandatoryOverflowForCompaction) return;
   const pinned = groups.find((group) => group.pinned);
   if (pinned !== undefined) {
     const sourceId = pinned.items[0]?.item.source.providerId;

@@ -6,6 +6,7 @@ import {
   createContextMessageRange,
   createDeterministicCheckpointBuilder,
   createDeterministicCompactionFacts,
+  createHistorySourceRef,
   createSemanticCheckpointDraft,
   type DeterministicCompactionFacts,
   type StructuredCheckpoint,
@@ -100,6 +101,13 @@ describe("Phase 8C deterministic checkpoint authority", () => {
     expect(checkpoint.pendingApprovals).toEqual(["approval-1"]);
     expect(checkpoint.blocked).toContain(
       "Semantic summarization was unavailable; continue from deterministic durable state.",
+    );
+    expect(checkpoint.criticalReferences).toContain(
+      createHistorySourceRef({
+        runId: sourceRange.runId,
+        firstSequence: sourceRange.firstSequence,
+        lastSequence: sourceRange.lastSequence,
+      }),
     );
     expect(checkpoint.sourceRange).toEqual({ from: 1, to: 160 });
   });

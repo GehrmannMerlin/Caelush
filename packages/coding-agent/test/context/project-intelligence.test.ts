@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -100,7 +100,7 @@ describe("Coding Project Intelligence", () => {
         "packages/core",
       ]);
       expect(snapshot.profile.activePackage?.path).toBe(
-        path.join(root, "packages", "core", "package.json"),
+        path.join(await realpath(root), "packages", "core", "package.json"),
       );
       expect(snapshot.profile.activePackage?.relativePath).not.toContain("package.json");
     } finally {

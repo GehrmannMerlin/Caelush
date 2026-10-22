@@ -68,6 +68,7 @@ export type { AttachmentReadOperationErrorCode } from "./operations/attachment-r
 export {
   createRuntimeGitOperations,
   createRuntimePatchOperations,
+  createRuntimeEffectReconciliationPort,
   createRuntimeProcessOperations,
   createDefaultRuntimeProcessAuthorization,
   createRuntimeReadOnlyOperations,

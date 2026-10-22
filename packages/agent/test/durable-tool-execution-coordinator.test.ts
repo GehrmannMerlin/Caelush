@@ -20,6 +20,7 @@ import {
   createToolFailureSettlement,
   createToolSettlementCoordinator,
   ToolExecutionConflictError,
+  ToolExecutionAbortedError,
   ToolExecutionUncertainError,
   type RunEventNotifierPort,
   type ToolResultProcessingOutcome,
@@ -31,6 +32,7 @@ import {
   type ToolExecutionSnapshot,
   type ToolExecutionStorePort,
   type ToolPolicyDecision,
+  type EffectReconciliationPort,
 } from "@caelush/agent";
 
 /**
@@ -144,6 +146,7 @@ function harness(options: {
   readonly approvalLookup?: boolean;
   readonly pipelineOutcome?: ToolResultProcessingOutcome;
   readonly notifier?: RunEventNotifierPort;
+  readonly effectReconciliation?: EffectReconciliationPort;
 }): Harness {
   const store = new FakeStore();
   let executions = 0;
@@ -198,6 +201,9 @@ function harness(options: {
   const coordinator = createDurableToolExecutionCoordinator({
     store,
     admission,
+    ...(options.effectReconciliation === undefined
+      ? {}
+      : { effectReconciliation: options.effectReconciliation }),
     metadata: { get: () => ({ riskLevel: "LOW" as const }) },
     approvalRequests: () => {
       const request = approval();
@@ -413,7 +419,7 @@ describe("DurableToolExecutionCoordinator", () => {
     expect(h.store.commits.at(-1)?.invocation.status).toBe("CANCELLED");
   });
 
-  it("never re-executes a durable RUNNING invocation and records uncertainty instead", async () => {
+  it("never re-executes a durable RUNNING invocation without a read-only recheck", async () => {
     const h = harness({});
     const running = seeded("RUNNING", {
       // After `createdAt` (10) and before the harness clock's first read (100), so the uncertainty
@@ -430,14 +436,93 @@ describe("DurableToolExecutionCoordinator", () => {
       signal: new AbortController().signal,
     });
 
-    expect(outcome.kind).toBe("SETTLED");
-    // The proof the requirement turns on: the executor was never reached.
+    expect(outcome.kind).toBe("WAITING_RECONCILIATION");
+    // The proof the requirement turns on: neither the executor nor a terminal settlement ran.
     expect(h.executions()).toBe(0);
-    if (outcome.kind !== "SETTLED") throw new Error("expected settlement");
+    if (outcome.kind !== "WAITING_RECONCILIATION") throw new Error("expected wait");
+    expect(outcome.invocation.status).toBe("RUNNING");
+    expect(outcome.reasonCode).toBe("UNAVAILABLE");
+    expect(h.store.commits).toHaveLength(0);
+  });
+
+  it("uses only read-only reconciliation evidence and never rewrites the original result as success", async () => {
+    const reconciliation = vi.fn(async () => ({ kind: "MATCHED_EXPECTED_STATE" as const }));
+    const h = harness({ effectReconciliation: { reconcile: reconciliation } });
+    const running = seeded("RUNNING", {
+      toolName: "apply_patch",
+      args: { patch: "*** Begin Patch\n*** End Patch" },
+      startedAt: createTimestampMs(20) as never,
+    });
+    const snapshot = { sessionId: createSessionId(), invocation: running, revision: null as never };
+
+    const outcome = await h.coordinator.recover(snapshot, {
+      environment,
+      securityContext,
+      signal: new AbortController().signal,
+    });
+
+    expect(reconciliation).toHaveBeenCalledWith({
+      runId: running.runId,
+      invocation: running,
+      environment,
+      securityContext,
+      signal: expect.any(AbortSignal),
+    });
+    expect(h.executions()).toBe(0);
+    expect(outcome.kind).toBe("SETTLED");
+    if (outcome.kind !== "SETTLED") throw new Error("expected failure settlement");
     expect(outcome.invocation.status).toBe("FAILED");
     expect(outcome.invocation.error?.code).toBe("TOOL_OUTCOME_UNKNOWN");
-    expect(outcome.invocation.error?.details?.executionDisposition).toBe("UNCERTAIN_SIDE_EFFECT");
     expect(outcome.observation.isError).toBe(true);
+    expect(outcome.observation.content).toContain("current target state matches");
+    expect(outcome.observation.details).toEqual({
+      effectReconciliation: "MATCHED_EXPECTED_STATE",
+    });
+  });
+
+  it("keeps an unknown side effect open when read-only reconciliation is inconclusive", async () => {
+    const reconciliation = vi.fn(async () => ({ kind: "INCONCLUSIVE" as const }));
+    const h = harness({ effectReconciliation: { reconcile: reconciliation } });
+    const running = seeded("RUNNING", {
+      toolName: "apply_patch",
+      args: { patch: "*** Begin Patch\n*** End Patch" },
+      startedAt: createTimestampMs(20) as never,
+    });
+
+    const outcome = await h.coordinator.recover(
+      { sessionId: createSessionId(), invocation: running, revision: null as never },
+      { environment, securityContext, signal: new AbortController().signal },
+    );
+
+    expect(reconciliation).toHaveBeenCalledTimes(1);
+    expect(outcome.kind).toBe("WAITING_RECONCILIATION");
+    expect(outcome).toMatchObject({ invocation: { id: running.id, status: "RUNNING" } });
+    expect(h.executions()).toBe(0);
+  });
+
+  it("honors cancellation when read-only reconciliation is interrupted", async () => {
+    const abort = new AbortController();
+    const reconciliation = vi.fn(async () => {
+      abort.abort();
+      throw new Error("read-only check aborted");
+    });
+    const h = harness({ effectReconciliation: { reconcile: reconciliation } });
+    const running = seeded("RUNNING", {
+      toolName: "apply_patch",
+      args: { patch: "*** Begin Patch\\n*** End Patch" },
+      startedAt: createTimestampMs(20) as never,
+    });
+
+    await expect(
+      h.coordinator.recover(
+        { sessionId: createSessionId(), invocation: running, revision: null as never },
+        { environment, securityContext, signal: abort.signal },
+      ),
+    ).rejects.toBeInstanceOf(ToolExecutionAbortedError);
+
+    expect(reconciliation).toHaveBeenCalledTimes(1);
+    expect(h.executions()).toBe(0);
+    expect(h.store.commits).toHaveLength(0);
   });
 
   it("returns the existing observation for a COMPLETED invocation without a second event", async () => {

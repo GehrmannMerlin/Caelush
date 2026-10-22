@@ -46,6 +46,10 @@ export class RetryController {
     return this.policy.maxAttempts;
   }
 
+  get episodePauseMs(): number {
+    return this.policy.episodePauseMs ?? this.policy.maxDelayMs;
+  }
+
   decide(input: RetryDecisionInput): RetryDecision {
     if (input.cancelled === true) return { kind: "STOP", reason: "CANCELLED" };
     if (input.deadlineAt !== undefined && input.now >= input.deadlineAt) {
@@ -66,10 +70,7 @@ export class RetryController {
       if (input.retryAfterMs > this.policy.maxProviderRetryAfterMs) {
         return { kind: "STOP", reason: "RETRY_AFTER_EXCEEDS_POLICY" };
       }
-      if (
-        input.deadlineAt !== undefined &&
-        input.retryAfterMs >= input.deadlineAt - input.now
-      ) {
+      if (input.deadlineAt !== undefined && input.retryAfterMs >= input.deadlineAt - input.now) {
         return { kind: "STOP", reason: "DEADLINE_EXCEEDED" };
       }
       return { kind: "RETRY", attempt: input.attempt + 1, delayMs: input.retryAfterMs };

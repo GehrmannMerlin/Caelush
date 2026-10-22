@@ -425,6 +425,72 @@ export const PromptCacheUsageSchema = z
   });
 
 export const ContextUsagePressureStateSchema = z.enum(["NORMAL", "PROACTIVE", "EMERGENCY"]);
+const TurnBudgetProjectionSchema = z
+  .object({
+    version: z.literal("TURN_BUDGET_DECISION_V1"),
+    algorithm: z.literal("HEADROOM_V1"),
+    windowTokens: SafeTokenCountSchema,
+    inputTokens: SafeTokenCountSchema,
+    outputAllowanceTokens: SafeTokenCountSchema,
+    safetyTokens: SafeTokenCountSchema,
+    expectedGrowthTokens: SafeTokenCountSchema,
+    remainingTokens: z.number().int().safe(),
+    decision: z.enum(["KEEP", "ADJUST_OUTPUT", "PREPARE_HISTORY"]),
+    windowSource: z.literal("MODEL_LIMITS"),
+    outputSource: z.enum(["EXPLICIT_SETTING", "PREFERRED_ALLOWANCE", "AVAILABLE_ROOM"]),
+    safetySource: z.literal("HEADROOM_V1_SAFETY"),
+    growthSource: z.literal("HEADROOM_V1_EXPECTED_GROWTH"),
+  })
+  .strict();
+const RunProcessProjectionSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("CORRECTING"),
+      cause: z.enum(["TOOL_FEEDBACK", "VERIFICATION_FEEDBACK", "NO_PROGRESS"]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("PROVIDER_WAIT"),
+      nextAttemptAt: TimestampMsSchema,
+      episode: SafeTokenCountSchema,
+      totalAttempts: SafeTokenCountSchema.optional(),
+      errorCode: z.enum(["LLM_RATE_LIMIT", "LLM_NETWORK", "LLM_TIMEOUT"]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("RETRY_WAIT"),
+      nextAttemptAt: TimestampMsSchema,
+      attempt: SafeTokenCountSchema,
+      maxAttempts: SafeTokenCountSchema,
+      episode: SafeTokenCountSchema.optional(),
+      totalAttempts: SafeTokenCountSchema.optional(),
+      errorCode: z.enum(["LLM_RATE_LIMIT", "LLM_NETWORK", "LLM_TIMEOUT"]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("COMPACTING"),
+      stage: z.enum(["PREPARING", "SUMMARIZING", "REBUILDING"]),
+      reason: z.enum(["PROACTIVE_PRESSURE", "SELECTION_PRESSURE", "FORCED_PROVIDER_OVERFLOW"]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("DEGRADED_CONTINUATION"),
+      sourceRefs: z.array(z.string().min(1).max(512)).max(8),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("ACTION_REQUIRED"),
+      reason: z.literal("EFFECT_UNCONFIRMED"),
+      toolName: z.string().min(1).max(128),
+      reasonCode: z.enum(["UNAVAILABLE", "DOES_NOT_MATCH", "INCONCLUSIVE", "UNSUPPORTED"]),
+    })
+    .strict(),
+]);
 const ContextProfileSourceSchema = z.enum([
   "CONFIGURATION",
   "KNOWN_METADATA",
@@ -432,6 +498,13 @@ const ContextProfileSourceSchema = z.enum([
   "OVERRIDE",
   "FALLBACK",
 ]);
+
+const LastCompactionProjectionSchema = z
+  .object({
+    reason: z.enum(["PROACTIVE_PRESSURE", "SELECTION_PRESSURE", "FORCED_PROVIDER_OVERFLOW"]),
+    quality: z.enum(["SEMANTIC", "DEGRADED"]),
+  })
+  .strict();
 
 export const ContextUsageProjectionSchema = z
   .object({
@@ -448,6 +521,12 @@ export const ContextUsageProjectionSchema = z
     usedRatio: z.number().min(0).max(1),
     remainingTokens: z.number().int().nonnegative(),
     pressureState: ContextUsagePressureStateSchema,
+    /** Exact per-turn input/output headroom decision. Missing means a legacy usage record. */
+    turnBudget: TurnBudgetProjectionSchema.optional(),
+    /** Quality and trigger from the latest durably committed checkpoint, if one exists. */
+    lastCompaction: LastCompactionProjectionSchema.optional(),
+    /** Read-only projection of an active durable execution boundary. */
+    process: RunProcessProjectionSchema.optional(),
     compactionCount: z.number().int().nonnegative(),
     lastCompactionAt: TimestampMsSchema.optional(),
     lastBuildAt: TimestampMsSchema.optional(),
@@ -492,4 +571,5 @@ export type PromptCacheSurfaceSegments = z.infer<typeof PromptCacheSurfaceSegmen
 export type CacheMetricsV2 = z.infer<typeof CacheMetricsV2Schema>;
 export type PromptCacheUsage = z.infer<typeof PromptCacheUsageSchema>;
 export type ContextUsageProjection = z.infer<typeof ContextUsageProjectionSchema>;
+export type RunProcessProjection = z.infer<typeof RunProcessProjectionSchema>;
 export type ContextUsageResponse = z.infer<typeof ContextUsageResponseSchema>;

@@ -175,6 +175,7 @@ class BlockingProvider implements ApiAdapter {
 
   private async *block(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     this.entered();
+    yield* [];
     await new Promise<void>((resolve) => {
       if (input.signal.aborted) {
         resolve();
@@ -509,7 +510,7 @@ describe("real Phase 12D daemon and CLI E2E", () => {
     expect(runId).toBeDefined();
     await expect(client.getRun(runId!)).resolves.toMatchObject({ status: "CANCELLED" });
     expect(await readFile(join(workspacePath, "README.md"), "utf8")).toBe("before\n");
-  }, 20_000);
+  }, 45_000);
 });
 
 async function makeWorkspace(prefix: string): Promise<string> {

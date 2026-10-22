@@ -146,18 +146,18 @@ describe("OpenAI-compatible wire tool contract", () => {
     const trace = normalizeWireRequest(body);
     expect(trace.model).toBe("fixture-model");
     expect(trace.toolNames).toEqual([...DEFAULT_CODING_TOOL_ORDER]);
-    expect(trace.toolCount).toBe(12);
+    expect(trace.toolCount).toBe(13);
     expect(trace.roleSequence).toEqual(["system", "user"]);
     expect(trace.roleCounts).toEqual({ system: 1, user: 1 });
-    expect(trace.metadata).toEqual({ messageCount: 2, toolCount: 12, hasTools: true });
+    expect(trace.metadata).toEqual({ messageCount: 2, toolCount: 13, hasTools: true });
     expect(Object.keys(trace.metadata)).toEqual(["messageCount", "toolCount", "hasTools"]);
     expect(trace.metadata.messageCount).toBeGreaterThanOrEqual(1);
     expect(trace.metadata.messageCount).toBeLessThanOrEqual(128);
-    expect(trace.metadata.toolCount).toBe(12);
+    expect(trace.metadata.toolCount).toBe(13);
     expect(trace.metadata.hasTools).toBe(true);
     expect(trace.toolChoice).toBe("auto");
-    expect(new Set(trace.inputSchemaHashes).size).toBe(12);
-    expect(new Set(trace.schemaHashes).size).toBe(12);
+    expect(new Set(trace.inputSchemaHashes).size).toBe(13);
+    expect(new Set(trace.schemaHashes).size).toBe(13);
     expect(trace.schemaMatrix).toMatchInlineSnapshot(`
       [
         {
@@ -219,6 +219,11 @@ describe("OpenAI-compatible wire tool contract", () => {
           "inputSchemaHash": "13267efe0326c60018d95a55be8b75cc7c657eebd4a7c03189878bdf7391b1fb",
           "name": "read_attachment",
           "schemaHash": "43024de0396d18d0ddca29d6205b37d5255bfbffdf889ea3c1f865b17ad0ab2e",
+        },
+        {
+          "inputSchemaHash": "b3f71069f51f05964550a76266ce09a5e344994b7dc81e2162a6c7c4768c35d6",
+          "name": "read_history",
+          "schemaHash": "556dd82929d9daa7095bf57d9afbf31f6420ae292b9c458ced65638489aae99c",
         },
       ]
     `);

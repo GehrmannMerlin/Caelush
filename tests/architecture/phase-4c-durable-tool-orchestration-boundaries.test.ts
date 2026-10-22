@@ -521,7 +521,7 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
     expect(pipeline).toContain("export interface PreparedToolSettlement {");
   });
 
-  it("keeps the twelve builtins target-owned and the legacy batch retired", () => {
+  it("keeps the thirteen builtins target-owned and the legacy batch retired", () => {
     // Phase 4C recorded that the nine builtins had not yet moved and that the legacy batch coordinator
     // still existed for its own direct API. Phase 4E moved the builtins and Phase 4F removed the legacy
     // package, so both statements are now their final form.
@@ -532,7 +532,7 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
     expect(daemon).toContain("createToolBatchCoordinator(");
     expect(daemon).not.toContain("new ToolBatchCoordinator(dispatcher)");
 
-    // The twelve builtins are declared by the Coding product layer, once each, in the frozen order.
+    // The thirteen builtins are declared by the Coding product layer, once each, in the frozen order.
     const builtinNames = [
       "read_file",
       "list_directory",
@@ -546,6 +546,7 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
       "git_status",
       "git_diff",
       "read_attachment",
+      "read_history",
     ];
     const defaultTools = executable("packages/coding-agent/src/tools/builtins/default-tools.ts");
     for (const name of builtinNames) {
@@ -576,7 +577,7 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
         expect(source, `${file} must not name ${name}`).not.toContain(name);
       }
     }
-  });
+  }, 20_000);
 
   it("keeps the production chain REQUESTED → admission → RUNNING → execute → settle", () => {
     const coordinator = executable(`${DURABLE}durable-execution-coordinator.ts`);

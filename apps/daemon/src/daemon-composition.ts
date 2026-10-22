@@ -81,6 +81,7 @@ import type {
   ContextContributionPipeline,
   ContextContributionRegistration,
   ContextUsageSnapshot,
+  HistoryLookupOperations,
   RunEventNotifierPort,
   ToolPresentationPort,
 } from "@caelush/agent";
@@ -172,6 +173,7 @@ import {
   createDefaultCodingTools,
   createDurableInvocationGatePort,
   createRuntimeGitOperations,
+  createRuntimeEffectReconciliationPort,
   createRuntimePatchOperations,
   createRuntimeProgressSignalProjector,
   createRuntimeProcessOperations,
@@ -437,6 +439,7 @@ export interface DaemonComposition {
   readonly toolTurn: ToolTurnPipeline;
   /** Safe Chinese presentation shared by durable and live Tool surfaces. */
   readonly toolPresentation: ToolPresentationPort;
+  readonly historyLookup: HistoryLookupOperations;
   readonly messages: RunMessageAuthority;
   readonly transcriptProjectors: import("@caelush/agent").AgentMessageTranscriptProjectorRegistry;
   readonly contextUsage: {
@@ -758,16 +761,17 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
    * registry, the Coding catalog, the model-visible specs and the prompt guidance block describing the
    * same active set.
    */
+  const historyLookup = createHistoryLookupAdapter({
+    runs: options.storage.runs,
+    messageRecords: options.storage.messageRecords,
+    codecs: messageCodecs,
+  });
   const defaultCodingTools = defaultCodingToolSet(
     defaultCodingOperations(
       runtimeResolver,
       securityCapabilityService,
       options.attachmentService,
-      createHistoryLookupAdapter({
-        runs: options.storage.runs,
-        messageRecords: options.storage.messageRecords,
-        codecs: messageCodecs,
-      }),
+      historyLookup,
     ),
     options.toolExposure ?? "AVAILABLE",
   );
@@ -949,6 +953,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       resultPipelineFactory: toolResultPipelineFactory,
       preparedCallFactory: ({ invocation, externalCallId }) =>
         preparedCallFromDurableState(activeToolRegistry, invocation, externalCallId),
+      effectReconciliation: createRuntimeEffectReconciliationPort(runtimeResolver),
       failureSettlement: createToolFailureSettlement({
         store: options.storage.toolExecution,
         clock,
@@ -1417,6 +1422,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     toolRegistry: activeToolRegistry,
     toolTurn,
     toolPresentation: toolSecurity.presentation,
+    historyLookup,
     messages,
     transcriptProjectors,
     contextUsage: {
@@ -1424,19 +1430,47 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
         const typedRunId = runId as RunId;
         const usage = await options.storage.contextUsage.getByRun(typedRunId);
         if (usage === undefined) return undefined;
-        const [records, currentEpoch, budgetEntries, invocationEntries] = await Promise.all([
+        const [
+          records,
+          currentEpoch,
+          budgetEntries,
+          invocationEntries,
+          executionSnapshot,
+          checkpoints,
+        ] = await Promise.all([
           options.storage.messageRecords.listByRun(typedRunId),
           options.storage.promptSurface.getCurrent(typedRunId),
           options.storage.budgetLedger.listByRun(typedRunId),
           options.storage.providerInvocationUsage.listByRun(typedRunId),
+          options.storage.execution.load(typedRunId),
+          options.storage.contextCheckpointsV2.listByRun(typedRunId),
         ]);
         const currentSurface =
           currentEpoch === undefined
             ? undefined
             : await options.storage.promptSurface.readEpoch(typedRunId, currentEpoch.epochId);
         const projectedContextUsage = projectV2ContextUsage(usage);
+        const latestCheckpoint = [...checkpoints]
+          .reverse()
+          .find((checkpoint) => checkpoint.schemaVersion === 2);
         return {
           ...projectedContextUsage,
+          ...(latestCheckpoint === undefined || latestCheckpoint.schemaVersion !== 2
+            ? {}
+            : {
+                lastCompaction: {
+                  reason: latestCheckpoint.reason,
+                  quality: latestCheckpoint.degraded
+                    ? ("DEGRADED" as const)
+                    : ("SEMANTIC" as const),
+                },
+              }),
+          ...(executionSnapshot === undefined
+            ? {}
+            : (() => {
+                const process = projectContextRunProcess(executionSnapshot, checkpoints);
+                return process === undefined ? {} : { process };
+              })()),
           promptCache: projectPromptCacheUsage(
             usage,
             promptCacheSamplesFromDurableMessages(records, budgetEntries, invocationEntries),
@@ -1476,6 +1510,76 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       await runtime.dispose();
     },
   };
+}
+
+function projectContextRunProcess(
+  snapshot: Awaited<ReturnType<CaelushStorage["execution"]["load"]>>,
+  checkpoints: Awaited<ReturnType<CaelushStorage["contextCheckpointsV2"]["listByRun"]>>,
+): ContextUsageProjection["process"] {
+  if (snapshot === undefined || snapshot === null) return undefined;
+  const continuation = snapshot.continuation;
+  if (continuation?.type === "WAITING_RETRY") {
+    return {
+      kind: "RETRY_WAIT",
+      nextAttemptAt: continuation.nextAttemptAt,
+      attempt: continuation.attempt,
+      maxAttempts: continuation.maxAttempts,
+      ...(continuation.episode === undefined ? {} : { episode: continuation.episode }),
+      ...(continuation.totalAttempts === undefined
+        ? {}
+        : { totalAttempts: continuation.totalAttempts }),
+      errorCode: continuation.errorCode,
+    };
+  }
+  if (continuation?.type === "WAITING_PROVIDER") {
+    return {
+      kind: "PROVIDER_WAIT",
+      nextAttemptAt: continuation.nextAttemptAt,
+      episode: continuation.episode ?? 1,
+      ...(continuation.totalAttempts === undefined
+        ? {}
+        : { totalAttempts: continuation.totalAttempts }),
+      errorCode: continuation.errorCode,
+    };
+  }
+  if (continuation?.type === "WAITING_RESOURCE") {
+    if (continuation.reason === "EFFECT_UNCONFIRMED") {
+      return {
+        kind: "ACTION_REQUIRED",
+        reason: continuation.reason,
+        toolName: continuation.toolName,
+        reasonCode: continuation.reasonCode,
+      };
+    }
+    return { kind: "CORRECTING", cause: "NO_PROGRESS" };
+  }
+  if (continuation?.type === "WAITING_VERIFICATION_REPAIR") {
+    return { kind: "CORRECTING", cause: "VERIFICATION_FEEDBACK" };
+  }
+  if (
+    continuation?.type === "WAITING_TOOL_RESULTS" &&
+    continuation.receivedResults?.some((result) => result.isError)
+  ) {
+    return { kind: "CORRECTING", cause: "TOOL_FEEDBACK" };
+  }
+
+  const runStatus = snapshot.run.status;
+  const active =
+    runStatus === "PENDING" ||
+    runStatus === "RUNNING" ||
+    runStatus === "WAITING_APPROVAL" ||
+    runStatus === "WAITING_RESOURCE" ||
+    runStatus === "VERIFYING";
+  const latest = checkpoints.at(-1);
+  if (active && latest?.schemaVersion === 2 && latest.degraded) {
+    const sourceRefs = latest.structuredCheckpoint.criticalReferences.filter((reference) =>
+      reference.startsWith("history:v1:"),
+    );
+    if (sourceRefs.length > 0) {
+      return { kind: "DEGRADED_CONTINUATION", sourceRefs: sourceRefs.slice(-8) };
+    }
+  }
+  return undefined;
 }
 
 function toolResultFeedbackText(
@@ -1547,6 +1651,25 @@ function projectV2ContextUsage(input: ContextUsageSnapshot) {
     usedRatio,
     remainingTokens,
     pressureState: input.pressureState,
+    ...(input.turnBudget === undefined
+      ? {}
+      : {
+          turnBudget: {
+            version: input.turnBudget.version,
+            algorithm: input.turnBudget.algorithm,
+            windowTokens: input.turnBudget.windowTokens,
+            inputTokens: input.turnBudget.inputTokens,
+            outputAllowanceTokens: input.turnBudget.outputAllowanceTokens,
+            safetyTokens: input.turnBudget.safetyTokens,
+            expectedGrowthTokens: input.turnBudget.expectedGrowthTokens,
+            remainingTokens: input.turnBudget.remainingTokens,
+            decision: input.turnBudget.decision,
+            windowSource: input.turnBudget.sources.window,
+            outputSource: input.turnBudget.sources.output,
+            safetySource: input.turnBudget.sources.safety,
+            growthSource: input.turnBudget.sources.growth,
+          },
+        }),
     compactionCount: input.compactionCount,
     ...(input.lastCompactionAt === undefined ? {} : { lastCompactionAt: input.lastCompactionAt }),
     breakdown: {

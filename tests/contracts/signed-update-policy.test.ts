@@ -65,7 +65,8 @@ describe("signed update policy contract", () => {
     expect(canonicalizePolicyJson({ z: 1, a: { y: true, x: null } })).toBe(
       canonicalizePolicyJson({ a: { x: null, y: true }, z: 1 }),
     );
-    expect(canonicalizePolicyJson({ text: 'é\n"\\' })).toBe('{"text":"é\\n\\\"\\\\"}');
+    const escapedText = { text: 'é\n"\\' };
+    expect(canonicalizePolicyJson(escapedText)).toBe(JSON.stringify(escapedText));
     expect(canonicalizePolicyJson({ text: "é" })).not.toBe(
       canonicalizePolicyJson({ text: "e\u0301" }),
     );
@@ -89,7 +90,9 @@ describe("signed update policy contract", () => {
   });
 
   it("requires exact signed payload fields and a present keyId", () => {
-    const { keyId: _keyId, ...withoutKeyId } = vector.envelope.payload;
+    const withoutKeyId = Object.fromEntries(
+      Object.entries(vector.envelope.payload).filter(([field]) => field !== "keyId"),
+    );
     expectPolicyError(() => validateUpdatePolicyPayload(withoutKeyId), "POLICY_PAYLOAD_INVALID");
   });
 

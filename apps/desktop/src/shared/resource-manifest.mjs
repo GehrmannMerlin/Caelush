@@ -431,7 +431,8 @@ function validateResourcePath(value) {
     value.startsWith("/") ||
     value.includes("\\") ||
     value.includes(":") ||
-    /[<>|?*\u0000-\u001f]/u.test(value)
+    /[<>|?*]/u.test(value) ||
+    [...value].some((character) => character.charCodeAt(0) <= 0x1f)
   ) {
     throw invalidManifest();
   }

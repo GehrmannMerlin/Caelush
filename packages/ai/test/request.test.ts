@@ -121,12 +121,18 @@ describe("request tool validation", () => {
   });
 
   it("rejects malformed tools and tool choices", () => {
-    expectInvalid(request({ tools: [] }));
     expectInvalid(request({ tools: [{ name: "", description: "d", inputSchema: {} }] }));
     expectInvalid(request({ tools: [{ name: "t", description: "d" }] }));
     expectInvalid(request({ toolChoice: { type: "MAYBE" } }));
     expectInvalid(request({ toolChoice: { type: "TOOL" } }));
     expectInvalid(request({ tools: [READ_FILE], toolChoice: { type: "TOOL", toolName: "" } }));
+  });
+
+  it("allows an explicitly empty tool catalog when tools are disabled", () => {
+    expect(() => {
+      validateAIModelRequest(request({ tools: [], toolChoice: { type: "NONE" } }), MODEL);
+    }).not.toThrow();
+    expectInvalid(request({ tools: [], toolChoice: { type: "REQUIRED" } }));
   });
 
   it("requires an existing tool for a TOOL choice", () => {

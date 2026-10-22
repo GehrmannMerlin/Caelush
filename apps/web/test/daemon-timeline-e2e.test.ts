@@ -93,21 +93,30 @@ describe("real daemon to Web timeline E2E", () => {
     });
 
     await manager.loadSessions();
+    await expect(
+      manager.selectPermissionPreset({ id: "FULL_ACCESS", expectedVersion: 1 }),
+    ).resolves.toBe(true);
     manager.beginDraft();
-    await expect(manager.submitPrompt("inspect the workspace safely")).resolves.toBe(true);
+    await expect(
+      manager.submitPrompt({
+        text: "inspect the workspace safely",
+        acceptanceRequirements: [{ purpose: "TEST" }],
+      }),
+    ).resolves.toBe(true);
     await waitFor(() => manager?.getSnapshot().activeRun === undefined);
 
     const snapshot = manager.getSnapshot();
+    const settledRun = snapshot.runs.at(-1);
+    const replayedEventTypes: string[] = [];
+    if (settledRun !== undefined) {
+      for await (const event of client.watchRunEvents(settledRun.id, { afterSequence: 0 })) {
+        replayedEventTypes.push(event.type);
+        if (event.type === "run.completed" || event.type === "run.failed") break;
+      }
+    }
     const terminalRun = snapshot.runs.find(
       (run) => run.finalResult?.type === "VERIFIED_COMPLETION",
     );
-    const replayedEventTypes: string[] = [];
-    if (terminalRun !== undefined) {
-      for await (const event of client.watchRunEvents(terminalRun.id, { afterSequence: 0 })) {
-        replayedEventTypes.push(event.type);
-        if (event.type === "run.completed") break;
-      }
-    }
     expect(terminalRun?.finalResult?.type).toBe("VERIFIED_COMPLETION");
     expect(replayedEventTypes).toContain("verification.finalized");
     expect(replayedEventTypes).toContain("run.completed");
@@ -167,6 +176,21 @@ async function makeWorkspace(): Promise<string> {
   directory = workspacePath;
   await mkdir(join(workspacePath, "src"));
   await writeFile(join(workspacePath, "src", "message.txt"), "API_KEY=real-value\n", "utf8");
+  await writeFile(
+    join(workspacePath, "package.json"),
+    JSON.stringify({
+      name: "timeline-fixture",
+      version: "1.0.0",
+      packageManager: "pnpm@11.21.0",
+      scripts: { test: "node verify.mjs" },
+    }),
+    "utf8",
+  );
+  await writeFile(
+    join(workspacePath, "verify.mjs"),
+    'import { access } from "node:fs/promises";\nawait access(new URL("./src/message.txt", import.meta.url));\n',
+    "utf8",
+  );
   return workspacePath;
 }
 

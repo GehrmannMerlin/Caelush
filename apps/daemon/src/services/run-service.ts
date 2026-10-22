@@ -119,6 +119,7 @@ export class RunService {
         throw new StorageError("Run submission idempotency is unavailable.");
       }
       const { submissionId: _ignored, ...payload } = input;
+      void _ignored;
       const reserved = await this.options.submissions.reserve(
         input.submissionId,
         hashSubmissionPayload({ sessionId, payload }),
@@ -160,12 +161,20 @@ export class RunService {
       );
     }
     const workspace = await this.resolveWorkspace(session, input.workspace);
-    const { preset, ...clientFields } = input;
+    const { preset, acceptanceRequirements, ...clientFields } = input;
     const securityPolicy = await this.resolveSecurityPolicy(workspace.id, preset);
     const runDraft = AgentRunSchema.parse({
       id: this.createId(),
       sessionId,
       ...clientFields,
+      ...(acceptanceRequirements === undefined
+        ? {}
+        : {
+            acceptanceRequirements: acceptanceRequirements.map((requirement) => ({
+              ...requirement,
+              source: "USER_EXPLICIT" as const,
+            })),
+          }),
       workspace,
       limits: input.limits ?? compatibilityLimitsForResourcePolicy(resourcePolicy),
       resourcePolicy,
@@ -173,7 +182,7 @@ export class RunService {
       securityPolicy,
       permissionProfile: securityPolicy.permissionProfile,
       approvalPolicy: securityPolicy.approvalPolicy,
-      completionContract: "NATURAL_V1",
+      ...(acceptanceRequirements === undefined ? { completionContract: "NATURAL_V1" } : {}),
       ...(reasoningLevel === undefined ? {} : { reasoningLevel }),
       status: "PENDING",
       createdAt: this.now(),

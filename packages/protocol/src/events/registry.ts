@@ -4,7 +4,10 @@ import { getRunEventTypeDefinition, RUN_EVENT_TYPE_CATALOG } from "./catalog.js"
 import { ApprovalRequestedEventSchema, ApprovalResolvedEventSchema } from "./approval.js";
 import { BudgetExceededEventSchema } from "./budget.js";
 import { ConversationMessageCommittedEventSchema } from "./conversation.js";
-import { ContextCompactionCompletedEventSchema } from "./context.js";
+import {
+  ContextCompactionCompletedEventSchema,
+  ContextCompactionProgressEventSchema,
+} from "./context.js";
 import { RunInputAcceptedEventSchema, RunInputAssignedEventSchema } from "./run-input.js";
 import { RunSecurityPolicyBoundEventSchema } from "./security-policy.js";
 import { ErrorEventSchema } from "./error.js";
@@ -147,6 +150,7 @@ const registeredSchemas: ReadonlyMap<string, RegisteredSchema> = new Map<string,
   ["run.input.accepted\u00001", RunInputAcceptedEventSchema],
   ["run.input.assigned\u00001", RunInputAssignedEventSchema],
   ["context.compaction.completed\u00001", ContextCompactionCompletedEventSchema],
+  ["context.compaction.progress\u00001", ContextCompactionProgressEventSchema],
   ["model.text.delta\u00001", ModelTextDeltaEventSchema],
   ["model.text.delta\u00002", ModelTextDeltaEventV2Schema],
   ["model.reasoning_summary.delta\u00001", ModelReasoningSummaryDeltaEventSchema],

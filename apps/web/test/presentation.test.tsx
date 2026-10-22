@@ -167,13 +167,6 @@ describe("Web presentation", () => {
   );
 
   it("keeps the sidebar compact and exposes only one new-session action", () => {
-    const session = {
-      id: createSessionId(),
-      defaultWorkspace: workspace,
-      createdAt: 1,
-      updatedAt: 2,
-      metadata: {},
-    };
     const html = renderToStaticMarkup(
       <SessionSidebar
         candidates={[]}

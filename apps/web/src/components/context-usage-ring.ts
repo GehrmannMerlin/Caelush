@@ -1,6 +1,16 @@
 import { createElement, useState, type ReactElement } from "react";
-import type { ContextUsageProjection } from "@caelush/protocol";
-import { ContextInspector } from "./context-inspector.js";
+import type {
+  ContextUsageProjection,
+  HistoryLookupQuery,
+  HistoryLookupResponse,
+  RunProcessProjection,
+  RunId,
+} from "@caelush/protocol";
+import {
+  ContextInspector,
+  ContextRunProcessPanel,
+  contextRunProcessShortLabel,
+} from "./context-inspector.js";
 
 function clampRatio(value: number): number {
   return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
@@ -8,6 +18,11 @@ function clampRatio(value: number): number {
 
 export function ContextUsageRing(props: {
   readonly usage?: ContextUsageProjection | null;
+  readonly process?: RunProcessProjection | undefined;
+  readonly runId?: RunId | undefined;
+  readonly onReadHistory?:
+    ((runId: RunId, query: HistoryLookupQuery) => Promise<HistoryLookupResponse>) | undefined;
+  readonly onContinueResourceGuard?: (() => Promise<boolean>) | undefined;
 }): ReactElement {
   const [open, setOpen] = useState(false);
   const contextWindowTokens =
@@ -23,9 +38,31 @@ export function ContextUsageRing(props: {
     props.usage == null
       ? "工作上下文用量：暂无数据"
       : `工作上下文用量：${Math.round(ratio * 100)}%`;
+  const process = props.process ?? props.usage?.process;
+  const runId = props.runId ?? props.usage?.runId;
+  const processPanel =
+    props.usage !== undefined && props.usage !== null
+      ? createElement(ContextInspector, {
+          usage: props.usage,
+          ...(process === undefined ? {} : { process }),
+          ...(props.onReadHistory === undefined ? {} : { onReadHistory: props.onReadHistory }),
+          ...(props.onContinueResourceGuard === undefined
+            ? {}
+            : { onContinueResourceGuard: props.onContinueResourceGuard }),
+        })
+      : process === undefined || runId === undefined
+        ? null
+        : createElement(ContextRunProcessPanel, {
+            runId,
+            process,
+            ...(props.onReadHistory === undefined ? {} : { onReadHistory: props.onReadHistory }),
+            ...(props.onContinueResourceGuard === undefined
+              ? {}
+              : { onContinueResourceGuard: props.onContinueResourceGuard }),
+          });
   return createElement(
     "span",
-    { className: "context-usage-control" },
+    { className: "context-usage-control", "aria-live": "polite" },
     createElement(
       "button",
       {
@@ -54,6 +91,13 @@ export function ContextUsageRing(props: {
         }),
       ),
     ),
-    open && props.usage != null ? createElement(ContextInspector, { usage: props.usage }) : null,
+    process === undefined
+      ? null
+      : createElement(
+          "small",
+          { className: "context-usage-live-process" },
+          contextRunProcessShortLabel(process),
+        ),
+    open ? processPanel : null,
   );
 }

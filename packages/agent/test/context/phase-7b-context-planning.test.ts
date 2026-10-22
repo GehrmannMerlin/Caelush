@@ -307,6 +307,31 @@ describe("Phase 7B ContextPlanner", () => {
     ).toThrow(ContextCurrentTurnTooLargeError);
   });
 
+  it("defers aggregate pinned overflow only when a caller has a safe compaction candidate", () => {
+    const pinned = item("pinned-small", 60, { retention: "PINNED", priorityClass: "CRITICAL" });
+    const critical = item("critical-small", 40, { priorityClass: "CRITICAL" });
+    const planner = createContextPlanner();
+
+    expect(() => planOf([pinned, critical])).toThrow(ContextMandatoryInputTooLargeError);
+
+    const deferred = planner.plan({
+      items: [pinned, critical],
+      policy: policy(),
+      allowMandatoryOverflowForCompaction: true,
+    });
+
+    expect(deferred.selectedItems).toHaveLength(2);
+    expect(deferred.budget.mandatoryTokens).toBe(100);
+    expect(deferred.requiresCompaction).toBe(true);
+    expect(() =>
+      planner.plan({
+        items: [item("pinned-too-large", 91, { retention: "PINNED", priorityClass: "CRITICAL" })],
+        policy: policy(),
+        allowMandatoryOverflowForCompaction: true,
+      }),
+    ).toThrow(ContextMandatoryInputTooLargeError);
+  });
+
   it("keeps a closed historical Tool protocol atomic and protects the current turn tail", () => {
     const oldRunId = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9c";
     const oldAssistant = assistantMessage({

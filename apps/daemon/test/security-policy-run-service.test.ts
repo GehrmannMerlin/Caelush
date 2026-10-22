@@ -101,6 +101,15 @@ describe("RunService security policy binding", () => {
       },
     });
     expect(events.notifyCommitted).toHaveBeenCalledWith([committedEvent]);
+
+    const acceptanceRun = await service.createRun(sessionId, {
+      ...makeInput(),
+      acceptanceRequirements: [{ purpose: "TEST" }],
+    });
+    expect(acceptanceRun.completionContract).toBeUndefined();
+    expect(acceptanceRun.acceptanceRequirements).toEqual([
+      { purpose: "TEST", source: "USER_EXPLICIT" },
+    ]);
   });
 
   it("does not create a Run or event when context budget policy resolution fails", async () => {

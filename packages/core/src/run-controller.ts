@@ -427,7 +427,12 @@ export class RunController {
     await scope.settled;
     const after = await this.load(runId);
     if (isTerminal(after.run.status)) return "ALREADY_SAFE";
-    if (after.continuation?.type === "WAITING_RETRY") return "CHECKPOINTED";
+    if (
+      after.continuation?.type === "WAITING_RETRY" ||
+      after.continuation?.type === "WAITING_PROVIDER"
+    ) {
+      return "CHECKPOINTED";
+    }
     return after.activeStep === undefined ? "ALREADY_SAFE" : "UNSAFE_IN_FLIGHT";
   }
 
@@ -542,6 +547,9 @@ export class RunController {
       loaded.continuation?.type !== "WAITING_RESOURCE"
     ) {
       return this.resultFromSnapshot(loaded);
+    }
+    if (loaded.continuation.reason === "EFFECT_UNCONFIRMED") {
+      return this.resumeEffectReconciliationWait(loaded);
     }
     if (loaded.continuation.reason !== "NO_PROGRESS") {
       throw new RunControllerInfrastructureError(
@@ -858,6 +866,57 @@ export class RunController {
     );
   }
 
+  /** Re-enter a paused Tool batch only after an explicit host/user request to re-check it. */
+  private async resumeEffectReconciliationWait(
+    loaded: RunExecutionSnapshot,
+  ): Promise<RunControllerResult> {
+    const continuation = loaded.continuation;
+    if (
+      loaded.run.status !== "WAITING_RESOURCE" ||
+      loaded.state === undefined ||
+      continuation?.type !== "WAITING_RESOURCE" ||
+      continuation.reason !== "EFFECT_UNCONFIRMED"
+    ) {
+      return this.resultFromSnapshot(loaded);
+    }
+
+    const now = this.dependencies.clock.now();
+    const run = resumeAgentRunFromResource(loaded.run);
+    const state = resumeAgentStateFromResource(loaded.state, now);
+    const resumed = await this.commit({
+      run,
+      state,
+      expectedStateRevision: loaded.stateRevision ?? null,
+      expectedContinuationRevision: loaded.continuationRevision ?? null,
+      stepWrites: [],
+      messagesToAppend: [],
+      continuation: {
+        operation: "SET",
+        checkpoint: {
+          type: "WAITING_TOOL_RESULTS",
+          runId: continuation.runId,
+          sourceStepId: continuation.sourceStepId,
+          pendingDecision: continuation.pendingDecision,
+          ...(continuation.observationPolicy === undefined
+            ? {}
+            : { observationPolicy: continuation.observationPolicy }),
+        },
+        updatedAt: now,
+      },
+      events: [
+        this.eventFactory.statusChanged(
+          loaded.run,
+          "WAITING_RESOURCE",
+          "RUNNING",
+          this.nextEventId(),
+          now,
+        ),
+      ],
+    });
+    this.notify(resumed.events);
+    return this.driveRunExecutionLocked(resumed.snapshot, "RECOVER");
+  }
+
   private async prepareLegacyCorrectionUpgrade(
     loaded: RunExecutionSnapshot,
     sourceStepId: StepId,
@@ -1101,6 +1160,12 @@ export class RunController {
     if (normalized.run.status === "WAITING_RESOURCE") {
       if (normalized.cancellationIntent !== undefined) return this.finalizeCancellation(normalized);
       if (this.isExpired(normalized)) return this.finalizeTimeout(normalized);
+      if (
+        normalized.continuation?.type === "WAITING_RESOURCE" &&
+        normalized.continuation.reason === "EFFECT_UNCONFIRMED"
+      ) {
+        return this.resultFromSnapshot(normalized);
+      }
       return this.recoverLegacyResourceWait(normalized);
     }
     // The coordinator owns the governance priority — terminal, cancellation, deadline, exception,
@@ -1111,6 +1176,12 @@ export class RunController {
     if (this.isExpired(normalized)) return this.finalizeTimeout(normalized);
     normalized = await this.ensureDurableUserMessage(normalized);
     normalized = await this.ensureDurableToolResults(normalized);
+    if (
+      normalized.run.status === "RUNNING" &&
+      normalized.continuation?.type === "WAITING_PROVIDER"
+    ) {
+      return this.resumeProviderWaitLocked(normalized);
+    }
     if (normalized.run.status === "RUNNING" && normalized.continuation?.type === "WAITING_RETRY") {
       return this.resumeRetryLocked(normalized);
     }
@@ -1202,7 +1273,8 @@ export class RunController {
       continuation === undefined ||
       !(
         continuation.type === "WAITING_TOOL_RESULTS" ||
-        (continuation.type === "WAITING_RETRY" && continuation.mode === "TOOL_RESULTS")
+        ((continuation.type === "WAITING_RETRY" || continuation.type === "WAITING_PROVIDER") &&
+          continuation.mode === "TOOL_RESULTS")
       ) ||
       continuation.receivedResults === undefined
     ) {
@@ -1293,7 +1365,7 @@ export class RunController {
   ): Promise<RunExecutionSnapshot> {
     const continuation = snapshot.continuation;
     if (
-      continuation?.type !== "WAITING_RETRY" ||
+      (continuation?.type !== "WAITING_RETRY" && continuation?.type !== "WAITING_PROVIDER") ||
       continuation.mode !== "TOOL_RESULTS" ||
       continuation.sourceStepId !== undefined
     ) {
@@ -1379,6 +1451,36 @@ export class RunController {
     // decides `ADVANCE_AGENT(RETRY)` from the normalized durable state, and the Run Layer allocates a
     // *new* Step for the new attempt. The failed Step is never reopened.
     return this.driveRunExecutionLocked(loaded, "RECOVER");
+  }
+
+  /** Convert an elapsed provider cooldown into a fresh bounded retry episode exactly once. */
+  private async resumeProviderWaitLocked(
+    loaded: RunExecutionSnapshot,
+  ): Promise<RunControllerResult> {
+    const continuation = loaded.continuation;
+    if (continuation?.type !== "WAITING_PROVIDER") return this.resultFromSnapshot(loaded);
+    if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
+    if (this.isExpired(loaded)) return this.finalizeTimeout(loaded);
+    if (loaded.state === undefined) {
+      throw new RunControllerInvariantError("Provider wait boundary requires an AgentState");
+    }
+    const now = this.dependencies.clock.now();
+    if (now < continuation.nextAttemptAt) {
+      this.scheduleRetry(loaded.run.id, continuation.nextAttemptAt);
+      return this.resultFromSnapshot(loaded);
+    }
+    const retryContinuation = { ...continuation, type: "WAITING_RETRY" as const, attempt: 1 };
+    const commit = await this.commit({
+      run: loaded.run,
+      state: loaded.state,
+      expectedStateRevision: loaded.stateRevision ?? null,
+      expectedContinuationRevision: loaded.continuationRevision ?? null,
+      stepWrites: [],
+      messagesToAppend: [],
+      continuation: { operation: "SET", checkpoint: retryContinuation, updatedAt: now },
+      events: [],
+    });
+    return this.resumeRetryLocked(commit.snapshot);
   }
 
   /**
@@ -3389,6 +3491,11 @@ export class RunController {
 
     const deadline = deriveRunDeadline(current.run);
     const attempt = before.continuation?.type === "WAITING_RETRY" ? before.continuation.attempt : 1;
+    const retryCheckpoint =
+      before.continuation?.type === "WAITING_RETRY" ? before.continuation : undefined;
+    const retryEpisode = retryCheckpoint?.episode ?? 1;
+    const totalAttempts =
+      retryCheckpoint === undefined ? 1 : (retryCheckpoint.totalAttempts ?? attempt - 1) + 1;
     const decision = this.retryController.decide({
       retryable: true,
       attempt,
@@ -3461,8 +3568,96 @@ export class RunController {
       return this.resultFromSnapshot(commit.snapshot);
     }
 
-    /* The original deadline, chunked to the deadline itself rather than a fresh attempt time. */
-    /* Attempts exhausted: the Run fails, with the same event vocabulary as the planner's branch. */
+    /*
+     * Exhausting one bounded backoff episode is a wait boundary, not a task failure. Keep the
+     * original resume provenance and the total request count, then begin another episode after a
+     * visible cooldown. A real Run deadline, cancellation, or explicit step budget still wins above.
+     */
+    if (
+      decision.kind === "STOP" &&
+      (decision.reason === "ATTEMPTS_EXHAUSTED" || decision.reason === "RETRY_AFTER_EXCEEDS_POLICY")
+    ) {
+      const providerDelay = retry.retryAfterMs ?? 0;
+      const delayMs = Math.max(this.retryController.episodePauseMs, providerDelay);
+      const nextAttemptAt = addTimestamp(now, delayMs);
+      const run = AgentRunSchema.parse({ ...current.run, currentStepId: undefined });
+      const transportRecovery = this.nextModelTransportForRetry({
+        previous: before.continuation,
+        run: current.run,
+        step: failedStep,
+        selection: observation.transportSelection,
+        errorCode: toDurableRetryCode(retry.code),
+        attempt: 1,
+        maxAttempts: this.retryController.maxAttempts,
+        timestamp: now,
+      });
+      const nextEpisode = retryEpisode + 1;
+      const commit = await this.commit({
+        run,
+        state: settledState,
+        expectedStateRevision: current.stateRevision ?? null,
+        expectedContinuationRevision: current.continuationRevision ?? null,
+        stepWrites: [{ operation: "UPDATE", step: failedStep }],
+        messagesToAppend: [],
+        continuation: {
+          operation: "SET",
+          checkpoint: {
+            type: "WAITING_PROVIDER",
+            runId: run.id,
+            failedStepId: step.id,
+            attempt: 1,
+            maxAttempts: this.retryController.maxAttempts,
+            episode: nextEpisode,
+            totalAttempts,
+            nextAttemptAt,
+            errorCode: toDurableRetryCode(retry.code),
+            ...retryContext,
+            ...(transportRecovery.checkpoint === undefined
+              ? {}
+              : { transport: transportRecovery.checkpoint }),
+          },
+          updatedAt: now,
+        },
+        events: [
+          this.eventFactory.llmFailed(
+            current.run,
+            failedStep,
+            result.error,
+            this.nextEventId(),
+            now,
+          ),
+          ...(transportRecovery.event === undefined ? [] : [transportRecovery.event]),
+          this.eventFactory.retryExhausted(
+            current.run,
+            failedStep,
+            retryExhaustedPayload(
+              attempt,
+              this.retryController.maxAttempts,
+              toDurableRetryCode(retry.code),
+              retryExhaustedReason(decision.reason)!,
+            ),
+            this.nextEventId(),
+            now,
+          ),
+          this.eventFactory.retryScheduled(
+            run,
+            failedStep,
+            1,
+            this.retryController.maxAttempts,
+            delayMs,
+            nextAttemptAt,
+            toDurableRetryCode(retry.code),
+            this.nextEventId(),
+            now,
+          ),
+        ],
+      });
+      this.notify(commit.events);
+      this.scheduleRetry(run.id, nextAttemptAt, deadline?.deadlineAt);
+      return this.resultFromSnapshot(commit.snapshot);
+    }
+
+    /* Other stop reasons are terminal only after the guards above have had their say. */
     if (decision.kind === "STOP") {
       const state = markAgentStateFailed(settledState, result.error, now);
       const failedRun = markAgentRunFailed(
@@ -3536,6 +3731,8 @@ export class RunController {
           failedStepId: step.id,
           attempt: decision.attempt,
           maxAttempts: this.retryController.maxAttempts,
+          episode: retryEpisode,
+          totalAttempts,
           nextAttemptAt,
           errorCode: toDurableRetryCode(retry.code),
           ...retryContext,
@@ -4431,14 +4628,28 @@ export class RunController {
       snapshot.run.status === "WAITING_RESOURCE" &&
       snapshot.continuation?.type === "WAITING_RESOURCE"
     ) {
+      const continuation = snapshot.continuation;
+      if (continuation.reason === "NO_PROGRESS") {
+        return {
+          status: "WAITING_RESOURCE",
+          run: snapshot.run,
+          state: snapshot.state!,
+          sourceStepId: continuation.sourceStepId,
+          requestedToolCalls: continuation.pendingDecision.toolRequests.length,
+          reason: continuation.reason,
+          replanCount: continuation.replanCount,
+        };
+      }
       return {
         status: "WAITING_RESOURCE",
         run: snapshot.run,
         state: snapshot.state!,
-        sourceStepId: snapshot.continuation.sourceStepId,
-        requestedToolCalls: snapshot.continuation.pendingDecision.toolRequests.length,
-        reason: snapshot.continuation.reason,
-        replanCount: snapshot.continuation.replanCount,
+        sourceStepId: continuation.sourceStepId,
+        requestedToolCalls: continuation.pendingDecision.toolRequests.length,
+        reason: continuation.reason,
+        invocationId: continuation.invocationId,
+        toolName: continuation.toolName,
+        reasonCode: continuation.reasonCode,
       };
     }
     if (snapshot.run.status === "RUNNING" && snapshot.continuation?.type === "WAITING_RETRY") {
@@ -4449,6 +4660,29 @@ export class RunController {
         nextAttemptAt: snapshot.continuation.nextAttemptAt,
         attempt: snapshot.continuation.attempt,
         maxAttempts: snapshot.continuation.maxAttempts,
+        ...(snapshot.continuation.episode === undefined
+          ? {}
+          : { episode: snapshot.continuation.episode }),
+        ...(snapshot.continuation.totalAttempts === undefined
+          ? {}
+          : { totalAttempts: snapshot.continuation.totalAttempts }),
+        errorCode: snapshot.continuation.errorCode,
+      };
+    }
+    if (snapshot.run.status === "RUNNING" && snapshot.continuation?.type === "WAITING_PROVIDER") {
+      return {
+        status: "WAITING_PROVIDER",
+        run: snapshot.run,
+        state: snapshot.state!,
+        nextAttemptAt: snapshot.continuation.nextAttemptAt,
+        attempt: snapshot.continuation.attempt,
+        maxAttempts: snapshot.continuation.maxAttempts,
+        ...(snapshot.continuation.episode === undefined
+          ? {}
+          : { episode: snapshot.continuation.episode }),
+        ...(snapshot.continuation.totalAttempts === undefined
+          ? {}
+          : { totalAttempts: snapshot.continuation.totalAttempts }),
         errorCode: snapshot.continuation.errorCode,
       };
     }
@@ -4671,12 +4905,33 @@ export class RunController {
     const snapshot = toAgentExecutionSnapshot(current);
     const effect: RunExecutionEffectResult = { kind: "COMPLETION", result: decision };
     const planned = this.transitionPlanner.plan({ snapshot, directive, effect, now });
+    const plannedWithDisposition =
+      decision.kind === "REJECT" && current.run.acceptanceRequirements !== undefined
+        ? {
+            ...planned,
+            run: AgentRunSchema.parse({
+              ...planned.run,
+              completionDisposition: {
+                version: "COMPLETION_DISPOSITION_V1",
+                type: "INCOMPLETE",
+                reasonCode:
+                  observation.verificationStatus === "ERROR"
+                    ? "ACCEPTANCE_EVIDENCE_UNAVAILABLE"
+                    : "ACCEPTANCE_NOT_MET",
+                requirementSources: [
+                  ...new Set(current.run.acceptanceRequirements.map(({ source }) => source)),
+                ],
+                failedCheckIds: [...(observation.failedCheckIds ?? [])],
+              },
+            }),
+          }
+        : planned;
     const completion = this.completionEventEvidence(decision, observation);
     const materialized = this.eventMaterializer.materialize({
       snapshot: current,
       directive,
       effect,
-      plannedCommit: planned,
+      plannedCommit: plannedWithDisposition,
       now,
       // A completion evaluation performs no provider turn of its own: the reviewer's model call is the
       // verification subsystem's, and reporting a provider state here would claim a call this effect
@@ -4752,7 +5007,22 @@ export class RunController {
       phase: "VERIFICATION",
       details: { reasonCode: "VERIFICATION_COMPLETION_COMMIT_ERROR" },
     };
-    const failedRun = markAgentRunFailed(latest.run, now);
+    const failedRunBase = markAgentRunFailed(latest.run, now);
+    const failedRun =
+      latest.run.acceptanceRequirements === undefined
+        ? failedRunBase
+        : AgentRunSchema.parse({
+            ...failedRunBase,
+            completionDisposition: {
+              version: "COMPLETION_DISPOSITION_V1",
+              type: "INCOMPLETE",
+              reasonCode: "ACCEPTANCE_EVIDENCE_UNAVAILABLE",
+              requirementSources: [
+                ...new Set(latest.run.acceptanceRequirements.map(({ source }) => source)),
+              ],
+              failedCheckIds: [...(observation.failedCheckIds ?? [])],
+            },
+          });
     const failedState = markAgentStateFailed(latest.state, error, now);
     const failed = await this.commitFailure(latest, failedRun, failedState, undefined);
     this.notify(failed.events);
@@ -4984,7 +5254,11 @@ export class RunController {
       this.retryRegistry.disarm(snapshot.run.id);
       return;
     }
-    if (snapshot.run.status !== "RUNNING" || snapshot.continuation?.type !== "WAITING_RETRY") {
+    if (
+      snapshot.run.status !== "RUNNING" ||
+      (snapshot.continuation?.type !== "WAITING_RETRY" &&
+        snapshot.continuation?.type !== "WAITING_PROVIDER")
+    ) {
       this.retryRegistry.disarm(snapshot.run.id);
       return;
     }
@@ -5019,17 +5293,28 @@ export class RunController {
   private async handleRetry(runId: RunId): Promise<void> {
     if (this.activeRuns.has(runId)) {
       const loaded = await this.load(runId);
-      if (loaded.continuation?.type === "WAITING_RETRY") {
+      if (
+        loaded.continuation?.type === "WAITING_RETRY" ||
+        loaded.continuation?.type === "WAITING_PROVIDER"
+      ) {
         this.scheduleRetry(runId, loaded.continuation.nextAttemptAt);
       }
       return;
     }
     await this.withLock(runId, async () => {
       const loaded = await this.load(runId);
-      if (loaded.run.status !== "RUNNING" || loaded.continuation?.type !== "WAITING_RETRY") {
+      if (
+        loaded.run.status !== "RUNNING" ||
+        (loaded.continuation?.type !== "WAITING_RETRY" &&
+          loaded.continuation?.type !== "WAITING_PROVIDER")
+      ) {
         return;
       }
-      await this.resumeRetryLocked(loaded);
+      if (loaded.continuation.type === "WAITING_PROVIDER") {
+        await this.resumeProviderWaitLocked(loaded);
+      } else {
+        await this.resumeRetryLocked(loaded);
+      }
     });
   }
 

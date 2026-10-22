@@ -50,27 +50,31 @@ describe("Phase 6F production Context Hook composition", () => {
   it("projects a non-empty Hook into the actual Fake Gateway request and redacts unsafe text", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-phase-6f-hook-"));
     const provider = new RecordingProvider();
+    let hookCalls = 0;
     const hook: ContextContributionRegistration = {
       id: createControlHookId("phase-6f-production"),
       priority: 10,
       criticality: "REQUIRED",
       timeoutMs: 100,
       hook: {
-        contribute: async () => [
-          {
-            id: "workspace-fact",
-            source: "phase-6f-test",
-            replay: "SNAPSHOT" as const,
-            items: [
-              {
-                id: "unsafe-fact",
-                priorityClass: "NORMAL" as const,
-                tokenEstimate: 0,
-                content: "TOKEN=CAELUSH_PHASE_6F_SECRET_9D /home/should-not-leak",
-              },
-            ],
-          },
-        ],
+        contribute: async () => {
+          hookCalls += 1;
+          return [
+            {
+              id: "workspace-fact",
+              source: "phase-6f-test",
+              replay: "SNAPSHOT" as const,
+              items: [
+                {
+                  id: "unsafe-fact",
+                  priorityClass: "NORMAL" as const,
+                  tokenEstimate: 16,
+                  content: "TOKEN=CAELUSH_PHASE_6F_SECRET_9D /home/should-not-leak",
+                },
+              ],
+            },
+          ];
+        },
       },
     };
     daemon = await startDaemon({
@@ -110,11 +114,18 @@ describe("Phase 6F production Context Hook composition", () => {
       status = (settled as { status: string }).status;
     }
     expect(status, JSON.stringify(settled)).toBe("COMPLETED");
-    const requestText = JSON.stringify(provider.requests);
-    expect(requestText).toContain("<context_contributions>");
-    expect(requestText).toContain("[REDACTED:HOST_PATH]");
-    expect(requestText).not.toContain("CAELUSH_PHASE_6F_SECRET_9D");
-    expect(requestText).not.toContain("/home/should-not-leak");
+    expect(hookCalls).toBe(1);
+    const promptText = provider.requests
+      .flatMap((request) => request.messages)
+      .map((message) => message.content)
+      .join("\n");
+    expect(
+      promptText.includes("<context_contributions>"),
+      "hook context must reach the model",
+    ).toBe(true);
+    expect(promptText.includes("[REDACTED:HOST_PATH]")).toBe(true);
+    expect(promptText.includes("CAELUSH_PHASE_6F_SECRET_9D")).toBe(false);
+    expect(promptText.includes("/home/should-not-leak")).toBe(false);
   }, 20_000);
 });
 

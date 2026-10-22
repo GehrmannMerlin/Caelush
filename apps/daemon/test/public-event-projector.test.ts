@@ -111,6 +111,35 @@ describe("DefaultPublicEventProjector", () => {
     expect(JSON.stringify(projected)).not.toContain("message");
   });
 
+  it("projects only the bounded compaction stage and trigger", () => {
+    const runId = createRunId();
+    const stepId = createStepId();
+    const event = makeEvent(
+      "context.compaction.progress",
+      { stage: "SUMMARIZING", reason: "FORCED_PROVIDER_OVERFLOW" },
+      {
+        runId,
+        stepId,
+        durability: {
+          kind: "EPHEMERAL",
+          version: 1,
+          deliveryClass: "COALESCIBLE",
+          streamKey: `context:compaction:${runId}:${stepId}`,
+        },
+      },
+    );
+
+    const projected = projector.project(event);
+
+    expect(projected).toMatchObject({
+      type: "context.compaction.progress",
+      visibility: "USER_VISIBLE",
+      durability: { kind: "EPHEMERAL", deliveryClass: "COALESCIBLE" },
+      payload: { stage: "SUMMARIZING", reason: "FORCED_PROVIDER_OVERFLOW" },
+    });
+    expect(JSON.stringify(projected)).not.toContain("prompt");
+  });
+
   it("projects transport fallback as safe candidate ids only", () => {
     const event = makeEvent("transport.fallback.selected", {
       attempt: 2,
@@ -449,6 +478,13 @@ describe("DefaultPublicEventProjector", () => {
     const ids = commonIds();
     const payloads: Record<string, unknown> = {
       "run.started": { goal: "goal" },
+      "run.input.accepted": { inputId: "input_fixture", acceptedSequence: 1 },
+      "run.input.assigned": {
+        inputId: "input_fixture",
+        acceptedSequence: 1,
+        messageId: "msg_fixture",
+        stepId: "step_fixture",
+      },
       "run.security_policy.bound": {
         policySchemaVersion: 1,
         preset: { id: "WORKSPACE_WRITE", version: 1 },
@@ -601,6 +637,10 @@ describe("DefaultPublicEventProjector", () => {
         conversationTurnId: "turn_fixture",
         messageType: "USER",
       },
+      "context.compaction.progress": {
+        stage: "SUMMARIZING",
+        reason: "FORCED_PROVIDER_OVERFLOW",
+      },
     };
 
     for (const definition of RUN_EVENT_TYPE_CATALOG.filter(
@@ -616,10 +656,12 @@ describe("DefaultPublicEventProjector", () => {
           : payloads[definition.type];
       expect(payload, `fixture missing for ${definition.type}`).toBeDefined();
       const modelScoped = definition.type.startsWith("model.");
-      const statusRunId = modelScoped ? createRunId() : undefined;
-      const statusStepId = modelScoped ? createStepId() : undefined;
-      const streamKey =
-        definition.type === "model.status"
+      const contextScoped = definition.type === "context.compaction.progress";
+      const statusRunId = modelScoped || contextScoped ? createRunId() : undefined;
+      const statusStepId = modelScoped || contextScoped ? createStepId() : undefined;
+      const streamKey = contextScoped
+        ? `context:compaction:${statusRunId}:${statusStepId}`
+        : definition.type === "model.status"
           ? `model:status:${statusRunId}:${statusStepId}`
           : definition.type === "model.tool_call.started"
             ? `model:tool-call:${statusRunId}:${statusStepId}:call-1`

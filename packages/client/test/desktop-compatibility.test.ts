@@ -119,7 +119,11 @@ describe("Desktop Daemon compatibility evaluator", () => {
       canEnterWorkspace: true,
     });
 
-    const { desktopLocalProxyV1: _omitted, ...withoutProxy } = daemonClaimsCapability.capabilities;
+    const withoutProxy = Object.fromEntries(
+      Object.entries(daemonClaimsCapability.capabilities).filter(
+        ([capability]) => capability !== "desktopLocalProxyV1",
+      ),
+    );
     const missing = evaluateDesktopDaemonCompatibility(
       { ...daemonClaimsCapability, capabilities: withoutProxy },
       requirements({ requiredCapabilities: ["desktopLocalProxyV1"] }),

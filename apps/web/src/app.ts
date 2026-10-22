@@ -1136,6 +1136,13 @@ function renderWorkspaceApp(input: {
         : { code: "RUN_CREATE_FAILED", message: input.draftError }
       : undefined,
     contextUsage: hasWorkspace ? (snapshot.contextUsage ?? null) : null,
+    contextProcess: hasWorkspace ? snapshot.contextProcess : undefined,
+    contextProcessRunId: hasWorkspace ? snapshot.activeRun?.id : undefined,
+    onReadHistory: (runId, query) =>
+      input.sessionManager?.readRunHistory(runId, query) ??
+      Promise.resolve({ kind: "UNAVAILABLE", reason: "SOURCE_UNAVAILABLE" }),
+    onContinueResourceGuard: async () =>
+      (await input.sessionManager?.continueResourceGuard()) ?? false,
     onSubmit: input.onSubmitPrompt,
   });
 

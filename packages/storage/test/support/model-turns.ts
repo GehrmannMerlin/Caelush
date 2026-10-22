@@ -71,6 +71,7 @@ export interface PartialTurnResult {
   readonly model?: AIModelRequest["model"];
   readonly text?: string;
   readonly toolCalls?: AIModelTurnResult["toolCalls"];
+  readonly toolRequests?: AIModelTurnResult["toolRequests"];
   readonly finishReason?: AIModelTurnResult["finishReason"];
   readonly usage?: ModelUsage | undefined;
   readonly resolution?: AIModelTurnResult["resolution"];
@@ -85,13 +86,21 @@ const DEFAULT_RESOLUTION: AIModelTurnResult["resolution"] = {
 /** Build a complete turn result from the fields a test cares about. */
 export function modelTurnResult(partial: PartialTurnResult = {}): AIModelTurnResult {
   const provider = partial.model?.provider ?? partial.providerId ?? "fixture";
+  const toolCalls = partial.toolCalls ?? [];
   return {
     // The AI call id and the Protocol call id are two brands of the same string.
     callId: (partial.callId ?? createLLMCallId()) as unknown as AIModelTurnResult["callId"],
     providerId: partial.providerId ?? provider,
     model: partial.model ?? { provider, model: "fixture-model" },
     text: partial.text ?? "",
-    toolCalls: partial.toolCalls ?? [],
+    toolRequests:
+      partial.toolRequests ??
+      toolCalls.map((call, sourceOrdinal) => ({
+        kind: "EXECUTABLE" as const,
+        sourceOrdinal,
+        call,
+      })),
+    toolCalls,
     finishReason: partial.finishReason ?? "STOP",
     ...(partial.usage === undefined ? {} : { usage: partial.usage }),
     resolution: partial.resolution ?? DEFAULT_RESOLUTION,

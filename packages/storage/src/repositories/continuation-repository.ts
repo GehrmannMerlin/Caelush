@@ -44,7 +44,9 @@ function decodeContinuation(row: ContinuationRow): StoredContinuation {
     table: "agent_run_continuations",
   });
   const sourceStepId =
-    durable.type === "WAITING_RETRY" ? durable.failedStepId : durable.sourceStepId;
+    durable.type === "WAITING_RETRY" || durable.type === "WAITING_PROVIDER"
+      ? durable.failedStepId
+      : durable.sourceStepId;
   if (
     durable.runId !== row.run_id ||
     durable.type !== row.kind ||
@@ -104,15 +106,16 @@ export function setContinuationInTransaction(
     entityId: runId,
     table: "agent_run_continuations",
   });
-  const sourceStepId =
-    durable.type === "WAITING_RETRY" ? durable.failedStepId : durable.sourceStepId;
-  if (durable.type === "WAITING_RETRY") {
+  const isProviderRetryBoundary =
+    durable.type === "WAITING_RETRY" || durable.type === "WAITING_PROVIDER";
+  const sourceStepId = isProviderRetryBoundary ? durable.failedStepId : durable.sourceStepId;
+  if (isProviderRetryBoundary) {
     const failedStep = client
       .prepare("SELECT run_id, status FROM agent_steps WHERE id = ?")
       .get(durable.failedStepId) as { run_id: string; status: string } | undefined;
     if (failedStep?.run_id !== runId || failedStep.status !== "FAILED") {
       throw new RunExecutionInvariantError(
-        "WAITING_RETRY must reference a failed Step belonging to the Run",
+        "Provider retry boundary must reference a failed Step belonging to the Run",
       );
     }
   }

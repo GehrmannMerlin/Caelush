@@ -48,9 +48,11 @@ describe("typed profile center IPC", () => {
     const test = fixture("AUTHENTICATED_ONLINE");
     try {
       const invoke = test.handlers.get("caelush:profile-center:get-snapshot")!;
-      expect(await invoke(test.event, { sinceMs: 1_000 })).toMatchObject({ ok: true });
+      expect(await invoke(test.event, { sinceMs: 1_000, timezoneOffsetMinutes: 0 })).toMatchObject({
+        ok: true,
+      });
       expect(test.profileCenterController.getSnapshot).toHaveBeenCalledWith(
-        { sinceMs: 1_000 },
+        { sinceMs: 1_000, timezoneOffsetMinutes: 0 },
         expect.any(AbortSignal),
       );
       expect(await invoke(test.event, { sinceMs: -1 })).toMatchObject({

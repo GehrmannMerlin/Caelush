@@ -213,10 +213,13 @@ describe("agent continuity S1 — dependency barrier and correction facts", () =
       expect(first.run.status).toBe("RUNNING");
       expect(wires).toHaveLength(1);
 
-      await new Promise((resolve) => setTimeout(resolve, 1_600));
-      const resumed = await fixture.composition.controller.recover(fixture.run.id);
+      let resumed = await fixture.storage.runs.get(fixture.run.id);
+      for (let attempt = 0; attempt < 400 && resumed?.status !== "COMPLETED"; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        resumed = await fixture.storage.runs.get(fixture.run.id);
+      }
 
-      expect(resumed.run.status).toBe("COMPLETED");
+      expect(resumed?.status).toBe("COMPLETED");
       expect(wires).toHaveLength(2);
     } finally {
       await fixture.dispose();

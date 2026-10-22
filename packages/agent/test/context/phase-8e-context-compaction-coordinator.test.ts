@@ -2,17 +2,27 @@ import { describe, expect, it } from "vitest";
 
 import {
   createContextCompactionCoordinator,
+  createContextCheckpointEnricher,
   createContextMessageRange,
   createStructuredCheckpoint,
+  createHistorySourceRef,
+  createDeterministicCheckpointBuilder,
   agentMessageId,
   conversationTurnId,
   type ContextCompactionDependencies,
   type ContextCompactionPlan,
   type ContextCompactionRequest,
   type ContextCheckpointIdFactory,
+  type ContextSummarizationInput,
   type ContextSummarizationResult,
 } from "@caelush/agent";
 import { ContextSummarizationInfrastructureError } from "@caelush/agent";
+import {
+  assistantMessage,
+  toolResultMessage,
+  turnIdFor,
+  userMessage,
+} from "../messages/fixtures.js";
 
 const request = {
   identity: {
@@ -151,6 +161,22 @@ function dependencies(
 }
 
 describe("Phase 8E ContextCompactionCoordinator", () => {
+  it("reports bounded preparation, summary, and rebuild stages to the live observer", async () => {
+    const stages: Array<string> = [];
+    const coordinator = createContextCompactionCoordinator({
+      dependencies: dependencies({ plan: () => plan }),
+      latest: { kind: "NONE" },
+      onProgress: (stage, reason) => stages.push(`${stage}:${reason}`),
+    });
+
+    await expect(coordinator.compact(request)).resolves.toMatchObject({ kind: "COMPACTED" });
+    expect(stages).toEqual([
+      "PREPARING:PROACTIVE_PRESSURE",
+      "SUMMARIZING:PROACTIVE_PRESSURE",
+      "REBUILDING:PROACTIVE_PRESSURE",
+    ]);
+  });
+
   it("maps an absent compaction plan to NO_COMPRESSIBLE_HISTORY", async () => {
     const coordinator = createContextCompactionCoordinator({
       dependencies: dependencies({ plan: () => null }),
@@ -176,6 +202,7 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
               return summary;
             },
           },
+          enricher: createContextCheckpointEnricher(),
           commit: {
             commit: async ({ checkpoint, events }) => {
               commitCalls += 1;
@@ -197,9 +224,239 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
       expect(result.checkpoint.tokensAfter).toBe(42);
       expect(result.receipt.tokensAfter).toBe(42);
       expect(result.checkpoint.degraded).toBe(false);
+      expect(result.checkpoint.structuredCheckpoint.criticalReferences).toContain(
+        createHistorySourceRef({
+          runId: range.runId,
+          firstSequence: range.firstSequence,
+          lastSequence: range.lastSequence,
+        }),
+      );
     }
     expect(summaryCalls).toBe(1);
     expect(commitCalls).toBe(1);
+  });
+
+  it("keeps the legal original history when semantic summarization fails", async () => {
+    let commitCalls = 0;
+    const coordinator = createContextCompactionCoordinator({
+      dependencies: dependencies(
+        { plan: () => plan },
+        {
+          summarizer: {
+            summarize: async () => {
+              throw new Error("summary provider unavailable");
+            },
+          },
+          commit: {
+            commit: async ({ checkpoint, events }) => {
+              commitCalls += 1;
+              return {
+                checkpoint: { ...checkpoint, schemaVersion: 2 as const },
+                events: events as never,
+              };
+            },
+          },
+        },
+      ),
+      latest: { kind: "NONE" },
+    });
+
+    await expect(
+      coordinator.compact({
+        ...request,
+        reason: "FORCED_PROVIDER_OVERFLOW",
+      }),
+    ).resolves.toEqual({
+      kind: "KEEP_ORIGINAL",
+      reason: "SUMMARY_UNAVAILABLE_ORIGINAL_FITS",
+      summaryOutcome: "FAILED",
+    });
+    expect(commitCalls).toBe(0);
+  });
+
+  it("commits a degraded checkpoint with a real source reference after forced overflow", async () => {
+    let committed: import("@caelush/agent").ContextCheckpointRecordV2 | undefined;
+    const sourceRef = createHistorySourceRef({
+      runId: range.runId,
+      firstSequence: range.firstSequence,
+      lastSequence: range.lastSequence,
+    });
+    const coordinator = createContextCompactionCoordinator({
+      dependencies: dependencies(
+        { plan: () => plan },
+        {
+          summarizer: {
+            summarize: async () => {
+              throw new Error("summary provider unavailable");
+            },
+          },
+          deterministicFallback: createDeterministicCheckpointBuilder(),
+          commit: {
+            commit: async ({ checkpoint, events }) => {
+              committed = { ...checkpoint, schemaVersion: 2 as const };
+              return { checkpoint: committed, events: events as never };
+            },
+          },
+        },
+      ),
+      latest: { kind: "NONE" },
+    });
+
+    const result = await coordinator.compact({
+      ...request,
+      estimatedInputTokensBefore: 120,
+      reason: "FORCED_PROVIDER_OVERFLOW",
+    });
+
+    expect(result.kind).toBe("COMPACTED");
+    expect(committed?.degraded).toBe(true);
+    expect(committed?.structuredCheckpoint.criticalReferences).toContain(sourceRef);
+  });
+
+  it("summarizes oversized history in closed Tool units and carries facts forward", async () => {
+    const runId = String(request.identity.runId);
+    const sessionId = String(request.identity.sessionId);
+    const turnId = turnIdFor(runId);
+    const sourceMessages = [
+      userMessage({
+        runId,
+        sessionId,
+        turnId,
+        sequence: 1,
+        text: "Original request ".repeat(180),
+      }),
+      ...Array.from({ length: 3 }, (_, index) => {
+        const callId = `call_segment_${String(index + 1)}`;
+        const assistant = assistantMessage({
+          runId,
+          sessionId,
+          turnId,
+          sequence: index * 2 + 2,
+          toolCalls: [callId],
+          text: `complete operation ${String(index + 1)} `.repeat(180),
+        });
+        const result = toolResultMessage({
+          runId,
+          sessionId,
+          turnId,
+          sequence: index * 2 + 3,
+          toolCallId: callId,
+          projectedContent: `verified result ${String(index + 1)} `.repeat(180),
+        });
+        return [assistant, result] as const;
+      }).flat(),
+    ];
+    const first = sourceMessages[0]!;
+    const last = sourceMessages.at(-1)!;
+    const sourceRange = createContextMessageRange({
+      runId: first.message.runId,
+      conversationTurnId: first.message.conversationTurnId,
+      firstMessageId: first.message.id,
+      lastMessageId: last.message.id,
+      firstSequence: first.sequence,
+      lastSequence: last.sequence,
+    });
+    const protocolUnits = Array.from({ length: 3 }, (_, index) => {
+      const assistant = sourceMessages[index * 2 + 1]!;
+      const toolResult = sourceMessages[index * 2 + 2]!;
+      return {
+        id: `tool-protocol:segment-${String(index + 1)}`,
+        kind: "TOOL_PROTOCOL" as const,
+        status: "CLOSED" as const,
+        messages: [assistant, toolResult].map((stored) => ({
+          messageId: stored.message.id,
+          runId: stored.message.runId,
+          conversationTurnId: stored.message.conversationTurnId,
+          sequence: stored.sequence,
+        })),
+        tokenEstimate: 2_000,
+        atomicGroupId: `segment-${String(index + 1)}`,
+        compactionEligible: true,
+        sourceAssistantMessageId: assistant.message.id,
+        toolCallIds: [`call_segment_${String(index + 1)}`],
+        toolResultMessageIds: [toolResult.message.id],
+      };
+    });
+    const summaryInputs: ContextSummarizationInput[] = [];
+    let summaryCalls = 0;
+    const coordinator = createContextCompactionCoordinator({
+      dependencies: dependencies(
+        { plan: () => ({ ...plan, selectedUnitIds: protocolUnits.map((unit) => unit.id) }) },
+        {
+          incrementalResolver: {
+            resolve: () => ({
+              newSourceMessages: sourceMessages,
+              newSourceRange: sourceRange,
+              cumulativeSourceRange: sourceRange,
+            }),
+          },
+          enricher: createContextCheckpointEnricher(),
+          summarizer: {
+            async summarize(input) {
+              summaryCalls += 1;
+              summaryInputs.push(input);
+              return {
+                ...summary,
+                semantic: {
+                  ...summary.semantic,
+                  completedWork: Array.from(
+                    { length: summaryCalls },
+                    (_, index) => `segment-${String(index + 1)}`,
+                  ),
+                },
+              };
+            },
+          },
+        },
+      ),
+      latest: { kind: "NONE" },
+    });
+
+    const result = await coordinator.compact({
+      ...request,
+      history: {
+        units: protocolUnits,
+        openUnits: [],
+        closedUnits: protocolUnits,
+        estimatedTokens: 7_000,
+      },
+      policy: {
+        effectiveInputLimitTokens: 5_000,
+        outputReserveTokens: 20,
+      } as never,
+    });
+
+    expect(
+      result.kind,
+      JSON.stringify({
+        summaryCalls,
+        priorCounts: summaryInputs.map((input) => input.previousCheckpoint?.completedWork),
+      }),
+    ).toBe("COMPACTED");
+    expect(summaryCalls).toBeGreaterThan(1);
+    expect(summaryInputs[1]?.previousCheckpoint?.completedWork).toContain("segment-1");
+    expect(
+      summaryInputs
+        .flatMap((input) => input.sourceMessages)
+        .map((stored) => stored.message.id)
+        .sort(),
+    ).toEqual(sourceMessages.map((stored) => stored.message.id).sort());
+    for (let index = 0; index < 3; index += 1) {
+      const assistantSequence = index * 2 + 2;
+      const resultSequence = assistantSequence + 1;
+      const segment = summaryInputs.find((input) =>
+        input.sourceMessages.some((stored) => stored.sequence === assistantSequence),
+      );
+      expect(segment?.sourceMessages.some((stored) => stored.sequence === resultSequence)).toBe(
+        true,
+      );
+    }
+    if (result.kind === "COMPACTED") {
+      expect(result.checkpoint.structuredCheckpoint.completedWork).toEqual(
+        Array.from({ length: summaryCalls }, (_, index) => `segment-${String(index + 1)}`),
+      );
+      expect(result.checkpoint.sourceRange.lastSequence).toBe(last.sequence);
+    }
   });
 
   it("maps a candidate that is still too large to INSUFFICIENT_GAIN without committing", async () => {

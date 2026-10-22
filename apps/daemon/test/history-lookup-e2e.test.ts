@@ -3,7 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { createHistorySourceRef, createAgentMessageCodecRegistry, STANDARD_AGENT_MESSAGE_CODECS } from "@caelush/agent";
+import {
+  createAgentMessageCodecRegistry,
+  createContextMessageRange,
+  createDeterministicCheckpointBuilder,
+  createDeterministicCompactionFacts,
+  createHistorySourceRef,
+  STANDARD_AGENT_MESSAGE_CODECS,
+} from "@caelush/agent";
 import { CODING_COMMAND_EXECUTION_MESSAGE_CODEC_V1 } from "@caelush/coding-agent";
 import { createRunId, createSessionId } from "@caelush/protocol";
 
@@ -94,16 +101,50 @@ describe("M3 — readable history references", () => {
               // checkpoint would emit. The model never sees a Session or a range.
               const db = new DatabaseSync(fixture.databasePath, { readOnly: true });
               try {
-                const row = db
+                const first = db
                   .prepare(
-                    "SELECT MIN(sequence) AS first, MAX(sequence) AS last FROM agent_messages WHERE run_id=?",
+                    "SELECT sequence, message_id, conversation_turn_id " +
+                      "FROM agent_messages WHERE run_id=? ORDER BY sequence ASC LIMIT 1",
                   )
-                  .get(fixture.run.id) as { first: number; last: number };
-                sourceRef = createHistorySourceRef({
+                  .get(fixture.run.id) as {
+                  sequence: number;
+                  message_id: string;
+                  conversation_turn_id: string;
+                };
+                const last = db
+                  .prepare(
+                    "SELECT sequence, message_id, conversation_turn_id " +
+                      "FROM agent_messages WHERE run_id=? ORDER BY sequence DESC LIMIT 1",
+                  )
+                  .get(fixture.run.id) as {
+                  sequence: number;
+                  message_id: string;
+                  conversation_turn_id: string;
+                };
+                const sourceRange = createContextMessageRange({
                   runId: fixture.run.id,
-                  firstSequence: row.first,
-                  lastSequence: row.last,
+                  conversationTurnId: first.conversation_turn_id as never,
+                  firstMessageId: first.message_id as never,
+                  lastMessageId: last.message_id as never,
+                  firstSequence: first.sequence,
+                  lastSequence: last.sequence,
                 });
+                const checkpoint = createDeterministicCheckpointBuilder().build({
+                  goal: "exercise the real daemon reliability path",
+                  sourceRange,
+                  facts: createDeterministicCompactionFacts({
+                    readFiles: [],
+                    changedFiles: [],
+                    recentErrors: [],
+                    verificationState: "NOT_RUN",
+                    activeProcesses: [],
+                    pendingApprovals: [],
+                    resourceGovernance: "BOUNDED",
+                  }),
+                });
+                sourceRef = checkpoint.criticalReferences.find((reference) =>
+                  reference.startsWith("history:v1:"),
+                );
               } finally {
                 db.close();
               }
@@ -198,10 +239,14 @@ describe("M3 — readable history references", () => {
       const empty = await adapter.read({ sourceRef: ref }, scope, signal);
       expect(empty.kind).toBe("PAGE");
 
-      const otherSession = await adapter.read({ sourceRef: ref }, {
-        sessionId: createSessionId(),
-        runId: createRunId(),
-      }, signal);
+      const otherSession = await adapter.read(
+        { sourceRef: ref },
+        {
+          sessionId: createSessionId(),
+          runId: createRunId(),
+        },
+        signal,
+      );
       expect(otherSession).toEqual({ kind: "UNAVAILABLE", reason: "OUT_OF_SCOPE" });
 
       const unknown = await adapter.read({ sourceRef: "history:v1:nonsense" }, scope, signal);

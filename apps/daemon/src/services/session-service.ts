@@ -50,6 +50,7 @@ export class SessionService {
         throw new StorageError("Session submission idempotency is unavailable.");
       }
       const { submissionId: _ignored, ...payload } = input;
+      void _ignored;
       const reserved = await this.options.submissions.reserve(
         input.submissionId,
         hashSubmissionPayload(payload),

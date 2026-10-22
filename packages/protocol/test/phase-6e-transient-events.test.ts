@@ -10,6 +10,7 @@ import {
   createToolInvocationId,
 } from "@caelush/protocol";
 import {
+  ContextCompactionProgressEventSchema,
   ModelReasoningSummaryDeltaEventSchema,
   ModelStatusEventSchema,
   ModelTextDeltaEventSchema,
@@ -176,6 +177,48 @@ describe("Phase 6E transient event contracts", () => {
       ModelStatusEventSchema.safeParse({
         ...status,
         durability: { ...status.durability, streamKey: "model:status:other:step" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("registers transient compaction progress with a closed stage, trigger, and stream identity", () => {
+    const base = common(1, {
+      kind: "EPHEMERAL",
+      version: 1,
+      deliveryClass: "COALESCIBLE",
+      streamKey: "",
+    });
+    const progress = ContextCompactionProgressEventSchema.parse({
+      ...base,
+      type: "context.compaction.progress",
+      durability: {
+        kind: "EPHEMERAL",
+        version: 1,
+        deliveryClass: "COALESCIBLE",
+        streamKey: `context:compaction:${base.runId}:${base.stepId}`,
+      },
+      payload: { stage: "SUMMARIZING", reason: "FORCED_PROVIDER_OVERFLOW" },
+    });
+
+    expect(RUN_EVENT_SCHEMA_REGISTRY.parse(progress)).toMatchObject({
+      type: "context.compaction.progress",
+      payload: { stage: "SUMMARIZING", reason: "FORCED_PROVIDER_OVERFLOW" },
+    });
+    expect(RUN_EVENT_TYPE_CATALOG.find(({ type }) => type === progress.type)).toMatchObject({
+      visibility: "USER_VISIBLE",
+      delivery: { kind: "TRANSIENT", class: "COALESCIBLE" },
+    });
+    expect(PublicRunEventSchema.parse(progress)).toMatchObject({ type: progress.type });
+    expect(
+      ContextCompactionProgressEventSchema.safeParse({
+        ...progress,
+        durability: { ...progress.durability, streamKey: "context:compaction:other:step" },
+      }).success,
+    ).toBe(false);
+    expect(
+      ContextCompactionProgressEventSchema.safeParse({
+        ...progress,
+        payload: { ...progress.payload, detail: "raw prompt omitted" },
       }).success,
     ).toBe(false);
   });

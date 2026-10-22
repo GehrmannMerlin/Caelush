@@ -136,7 +136,7 @@ describe("Phase 4E prompt production E2E", () => {
     expect(provider.turns.length).toBeGreaterThan(0);
 
     const turn = provider.turns[0]!;
-    // The twelve default Tools reach the model, in the frozen order.
+    // The thirteen default Tools reach the model, in the frozen order.
     expect(turn.tools.map((tool) => tool.name)).toEqual([
       "read_file",
       "list_directory",
@@ -150,6 +150,7 @@ describe("Phase 4E prompt production E2E", () => {
       "git_status",
       "git_diff",
       "read_attachment",
+      "read_history",
     ]);
 
     for (const tool of turn.tools) {
@@ -208,6 +209,7 @@ describe("Phase 4E prompt production E2E", () => {
       "write_stdin",
       "stop_process",
       "read_attachment",
+      "read_history",
     ]);
     const systemText = turn.messages
       .filter((message) => message.role === "system")

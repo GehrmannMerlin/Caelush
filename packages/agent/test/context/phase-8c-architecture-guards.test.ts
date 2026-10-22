@@ -26,7 +26,9 @@ describe("Phase 8C architecture guards", () => {
     expect(adapter).not.toMatch(
       /AgentLoop|ToolBatchCoordinator|MemoryRetriever|rawArtifactRef|@caelush\/storage/u,
     );
-    expect(adapter).toContain("tools: replayPrefix?.tools ?? []");
+    expect(adapter).toContain('toolChoice: { type: "NONE" }');
+    expect(adapter).toContain("countReceivedToolRequests(result)");
+    expect(adapter).not.toContain("replayPrefix");
     expect(adapter).toContain("gateway.complete");
   });
 

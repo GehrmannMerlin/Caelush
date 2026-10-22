@@ -341,6 +341,20 @@ describe("Phase 8A pressure evaluator", () => {
     });
   });
 
+  it("compacts mandatory overflow when a protocol-safe current-turn prefix was proved", () => {
+    expect(
+      evaluate({
+        estimatedInputTokens: 800,
+        selectedPlanningTokens: 1_001,
+        mandatoryTokens: 1_001,
+        canCompactMandatoryOverflow: true,
+      }),
+    ).toMatchObject({
+      trigger: "SELECTION_PRESSURE",
+      shouldCompact: true,
+    });
+  });
+
   it("computes the post-compaction target from the hard input limit without changing the tail", () => {
     expect(
       evaluate({

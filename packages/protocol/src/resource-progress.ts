@@ -279,7 +279,10 @@ export const ResourceProgressRecordV1Schema = z
   })
   .strict()
   .superRefine((record, context) => {
-    if (Buffer.byteLength(JSON.stringify(record), "utf8") > RESOURCE_PROGRESS_LIMITS.maxJsonBytes) {
+    if (
+      new TextEncoder().encode(JSON.stringify(record)).byteLength >
+      RESOURCE_PROGRESS_LIMITS.maxJsonBytes
+    ) {
       context.addIssue({
         code: "custom",
         message: "resource progress window exceeds its byte limit",

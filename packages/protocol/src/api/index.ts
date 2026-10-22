@@ -241,6 +241,8 @@ export type {
 } from "./security.js";
 export { EventStreamQuerySchema } from "./event-stream.js";
 export type { EventStreamQuery } from "./event-stream.js";
+export { HistoryLookupQuerySchema, HistoryLookupResponseSchema } from "./history.js";
+export type { HistoryLookupQuery, HistoryLookupResponse } from "./history.js";
 export {
   CacheMetricsV2Schema,
   ContextUsagePressureStateSchema,
@@ -256,6 +258,7 @@ export type {
   CacheMetricsV2,
   ContextUsageProjection,
   ContextUsageResponse,
+  RunProcessProjection,
   PromptCacheRequestPurpose,
   PromptCachePurposeUsage,
   PromptCacheSurfaceSegments,

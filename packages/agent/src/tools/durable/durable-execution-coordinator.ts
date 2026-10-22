@@ -60,6 +60,7 @@ import type {
   ToolExecutionStorePort,
 } from "./execution-store-port.js";
 import type { RunEventNotifierPort } from "../../events/notifier-port.js";
+import type { EffectReconciliationPort } from "./effect-reconciliation-port.js";
 
 /* ------------------------------------------------------------------------------------------------
  * The frozen contracts
@@ -150,6 +151,12 @@ export type DurableToolExecutionOutcome =
       readonly kind: "CANCELLED";
       readonly invocation: ToolInvocation;
       readonly observation?: ToolObservation | undefined;
+    }
+  | {
+      /** A RUNNING side effect remains open until a read-only recheck can establish its postcondition. */
+      readonly kind: "WAITING_RECONCILIATION";
+      readonly invocation: ToolInvocation;
+      readonly reasonCode: "DOES_NOT_MATCH" | "INCONCLUSIVE" | "UNSUPPORTED" | "UNAVAILABLE";
     };
 
 /**
@@ -294,6 +301,8 @@ export interface DurableToolExecutionCoordinatorOptions {
   readonly budget?: DurableToolBudgetPort | undefined;
   readonly presentation?: ToolPresentationPort | undefined;
   readonly rawOutputStore?: DurableRawOutputStore | undefined;
+  /** Optional host adapter that checks current target state without replaying uncertain effects. */
+  readonly effectReconciliation?: EffectReconciliationPort | undefined;
   readonly notifier?: RunEventNotifierPort | undefined;
   /** Bounds the model-facing content a *failure* settlement writes. */
   readonly boundFailureContent?: ((content: string) => string) | undefined;
@@ -306,8 +315,8 @@ export interface DurableToolExecutionCoordinatorOptions {
  * Safe failure content
  * ---------------------------------------------------------------------------------------------- */
 
-const INTERRUPTED_CONTENT =
-  "Tool execution was interrupted before its result was durably recorded. The operation may have partially or fully executed. Do not automatically repeat the operation.";
+const RECONCILED_TARGET_STATE_CONTENT =
+  "The Tool result was lost after execution began. A read-only check found that the current target state matches the requested change. This does not prove which process produced that state, and the operation was not repeated; continue using the current target state.";
 const RUNTIME_CONTENT =
   "Tool execution failed because the tool runtime encountered an internal error.";
 const UNCERTAIN_CONTENT =
@@ -790,15 +799,43 @@ export function createDurableToolExecutionCoordinator(
       return await recoverWaitingApproval(execution, snapshot);
     }
     if (invocation.status === "RUNNING") {
-      // The side-effect boundary was crossed and the process did not come back. Nothing here may
-      // invoke the executor: an interrupted Tool may have partially or fully run, so the only safe
-      // statement is an uncertain one, and the executor call count for this path is zero.
+      // The side-effect boundary was crossed and the process did not come back. A host may perform a
+      // narrow read-only reconciliation, but neither a match nor a mismatch proves whether this
+      // invocation ran: it only describes the current target state. The executor is never called.
+      let reconciliation: Awaited<ReturnType<EffectReconciliationPort["reconcile"]>> | undefined;
+      if (input.effectReconciliation !== undefined) {
+        try {
+          reconciliation = await input.effectReconciliation.reconcile({
+            runId: invocation.runId,
+            invocation,
+            environment: restore.environment,
+            securityContext: restore.securityContext,
+            signal: restore.signal,
+          });
+        } catch {
+          // A failed inspection cannot alter durable invocation truth or block safe settlement.
+          reconciliation = { kind: "INCONCLUSIVE" };
+        }
+      }
+      // Cancellation wins over the inconclusive fallback. Keep the durable RUNNING row untouched so
+      // the uncertain side effect remains recoverable, but let the batch/Run cancellation path stop.
+      throwIfAborted(restore.signal);
+      if (reconciliation?.kind !== "MATCHED_EXPECTED_STATE") {
+        return Object.freeze({
+          kind: "WAITING_RECONCILIATION",
+          invocation,
+          reasonCode: reconciliation?.kind ?? "UNAVAILABLE",
+        });
+      }
       return await settleDurableFailure({
         snapshot,
         code: "TOOL_OUTCOME_UNKNOWN",
         phase: "RUNTIME",
         message: "Tool outcome could not be confirmed.",
-        content: INTERRUPTED_CONTENT,
+        content: RECONCILED_TARGET_STATE_CONTENT,
+        ...(reconciliation === undefined
+          ? {}
+          : { details: { effectReconciliation: reconciliation.kind } }),
         errorDetails: { ...uncertainExecutionDetails() },
       });
     }

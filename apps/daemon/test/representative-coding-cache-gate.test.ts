@@ -1748,7 +1748,7 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
       permissionProfile: "FULL_ACCESS",
       approvalPolicy: "NEVER_ASK",
       limits: { maxSteps: 4, maxToolCalls: 2, timeoutMs: 90_000 },
-      contextBudgetPolicy: adaptiveContextBudgetPolicy(8_192, 2_048),
+      contextBudgetPolicy: adaptiveContextBudgetPolicy(16_384, 2_048),
     });
     await storage.runs.insert(compactionRun);
     const compactionUser = composition.messages.factory.createUser({
@@ -1801,7 +1801,7 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
     const compactionModel: ModelDescriptor = {
       ...composition.ai.models.resolve(compactionRun.model),
       limits: {
-        contextWindowTokens: manifest.offlineCompactionContextWindowTokens ?? 8_192,
+        contextWindowTokens: manifest.offlineCompactionContextWindowTokens ?? 16_384,
         maxOutputTokens: 2_048,
       },
     };
@@ -1823,16 +1823,20 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
     });
     const compactionSurface = await readSurface(compactionRun.id);
     const compactionEpoch = await storage.promptSurface.getCurrent(compactionRun.id);
-    expect(compactionEpoch?.resetReason).toBe("COMPACTION_COMMITTED");
+    const compactionUsage = await composition.contextUsage.getContextUsage(
+      String(compactionRun.id),
+    );
+    expect(compactionUsage?.fullRequestInputEstimateTokens).toBeLessThanOrEqual(
+      compactionUsage?.effectiveInputLimitTokens ?? 0,
+    );
+    expect(compactionEpoch?.resetReason).toBe("INITIAL");
     expect(compactionSurface.records?.map(({ kind }) => kind)).toEqual(["BASELINE"]);
-    expect(
-      (await composition.contextUsage.getContextUsage(String(compactionRun.id)))?.compactionCount,
-    ).toBe(1);
+    expect(compactionUsage?.compactionCount).toBe(0);
     const compactionProviderRecords = await storage.providerInvocationUsage.listByRun(
       compactionRun.id,
     );
-    expect(compactionProviderRecords).toHaveLength(0);
-    expect(provider.requests).toHaveLength(crossRunRequestIndex + 2);
+    expect(compactionProviderRecords).toHaveLength(1);
+    expect(provider.requests).toHaveLength(crossRunRequestIndex + 3);
 
     const compactionSegments = {
       preCompactionMainCalls:
@@ -1851,13 +1855,13 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
     };
     expect(compactionSegments).toMatchObject({
       preCompactionMainCalls: 11,
-      compactionProviderCalls: 0,
+      compactionProviderCalls: 1,
       postCompactionMainCalls: 0,
       postCompactionVerificationCalls: 0,
       crossRunMainCalls: 1,
       crossRunVerificationCalls: 1,
-      checkpoints: 1,
-      resetReason: "COMPACTION_COMMITTED",
+      checkpoints: 0,
+      resetReason: "INITIAL",
     });
     const safePublicJson = JSON.stringify({
       publicEvents,

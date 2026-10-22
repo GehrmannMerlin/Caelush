@@ -10,6 +10,16 @@ import {
   type ToolInfrastructureFailureReason,
 } from "@caelush/protocol";
 
+const CONTEXT_PLANNING_ERROR_CODES = new Set([
+  "INVALID_CONTEXT_ITEM",
+  "DUPLICATE_ITEM_ID",
+  "UNKNOWN_ITEM_REFERENCE",
+  "BROKEN_ATOMIC_GROUP",
+  "INCONSISTENT_PLAN",
+  "MANDATORY_INPUT_TOO_LARGE",
+  "CURRENT_TURN_TOO_LARGE",
+] satisfies readonly NonNullable<RunContextPreparationDiagnostic["planningErrorCode"]>[]);
+
 /**
  * The daemon's sink for the Run Layer's bounded failure diagnostics.
  *
@@ -37,6 +47,7 @@ export interface ToolFailureLogEntry {
   readonly stage: RunToolFailureDiagnostic["stage"];
   readonly reasonCode: ToolInfrastructureFailureReason;
   readonly causeKinds: readonly string[];
+  readonly planningErrorCode?: RunContextPreparationDiagnostic["planningErrorCode"];
 }
 
 /**
@@ -122,6 +133,7 @@ export function toContextPreparationLogEntry(
   const safe: ContextPreparationDiagnostic = parsed.success
     ? parsed.data
     : { reasonCode: "CONTEXT_PREPARATION_FAILED", stage: "unknown" };
+  const planningErrorCode = diagnostic.planningErrorCode;
   return Object.freeze({
     event: "run.context.preparation.failure" as const,
     runId: diagnostic.runId,
@@ -132,5 +144,8 @@ export function toContextPreparationLogEntry(
     ...(safe.observed === undefined ? {} : { observed: safe.observed }),
     ...(safe.limit === undefined ? {} : { limit: safe.limit }),
     causeKinds: Object.freeze([...diagnostic.causeKinds]),
+    ...(planningErrorCode === undefined || !CONTEXT_PLANNING_ERROR_CODES.has(planningErrorCode)
+      ? {}
+      : { planningErrorCode }),
   });
 }

@@ -273,6 +273,115 @@ describe("canonical Tool batch — validation", () => {
   });
 });
 
+describe("canonical Tool batch — segmented scheduling continuity", () => {
+  it("carries a dependency barrier across execution chunks with whole-batch ordinals", async () => {
+    const h = harness({
+      classes: { write_file: "MAY_MUTATE" },
+    });
+    h.setRejections({
+      bad_tool: {
+        code: "TOOL_ARGUMENT_ERROR",
+        content: "The arguments are invalid.",
+        details: {},
+        disposition: "SAFE_FAILURE",
+      },
+    });
+
+    const firstChunk = await h.coordinator.execute({
+      ...request([call("call_bad", "bad_tool")]),
+      segment: { version: "TOOL_BATCH_SEGMENT_V1", sourceOrdinalOffset: 0 },
+    } as never);
+    expect(firstChunk).toMatchObject({
+      kind: "COMPLETED",
+      segment: {
+        version: "TOOL_BATCH_SEGMENT_V1",
+        nextSourceOrdinal: 1,
+        barrier: {
+          kind: "DEPENDENCY_UNPROVEN",
+          sourceOrdinal: 0,
+          code: "TOOL_ARGUMENT_ERROR",
+        },
+      },
+    });
+
+    const nextSegment =
+      firstChunk.kind === "COMPLETED" && firstChunk.segment !== undefined
+        ? {
+            version: firstChunk.segment.version,
+            sourceOrdinalOffset: firstChunk.segment.nextSourceOrdinal,
+            ...(firstChunk.segment.barrier === null
+              ? {}
+              : { priorBarrier: firstChunk.segment.barrier }),
+          }
+        : undefined;
+    const secondChunk = await h.coordinator.execute({
+      ...request([call("call_write", "write_file")]),
+      segment: nextSegment,
+    } as never);
+
+    expect(secondChunk).toMatchObject({
+      kind: "COMPLETED",
+      items: [
+        {
+          kind: "SKIPPED",
+          feedback: {
+            code: "TOOL_DEPENDENCY_UNPROVEN",
+            details: {
+              dependencyBarrierOrdinal: 0,
+              dependencyBarrierCode: "TOOL_ARGUMENT_ERROR",
+              notExecutedOrdinal: 1,
+            },
+          },
+        },
+      ],
+      segment: {
+        nextSourceOrdinal: 2,
+        barrier: {
+          kind: "DEPENDENCY_UNPROVEN",
+          sourceOrdinal: 0,
+          code: "TOOL_ARGUMENT_ERROR",
+        },
+      },
+    });
+    expect(h.prepared).toEqual(["call_bad", "call_write"]);
+    expect(h.executed).toEqual([]);
+  });
+
+  it("carries an unknown-effect barrier across chunks and withholds even later reads", async () => {
+    const h = harness({ unknownOn: ["call_unknown"] });
+    const firstChunk = await h.coordinator.execute({
+      ...request([call("call_unknown")]),
+      segment: { version: "TOOL_BATCH_SEGMENT_V1", sourceOrdinalOffset: 0 },
+    } as never);
+    const nextSegment =
+      firstChunk.kind === "COMPLETED" && firstChunk.segment !== undefined
+        ? {
+            version: firstChunk.segment.version,
+            sourceOrdinalOffset: firstChunk.segment.nextSourceOrdinal,
+            ...(firstChunk.segment.barrier === null
+              ? {}
+              : { priorBarrier: firstChunk.segment.barrier }),
+          }
+        : undefined;
+    const secondChunk = await h.coordinator.execute({
+      ...request([call("call_read")]),
+      segment: nextSegment,
+    } as never);
+
+    expect(secondChunk).toMatchObject({
+      kind: "COMPLETED",
+      items: [
+        {
+          kind: "SKIPPED",
+          feedback: { code: SKIPPED_AFTER_UNCERTAIN_EXECUTION },
+        },
+      ],
+    });
+    expect(h.executed).toEqual(["call_unknown"]);
+    expect(h.prepared).toEqual(["call_unknown"]);
+  });
+});
+
 /* ------------------------------------------------------------------------------------------------
  * Sequential scheduling
  * ---------------------------------------------------------------------------------------------- */
@@ -485,6 +594,43 @@ describe("canonical Tool batch — pre-invocation rejection", () => {
     expect(outcome.items.map((item) => item.kind)).toEqual(["REJECTED", "OBSERVATION"]);
     expect(idsOf(outcome.items)).toEqual(["call_bad", "call_good"]);
     expect(h.executed).toEqual(["call_good"]);
+  });
+
+  it("returns exactly seven independent read results plus one parameter rejection in source order", async () => {
+    const h = harness();
+    const calls = Array.from({ length: 8 }, (_, index) =>
+      index === 3
+        ? {
+            externalCallId: `call_${index}`,
+            toolName: "echo",
+            issue: { code: "MALFORMED_JSON" as const, argumentBytes: 11 },
+          }
+        : { externalCallId: `call_${index}`, toolName: "echo", args: {} },
+    );
+
+    const outcome = await h.coordinator.execute(request(calls));
+
+    if (outcome.kind !== "COMPLETED") throw new Error("expected COMPLETED");
+    expect(idsOf(outcome.items)).toEqual(calls.map(({ externalCallId }) => externalCallId));
+    expect(outcome.items.map((item) => item.kind)).toEqual([
+      "OBSERVATION",
+      "OBSERVATION",
+      "OBSERVATION",
+      "MODEL_REJECTED",
+      "OBSERVATION",
+      "OBSERVATION",
+      "OBSERVATION",
+      "OBSERVATION",
+    ]);
+    expect(h.executed).toEqual([
+      "call_0",
+      "call_1",
+      "call_2",
+      "call_4",
+      "call_5",
+      "call_6",
+      "call_7",
+    ]);
   });
 
   it("withholds a mutating call whose independence from the rejection is unproven", async () => {

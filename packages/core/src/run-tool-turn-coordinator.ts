@@ -9,6 +9,7 @@ import type {
   ToolBatchItemOutcome,
   ToolBatchOutcome,
   ToolBatchRequest,
+  ToolBatchSegmentInput,
   ToolExecutionEnvironment,
   ToolResultBatchNormalizer,
   ToolSecurityContext,
@@ -435,12 +436,41 @@ async function executeInChunks(
   if (chunks.length <= 1) return await dependencies.batches.execute(request);
 
   const items: ToolBatchItemOutcome[] = [];
+  let segment: ToolBatchSegmentInput = {
+    version: "TOOL_BATCH_SEGMENT_V1",
+    sourceOrdinalOffset: 0,
+  };
   for (const calls of chunks) {
-    const outcome = await dependencies.batches.execute({ ...request, calls });
+    const outcome = await dependencies.batches.execute({ ...request, calls, segment });
     if (outcome.kind !== "COMPLETED") return outcome;
     items.push(...outcome.items);
+    if (outcome.segment === undefined) {
+      throw new RunControllerInvariantError(
+        "A completed Tool segment did not return its scheduling continuation.",
+      );
+    }
+    const expectedNextSourceOrdinal = segment.sourceOrdinalOffset + calls.length;
+    if (
+      outcome.segment.version !== "TOOL_BATCH_SEGMENT_V1" ||
+      outcome.segment.nextSourceOrdinal !== expectedNextSourceOrdinal
+    ) {
+      throw new RunControllerInvariantError("A Tool segment returned a mismatched source cursor.");
+    }
+    segment = {
+      version: outcome.segment.version,
+      sourceOrdinalOffset: outcome.segment.nextSourceOrdinal,
+      ...(outcome.segment.barrier === null ? {} : { priorBarrier: outcome.segment.barrier }),
+    };
   }
-  return Object.freeze({ kind: "COMPLETED", items: Object.freeze(items) });
+  return Object.freeze({
+    kind: "COMPLETED",
+    items: Object.freeze(items),
+    segment: {
+      version: "TOOL_BATCH_SEGMENT_V1" as const,
+      nextSourceOrdinal: segment.sourceOrdinalOffset,
+      barrier: segment.priorBarrier ?? null,
+    },
+  });
 }
 
 /**
@@ -1065,6 +1095,13 @@ async function toToolTurnResult(
         // The exact numbers the Tool budget authority returned. They are reported, never re-derived: a
         // Run Layer that recomputed them would be a second accounting authority.
         block: budgetBlockOf(outcome),
+      }));
+    case "EFFECT_UNCONFIRMED":
+      return settleObservation(observation, "EFFECT_UNCONFIRMED", outcome.items, async () => ({
+        kind: "EFFECT_UNCONFIRMED",
+        invocationId: outcome.invocationId,
+        toolName: outcome.pendingCall.toolName,
+        reasonCode: outcome.reasonCode,
       }));
     case "CANCELLED":
       // `CANCELLED` is only ever reported on an aborted signal, and that case never reaches here: the

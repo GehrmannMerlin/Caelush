@@ -247,9 +247,9 @@ describe("Web control presentation", () => {
   });
 });
 
-function findElements(element: unknown, type: string): Array<{ props: Record<string, any> }> {
+function findElements(element: unknown, type: string): Array<{ props: Record<string, unknown> }> {
   if (!element || typeof element !== "object") return [];
-  const candidate = element as { type?: unknown; props?: Record<string, any> };
+  const candidate = element as { type?: unknown; props?: Record<string, unknown> };
   const found = candidate.type === type && candidate.props ? [{ props: candidate.props }] : [];
   const children = candidate.props?.children;
   return found.concat(

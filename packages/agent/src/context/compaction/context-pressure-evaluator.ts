@@ -22,6 +22,8 @@ export interface ContextPressureInput {
   readonly minRecentTailTokens: number;
   readonly mode: "NORMAL" | "FORCED_RECOVERY";
   readonly hasCompressibleHistory: boolean;
+  /** A protocol-safe prefix cut can reduce the otherwise mandatory open-turn working set. */
+  readonly canCompactMandatoryOverflow?: boolean;
   /**
    * Elective-compaction pacing.
    *
@@ -73,6 +75,9 @@ export function createContextPressureEvaluator(): ContextPressureEvaluator {
         input.mode === "FORCED_RECOVERY" ||
         input.estimatedInputTokens >= input.effectiveInputLimitTokens ||
         input.historySelectionPressure ||
+        (input.canCompactMandatoryOverflow === true &&
+          input.mandatoryTokens > input.effectiveInputLimitTokens &&
+          input.hasCompressibleHistory) ||
         proactiveDue;
       return Object.freeze({
         state,
@@ -147,6 +152,12 @@ function assertPressureInput(input: ContextPressureInput): void {
   }
   if (typeof input.hasCompressibleHistory !== "boolean") {
     throw new TypeError("hasCompressibleHistory must be boolean.");
+  }
+  if (
+    input.canCompactMandatoryOverflow !== undefined &&
+    typeof input.canCompactMandatoryOverflow !== "boolean"
+  ) {
+    throw new TypeError("canCompactMandatoryOverflow must be boolean.");
   }
   if (typeof input.historySelectionPressure !== "boolean") {
     throw new TypeError("historySelectionPressure must be boolean.");

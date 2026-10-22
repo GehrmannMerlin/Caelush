@@ -34,9 +34,9 @@ export const DESKTOP_DAEMON_REQUIRED_CAPABILITIES: readonly DesktopDaemonCapabil
     "desktopLocalProxyV1",
   ]);
 
-const HOST_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const MAX_LOG_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_LOG_CHUNK_BYTES = 32 * 1024;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 const ReadyMessageSchema = z
   .object({
@@ -800,9 +800,11 @@ export class DesktopDaemonSupervisor {
 
   private onChildExit(
     generation: ManagedGeneration,
-    _code: number | null,
-    _signal: NodeJS.Signals | null,
+    code: number | null,
+    signal: NodeJS.Signals | null,
   ): void {
+    void code;
+    void signal;
     this.disposeCredentialRpc(generation);
     if (this.current !== generation || generation.lifecycleState === "STOPPING") return;
     const wasReady = generation.lifecycleState === "READY";
@@ -908,7 +910,9 @@ export class DesktopDaemonSupervisor {
   private scheduleExpiry(desired: DesiredAccount | undefined): void {
     this.clearExpiryTimer();
     if (desired?.expiresAt === undefined) return;
-    const delay = Math.max(0, desired.expiresAt - this.now());
+    // Node coerces larger setTimeout delays to 1ms. Wake at the platform limit and re-check the
+    // trusted expiry instead of spinning a timer for long-lived offline grants.
+    const delay = Math.min(MAX_TIMER_DELAY_MS, Math.max(0, desired.expiresAt - this.now()));
     this.expiryTimer = setTimeout(() => {
       if (this.desired !== desired) return;
       if (desired.expiresAt !== undefined && desired.expiresAt > this.now()) {
@@ -993,7 +997,6 @@ interface MessageWaiter {
 
 function waitForChildMessage(child: DesktopChildProcess, timeoutMs: number): MessageWaiter {
   let settled = false;
-  let timer: NodeJS.Timeout;
   let resolvePromise!: (value: unknown) => void;
   let rejectPromise!: (error: Error) => void;
   const promise = new Promise<unknown>((resolve, reject) => {
@@ -1030,7 +1033,7 @@ function waitForChildMessage(child: DesktopChildProcess, timeoutMs: number): Mes
   };
   const onExit = () => reject(new Error("child exited before response"));
   const onError = () => reject(new Error("child process failed"));
-  timer = setTimeout(() => reject(new Error("private IPC response timed out")), timeoutMs);
+  const timer = setTimeout(() => reject(new Error("private IPC response timed out")), timeoutMs);
   child.on("message", onMessage);
   child.once("exit", onExit);
   child.once("error", onError);

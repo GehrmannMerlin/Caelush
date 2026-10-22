@@ -54,14 +54,26 @@ export interface WaitingVerificationRepairContinuation {
   readonly repairCycle: number;
 }
 
-export interface WaitingResourceContinuation {
-  readonly type: "WAITING_RESOURCE";
-  readonly runId: RunId;
-  readonly sourceStepId: StepId;
-  readonly pendingDecision: AgentToolCallsDecision;
-  readonly reason: "NO_PROGRESS";
-  readonly replanCount: number;
-}
+export type WaitingResourceContinuation =
+  | {
+      readonly type: "WAITING_RESOURCE";
+      readonly runId: RunId;
+      readonly sourceStepId: StepId;
+      readonly pendingDecision: AgentToolCallsDecision;
+      readonly reason: "NO_PROGRESS";
+      readonly replanCount: number;
+    }
+  | {
+      readonly type: "WAITING_RESOURCE";
+      readonly runId: RunId;
+      readonly sourceStepId: StepId;
+      readonly pendingDecision: AgentToolCallsDecision;
+      readonly reason: "EFFECT_UNCONFIRMED";
+      readonly observationPolicy?: ToolObservationPolicySnapshot | undefined;
+      readonly invocationId: ToolInvocationId;
+      readonly toolName: ToolName;
+      readonly reasonCode: "DOES_NOT_MATCH" | "INCONCLUSIVE" | "UNSUPPORTED" | "UNAVAILABLE";
+    };
 
 /**
  * A complete answer deferred because the Run owed the user's accepted corrections a turn.
@@ -85,6 +97,10 @@ interface WaitingRetryContinuationBase {
   readonly failedStepId: StepId;
   readonly attempt: number;
   readonly maxAttempts: number;
+  /** Number of provider retry episodes already entered (first episode is 1). */
+  readonly episode?: number | undefined;
+  /** Total provider requests that failed across all episodes; never reset on episode rotation. */
+  readonly totalAttempts?: number | undefined;
   readonly nextAttemptAt: import("@caelush/protocol").TimestampMs;
   readonly errorCode: RetryErrorCode;
   /** Optional for backward decoding of retry checkpoints written before transport recovery. */
@@ -135,10 +151,21 @@ export type WaitingRetryContinuation =
       readonly receivedResults?: never;
     });
 
+type ReplaceContinuationType<T, Type extends string> = T extends { readonly type: string }
+  ? Omit<T, "type"> & { readonly type: Type }
+  : never;
+
+/** A durable wait after one provider retry episode is exhausted. */
+export type WaitingProviderContinuation = ReplaceContinuationType<
+  WaitingRetryContinuation,
+  "WAITING_PROVIDER"
+>;
+
 export type RunContinuationCheckpoint =
   | WaitingToolResultsContinuation
   | AwaitingVerificationContinuation
   | WaitingVerificationRepairContinuation
   | WaitingResourceContinuation
   | WaitingSteeringContinuation
+  | WaitingProviderContinuation
   | WaitingRetryContinuation;

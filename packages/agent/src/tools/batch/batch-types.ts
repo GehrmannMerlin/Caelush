@@ -74,6 +74,31 @@ export interface ModelRejectedToolCall {
 /** One entry of a batch's ordered request list. */
 export type ToolBatchCall = ToolCallRequest | ModelRejectedToolCall;
 
+/** The first scheduling barrier discovered in an earlier execution segment. */
+export interface ToolBatchSchedulingBarrier {
+  readonly kind: "DEPENDENCY_UNPROVEN" | "OUTCOME_UNKNOWN";
+  /** Zero-based position in the original assistant batch, across all segments. */
+  readonly sourceOrdinal: number;
+  /** Stable, bounded reason code only; never model arguments, exception text or paths. */
+  readonly code: string;
+}
+
+/** Non-durable cursor facts used while one logical assistant batch is dispatched in segments. */
+export interface ToolBatchSegmentInput {
+  readonly version: "TOOL_BATCH_SEGMENT_V1";
+  /** Number of original assistant requests in all earlier segments. */
+  readonly sourceOrdinalOffset: number;
+  readonly priorBarrier?: ToolBatchSchedulingBarrier | undefined;
+}
+
+/** The scheduler facts Core must carry into the next segment of this same logical batch. */
+export interface ToolBatchSegmentOutput {
+  readonly version: "TOOL_BATCH_SEGMENT_V1";
+  /** The next zero-based position in the original assistant batch. */
+  readonly nextSourceOrdinal: number;
+  readonly barrier: ToolBatchSchedulingBarrier | null;
+}
+
 /** True when this entry describes a request that cannot be dispatched. */
 export function isModelRejectedCall(call: ToolBatchCall): call is ModelRejectedToolCall {
   return "issue" in call;
@@ -161,6 +186,12 @@ export interface ToolBatchRequest {
   readonly environment: ToolExecutionEnvironment;
   readonly securityContext: ToolSecurityContext;
   readonly signal: AbortSignal;
+  /**
+   * Present only when Core dispatches one logical assistant batch in multiple execution segments.
+   * The ledger remains the recovery cursor; after a restart Core replays earlier segments through
+   * the durable coordinator and reconstructs this scheduling fact without repeating side effects.
+   */
+  readonly segment?: ToolBatchSegmentInput | undefined;
 }
 
 /**
@@ -190,6 +221,8 @@ export type ToolBatchOutcome =
   | {
       readonly kind: "COMPLETED";
       readonly items: readonly ToolBatchItemOutcome[];
+      /** Always emitted by the canonical coordinator; optional for older host implementations. */
+      readonly segment?: ToolBatchSegmentOutput | undefined;
     }
   | {
       readonly kind: "WAITING_APPROVAL";
@@ -201,6 +234,14 @@ export type ToolBatchOutcome =
       readonly kind: "BUDGET_EXCEEDED";
       readonly items: readonly ToolBatchItemOutcome[];
       readonly block: AgentBudgetBlock;
+    }
+  | {
+      /** A recovered RUNNING invocation could not be proven safe to settle or re-dispatch. */
+      readonly kind: "EFFECT_UNCONFIRMED";
+      readonly items: readonly ToolBatchItemOutcome[];
+      readonly pendingCall: ToolCallRequest;
+      readonly invocationId: ToolInvocationId;
+      readonly reasonCode: "DOES_NOT_MATCH" | "INCONCLUSIVE" | "UNSUPPORTED" | "UNAVAILABLE";
     }
   | {
       readonly kind: "CANCELLED";
@@ -237,5 +278,6 @@ export const TOOL_BATCH_OUTCOME_KINDS = [
   "COMPLETED",
   "WAITING_APPROVAL",
   "BUDGET_EXCEEDED",
+  "EFFECT_UNCONFIRMED",
   "CANCELLED",
 ] as const satisfies readonly ToolBatchOutcome["kind"][];

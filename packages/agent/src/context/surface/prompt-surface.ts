@@ -15,6 +15,7 @@ import {
 
 export {
   PromptSurfaceIntegrityError,
+  PromptSurfaceStepRetryConflictError,
   hashPromptSurfaceContent,
 } from "./prompt-surface-integrity.js";
 
@@ -25,6 +26,7 @@ export const PROMPT_SURFACE_RESET_REASONS = [
   "STABLE_HEAD_CHANGED",
   "CACHE_SETTINGS_CHANGED",
   "COMPACTION_COMMITTED",
+  "FORCED_RECOVERY",
   "RECOVERY_INCOMPATIBLE",
   /**
    * Internal only: the epoch reached a structural capacity bound and an equivalent projection was
@@ -484,7 +486,6 @@ export function assertPromptSurfaceRecordInput(
   if (!Array.isArray(candidate["updates"])) {
     throw new PromptSurfaceIntegrityError("Prompt Surface V3 record operations are invalid.");
   }
-  const anchor = candidate["anchor"] as PromptSurfaceAnchor;
   for (const update of candidate["updates"]) assertSectionUpdate(update);
   const kind = candidate["kind"] as PromptSurfaceRecordKind;
   if (

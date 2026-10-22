@@ -4,7 +4,11 @@ import { createRunId } from "@caelush/protocol";
 import type { ContextUsageProjection, PromptCacheUsage } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { ContextUsageRing } from "../src/components/context-usage-ring.js";
-import { ContextInspector } from "../src/components/context-inspector.js";
+import { ContextInspector, ContextRunProcessPanel } from "../src/components/context-inspector.js";
+import { PromptComposer } from "../src/components/prompt-composer.js";
+import { SessionWorkspace } from "../src/components/session-workspace.js";
+import { createInitialTimelineState } from "@caelush/client";
+import { resolveClientHostIntegration } from "../src/host/desktop-integration.js";
 
 const baseUsage: ContextUsageProjection = {
   runId: createRunId(),
@@ -170,6 +174,172 @@ describe("ContextUsageRing", () => {
     expect(inspectorMarkup).toContain("上下文压缩");
     expect(inspectorMarkup).not.toContain("Current Turn");
     expect(inspectorMarkup).not.toContain("Raw Context Window");
+  });
+
+  it("keeps the shared context control in the Desktop-mode workbench shell", () => {
+    const host = resolveClientHostIntegration({
+      caelushDesktop: { protocolVersion: 1 },
+    });
+    expect(host.kind).toBe("DESKTOP");
+
+    const html = renderToStaticMarkup(
+      <SessionWorkspace
+        title="桌面工作台"
+        workspaces={[]}
+        onAddWorkspace={() => undefined}
+        onSelectWorkspace={() => undefined}
+        activeRun={{ id: baseUsage.runId, status: "RUNNING" } as never}
+        history={[]}
+        timeline={createInitialTimelineState(baseUsage.runId)}
+        composer={
+          <PromptComposer
+            disabled
+            submission="ACTIVE"
+            onSubmit={async () => false}
+            contextUsage={baseUsage}
+          />
+        }
+      />,
+    );
+
+    expect(html).toContain('class="session-workspace"');
+    expect(html).toContain('aria-label="工作上下文用量：42%"');
+    expect(html).toContain('aria-label="运行中"');
+  });
+
+  it("explains the exact per-turn input and output headroom decision", () => {
+    const markup = renderToStaticMarkup(
+      <ContextInspector
+        usage={{
+          ...baseUsage,
+          turnBudget: {
+            version: "TURN_BUDGET_DECISION_V1",
+            algorithm: "HEADROOM_V1",
+            windowTokens: 1_000_000,
+            inputTokens: 80_000,
+            outputAllowanceTokens: 16_384,
+            safetyTokens: 4_096,
+            expectedGrowthTokens: 8_192,
+            remainingTokens: 899_520,
+            decision: "KEEP",
+            windowSource: "MODEL_LIMITS",
+            outputSource: "PREFERRED_ALLOWANCE",
+            safetySource: "HEADROOM_V1_SAFETY",
+            growthSource: "HEADROOM_V1_EXPECTED_GROWTH",
+          },
+        }}
+      />,
+    );
+    expect(markup).toContain("HEADROOM_V1");
+    expect(markup).toContain("输入 P 80,000");
+    expect(markup).toContain("输出 O 16,384");
+    expect(markup).toContain("安全余量 S 4,096");
+    expect(markup).toContain("下轮增长预估 G 8,192");
+    expect(markup).toContain("保留当前历史");
+  });
+
+  it("shows a degraded continuation with a readable, scoped source reference", () => {
+    const sourceRef = "history:v1:run_00000000-0000-7000-8000-000000000000:1:4#1234567890abcdef";
+    const markup = renderToStaticMarkup(
+      <ContextInspector
+        usage={{
+          ...baseUsage,
+          process: { kind: "DEGRADED_CONTINUATION", sourceRefs: [sourceRef] },
+        }}
+        onReadHistory={async () => ({
+          kind: "PAGE",
+          items: [
+            {
+              messageId: "msg_1",
+              sequence: 1,
+              role: "USER",
+              text: "请继续完成并运行测试",
+              byteLength: 30,
+            },
+          ],
+          sourceRef,
+          integrity: "VERIFIED",
+          byteCount: 30,
+        })}
+      />,
+    );
+    expect(markup).toContain("任务正在降级接续");
+    expect(markup).toContain("history:v1:");
+    expect(markup).toContain("查看原文");
+    expect(markup).toContain("可回查引用");
+  });
+
+  it("explains the trigger and quality of the latest committed summary", () => {
+    const markup = renderToStaticMarkup(
+      <ContextInspector
+        usage={{
+          ...baseUsage,
+          lastCompaction: { reason: "FORCED_PROVIDER_OVERFLOW", quality: "DEGRADED" },
+        }}
+      />,
+    );
+
+    expect(markup).toContain("模型服务提示本轮输入超出窗口");
+    expect(markup).toContain("降级摘要");
+  });
+
+  it("shows live compaction progress and its trigger even before a usage snapshot exists", () => {
+    const markup = renderToStaticMarkup(
+      <ContextRunProcessPanel
+        runId={baseUsage.runId}
+        process={{
+          kind: "COMPACTING",
+          stage: "SUMMARIZING",
+          reason: "SELECTION_PRESSURE",
+        }}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="上下文整理状态"');
+    expect(markup).toContain("正在生成并校验历史摘要");
+    expect(markup).toContain("当前可选信息过多，需要整理历史");
+  });
+
+  it("offers a read-only retry for an unconfirmed operation", () => {
+    const markup = renderToStaticMarkup(
+      <ContextInspector
+        usage={{
+          ...baseUsage,
+          process: {
+            kind: "ACTION_REQUIRED",
+            reason: "EFFECT_UNCONFIRMED",
+            toolName: "apply_patch",
+            reasonCode: "INCONCLUSIVE",
+          },
+        }}
+        onContinueResourceGuard={async () => true}
+      />,
+    );
+    expect(markup).toContain("操作的结果暂时无法确认");
+    expect(markup).toContain("apply_patch");
+    expect(markup).toContain("只读核对并继续");
+    expect(markup).toContain("不会自动重放");
+  });
+
+  it("shows a persistent provider cooldown with its saved progress", () => {
+    const markup = renderToStaticMarkup(
+      <ContextInspector
+        usage={{
+          ...baseUsage,
+          process: {
+            kind: "PROVIDER_WAIT",
+            nextAttemptAt: Date.now() + 60_000,
+            episode: 2,
+            totalAttempts: 6,
+            errorCode: "LLM_NETWORK",
+          },
+        }}
+      />,
+    );
+    expect(markup).toContain("模型服务连续不可用，任务已保存并等待自动接续");
+    expect(markup).toContain("第 2 段重试");
+    expect(markup).toContain("此前已失败 6 次");
+    expect(markup).toContain("LLM_NETWORK");
   });
 
   it("clamps invalid ratios to the visible 0%–100% ring range", () => {

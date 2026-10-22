@@ -2,7 +2,12 @@ import { z } from "zod";
 import { ModelRefSchema } from "./model.js";
 import { ApprovalPolicySchema, PermissionProfileSchema } from "./policy.js";
 import { JsonValueSchema } from "./primitives/json.js";
-import { RunIdSchema, SessionIdSchema, StepIdSchema } from "./primitives/ids.js";
+import {
+  RunIdSchema,
+  SessionIdSchema,
+  StepIdSchema,
+  VerificationCheckIdSchema,
+} from "./primitives/ids.js";
 import { TimestampMsSchema } from "./primitives/time.js";
 import { RunLimitsSchema } from "./limits.js";
 import { RunResourcePolicySchema } from "./resource-policy.js";
@@ -11,6 +16,21 @@ import { WorkspaceRefSchema } from "./workspace.js";
 import { ReasoningLevelSchema } from "./api/model-selection.js";
 import { RunSecurityPolicySnapshotV1Schema } from "./security-policy.js";
 import { AttachmentIdsSchema, SubmissionIdSchema } from "./attachment.js";
+import { CompletionRequirementSchema } from "./verification.js";
+
+export const CompletionDispositionSchema = z
+  .object({
+    version: z.literal("COMPLETION_DISPOSITION_V1"),
+    type: z.literal("INCOMPLETE"),
+    reasonCode: z.enum(["ACCEPTANCE_NOT_MET", "ACCEPTANCE_EVIDENCE_UNAVAILABLE"]),
+    requirementSources: z
+      .array(z.enum(["USER_EXPLICIT", "HOST_CONTRACT", "MODEL_PROPOSAL"]))
+      .min(1)
+      .max(3),
+    failedCheckIds: z.array(VerificationCheckIdSchema).max(32),
+  })
+  .strict();
+export type CompletionDisposition = z.infer<typeof CompletionDispositionSchema>;
 
 export const RunStatusSchema = z.enum([
   "PENDING",
@@ -112,6 +132,8 @@ export const AgentRunSchema = z
     /** Actual user-authored text, distinct from the internal goal for attachment-only Runs. */
     userText: z.string().max(200_000).optional(),
     attachmentIds: AttachmentIdsSchema.optional(),
+    /** Structured criteria that must be evidenced before a final answer may complete this Run. */
+    acceptanceRequirements: z.array(CompletionRequirementSchema).max(8).optional(),
     submissionId: SubmissionIdSchema.optional(),
     status: RunStatusSchema,
     workspace: WorkspaceRefSchema,
@@ -133,6 +155,7 @@ export const AgentRunSchema = z
     finalResult: JsonValueSchema.optional(),
     /** Absent on historical Runs, which retain their verification completion contract. */
     completionContract: RunCompletionContractSchema.optional(),
+    completionDisposition: CompletionDispositionSchema.optional(),
   })
   .strict();
 export type AgentRun = z.infer<typeof AgentRunSchema>;

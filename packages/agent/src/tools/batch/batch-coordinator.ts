@@ -5,6 +5,7 @@ import {
   StepIdSchema,
   ToolNameSchema,
 } from "@caelush/protocol";
+import type { ToolInvocationId } from "@caelush/protocol";
 
 import type { AgentBudgetBlock } from "../../loop/ports/model-request-admission.js";
 import { isToolExecutionEnvironment } from "../types/execution-environment.js";
@@ -37,6 +38,9 @@ import type {
   ToolBatchItemOutcome,
   ToolBatchOutcome,
   ToolBatchRequest,
+  ToolBatchSchedulingBarrier,
+  ToolBatchSegmentInput,
+  ToolBatchSegmentOutput,
 } from "./batch-types.js";
 
 /**
@@ -152,6 +156,7 @@ export const TOOL_DEPENDENCY_UNPROVEN_CONTENT =
 
 /** Why the rest of a batch cannot be assumed to apply to the state the model observed. */
 interface BatchBarrier {
+  readonly kind: ToolBatchSchedulingBarrier["kind"];
   /** The source position of the call that established the barrier. */
   readonly ordinal: number;
   readonly code: string;
@@ -223,13 +228,13 @@ async function executeCallsSequentially(
   }
 
   const items: ToolBatchItemOutcome[] = [];
-  let skipRemaining = false;
-  let barrier: BatchBarrier | undefined;
+  let barrier = barrierFromSegment(request.segment);
+  let skipRemaining = barrier?.kind === "OUTCOME_UNKNOWN";
   let callIndex = 0;
 
   for (const call of request.calls) {
     const notStartedCalls = request.calls.slice(callIndex);
-    const ordinal = callIndex;
+    const ordinal = (request.segment?.sourceOrdinalOffset ?? 0) + callIndex;
     callIndex += 1;
 
     // A rejected request never reached a handler and never will: the model has to correct it. It is
@@ -238,7 +243,7 @@ async function executeCallsSequentially(
     // chosen on the assumption this one's arguments described the world.
     if (isModelRejectedCall(call)) {
       items.push(modelRejectedItem(call));
-      barrier ??= { ordinal, code: TOOL_ARGUMENTS_REJECTED };
+      barrier ??= { kind: "DEPENDENCY_UNPROVEN", ordinal, code: TOOL_ARGUMENTS_REJECTED };
       continue;
     }
 
@@ -256,7 +261,11 @@ async function executeCallsSequentially(
       // A safe, model-correctable rejection. It never blocks the rest of the batch, and it never
       // created a ToolInvocation, an observation, an approval, a budget reservation or an event.
       items.push(Object.freeze({ kind: "REJECTED", call, feedback: prepared.feedback }));
-      barrier ??= { ordinal, code: prepared.feedback.code };
+      barrier ??= {
+        kind: "DEPENDENCY_UNPROVEN",
+        ordinal,
+        code: prepared.feedback.code,
+      };
       continue;
     }
 
@@ -284,9 +293,15 @@ async function executeCallsSequentially(
         );
         // A known, safe Tool failure is not a barrier: the loop continues. Only an unproven side
         // effect stops the batch.
-        if (isUncertainSettlement(invocation.error)) skipRemaining = true;
-        else if (invocation.status === "FAILED") {
-          barrier ??= { ordinal, code: "TOOL_EXECUTION_FAILED" };
+        if (isUncertainSettlement(invocation.error)) {
+          skipRemaining = true;
+          barrier = { kind: "OUTCOME_UNKNOWN", ordinal, code: "TOOL_OUTCOME_UNKNOWN" };
+        } else if (invocation.status === "FAILED") {
+          barrier ??= {
+            kind: "DEPENDENCY_UNPROVEN",
+            ordinal,
+            code: "TOOL_EXECUTION_FAILED",
+          };
         }
         break;
       }
@@ -299,6 +314,15 @@ async function executeCallsSequentially(
           items: Object.freeze([...items]),
           pendingCall: call,
           approval: outcome.approval,
+        });
+      }
+      case "WAITING_RECONCILIATION": {
+        return Object.freeze({
+          kind: "EFFECT_UNCONFIRMED",
+          items: Object.freeze([...items]),
+          pendingCall: call,
+          invocationId: outcome.invocation.id,
+          reasonCode: outcome.reasonCode,
         });
       }
       case "BUDGET_EXCEEDED": {
@@ -329,7 +353,11 @@ async function executeCallsSequentially(
     }
   }
 
-  return Object.freeze({ kind: "COMPLETED", items: Object.freeze([...items]) });
+  return Object.freeze({
+    kind: "COMPLETED",
+    items: Object.freeze([...items]),
+    segment: segmentOutput(request, barrier),
+  });
 }
 
 /**
@@ -359,9 +387,10 @@ async function executeCallsWithWindows(
   maxConcurrency: number,
 ): Promise<ToolBatchOutcome> {
   const items: ToolBatchItemOutcome[] = [];
-  let skipRemaining = false;
-  let barrier: BatchBarrier | undefined;
+  let barrier = barrierFromSegment(request.segment);
+  let skipRemaining = barrier?.kind === "OUTCOME_UNKNOWN";
   let index = 0;
+  const sourceOrdinalOffset = request.segment?.sourceOrdinalOffset ?? 0;
 
   while (index < request.calls.length) {
     const current = request.calls[index]!;
@@ -369,7 +398,11 @@ async function executeCallsWithWindows(
       // Reported even while the batch is skipping dependants: the request was never going to run,
       // and its feedback is what lets the model correct it.
       items.push(modelRejectedItem(current));
-      barrier ??= { ordinal: index, code: TOOL_ARGUMENTS_REJECTED };
+      barrier ??= {
+        kind: "DEPENDENCY_UNPROVEN",
+        ordinal: sourceOrdinalOffset + index,
+        code: TOOL_ARGUMENTS_REJECTED,
+      };
       index += 1;
       continue;
     }
@@ -383,7 +416,11 @@ async function executeCallsWithWindows(
     const first = prepareCall(options, current);
     if (first.kind === "REJECTED") {
       items.push(Object.freeze({ kind: "REJECTED", call: current, feedback: first.feedback }));
-      barrier ??= { ordinal: index, code: first.feedback.code };
+      barrier ??= {
+        kind: "DEPENDENCY_UNPROVEN",
+        ordinal: sourceOrdinalOffset + index,
+        code: first.feedback.code,
+      };
       index += 1;
       continue;
     }
@@ -391,7 +428,7 @@ async function executeCallsWithWindows(
     // The window below must never straddle a barrier. A read may still run; anything else is
     // withheld in place so the model sees exactly which call it has to re-submit.
     if (barrier !== undefined && !mayRunAfterEarlierFailure(schedulingOf(first.call))) {
-      items.push(dependencyUnprovenItem(current, barrier, index));
+      items.push(dependencyUnprovenItem(current, barrier, sourceOrdinalOffset + index));
       index += 1;
       continue;
     }
@@ -425,10 +462,24 @@ async function executeCallsWithWindows(
     let waitingApproval:
       | {
           readonly call: ToolCallRequest;
-          readonly approval: Extract<DurableToolExecutionOutcome, { kind: "WAITING_APPROVAL" }>["approval"];
+          readonly approval: Extract<
+            DurableToolExecutionOutcome,
+            { kind: "WAITING_APPROVAL" }
+          >["approval"];
         }
       | undefined;
-    let budgetBlock: Extract<DurableToolExecutionOutcome, { kind: "BUDGET_EXCEEDED" }>["block"] | undefined;
+    let waitingReconciliation:
+      | {
+          readonly call: ToolCallRequest;
+          readonly invocationId: ToolInvocationId;
+          readonly reasonCode: Extract<
+            DurableToolExecutionOutcome,
+            { kind: "WAITING_RECONCILIATION" }
+          >["reasonCode"];
+        }
+      | undefined;
+    let budgetBlock:
+      Extract<DurableToolExecutionOutcome, { kind: "BUDGET_EXCEEDED" }>["block"] | undefined;
     let cancelled = false;
 
     for (let offset = 0; offset < results.length; offset += 1) {
@@ -452,13 +503,31 @@ async function executeCallsWithWindows(
               observation: outcome.observation,
             }),
           );
-          if (isUncertainSettlement(invocation.error)) skipRemaining = true;
-          else if (invocation.status === "FAILED")
-            barrier ??= { ordinal: index + offset, code: "TOOL_EXECUTION_FAILED" };
+          if (isUncertainSettlement(invocation.error)) {
+            skipRemaining = true;
+            barrier = {
+              kind: "OUTCOME_UNKNOWN",
+              ordinal: sourceOrdinalOffset + index + offset,
+              code: "TOOL_OUTCOME_UNKNOWN",
+            };
+          } else if (invocation.status === "FAILED") {
+            barrier ??= {
+              kind: "DEPENDENCY_UNPROVEN",
+              ordinal: sourceOrdinalOffset + index + offset,
+              code: "TOOL_EXECUTION_FAILED",
+            };
+          }
           break;
         }
         case "WAITING_APPROVAL":
           waitingApproval ??= { call, approval: outcome.approval };
+          break;
+        case "WAITING_RECONCILIATION":
+          waitingReconciliation ??= {
+            call,
+            invocationId: outcome.invocation.id,
+            reasonCode: outcome.reasonCode,
+          };
           break;
         case "BUDGET_EXCEEDED":
           budgetBlock ??= outcome.block;
@@ -487,6 +556,15 @@ async function executeCallsWithWindows(
     if (cancelled) {
       return cancelledOutcome(items, request.calls.slice(index + window.length));
     }
+    if (waitingReconciliation !== undefined) {
+      return Object.freeze({
+        kind: "EFFECT_UNCONFIRMED",
+        items: Object.freeze([...items]),
+        pendingCall: waitingReconciliation.call,
+        invocationId: waitingReconciliation.invocationId,
+        reasonCode: waitingReconciliation.reasonCode,
+      });
+    }
     if (waitingApproval !== undefined) {
       return Object.freeze({
         kind: "WAITING_APPROVAL",
@@ -505,7 +583,11 @@ async function executeCallsWithWindows(
     index += window.length;
   }
 
-  return Object.freeze({ kind: "COMPLETED", items: Object.freeze([...items]) });
+  return Object.freeze({
+    kind: "COMPLETED",
+    items: Object.freeze([...items]),
+    segment: segmentOutput(request, barrier),
+  });
 }
 
 /** Prepare one call, converting a preparation invariant failure into a batch infrastructure failure. */
@@ -787,8 +869,9 @@ function isUncertainSettlement(error: unknown): boolean {
  * durable write. Discovering a duplicate after executing the first copy would be the one failure mode
  * this ordering exists to make impossible.
  *
- * The key list is exact: the frozen request has seven fields, and an extra field is a caller mistake
- * rather than something to ignore.
+ * The key list is exact: the frozen base request has seven fields, plus the optional, versioned
+ * segment cursor used only by Core when one logical assistant batch spans multiple dispatches.
+ * Any other field is a caller mistake rather than something to ignore.
  */
 export function assertToolBatchRequest(
   value: unknown,
@@ -799,8 +882,9 @@ export function assertToolBatchRequest(
   }
   const request = value as Record<string, unknown>;
   const keys = Object.keys(request);
+  const hasSegment = Object.hasOwn(request, "segment");
   if (
-    keys.length !== BATCH_REQUEST_KEYS.length ||
+    keys.length !== BATCH_REQUEST_KEYS.length + (hasSegment ? 1 : 0) ||
     !BATCH_REQUEST_KEYS.every((key) => Object.hasOwn(request, key)) ||
     !RunIdSchema.safeParse(request.runId).success ||
     !SessionIdSchema.safeParse(request.sessionId).success ||
@@ -877,6 +961,7 @@ export function assertToolBatchRequest(
     });
   }
 
+  const segment = hasSegment ? assertToolBatchSegmentInput(request.segment) : undefined;
   return Object.freeze({
     runId: RunIdSchema.parse(request.runId),
     sessionId: SessionIdSchema.parse(request.sessionId),
@@ -885,6 +970,7 @@ export function assertToolBatchRequest(
     environment: request.environment as ToolBatchRequest["environment"],
     securityContext: request.securityContext as ToolBatchRequest["securityContext"],
     signal: request.signal,
+    ...(segment === undefined ? {} : { segment }),
   });
 }
 
@@ -897,6 +983,85 @@ const BATCH_REQUEST_KEYS = [
   "securityContext",
   "signal",
 ] as const;
+
+function assertToolBatchSegmentInput(value: unknown): ToolBatchSegmentInput {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ToolBatchInputError();
+  }
+  const segment = value as Record<string, unknown>;
+  const keys = Object.keys(segment);
+  const hasBarrier = Object.hasOwn(segment, "priorBarrier");
+  if (
+    segment.version !== "TOOL_BATCH_SEGMENT_V1" ||
+    !Number.isSafeInteger(segment.sourceOrdinalOffset) ||
+    (segment.sourceOrdinalOffset as number) < 0 ||
+    keys.length !== 2 + (hasBarrier ? 1 : 0) ||
+    !Object.hasOwn(segment, "version") ||
+    !Object.hasOwn(segment, "sourceOrdinalOffset")
+  ) {
+    throw new ToolBatchInputError();
+  }
+  let priorBarrier: ToolBatchSchedulingBarrier | undefined;
+  if (hasBarrier) {
+    const candidate = segment.priorBarrier;
+    if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new ToolBatchInputError();
+    }
+    const barrier = candidate as Record<string, unknown>;
+    if (
+      Object.keys(barrier).length !== 3 ||
+      !Object.hasOwn(barrier, "kind") ||
+      !Object.hasOwn(barrier, "sourceOrdinal") ||
+      !Object.hasOwn(barrier, "code") ||
+      (barrier.kind !== "DEPENDENCY_UNPROVEN" && barrier.kind !== "OUTCOME_UNKNOWN") ||
+      !Number.isSafeInteger(barrier.sourceOrdinal) ||
+      (barrier.sourceOrdinal as number) < 0 ||
+      (barrier.sourceOrdinal as number) >= (segment.sourceOrdinalOffset as number) ||
+      typeof barrier.code !== "string" ||
+      barrier.code.length > 64 ||
+      !/^[A-Z][A-Z0-9_]*$/.test(barrier.code)
+    ) {
+      throw new ToolBatchInputError();
+    }
+    priorBarrier = Object.freeze({
+      kind: barrier.kind,
+      sourceOrdinal: barrier.sourceOrdinal as number,
+      code: barrier.code,
+    });
+  }
+  return Object.freeze({
+    version: "TOOL_BATCH_SEGMENT_V1",
+    sourceOrdinalOffset: segment.sourceOrdinalOffset as number,
+    ...(priorBarrier === undefined ? {} : { priorBarrier }),
+  });
+}
+
+function barrierFromSegment(segment: ToolBatchSegmentInput | undefined): BatchBarrier | undefined {
+  if (segment?.priorBarrier === undefined) return undefined;
+  return {
+    kind: segment.priorBarrier.kind,
+    ordinal: segment.priorBarrier.sourceOrdinal,
+    code: segment.priorBarrier.code,
+  };
+}
+
+function segmentOutput(
+  request: ToolBatchRequest,
+  barrier: BatchBarrier | undefined,
+): ToolBatchSegmentOutput {
+  return Object.freeze({
+    version: "TOOL_BATCH_SEGMENT_V1",
+    nextSourceOrdinal: (request.segment?.sourceOrdinalOffset ?? 0) + request.calls.length,
+    barrier:
+      barrier === undefined
+        ? null
+        : Object.freeze({
+            kind: barrier.kind,
+            sourceOrdinal: barrier.ordinal,
+            code: barrier.code,
+          }),
+  });
+}
 
 const TOOL_CALL_REQUEST_KEYS = ["externalCallId", "toolName", "args"] as const;
 

@@ -1,11 +1,6 @@
 import { render } from "ink";
 import { createDaemonClient } from "./bootstrap/daemon-client.js";
-import {
-  CliArgsError,
-  parseCliArgs,
-  type LaunchIntent,
-  type PrintIntent,
-} from "./bootstrap/cli-args.js";
+import { CliArgsError, parseCliArgs, type LaunchIntent } from "./bootstrap/cli-args.js";
 import { CliConversationController, type CliDaemonClient } from "./application/cli-controller.js";
 import { App } from "./components/App.js";
 
@@ -28,7 +23,7 @@ export async function main(options: CliMainOptions = {}): Promise<number> {
   let launchIntent: LaunchIntent;
   try {
     const command = options.launchIntent ?? parseCliArgs(options.argv ?? process.argv.slice(2));
-    if (command.kind === "PRINT") return printModeNotAvailable(command);
+    if (command.kind === "PRINT") return printModeNotAvailable();
     launchIntent = command;
   } catch (error) {
     if (error instanceof CliArgsError) {
@@ -59,7 +54,7 @@ export async function main(options: CliMainOptions = {}): Promise<number> {
   return 0;
 }
 
-function printModeNotAvailable(_command: PrintIntent): number {
+function printModeNotAvailable(): number {
   return 2;
 }
 

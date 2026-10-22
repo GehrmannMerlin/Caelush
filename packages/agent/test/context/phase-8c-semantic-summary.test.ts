@@ -6,6 +6,7 @@ import {
   createContextMessageRange,
   createContextSummaryReplayPrefixFingerprint,
   createContextSummarizationRunner,
+  createStructuredCheckpoint,
   createSemanticCheckpointDraft,
   createSemanticSummaryValidator,
   SemanticSummaryMalformedError,
@@ -199,7 +200,20 @@ describe("Phase 8C semantic summary contracts", () => {
     expect(observedFingerprint).toBeUndefined();
   });
 
-  it("downgrades a changed-model or malformed claimed replay and still attempts the summary", async () => {
+  it("never offers main-turn replay prefixes to the independent summary request", async () => {
+    const validPrefix = {
+      modelRef: MODEL.ref,
+      api: MODEL.api,
+      surfaceFingerprint: `sha256:${"a".repeat(64)}`,
+      messages: [{ role: "system" as const, content: "Stable host context." }],
+      tools: [],
+    };
+    const valid = {
+      ...input(),
+      cacheEligibility: "CACHE_REUSE_ELIGIBLE",
+      replayPrefix: validPrefix,
+      replayPrefixFingerprint: createContextSummaryReplayPrefixFingerprint(validPrefix),
+    } satisfies ContextSummarizationInput;
     const prefix = {
       modelRef: { ...MODEL.ref, model: "different-model" },
       api: MODEL.api,
@@ -227,18 +241,23 @@ describe("Phase 8C semantic summary contracts", () => {
     const observed: Array<{
       readonly eligibility: unknown;
       readonly fingerprint: unknown;
+      readonly hasPrefix: boolean;
     }> = [];
     const summarizer: ContextSummarizerPort = {
       async summarize(request) {
         observed.push({
           eligibility: request.cacheEligibility,
           fingerprint: request.replayPrefixFingerprint,
+          hasPrefix: request.replayPrefix !== undefined,
         });
         return result();
       },
     };
     const runner = createContextSummarizationRunner({ summarizer });
 
+    const validResult = await runner.summarize(valid, {
+      signal: new AbortController().signal,
+    });
     const changedModelResult = await runner.summarize(changedModel, {
       signal: new AbortController().signal,
     });
@@ -246,11 +265,13 @@ describe("Phase 8C semantic summary contracts", () => {
       signal: new AbortController().signal,
     });
 
+    expect(validResult.kind).toBe("ACCEPTED");
     expect(changedModelResult.kind).toBe("ACCEPTED");
     expect(malformedResult.kind).toBe("ACCEPTED");
     expect(observed).toEqual([
-      { eligibility: "NOT_ELIGIBLE", fingerprint: undefined },
-      { eligibility: "NOT_ELIGIBLE", fingerprint: undefined },
+      { eligibility: "NOT_ELIGIBLE", fingerprint: undefined, hasPrefix: false },
+      { eligibility: "NOT_ELIGIBLE", fingerprint: undefined, hasPrefix: false },
+      { eligibility: "NOT_ELIGIBLE", fingerprint: undefined, hasPrefix: false },
     ]);
   });
 
@@ -286,5 +307,54 @@ describe("Phase 8C semantic summary contracts", () => {
         signal: controller.signal,
       }),
     ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("rejects valid JSON that drops a protected prior plan decision", async () => {
+    const previousCheckpoint = createStructuredCheckpoint({
+      version: 1,
+      goal: identity.goal,
+      constraints: ["Keep the user's original constraints."],
+      completedWork: ["Completed the first implementation stage."],
+      inProgress: ["Verify the migration."],
+      blocked: ["Provider is temporarily unavailable."],
+      importantDiscoveries: ["A completed Tool batch is one source unit."],
+      keyDecisions: ["Never replay an operation with unknown effects."],
+      changedFiles: [],
+      readFiles: [],
+      recentErrors: ["Migration check failed."],
+      verificationState: "FAILED",
+      activeProcesses: [],
+      pendingApprovals: [],
+      resourceGovernance: "BOUNDED",
+      criticalReferences: ["history:v1:run:1:3#sha256:example"],
+      nextIntent: "Retry the migration check after fixing the failure.",
+      sourceRange: { from: 1, to: 3 },
+    });
+    const semanticallyIncomplete = result({
+      semantic: {
+        ...semantic,
+        constraints: ["Keep the user's original constraints."],
+        completedWork: ["Completed the first implementation stage."],
+        inProgress: ["Verify the migration."],
+        blocked: ["Provider is temporarily unavailable."],
+        importantDiscoveries: ["A completed Tool batch is one source unit."],
+        keyDecisions: [],
+        criticalReferences: ["history:v1:run:1:3#sha256:example"],
+      },
+    });
+
+    const execution = await createContextSummarizationRunner({
+      summarizer: {
+        async summarize() {
+          return semanticallyIncomplete;
+        },
+      },
+    }).summarize({ ...input(), previousCheckpoint }, { signal: new AbortController().signal });
+
+    expect(execution).toMatchObject({
+      kind: "FALLBACK_REQUIRED",
+      outcome: "MALFORMED",
+      reason: expect.stringContaining("protected keyDecisions"),
+    });
   });
 });

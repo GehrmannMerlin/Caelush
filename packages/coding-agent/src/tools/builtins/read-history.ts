@@ -99,8 +99,7 @@ export function createReadHistoryTool(
   const tool = defineCodingTool({
     name: "read_history",
     scheduling: { class: "READ_ONLY" },
-    description:
-      "Read a bounded page of earlier conversation records referenced by a checkpoint. Use it when a summary says detail was set aside.",
+    description: "Read an earlier conversation page referenced by a summary.",
     executionMode: "PARALLEL_SAFE",
     inputSchema,
     resultDetailsSchema: outputSchema,

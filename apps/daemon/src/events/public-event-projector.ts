@@ -44,6 +44,20 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
       case "run.started":
         payload = { goal: nonEmptyText(event.payload.goal, "Run") };
         break;
+      case "run.input.accepted":
+        payload = {
+          inputId: boundedText(event.payload.inputId, PUBLIC_EVENT_TEXT_BYTES),
+          acceptedSequence: event.payload.acceptedSequence,
+        };
+        break;
+      case "run.input.assigned":
+        payload = {
+          inputId: boundedText(event.payload.inputId, PUBLIC_EVENT_TEXT_BYTES),
+          acceptedSequence: event.payload.acceptedSequence,
+          messageId: boundedText(event.payload.messageId, PUBLIC_EVENT_TEXT_BYTES),
+          stepId: boundedText(event.payload.stepId, PUBLIC_EVENT_TEXT_BYTES),
+        };
+        break;
       case "run.security_policy.bound":
         payload = {
           policySchemaVersion: event.payload.policySchemaVersion,
@@ -398,6 +412,12 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
           messageId: event.payload.messageId,
           conversationTurnId: event.payload.conversationTurnId,
           messageType: event.payload.messageType,
+        };
+        break;
+      case "context.compaction.progress":
+        payload = {
+          stage: event.payload.stage,
+          reason: event.payload.reason,
         };
         break;
       default:

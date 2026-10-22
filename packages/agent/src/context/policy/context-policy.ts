@@ -299,7 +299,9 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
   const workingSet = options.workingSet;
   const requestHeadroom = options.requestHeadroom;
   if (workingSet !== undefined && requestHeadroom !== undefined) {
-    throw new RangeError("A Context policy cannot be frozen against both a working set and headroom.");
+    throw new RangeError(
+      "A Context policy cannot be frozen against both a working set and headroom.",
+    );
   }
   if (workingSet !== undefined) assertWorkingSet(workingSet, effectiveInputLimitTokens);
   if (requestHeadroom !== undefined) {
@@ -373,7 +375,12 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
     targetRecentTailTokens: boundedTargetRecentTailTokens,
     minRecentTailTokens,
     targetPostCompactionTokens,
-    allowCurrentTurnPrefix: workingSet?.allowCurrentTurnPrefix ?? false,
+    // A HEADROOM_V1 Run can spend its entire lifetime inside one open conversation turn: each
+    // model/tool exchange extends the user's still-active turn. Without this protocol-safe prefix
+    // cut, such a Run has no closed turn to compact and reaches CONTEXT_EXHAUSTED even though old
+    // completed Tool batches could be removed safely. Legacy policies retain their historical
+    // boundary rule; only the explicit headroom policy opts into the already-validated split.
+    allowCurrentTurnPrefix: workingSet?.allowCurrentTurnPrefix ?? requestHeadroom !== undefined,
     ...(workingSet === undefined ? {} : { workingSet: Object.freeze({ ...workingSet }) }),
     ...(requestHeadroom === undefined
       ? {}

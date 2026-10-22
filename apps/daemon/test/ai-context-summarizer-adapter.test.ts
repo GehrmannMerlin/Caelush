@@ -7,6 +7,7 @@ import type {
   AIToolSpec,
   ModelDescriptor,
 } from "@caelush/ai";
+import { validateAIModelRequestShape } from "@caelush/ai";
 import { createRunId, createSessionId } from "@caelush/protocol";
 import {
   createContextMessageRange,
@@ -111,7 +112,7 @@ function fakeGateway(result: AIModelTurnResult): {
 }
 
 describe("Phase 8C Daemon semantic summarizer adapter", () => {
-  it("replays the complete eligible prefix unchanged and appends one fixed tail instruction", async () => {
+  it("ignores a cache-eligible prefix and sends an independent tools-disabled summary request", async () => {
     const messages: readonly AIMessage[] = [
       { role: "system", content: "Stable host context." },
       { role: "user", content: "Earlier durable input." },
@@ -141,15 +142,19 @@ describe("Phase 8C Daemon semantic summarizer adapter", () => {
     });
 
     const request = fixture.requests[0]!;
-    expect(request.messages.slice(0, messages.length)).toEqual(messages);
-    expect(request.tools).toEqual(tools);
+    expect(request.messages).toHaveLength(1);
+    expect(request.tools).toEqual([]);
     expect(request.toolChoice).toEqual({ type: "NONE" });
-    expect(request.messages).toHaveLength(messages.length + 1);
+    expect(() => validateAIModelRequestShape(request)).not.toThrow();
     expect(request.messages.at(-1)).toMatchObject({
       role: "user",
       content: expect.stringContaining("SemanticCheckpointDraft"),
     });
     expect(request.messages.at(-1)?.content).toContain("UNTRUSTED_DATA");
+    expect(request.messages.at(-1)?.content).not.toContain("Stable host context.");
+    expect(request.messages.at(-1)?.content).not.toContain("Earlier durable input.");
+    expect(request.messages.at(-1)?.content).not.toContain("Earlier answer.");
+    expect(tools).toHaveLength(1);
   });
 
   it("uses the current model, disables tools, asks for semantic JSON, and forwards resolved metadata", async () => {
@@ -162,6 +167,7 @@ describe("Phase 8C Daemon semantic summarizer adapter", () => {
     expect(request.model).toEqual(input.model.ref);
     expect(request.tools).toEqual([]);
     expect(request.toolChoice).toEqual({ type: "NONE" });
+    expect(() => validateAIModelRequestShape(request)).not.toThrow();
     expect(request.messages).toHaveLength(1);
     expect(request.messages[0]).toMatchObject({
       role: "user",

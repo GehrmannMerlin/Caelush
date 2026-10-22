@@ -300,6 +300,25 @@ describe("Context Usage Protocol projection", () => {
     expect(protocol.ContextUsageProjectionSchema.parse(baseUsage)).toEqual(baseUsage);
   });
 
+  it("projects provider cooldown separately from an ordinary in-episode retry", () => {
+    const process = {
+      kind: "PROVIDER_WAIT" as const,
+      nextAttemptAt: 300_000,
+      episode: 2,
+      totalAttempts: 6,
+      errorCode: "LLM_NETWORK" as const,
+    };
+    expect(protocol.ContextUsageProjectionSchema.parse({ ...baseUsage, process }).process).toEqual(
+      process,
+    );
+    expect(() =>
+      protocol.ContextUsageProjectionSchema.parse({
+        ...baseUsage,
+        process: { ...process, errorCode: "SECRET_PROVIDER_ERROR" },
+      }),
+    ).toThrow();
+  });
+
   it.each([
     { fullRequestInputEstimateTokens: 0, fullWindowUsedRatio: 0 },
     { fullRequestInputEstimateTokens: 20_000, fullWindowUsedRatio: 1 },

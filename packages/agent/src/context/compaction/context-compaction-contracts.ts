@@ -16,6 +16,7 @@ import type { SemanticSummaryValidator } from "./semantic-summary-validator.js";
 import type { DeterministicCompactionFactsProvider } from "./deterministic-compaction-facts.js";
 import type { DeterministicCheckpointBuilder } from "./deterministic-checkpoint-builder.js";
 import type { ContextCheckpointEnricher } from "./checkpoint-enricher.js";
+import type { ContextTokenEstimatorPort } from "../token/context-token-estimator.js";
 import type { ContextCompactionRebuilder } from "./context-compaction-rebuilder.js";
 import type { ContextCompactionRebuildResult } from "./context-compaction-rebuilder.js";
 import type { ContextCompactionCommitPort } from "../ports/context-compaction-commit-port.js";
@@ -228,6 +229,12 @@ export type ContextCompactionOutcome =
       readonly receipt: ContextCompactionReceipt;
     }
   | {
+      /** Summary failed, but the unmodified source still fits the current request budget. */
+      readonly kind: "KEEP_ORIGINAL";
+      readonly reason: "SUMMARY_UNAVAILABLE_ORIGINAL_FITS";
+      readonly summaryOutcome: "TRUNCATED" | "FILTERED" | "MALFORMED" | "FAILED";
+    }
+  | {
       readonly kind: "NOT_APPLICABLE";
       readonly reason: "NO_COMPRESSIBLE_HISTORY" | "INSUFFICIENT_GAIN";
     };
@@ -255,6 +262,8 @@ export interface ContextCompactionDependencies {
   readonly commit: ContextCompactionCommitPort;
   readonly clock: ClockPort;
   readonly checkpointIdFactory: ContextCheckpointIdFactory;
+  /** Uses the prepared Context's tokenizer while bounding independent summary requests. */
+  readonly summarySourceTokenEstimator?: ContextTokenEstimatorPort;
 }
 
 export interface ContextCompactionEventFactoryInput {
@@ -267,6 +276,10 @@ export interface ContextCompactionEventFactoryInput {
 export interface ContextCompactionCoordinatorOptions {
   readonly dependencies: ContextCompactionDependencies;
   readonly latest: IncrementalCheckpointState;
+  readonly onProgress?: (
+    stage: "PREPARING" | "SUMMARIZING" | "REBUILDING",
+    reason: ContextCompactionReason,
+  ) => void;
   readonly createEvents?: (
     input: ContextCompactionEventFactoryInput,
   ) => readonly DurableRunEventDraft[];

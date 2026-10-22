@@ -19,6 +19,7 @@ import {
   type AgentToolRegistry,
   type DurableResultPipelineFactory,
   type DurableToolExecutionCoordinator,
+  type EffectReconciliationPort,
   type RunEventNotifierPort,
   type PreparedToolCall,
   type ToolAdmissionCoordinator,
@@ -84,6 +85,8 @@ export interface CanonicalToolRuntimeOptions {
   /** The durable metadata answer for a Tool with no Coding overlay. */
   readonly riskLevel?: RiskLevel | undefined;
   readonly resultPipelineFactory?: DurableResultPipelineFactory | undefined;
+  /** Read-only recovery for a side effect whose durable result was interrupted. */
+  readonly effectReconciliation?: EffectReconciliationPort | undefined;
   readonly updateSanitizer?: ToolExecutionUpdateSanitizerPort | undefined;
   readonly boundContent?: ((content: string) => string) | undefined;
   /** The Tool-layer clock, when the host shares one clock across admission and settlement. */
@@ -156,6 +159,9 @@ export function createCanonicalToolRuntime(
       }),
     updateSanitizer,
     resultPipelineFactory: options.resultPipelineFactory ?? (() => createToolResultPipeline()),
+    ...(options.effectReconciliation === undefined
+      ? {}
+      : { effectReconciliation: options.effectReconciliation }),
     preparedCallFactory: ({ invocation, externalCallId }) =>
       preparedCallFromDurableState(options.registry, invocation, externalCallId),
     failureSettlement: createToolFailureSettlement({

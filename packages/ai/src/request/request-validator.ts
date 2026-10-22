@@ -106,9 +106,7 @@ function validateTools(request: AIModelRequest, context: AIErrorContext): readon
   if (tools === undefined) return [];
 
   translateShapeFailures(context, () => {
-    if (!Array.isArray(tools) || tools.length === 0) {
-      throw new TypeError("AI model request tools must be a non-empty array when present.");
-    }
+    if (!Array.isArray(tools)) throw new TypeError("AI model request tools must be an array.");
     for (const tool of tools) assertAIToolSpec(tool);
   });
 

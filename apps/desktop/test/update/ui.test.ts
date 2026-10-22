@@ -20,7 +20,9 @@ vi.mock("react", async (importOriginal) => ({
     const slot = view.hook++;
     if (slot === 0) return [view.state, () => {}];
     if (slot === 2) return [view.releases, () => {}];
-    if (slot === 4) return [view.open, () => {}];
+    if (slot === 3 || slot === 4) return [false, () => {}];
+    if (slot === 5) return [view.open, () => {}];
+    if (slot === 6) return [null, () => {}];
     return [initial, () => {}];
   },
 }));

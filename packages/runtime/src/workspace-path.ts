@@ -96,6 +96,7 @@ function classifyRelation(
   policy: RuntimeFilesystemPolicy,
   candidate: string,
   workspaceAlias?: string,
+  canonicalHostUserRoot?: string,
 ): FilesystemTargetRelation | undefined {
   if (
     isPathInsideOrEqual(policy.workspaceRoot, candidate) ||
@@ -105,20 +106,52 @@ function classifyRelation(
   }
   if (
     policy.boundary === "HOST_USER_SCOPE" &&
-    isPathInsideOrEqual(policy.hostUserRoot, candidate)
+    (isPathInsideOrEqual(policy.hostUserRoot, candidate) ||
+      (canonicalHostUserRoot !== undefined &&
+        isPathInsideOrEqual(canonicalHostUserRoot, candidate)))
   ) {
     return "HOST_USER";
   }
   return undefined;
 }
 
+interface CanonicalPolicyRoots {
+  readonly hostUserRoot: string;
+  readonly protectedRoots: readonly string[];
+}
+
+async function resolveCanonicalPolicyRoots(
+  filesystem: RuntimeFileSystem,
+  policy: RuntimeFilesystemPolicy,
+): Promise<CanonicalPolicyRoots> {
+  const resolveRoot = async (root: string) =>
+    path.normalize((await resolveExistingAncestor(filesystem, root, "READ")).canonicalPath);
+  const [hostUserRoot, ...protectedRoots] = await Promise.all([
+    resolveRoot(policy.hostUserRoot),
+    ...policy.protectedRoots.map(resolveRoot),
+  ]);
+  return { hostUserRoot: hostUserRoot!, protectedRoots };
+}
+
 function isMutation(operation: RuntimeFilesystemOperation): boolean {
   return operation === "WRITE" || operation === "DELETE" || operation === "MOVE";
 }
 
-function isProtectedTarget(policy: RuntimeFilesystemPolicy, candidate: string): boolean {
-  if (path.normalize(candidate) === path.normalize(policy.hostUserRoot)) return true;
-  return policy.protectedRoots.some((root) => isPathInsideOrEqual(root, candidate));
+function isProtectedTarget(
+  policy: RuntimeFilesystemPolicy,
+  canonicalRoots: CanonicalPolicyRoots,
+  candidate: string,
+): boolean {
+  if (
+    path.normalize(candidate) === path.normalize(policy.hostUserRoot) ||
+    path.normalize(candidate) === canonicalRoots.hostUserRoot
+  ) {
+    return true;
+  }
+  return (
+    policy.protectedRoots.some((root) => isPathInsideOrEqual(root, candidate)) ||
+    canonicalRoots.protectedRoots.some((root) => isPathInsideOrEqual(root, candidate))
+  );
 }
 
 function assertTargetAllowed(
@@ -126,6 +159,7 @@ function assertTargetAllowed(
   relation: FilesystemTargetRelation | undefined,
   operation: RuntimeFilesystemOperation,
   canonicalPath: string,
+  canonicalRoots: CanonicalPolicyRoots,
 ): FilesystemTargetRelation {
   if (relation === undefined) {
     throw new RuntimeBoundaryError("path resolves outside the active filesystem boundary");
@@ -139,7 +173,7 @@ function assertTargetAllowed(
         "The active filesystem policy is workspace-bound.",
       );
     }
-    if (isProtectedTarget(policy, canonicalPath)) {
+    if (isProtectedTarget(policy, canonicalRoots, canonicalPath)) {
       throw new RuntimeProtectedRootMutationError();
     }
   }
@@ -185,6 +219,8 @@ async function resolveExistingAncestor(
 }
 
 export class WorkspacePathResolver {
+  private canonicalPolicyRoots: Promise<CanonicalPolicyRoots> | undefined;
+
   constructor(
     private readonly scope: Readonly<{
       readonly workspace: WorkspaceRef;
@@ -206,12 +242,22 @@ export class WorkspacePathResolver {
         "filesystem policy does not match the opened workspace",
       );
     }
+    const canonicalPolicyRoots = (this.canonicalPolicyRoots ??= resolveCanonicalPolicyRoots(
+      this.scope.filesystem,
+      this.scope.policy,
+    ));
+    const resolvedPolicyRoots = await canonicalPolicyRoots;
     const normalized = validatePathInput(input.path);
     const absoluteInput = isAbsoluteInput(normalized);
     const absolutePath = path.normalize(
       absoluteInput ? normalized : path.resolve(this.scope.logicalRoot, normalized),
     );
-    const lexicalRelation = classifyRelation(input.policy, absolutePath, this.scope.realRoot);
+    const lexicalRelation = classifyRelation(
+      input.policy,
+      absolutePath,
+      this.scope.realRoot,
+      resolvedPolicyRoots.hostUserRoot,
+    );
     if (lexicalRelation === undefined) {
       throw new RuntimeBoundaryError("path resolves outside the active filesystem boundary");
     }
@@ -243,9 +289,15 @@ export class WorkspacePathResolver {
     }
     const relation = assertTargetAllowed(
       input.policy,
-      classifyRelation(input.policy, canonicalPath, this.scope.realRoot),
+      classifyRelation(
+        input.policy,
+        canonicalPath,
+        this.scope.realRoot,
+        resolvedPolicyRoots.hostUserRoot,
+      ),
       input.operation,
       canonicalPath,
+      resolvedPolicyRoots,
     );
     if (isMutation(input.operation) && indirection !== "DIRECT") {
       throw new RuntimePatchError("SYMLINK_MUTATION_NOT_ALLOWED");

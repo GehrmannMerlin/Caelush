@@ -91,6 +91,7 @@ export const RUN_EVENT_TYPE_CATALOG: readonly RunEventTypeDefinition[] = Object.
   durable("run.input.accepted"),
   durable("run.input.assigned"),
   durable("context.compaction.completed", "SYSTEM"),
+  transient("context.compaction.progress", 1, "COALESCIBLE"),
   transient("tool.output", 2, "ORDERED"),
   transient("shell.output", 2, "ORDERED"),
   transient("process.output", 2, "ORDERED"),
