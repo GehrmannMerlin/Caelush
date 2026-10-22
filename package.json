@@ -14,7 +14,8 @@
   },
   "scripts": {
     "build": "pnpm -r --if-present run build",
-    "typecheck": "pnpm build && tsc -p tsconfig.json --noEmit && pnpm -r --if-present run typecheck",
+    "typecheck": "pnpm build && pnpm -r --if-present run typecheck",
+    "typecheck:tests": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --maxWorkers=4",
     "dev:desktop": "pnpm --filter @caelush/desktop dev",
     "start:desktop": "pnpm --filter @caelush/desktop start",
