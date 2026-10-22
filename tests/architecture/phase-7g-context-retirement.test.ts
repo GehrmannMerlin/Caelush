@@ -24,24 +24,53 @@ async function readSource(relativePath: string): Promise<string> {
 }
 
 describe("Phase 7G Context Engineering V2 final acceptance", () => {
-  it("retires the package and every live production consumer", async () => {
-    await expect(readFile(path.join(root, "packages/context/package.json"))).rejects.toThrow();
+  /**
+   * What Phase 7G actually retired, restated against the architecture that is live today.
+   *
+   * ```text
+   * retired   the second Context runtime: legacy-context-runtime-adapter, a daemon-local engine,
+   *           a Context package that owns history, selection or budgets
+   * retained  @caelush/context as the attachment-context projector
+   * ```
+   *
+   * AGENTS.md keeps one responsibility on that package — attachment projection, host-path rejection,
+   * redaction and budget accounting for a single attachment span — and `packages/core` is its only
+   * consumer. Deleting the package would move that logic into Core rather than retire anything, so
+   * the guard asserts the confinement instead of the deletion: one consumer, one responsibility, no
+   * dependency on the kernel, storage, runtime or a host.
+   */
+  it("retires the legacy Context runtime and confines @caelush/context to attachment projection", async () => {
+    const manifest = JSON.parse(
+      await readFile(path.join(root, "packages/context/package.json"), "utf8"),
+    ) as { readonly private?: boolean; readonly dependencies?: Record<string, string> };
+    expect(manifest.private).toBe(true);
+    // The projector is a pure data transform: no kernel, no storage, no runtime, no host package.
+    expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual([
+      "@caelush/ai",
+      "@caelush/protocol",
+    ]);
     await expect(
       readFile(path.join(root, "packages/core/src/legacy-context-runtime-adapter.ts")),
     ).rejects.toThrow();
 
     const productionFiles = [...(await sourceFiles("packages")), ...(await sourceFiles("apps"))];
-    const offenders: string[] = [];
+    const consumers: string[] = [];
     for (const file of productionFiles) {
       const source = await readSource(file);
-      if (
-        /(?:from|import\s*\()\s*["']@caelush\/context["']/.test(source) ||
-        /packages\/context[\\/]/.test(source)
-      ) {
-        offenders.push(file);
-      }
+      if (/(?:from|import\s*\()\s*["']@caelush\/context["']/.test(source)) consumers.push(file);
+      // A path reference to the package directory is a private cross-package import.
+      expect(source, `${file} must not name packages/context by path`).not.toMatch(
+        /packages\/context[\\/]/,
+      );
     }
-    expect(offenders).toEqual([]);
+    expect(consumers.map((file) => file.split(path.sep).join("/"))).toEqual([
+      "packages/core/src/run-attachment-context.ts",
+    ]);
+
+    // The daemon composes the Agent-owned engine; it never builds a second Context runtime.
+    const composition = await readSource("apps/daemon/src/context/v2-context-composition.ts");
+    expect(composition).not.toContain("@caelush/context");
+    expect(composition).toContain("createV2ContextEngine");
   });
 
   it("keeps V2 authority in Agent, Coding Agent, Core integration and Daemon projection", async () => {

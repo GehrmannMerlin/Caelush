@@ -214,7 +214,9 @@ describe("Phase 2C package edges", () => {
     const exported = [...entry.matchAll(/export \{([^}]*)\}/g)].flatMap((match) =>
       (match[1] ?? "")
         .split(",")
-        .map((part) => part.trim())
+        // `export { type X }` names a type contract rather than a value; the frozen list holds the
+        // contract's name, so the syntax marker is normalised away instead of becoming an entry.
+        .map((part) => part.trim().replace(/^type\s+/, ""))
         .filter(Boolean),
     );
     // Phase 3A froze the V2 kernel contracts, Phase 3B implemented `advance()` and the context
@@ -750,6 +752,69 @@ describe("Phase 2C package edges", () => {
         "hashPromptSurfaceContent",
         "projectAgentAssistantTextItems",
         "projectPromptSurface",
+        // --- T1–T13 rounds. The kernel now owns the received-request authority, the scheduling
+        // facts that let one batch withhold a dependent mutation, the execution chunk limit, the
+        // Prompt Surface capacity vocabulary, the per-turn headroom budget and the readable history
+        // reference. Each is a protocol statement about the kernel's own domain. The list stays
+        // asserted exactly, so the next accidental widening fails here instead of shipping.
+        "AGENT_ASSISTANT_MESSAGE_CODEC_V4",
+        "AGENT_ASSISTANT_MESSAGE_PROJECTOR_V2",
+        "AGENT_TOOL_RESULT_MESSAGE_CODEC_V3",
+        "ContextPressureAccountingError",
+        "DEFAULT_TOOL_RESULT_PRUNING",
+        "DEFAULT_TOOL_SCHEDULING_FACTS",
+        "HEADROOM_V1_DEFAULTS",
+        "HISTORY_LOOKUP_DEFAULT_BYTES",
+        "HISTORY_LOOKUP_MAX_BYTES",
+        "HISTORY_LOOKUP_MAX_ITEMS",
+        "HISTORY_SOURCE_PROJECTION_VERSION",
+        "MAX_MODEL_SCHEMA_FEEDBACK_BYTES",
+        "MAX_MODEL_SCHEMA_ISSUES",
+        "PROMPT_SURFACE_CAPACITY_DIMENSIONS",
+        "PROMPT_SURFACE_CAPACITY_REASONS",
+        "PRUNED_TOOL_RESULT_PREFIX",
+        "PUBLIC_PROMPT_SURFACE_RESET_REASONS",
+        "PromptSurfaceCapacityError",
+        "PromptSurfaceRolloverConflictError",
+        "RunInputPendingError",
+        "TOOL_ARGUMENTS_REJECTED",
+        "TOOL_DEPENDENCY_UNPROVEN",
+        "TOOL_DEPENDENCY_UNPROVEN_CONTENT",
+        "TOOL_PREPARATION_FAILURE_LIMITS",
+        "TOOL_SCHEDULING_CLASSES",
+        "TURN_BUDGET_ALGORITHM",
+        "UTF8_BYTES_PER_TOKEN",
+        "agentAssistantRejectedToolCallPart",
+        "assertToolPreparationFailureFact",
+        "assertToolResultPruningPolicy",
+        "assertToolSchedulingFacts",
+        "assessPromptSurfaceBaseline",
+        "assistantToolRequests",
+        "computeRequestHeadroom",
+        "createHistorySourceRef",
+        "decidePromptSurfaceCapacity",
+        "decideTurnBudget",
+        "evaluateRunInputAdmission",
+        "isModelRejectedCall",
+        "isToolSchedulingClass",
+        "mayRunAfterEarlierFailure",
+        "modelRejectedArgumentsFeedback",
+        "omissionMarker",
+        "parseHistorySourceRef",
+        "projectPromptSurfaceResetReason",
+        "promptSurfaceBaselineByteLength",
+        "promptSurfaceBaselineTooLarge",
+        "promptSurfaceEpochIdentity",
+        "promptSurfaceReplaySoftBudgetBytes",
+        "promptSurfaceRolloverOperationId",
+        "pruneSettledToolResult",
+        "renderToolSchemaFeedback",
+        "resolveOutputAllowance",
+        "resolveTurnBudgetPolicy",
+        "rolloverPromptSurface",
+        "ToolResultPruningPolicy",
+        "ToolResultPruningStats",
+
       ].sort(),
     );
   });

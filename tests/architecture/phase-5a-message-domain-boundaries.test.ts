@@ -54,9 +54,56 @@ async function exists(relativePath: string): Promise<boolean> {
   }
 }
 
-/** Source with comments removed, so documentation about a forbidden pattern is not a violation. */
+/**
+ * Source with comments removed, so documentation about a forbidden pattern is not a violation.
+ *
+ * ```text
+ * string and template literals are honoured
+ * ```
+ *
+ * A regular expression cannot do this: an Accept header built from a string literal contains a
+ * block-comment opener, and a naive stripper then consumes everything up to the next terminator —
+ * several hundred lines of real code, including the very methods this guard asserts exist. The
+ * scanner therefore tracks whether it is inside a quoted literal, a template literal, a line comment
+ * or a block comment, and only removes the last two.
+ */
 function code(text: string): string {
-  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  let output = "";
+  let index = 0;
+  let quote: '"' | "'" | "`" | undefined;
+  while (index < text.length) {
+    const character = text[index];
+    const next = text[index + 1];
+    if (quote !== undefined) {
+      output += character;
+      if (character === "\\") {
+        output += next ?? "";
+        index += 2;
+        continue;
+      }
+      if (character === quote) quote = undefined;
+      index += 1;
+      continue;
+    }
+    if (character === '"' || character === "'" || character === "`") {
+      quote = character;
+      output += character;
+      index += 1;
+      continue;
+    }
+    if (character === "/" && next === "/") {
+      while (index < text.length && text[index] !== "\n") index += 1;
+      continue;
+    }
+    if (character === "/" && next === "*") {
+      const end = text.indexOf("*/", index + 2);
+      index = end === -1 ? text.length : end + 2;
+      continue;
+    }
+    output += character;
+    index += 1;
+  }
+  return output;
 }
 
 /** One source file, or `""` when it does not exist. Guards must assert absence, not throw. */
@@ -380,6 +427,19 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
       "packages/agent/src/context/compaction/context-compaction-rebuilder.ts",
       "packages/agent/src/context/compaction/incremental-compaction-resolver.ts",
       "packages/agent/src/context/materializer/context-materializer.ts",
+      // Phase 7G keeps the attachment-context mapping on the Core side, where it reads a bounded
+      // semantic projection rather than raw records.
+      "packages/core/src/run-attachment-context.ts",
+      // Task-plan evidence is derived from the durable conversation it reports on: the adapter names
+      // the snapshot type so the evidence it returns can be traced to the messages it read.
+      "apps/daemon/src/context/task-plan-evidence-adapter.ts",
+      // Interrupted-step recovery reads the record *envelope* (type and source step) to decide which
+      // steps were left open. It never decodes or projects a message body.
+      "packages/core/src/interrupted-step-recovery.ts",
+      // The history lookup adapter names the durable record it decodes and projects to visible text.
+      // It is the read side of a checkpoint reference and the one place outside Storage that turns a
+      // record into model-visible content, through the canonical codec — never through `data`.
+      "apps/daemon/src/context/history-lookup-adapter.ts",
     ];
     const consumers: string[] = [];
     for (const file of await activeSourceFiles(["packages", "apps"])) {

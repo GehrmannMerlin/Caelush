@@ -173,6 +173,9 @@ const CODING_BUILTINS = [
   "git_status",
   "git_diff",
   "read_attachment",
+  // Appended by the T6 round: reading a checkpoint's source range back is a Coding Tool like any
+  // other, declared in the same catalog and derived into the same registry.
+  "read_history",
 ] as const;
 
 describe("Phase 4F guard — the legacy package is gone", () => {

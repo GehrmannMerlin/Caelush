@@ -145,7 +145,7 @@ const WINDOWS_VERIFICATION_SCRIPT_NAMES = new Set([
 ]);
 
 /**
- * Windows installs Node package managers as `.cmd` launchers, which `spawn(..., { shell: false })`
+ * Windows installs Node package managers as `.cmd` launchers, which a shell-free child process
  * cannot start directly. Translate only the resolver's closed `manager run known-script` argv into
  * a fixed command-processor command. The package script remains the already-reviewed lifecycle
  * input; no manifest text or arbitrary argv is interpolated into the command line.

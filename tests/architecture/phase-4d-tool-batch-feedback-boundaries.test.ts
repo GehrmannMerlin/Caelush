@@ -228,7 +228,10 @@ describe("Phase 4D canonical batch boundaries", () => {
     expect(request).toContain("readonly runId: RunId;");
     expect(request).toContain("readonly sessionId: SessionId;");
     expect(request).toContain("readonly sourceStepId: StepId;");
-    expect(request).toContain("readonly calls: readonly ToolCallRequest[];");
+    // The ordered authority is the *received* request union, not the executable projection: a
+    // malformed request is announced and answered, so it occupies its source position in the batch
+    // without ever becoming a dispatchable call.
+    expect(request).toContain("readonly calls: readonly ToolBatchCall[];");
     expect(request).toContain("readonly environment: ToolExecutionEnvironment;");
     expect(request).toContain("readonly securityContext: ToolSecurityContext;");
     expect(request).toContain("readonly signal: AbortSignal;");
@@ -253,6 +256,7 @@ describe("Phase 4D canonical batch boundaries", () => {
       types.indexOf("export interface ToolBatchRequest"),
     );
     expect(item).toContain('readonly kind: "OBSERVATION"');
+    expect(item).toContain('readonly kind: "MODEL_REJECTED"');
     expect(item).toContain('readonly kind: "REJECTED"');
     expect(item).toContain('readonly kind: "SKIPPED"');
     expect(item).toContain("readonly observation: ToolObservation;");
@@ -431,7 +435,9 @@ describe("Phase 4D model feedback boundaries", () => {
     );
 
     // 17. The frozen input names three things and nothing else.
-    expect(declaration).toContain("readonly calls: readonly ToolCallRequest[];");
+    // Rejected requests reach the projector too: their one "not executed" result has to appear in
+    // source order, and the projector is the only place that projection is decided.
+    expect(declaration).toContain("readonly calls: readonly ToolBatchCall[];");
     expect(declaration).toContain("readonly items: readonly ToolBatchItemOutcome[];");
     expect(declaration).toContain("readonly policy: ToolObservationPolicySnapshot;");
 

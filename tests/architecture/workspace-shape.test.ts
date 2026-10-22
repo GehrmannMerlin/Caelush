@@ -46,10 +46,26 @@ describe("workspace shape", () => {
       const manifest = await readManifest(manifestPath);
       const sourceEntry = manifestPath.replace(/package\.json$/, "src/index.ts");
 
-      await expect(pathExists(sourceEntry)).resolves.toBe(true);
+      /*
+       * A library-shaped project publishes `src/index.ts` and an `exports` map. An application
+       * whose entry point is its host's — the Electron app in `apps/desktop`, whose `main` is the
+       * Electron main process — publishes the source form of that declared entry instead. The rule
+       * is not relaxed: every project must still name a real source entry, and an app that stops
+       * declaring `main` falls back to the library rule.
+       */
+      const applicationEntry =
+        manifestPath.includes("apps/") && typeof manifest.main === "string"
+          ? manifestPath.replace(/package\.json$/, String(manifest.main)).replace(/\/dist\//, "/src/")
+              .replace(/\.js$/, ".ts")
+          : undefined;
+      if (applicationEntry !== undefined && (await pathExists(applicationEntry))) {
+        await expect(pathExists(applicationEntry)).resolves.toBe(true);
+      } else {
+        await expect(pathExists(sourceEntry)).resolves.toBe(true);
+        expect(manifest.exports).toMatchObject({ ".": expect.anything() });
+      }
       expect(manifest.private).toBe(true);
       expect(manifest.type).toBe("module");
-      expect(manifest.exports).toMatchObject({ ".": expect.anything() });
     }
   });
 });

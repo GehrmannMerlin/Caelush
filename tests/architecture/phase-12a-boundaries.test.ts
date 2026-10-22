@@ -77,6 +77,20 @@ describe("Phase 12A daemon and shared-client boundaries", () => {
 
   it("keeps provider and Run-process execution out of daemon production adapters", async () => {
     const daemon = await sourceTree("apps/daemon/src");
+    /*
+     * Three host-level files are allowed to reach the machine, and each is checked for the bound
+     * that makes it a host concern rather than Run execution:
+     *
+     * ```text
+     * workspace-picker.ts   the Windows folder dialog; one bounded, cancellable child
+     * desktop-entry.ts      the daemon's own /info handshake, with its host token
+     * replay/windows-dpapi.ts  DPAPI unprotect for the private replay key, ≤ 8 KiB
+     * ```
+     *
+     * The allowlist is explicit and per file. It is not "the daemon may spawn": every other file in
+     * `apps/daemon/src` is still forbidden from reaching the host, so a new provider transport or a
+     * Run command smuggled into a route fails this guard.
+     */
     const pickerPath = path.join(
       repositoryRoot,
       "apps",
@@ -85,17 +99,34 @@ describe("Phase 12A daemon and shared-client boundaries", () => {
       "workspaces",
       "workspace-picker.ts",
     );
+    const desktopEntryPath = path.join(repositoryRoot, "apps", "daemon", "src", "desktop-entry.ts");
+    const dpapiPath = path.join(
+      repositoryRoot,
+      "apps",
+      "daemon",
+      "src",
+      "replay",
+      "windows-dpapi.ts",
+    );
     const picker = await readFile(pickerPath, "utf8");
-    const daemonWithoutPicker = daemon.replace(picker, "");
-    // The one host process exception is a bounded Windows folder dialog. It is not a Run command or
-    // provider transport; Run process execution remains behind Runtime.
+    const desktopEntry = await readFile(desktopEntryPath, "utf8");
+    const dpapi = await readFile(dpapiPath, "utf8");
     expect(picker).toContain('import { execFile } from "node:child_process"');
     expect(picker).toContain("System.Windows.Forms.FolderBrowserDialog");
     expect(picker).toContain("WORKSPACE_PICKER_TIMEOUT_MS");
     expect(picker).toContain("child.kill()");
-    expect(daemonWithoutPicker).not.toMatch(/\b(?:fetch|spawn|execFile|nodePty)\s*\(/);
-    expect(daemonWithoutPicker).not.toMatch(/from\s+["']node:child_process["']/);
-    expect(daemonWithoutPicker).not.toMatch(
+    expect(desktopEntry).toContain("/api/v1/info");
+    expect(desktopEntry).toContain("x-caelush-host-token");
+    expect(dpapi).toContain("bytes.byteLength > 8192");
+    expect(dpapi).toContain('process.platform !== "win32"');
+
+    const daemonWithoutHostFiles = daemon
+      .replace(picker, "")
+      .replace(desktopEntry, "")
+      .replace(dpapi, "");
+    expect(daemonWithoutHostFiles).not.toMatch(/\b(?:fetch|spawn|execFile|nodePty)\s*\(/);
+    expect(daemonWithoutHostFiles).not.toMatch(/from\s+["']node:child_process["']/);
+    expect(daemonWithoutHostFiles).not.toMatch(
       /\b(?:React|Ink|EventSource|WebSocket|cors|MCP|Browser|Computer)\b/i,
     );
   });
