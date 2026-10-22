@@ -263,10 +263,11 @@ export interface ToolPreparationFailureIssue {
 }
 
 /**
- * The durable fact that a Tool call was refused **before execution** by its declared schema.
+ * The durable fact that a Tool call never became executable.
  *
  * ```text
- * PREPARATION_REJECTED   the only kind this version defines
+ * PREPARATION_REJECTED      the arguments were a JSON object but the declared schema refused them
+ * MODEL_ARGUMENT_PARSING    the arguments never formed a JSON object the Tool could be called with
  * ```
  *
  * This is deliberately narrower than `ToolFailureFeedback`. It exists because the resource layer
@@ -275,16 +276,30 @@ export interface ToolPreparationFailureIssue {
  * observation, no side effect and no replay authorisation behind it. Approval refusals, synthetic
  * replan results and real execution failures are different facts and never become this one.
  *
+ * The two kinds are kept apart because the model's recovery differs: a schema rejection means the
+ * shape was understood and one field was wrong, while a parsing rejection means nothing was
+ * understood at all. They can still reach the same correction ladder — that is a decision made by
+ * the consumer, not a reason to merge the facts.
+ *
  * `classifierVersion` pins the meaning of the pattern key derived from these fields, so a later
- * change to the classification cannot silently reinterpret history.
+ * change to the classification cannot silently reinterpret history. Each kind carries the version
+ * its own fields were defined with.
  */
-export interface ToolPreparationFailureFact {
-  readonly kind: "PREPARATION_REJECTED";
-  readonly code: string;
-  readonly issues: readonly ToolPreparationFailureIssue[];
-  readonly disposition: "SAFE_FAILURE";
-  readonly classifierVersion: 1;
-}
+export type ToolPreparationFailureFact =
+  | {
+      readonly kind: "PREPARATION_REJECTED";
+      readonly code: string;
+      readonly issues: readonly ToolPreparationFailureIssue[];
+      readonly disposition: "SAFE_FAILURE";
+      readonly classifierVersion: 1;
+    }
+  | {
+      readonly kind: "MODEL_ARGUMENT_PARSING";
+      readonly code: string;
+      readonly issues: readonly ToolPreparationFailureIssue[];
+      readonly disposition: "SAFE_FAILURE";
+      readonly classifierVersion: 2;
+    };
 
 /** Bounds on one preparation-failure fact, enforced at construction and at decode. */
 export const TOOL_PREPARATION_FAILURE_LIMITS = Object.freeze({
@@ -312,13 +327,15 @@ export function assertToolPreparationFailureFact(
   ) {
     throw new TypeError("Tool preparation failure fact has an unsupported shape.");
   }
-  if (candidate["kind"] !== "PREPARATION_REJECTED") {
+  if (candidate["kind"] !== "PREPARATION_REJECTED" && candidate["kind"] !== "MODEL_ARGUMENT_PARSING") {
     throw new TypeError("Tool preparation failure kind is unsupported.");
   }
   if (candidate["disposition"] !== "SAFE_FAILURE") {
     throw new TypeError("Tool preparation failure disposition is unsupported.");
   }
-  if (candidate["classifierVersion"] !== 1) {
+  const expectedClassifierVersion =
+    candidate["kind"] === "PREPARATION_REJECTED" ? 1 : 2;
+  if (candidate["classifierVersion"] !== expectedClassifierVersion) {
     throw new TypeError("Tool preparation failure classifier version is unsupported.");
   }
   const code = candidate["code"];

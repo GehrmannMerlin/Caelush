@@ -9,7 +9,6 @@ import type {
   ToolBatchItemOutcome,
   ToolBatchOutcome,
   ToolBatchRequest,
-  ToolCallRequest,
   ToolExecutionEnvironment,
   ToolResultBatchNormalizer,
   ToolSecurityContext,
@@ -43,6 +42,7 @@ import type { RunExecutionSnapshotView as RunExecutionSnapshot } from "./run-exe
 import type { RunToolFeedbackProjection } from "./run-message-materializer.js";
 import {
   describePatternFields as describeSemanticFields,
+  modelArgumentRejectionFact,
   preparationFailureFactFromRejection,
   resourceProgressTurn,
 } from "./resource-progress-classifier.js";
@@ -395,8 +395,90 @@ async function executeRunToolTurn(
   // An abort during the batch arrives as a throw, and it is deliberately *not* caught: the Run Layer's
   // `executeToolBatchDirective` already routes `executionSignal.aborted` to its cancellation authority,
   // and a Tool System that converted the abort into a result would be making a Run decision.
-  const outcome = await dependencies.batches.execute(batchRequest);
+  const outcome = await executeInChunks(dependencies, context, batchRequest);
   return toToolTurnResult(context, observation, outcome, dependencies);
+}
+
+/**
+ * Execute one logical batch in source-ordered chunks.
+ *
+ * ```text
+ * 18 requested calls, chunk size 16   →   calls 0..15 execute, then 16..17 execute
+ *                                     →   one result per call, in source order
+ * ```
+ *
+ * ## Why the chunks need no cursor of their own
+ *
+ * The durable ledger already is the cursor. Every executed call has a stable identity
+ * `(runId, sourceStepId, externalCallId)`, and the durable coordinator looks it up before dispatching;
+ * a terminal snapshot is recovered and its observation returned without running the handler again. So a
+ * resume after chunk 1 (or halfway through chunk 2) re-derives the same chunks and recovers what already
+ * happened instead of replaying it. What the chunker adds is only *how much is dispatched at once*.
+ *
+ * ## What a non-completed chunk means
+ *
+ * A chunk that parks on approval, is blocked by a budget or cancels ends the logical batch. The caller
+ * receives that chunk's own outcome, never a merged one, because only a fully completed logical batch
+ * owes the model a result for every call it made. The earlier chunks' invocations stay durable, which is
+ * what the next recovery resumes from.
+ */
+async function executeInChunks(
+  dependencies: RunToolTurnDriverDependencies,
+  context: RunToolTurnContext,
+  request: ToolBatchRequest,
+): Promise<ToolBatchOutcome> {
+  const chunks = chunkToolCalls(request.calls, chunkSizeOf(context));
+  if (chunks.length <= 1) return await dependencies.batches.execute(request);
+
+  const items: ToolBatchItemOutcome[] = [];
+  for (const calls of chunks) {
+    const outcome = await dependencies.batches.execute({ ...request, calls });
+    if (outcome.kind !== "COMPLETED") return outcome;
+    items.push(...outcome.items);
+  }
+  return Object.freeze({ kind: "COMPLETED", items: Object.freeze(items) });
+}
+
+/**
+ * The largest number of calls one dispatch may contain.
+ *
+ * A Run with no resource policy has no chunk size, and `Infinity` keeps the historical single-batch
+ * behaviour rather than inventing a limit nobody configured. A V1 Run keeps the same value as its
+ * refusal threshold: the governor already refused an oversized batch, so this never splits one.
+ */
+function chunkSizeOf(context: RunToolTurnContext): number {
+  const policy = context.run.resourcePolicy;
+  if (policy === undefined) return Number.POSITIVE_INFINITY;
+  const size = policy.batch.maxToolCallsPerTurn;
+  return Number.isSafeInteger(size) && size > 0 ? size : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Split calls into source-ordered chunks of at most `size` **executable** calls.
+ *
+ * A rejected request costs no execution and occupies exactly its position, so it rides in the chunk
+ * that is open when it appears. The order is never changed: chunks are contiguous slices of the
+ * assistant's own sequence.
+ */
+function chunkToolCalls(
+  calls: readonly ToolBatchCall[],
+  size: number,
+): readonly (readonly ToolBatchCall[])[] {
+  if (!Number.isFinite(size) || calls.length <= size) return Object.freeze([calls]);
+  const chunks: ToolBatchCall[][] = [];
+  let current: ToolBatchCall[] = [];
+  let executable = 0;
+  for (const call of calls) {
+    if (!isModelRejectedCall(call) && executable === size) {
+      chunks.push(current);
+      current = [];
+      executable = 0;
+    }
+    current.push(call);
+    if (!isModelRejectedCall(call)) executable += 1;
+  }
+  if (current.length > 0) chunks.push(current);
+  return Object.freeze(chunks.map((chunk) => Object.freeze(chunk)));
 }
 
 /**
@@ -1107,17 +1189,35 @@ async function projectAndNormalize(
 }
 
 /**
- * The trusted preparation-failure fact of every refused call in this batch.
+ * The trusted failure fact of every call in this batch that never became executable.
  *
- * Only `REJECTED` items qualify. A `SKIPPED` call was never prepared, and a synthetic replan result
- * never reached the Tool Layer at all, so neither can become evidence that the model repeated a
- * schema mistake.
+ * Two different facts are collected, and they are deliberately not merged:
+ *
+ * ```text
+ * REJECTED        the arguments were an object; the declared schema refused a field
+ * MODEL_REJECTED  the arguments never formed an object, so nothing could be validated
+ * ```
+ *
+ * A `SKIPPED` call was never prepared, and a synthetic replan result never reached the Tool Layer at
+ * all, so neither can become evidence that the model repeated a schema mistake. The second arm is
+ * what makes a run of identical malformed requests visible to the existing correction ladder; before
+ * it existed, those turns produced no pattern and no progress signal at all.
  */
 function preparationFailuresByCall(
   items: readonly ToolBatchItemOutcome[],
 ): ReadonlyMap<string, ToolPreparationFailureFact> {
   const byCall = new Map<string, ToolPreparationFailureFact>();
   for (const item of items) {
+    if (item.kind === "MODEL_REJECTED") {
+      byCall.set(
+        item.call.externalCallId,
+        modelArgumentRejectionFact({
+          code: item.feedback.code,
+          issueCode: item.call.issue.code,
+        }),
+      );
+      continue;
+    }
     if (item.kind !== "REJECTED") continue;
     const fact = preparationFailureFactFromRejection(item.feedback);
     if (fact !== undefined) byCall.set(item.call.externalCallId, fact);

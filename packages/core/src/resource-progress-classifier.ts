@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { ToolPreparationFailureFact, ToolPreparationFailureIssue } from "@caelush/agent";
+import type { AIRejectedToolArgumentsIssueCode } from "@caelush/ai";
 import type {
   ResourceProgressFieldRecord,
   ResourceProgressPatternRecord,
@@ -72,8 +73,28 @@ export function preparationFailureFactFromRejection(feedback: {
   });
 }
 
-/** Derive the stable pattern identity of one preparation failure. */
-export function toolFailurePatternKey(input: {
+/**
+ * Build the durable fact for a request whose arguments never formed a JSON object.
+ *
+ * It is a different fact from a schema rejection on purpose: nothing was understood, so the model
+ * needs "send a complete object", not "fix this field". The stable issue keyword is the AI-layer
+ * reason code, which means the pattern identity ignores the argument byte count — five attempts that
+ * only change whitespace are one recurring mistake, not five discoveries.
+ */
+export function modelArgumentRejectionFact(input: {
+  readonly code: string;
+  readonly issueCode: AIRejectedToolArgumentsIssueCode;
+}): ToolPreparationFailureFact {
+  return Object.freeze({
+    kind: "MODEL_ARGUMENT_PARSING" as const,
+    code: input.code,
+    issues: Object.freeze([{ keyword: input.issueCode }]),
+    disposition: "SAFE_FAILURE" as const,
+    classifierVersion: 2 as const,
+  });
+}
+
+/** Derive the stable pattern identity of one preparation failure. */export function toolFailurePatternKey(input: {
   readonly toolName: string;
   readonly fact: ToolPreparationFailureFact;
 }): string {
@@ -175,6 +196,14 @@ export function describePatternFields(fields: readonly ResourceProgressField[]):
           return `wrong type for ${name}`.trim();
         case "enum":
           return `unsupported value for ${name}`.trim();
+        // The three AI-layer reasons are not schema keywords: they say the arguments never became an
+        // object, so there is no field to name and "violates MALFORMED_JSON" would be noise.
+        case "MALFORMED_JSON":
+          return "arguments that are not valid JSON";
+        case "EXPECTED_OBJECT":
+          return "arguments that are not one JSON object";
+        case "INCOMPLETE_ARGUMENTS":
+          return "arguments cut off before the object was complete";
         default:
           return `${name} violates ${field.keyword}`.trim();
       }

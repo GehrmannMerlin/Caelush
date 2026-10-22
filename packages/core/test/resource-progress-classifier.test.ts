@@ -4,6 +4,7 @@ import type { ToolPreparationFailureFact } from "@caelush/agent";
 
 import {
   describePatternFields,
+  modelArgumentRejectionFact,
   preparationFailureFactFromRejection,
   resourceProgressTurn,
   toolFailurePatternKey,
@@ -145,6 +146,60 @@ describe("preparation failure classification", () => {
     } satisfies ResourceProgressPattern;
     expect(describePatternFields(pattern.fields)).toBe(
       'missing required "patch", unsupported "input"',
+    );
+  });
+
+  it("gives malformed-argument attempts one pattern regardless of the argument byte count", () => {
+    // Five rounds that only change whitespace are one repeated mistake. The durable fact therefore
+    // carries no byte count at all, and its serialized form proves it.
+    const fact = modelArgumentRejectionFact({
+      code: "TOOL_ARGUMENTS_REJECTED",
+      issueCode: "MALFORMED_JSON",
+    });
+    expect(JSON.stringify(fact)).not.toMatch(/argumentBytes|12|4096/);
+    const keys = new Set(
+      [0, 1, 2, 3, 4].map(() =>
+        toolFailurePatternKey({
+          toolName: "apply_patch",
+          fact: modelArgumentRejectionFact({
+            code: "TOOL_ARGUMENTS_REJECTED",
+            issueCode: "MALFORMED_JSON",
+          }),
+        }),
+      ),
+    );
+    expect(keys.size).toBe(1);
+  });
+
+  it("keeps the three parsing reasons apart and separate from a schema rejection", () => {
+    const keys = new Set(
+      (["MALFORMED_JSON", "EXPECTED_OBJECT", "INCOMPLETE_ARGUMENTS"] as const).map((issueCode) =>
+        toolFailurePatternKey({
+          toolName: "apply_patch",
+          fact: modelArgumentRejectionFact({ code: "TOOL_ARGUMENTS_REJECTED", issueCode }),
+        }),
+      ),
+    );
+    expect(keys.size).toBe(3);
+    expect(keys.has(toolFailurePatternKey({ toolName: "apply_patch", fact: factFor({}) }))).toBe(
+      false,
+    );
+  });
+
+  it("counts a malformed request as one pattern in the window", () => {
+    const fact = modelArgumentRejectionFact({
+      code: "TOOL_ARGUMENTS_REJECTED",
+      issueCode: "MALFORMED_JSON",
+    });
+    const turn = resourceProgressTurn({
+      turnId: "step-4",
+      results: [{ toolName: "apply_patch", isError: true, preparationFailure: fact }],
+    });
+    expect(turn?.classified).toBe(true);
+    expect(turn?.patterns).toHaveLength(1);
+    expect(turn?.patterns[0]?.code).toBe("TOOL_ARGUMENTS_REJECTED");
+    expect(describePatternFields(turn?.patterns[0]?.fields ?? [])).toBe(
+      "arguments that are not valid JSON",
     );
   });
 });
