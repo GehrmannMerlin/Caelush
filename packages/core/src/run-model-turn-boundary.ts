@@ -98,6 +98,14 @@ export interface AgentTurnObservation {
   providerError: unknown;
   /** The durable budget block an admission refusal produced, accounting included. */
   admissionBlock: AgentBudgetBlock | undefined;
+  /** Whether budget admission explicitly allowed this pending Step. */
+  admissionAllowed: boolean;
+  /** The pending Step identity the durable budget reservation belongs to. */
+  admittedStepId: StepId | undefined;
+  /** The final output cap the budget admitted, when the request carried a valid value. */
+  admittedOutputTokens: number | undefined;
+  /** A Core-validated output-recovery admission that stopped before the durable boundary. */
+  outputRecoveryStop: boolean;
   admissionError: unknown;
   contextError: unknown;
   /** Run-selected transport identity for the one Provider attempt, if configured. */
@@ -115,6 +123,10 @@ export function createAgentTurnObservation(): AgentTurnObservation {
     providerTurnState: "NOT_STARTED",
     providerError: undefined,
     admissionBlock: undefined,
+    admissionAllowed: false,
+    admittedStepId: undefined,
+    admittedOutputTokens: undefined,
+    outputRecoveryStop: false,
     admissionError: undefined,
     contextError: undefined,
     transportSelection: undefined,

@@ -2131,7 +2131,7 @@ export class RunController {
     cause?: unknown,
   ): Promise<RunControllerResult> {
     if (loaded.state === undefined) {
-      throw new RunControllerInfrastructureError("Tool boundary failure has no AgentState", {
+      throw new RunControllerInfrastructureError("Run boundary failure has no AgentState", {
         cause,
       });
     }
@@ -2232,7 +2232,7 @@ export class RunController {
       await this.verificationRepairContext(snapshot),
       directive.mode,
     );
-    const modelAdmission = this.modelAdmissionPort(observation, snapshot.run, step);
+    const modelAdmission = this.modelAdmissionPort(observation, snapshot, step);
     const loop = createRunAgentLoop(
       this.captureContextErrors(contextEngine, observation),
       createAgentDecisionClassifier(),
@@ -2292,10 +2292,19 @@ export class RunController {
         this.scopes.get(snapshot.run.id)?.abortCause === "MANAGED_RESTART"
       ) {
         const current = await this.load(snapshot.run.id);
-        if (current.activeStep === undefined) return this.resultFromSnapshot(current);
+        if (current.activeStep === undefined) {
+          const exceeded = await this.settleUnopenedLLMReservation(snapshot.run.id, observation);
+          if (exceeded !== undefined) return this.finalizeBudgetExceeded(current, exceeded);
+          return this.resultFromSnapshot(current);
+        }
         return this.settleManagedRestart(snapshot, current, effect.result, observation);
       }
       if (requiresBoundaryRepair(observation)) {
+        const exceeded = await this.settleUnopenedLLMReservation(snapshot.run.id, observation);
+        if (exceeded !== undefined) {
+          const current = await this.load(snapshot.run.id);
+          return this.finalizeBudgetExceeded(current, exceeded);
+        }
         // The durable open-Step commit did not succeed. No provider call was allowed, no Agent effect
         // exists, and settling this as a model failure would durably record an answer the model never
         // gave. The Run stays recoverable and the caller repairs or retries.
@@ -2389,11 +2398,12 @@ export class RunController {
    */
   private modelAdmissionPort(
     observation: AgentTurnObservation,
-    run: AgentRun,
+    snapshot: RunExecutionSnapshot,
     step: AgentStep,
   ): ModelRequestAdmissionPort | undefined {
     const budget = this.dependencies.budget;
     if (budget === undefined) return undefined;
+    const { run } = snapshot;
     return {
       admit: async ({ request }) => {
         try {
@@ -2411,6 +2421,26 @@ export class RunController {
           if (admission.kind !== "ALLOWED") {
             observation.admissionBlock = toBudgetBlock(admission);
             return { kind: "BLOCKED", reason: "BUDGET", block: toFrozenBudgetBlock(admission) };
+          }
+          const admittedOutputTokens =
+            admission.effectiveMaxOutputTokens ?? request.settings?.maxOutputTokens;
+          observation.admissionAllowed = true;
+          observation.admittedStepId = step.id;
+          observation.admittedOutputTokens = isPositiveSafeInteger(admittedOutputTokens)
+            ? admittedOutputTokens
+            : undefined;
+          const outputRecoveryAttempt = isReservedOutputRecoveryAttempt(snapshot);
+          const previousOutputTokens = outputRecoveryAttempt
+            ? snapshot.state?.modelOutputRecovery?.previousOutputTokens
+            : undefined;
+          if (
+            outputRecoveryAttempt &&
+            (!isPositiveSafeInteger(admittedOutputTokens) ||
+              previousOutputTokens === undefined ||
+              admittedOutputTokens <= previousOutputTokens)
+          ) {
+            observation.outputRecoveryStop = true;
+            return { kind: "STOPPED", reason: "OUTPUT_RECOVERY_NO_INCREMENT" };
           }
           if (admission.effectiveMaxOutputTokens === undefined) {
             return { kind: "ALLOWED", request };
@@ -2448,6 +2478,13 @@ export class RunController {
             observation.admissionBlock = toBudgetBlock(admission);
             return { kind: "BLOCKED", reason: "BUDGET", block: toFrozenBudgetBlock(admission) };
           }
+          const admittedOutputTokens =
+            admission.effectiveMaxOutputTokens ?? request.settings?.maxOutputTokens;
+          observation.admissionAllowed = true;
+          observation.admittedStepId = step.id;
+          observation.admittedOutputTokens = isPositiveSafeInteger(admittedOutputTokens)
+            ? admittedOutputTokens
+            : undefined;
           if (admission.effectiveMaxOutputTokens === undefined) {
             return { kind: "ALLOWED", request };
           }
@@ -2467,6 +2504,42 @@ export class RunController {
         }
       },
     };
+  }
+
+  /**
+   * Settle a reservation whose durable model boundary did not open.
+   *
+   * The budget port turns an allowed admission into an in-flight reservation before the Agent
+   * reaches `ModelTurnBoundaryPort`. When Core has positive no-send facts, the existing settlement
+   * API can close that reservation as exact zero usage; its invocation ledger still overrides this
+   * value or falls back conservatively if it has stronger evidence.
+   */
+  private async settleUnopenedLLMReservation(
+    runId: RunId,
+    observation: AgentTurnObservation,
+  ): Promise<Extract<AgentBudgetBlock, { kind: "EXCEEDED" }> | undefined> {
+    const budget = this.dependencies.budget;
+    const stepId = observation.admittedStepId;
+    if (
+      budget === undefined ||
+      !observation.admissionAllowed ||
+      stepId === undefined ||
+      observation.boundaryCommitted ||
+      observation.providerTurnState !== "NOT_STARTED"
+    ) {
+      return undefined;
+    }
+    const settlement = await budget.settleLLM({
+      runId,
+      stepId,
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      settledAt: this.dependencies.clock.now(),
+    });
+    if (settlement?.kind === "EXCEEDED") {
+      observation.admissionBlock = settlement;
+      return settlement;
+    }
+    return undefined;
   }
 
   /**
@@ -2952,6 +3025,9 @@ export class RunController {
     rawResult: AgentLoopAdvanceResult,
     observation: AgentTurnObservation,
   ): Promise<RunControllerResult> {
+    if (rawResult.kind === "FAILED" || rawResult.kind === "CANCELLED") {
+      await this.settleUnopenedLLMReservation(before.run.id, observation);
+    }
     // Exactly one re-reading happens, and only for a preparation failure: the loop reports the
     // *fact* that context preparation failed, and Core owns what that fact is called.
     const result = this.settleContextPreparationFailure(before, rawResult, observation);
@@ -2988,6 +3064,27 @@ export class RunController {
         );
       case "RETRY_COMPATIBILITY":
         return this.settleRetryCompatibility(before, result as AgentLoopFailedResult, observation);
+      case "OUTPUT_RECOVERY_STOP": {
+        const current = await this.load(before.run.id);
+        const authority = this.resolveAuthority(
+          current,
+          this.executionSignal(current.run.id).aborted,
+        );
+        if (authority === "CANCELLED") return this.finalizeCancellation(current);
+        if (authority === "TIMEOUT") return this.finalizeTimeout(current);
+        if (authority === "TERMINAL") return this.resultFromSnapshot(current);
+        if (current.activeStep !== undefined || current.state?.currentStepId !== undefined) {
+          throw new RunControllerInvariantError(
+            "An output-recovery admission stop cannot own a durable active Step.",
+          );
+        }
+        if (result.kind !== "FAILED") {
+          throw new RunControllerInvariantError(
+            "An output-recovery admission stop requires the Agent's typed failure result.",
+          );
+        }
+        return this.failBoundaryLocked(current, result.error);
+      }
     }
   }
 
@@ -5527,6 +5624,37 @@ function resolveResultCallId(result: AgentLoopAdvanceResult): string | undefined
   }
   if (result.kind === "FAILED") return result.modelTurn?.callId;
   return undefined;
+}
+
+/** Whether the current retry and State prove one unopened output-recovery admission. */
+function isReservedOutputRecoveryAttempt(snapshot: RunExecutionSnapshot): boolean {
+  const continuation = snapshot.continuation;
+  const state = snapshot.state;
+  const recovery = state?.modelOutputRecovery;
+  const policy = snapshot.run.contextBudgetPolicy;
+  return (
+    snapshot.run.status === "RUNNING" &&
+    snapshot.run.currentStepId === undefined &&
+    state?.status === "RUNNING" &&
+    state.currentStepId === undefined &&
+    continuation?.type === "WAITING_RETRY" &&
+    continuation.errorCode === "LLM_OUTPUT_TRUNCATED" &&
+    continuation.attempt === 2 &&
+    continuation.maxAttempts === 2 &&
+    continuation.episode === undefined &&
+    continuation.totalAttempts === undefined &&
+    continuation.transport === undefined &&
+    recovery?.version === 1 &&
+    recovery.phase === "RESERVED" &&
+    recovery.sourceStepId === continuation.failedStepId &&
+    recovery.targetOutputTokens > recovery.previousOutputTokens &&
+    policy?.version === "TURN_BUDGET_V3" &&
+    policy.outputRecovery?.version === "OUTPUT_RECOVERY_V1"
+  );
+}
+
+function isPositiveSafeInteger(value: number | undefined): value is number {
+  return value !== undefined && Number.isSafeInteger(value) && value > 0;
 }
 
 /**

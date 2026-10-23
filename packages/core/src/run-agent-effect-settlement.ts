@@ -46,6 +46,7 @@ export type AgentEffectSettlementRoute =
     }
   | { readonly route: "VERIFICATION_COMPATIBILITY" }
   | { readonly route: "RETRY_COMPATIBILITY" }
+  | { readonly route: "OUTPUT_RECOVERY_STOP" }
   | { readonly route: "TERMINATION_AUTHORITY" }
   | { readonly route: "BUDGET_AUTHORITY" };
 
@@ -88,6 +89,11 @@ export function classifyAgentEffectSettlement(
   // cancellation means a Reason stopped; it does not mean the Run is cancelled, and the Run
   // Termination Authority decides what it means for the Run.
   if (result.kind === "CANCELLED") return { route: "TERMINATION_AUTHORITY" };
+
+  // Core sets this only after validating the durable output-recovery provenance and observing an
+  // admitted cap that could not increase. The public Agent error is deliberately not a routing
+  // authority: an ordinary provider truncation carries the same safe error projection.
+  if (observation.outputRecoveryStop) return { route: "OUTPUT_RECOVERY_STOP" };
 
   if (result.kind === "FINAL_CANDIDATE") {
     // The durable Run contract selects one authority. New Runs use the canonical normal transition;
