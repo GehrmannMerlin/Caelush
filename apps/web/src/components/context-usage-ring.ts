@@ -6,11 +6,7 @@ import type {
   RunProcessProjection,
   RunId,
 } from "@caelush/protocol";
-import {
-  ContextInspector,
-  ContextRunProcessPanel,
-  contextRunProcessShortLabel,
-} from "./context-inspector.js";
+import { ContextInspector, ContextRunProcessPanel } from "./context-inspector.js";
 
 function clampRatio(value: number): number {
   return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
@@ -91,13 +87,6 @@ export function ContextUsageRing(props: {
         }),
       ),
     ),
-    process === undefined
-      ? null
-      : createElement(
-          "small",
-          { className: "context-usage-live-process" },
-          contextRunProcessShortLabel(process),
-        ),
     open ? processPanel : null,
   );
 }

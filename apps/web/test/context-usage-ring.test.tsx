@@ -157,6 +157,20 @@ const basePromptCache: PromptCacheUsage = {
 };
 
 describe("ContextUsageRing", () => {
+  it("keeps correction text out of the compact control while retaining inspector details", () => {
+    const process = { kind: "CORRECTING", cause: "TOOL_FEEDBACK" } as const;
+    const markup = renderToStaticMarkup(<ContextUsageRing usage={baseUsage} process={process} />);
+    const details = renderToStaticMarkup(
+      <ContextRunProcessPanel runId={baseUsage.runId} process={process} />,
+    );
+
+    expect(markup).toContain('aria-label="工作上下文用量：42%"');
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).not.toContain("正在根据反馈修正");
+    expect(markup).not.toContain("context-usage-live-process");
+    expect(details).toContain("工具返回问题，正在根据具体反馈修正");
+  });
+
   it("renders total model-window usage while keeping input budget details separate", () => {
     const markup = renderToStaticMarkup(<ContextUsageRing usage={baseUsage} />);
     const inspectorMarkup = renderToStaticMarkup(<ContextInspector usage={baseUsage} />);
