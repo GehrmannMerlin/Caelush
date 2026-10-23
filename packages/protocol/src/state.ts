@@ -13,6 +13,38 @@ import { PlanItemSchema } from "./plan.js";
 import { RunIdSchema, SessionIdSchema, StepIdSchema } from "./primitives/ids.js";
 import { TimestampMsSchema } from "./primitives/time.js";
 
+const ModelOutputRecoveryStateSchema = z
+  .discriminatedUnion("phase", [
+    z
+      .object({
+        version: z.literal(1),
+        sourceStepId: StepIdSchema,
+        previousOutputTokens: z.number().int().safe().positive(),
+        targetOutputTokens: z.number().int().safe().positive(),
+        phase: z.literal("RESERVED"),
+      })
+      .strict(),
+    z
+      .object({
+        version: z.literal(1),
+        sourceStepId: StepIdSchema,
+        previousOutputTokens: z.number().int().safe().positive(),
+        targetOutputTokens: z.number().int().safe().positive(),
+        phase: z.literal("OPENED"),
+        recoveryStepId: StepIdSchema,
+      })
+      .strict(),
+  ])
+  .superRefine((recovery, context) => {
+    if (recovery.targetOutputTokens <= recovery.previousOutputTokens) {
+      context.addIssue({
+        code: "custom",
+        path: ["targetOutputTokens"],
+        message: "target output tokens must exceed previous output tokens",
+      });
+    }
+  });
+
 export const AgentStateSchema = z
   .object({
     runId: RunIdSchema,
@@ -31,6 +63,7 @@ export const AgentStateSchema = z
     errors: z.array(AgentErrorSchema),
     verification: VerificationStateSchema,
     usage: UsageStateSchema,
+    modelOutputRecovery: ModelOutputRecoveryStateSchema.optional(),
     startedAt: TimestampMsSchema.optional(),
     updatedAt: TimestampMsSchema,
   })

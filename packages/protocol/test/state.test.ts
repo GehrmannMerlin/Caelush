@@ -64,6 +64,95 @@ describe("protocol AgentState projection", () => {
     };
 
     expect(stateSchema.parse(state)).toEqual(state);
+    expect(stateSchema.parse(JSON.parse(JSON.stringify(state)))).toEqual(state);
+    expect(state).not.toHaveProperty("modelOutputRecovery");
+  });
+
+  it("round-trips the bounded model output recovery reservation states", () => {
+    const stateSchema = getSchema("AgentStateSchema");
+    const createRunId = getFactory("createRunId");
+    const createSessionId = getFactory("createSessionId");
+    const createWorkspaceId = getFactory("createWorkspaceId");
+    const createStepId = getFactory("createStepId");
+    if (
+      stateSchema === undefined ||
+      createRunId === undefined ||
+      createSessionId === undefined ||
+      createWorkspaceId === undefined ||
+      createStepId === undefined
+    ) {
+      return;
+    }
+
+    const baseState = {
+      runId: createRunId(),
+      sessionId: createSessionId(),
+      goal: "verify the project",
+      status: "RUNNING",
+      workspace: { id: createWorkspaceId(), path: "D:/workspace" },
+      runtime: { id: "local", kind: "local" },
+      permissionProfile: "PROJECT_ACCESS",
+      approvalPolicy: "DANGEROUS_ONLY",
+      plan: [],
+      recentObservations: [],
+      changedFiles: [],
+      activeProcesses: [],
+      errors: [],
+      verification: "NOT_RUN",
+      usage: { steps: 1, toolCalls: 0, inputTokens: 12, outputTokens: 24 },
+      updatedAt: 1_700_000_000_000,
+    };
+    const reserved = {
+      ...baseState,
+      modelOutputRecovery: {
+        version: 1,
+        sourceStepId: createStepId(),
+        previousOutputTokens: 16_384,
+        targetOutputTokens: 32_768,
+        phase: "RESERVED",
+      },
+    };
+    const opened = {
+      ...reserved,
+      modelOutputRecovery: {
+        ...reserved.modelOutputRecovery,
+        phase: "OPENED",
+        recoveryStepId: createStepId(),
+      },
+    };
+
+    expect(stateSchema.parse(JSON.parse(JSON.stringify(reserved)))).toEqual(reserved);
+    expect(stateSchema.parse(JSON.parse(JSON.stringify(opened)))).toEqual(opened);
+    expect(
+      stateSchema.safeParse({
+        ...baseState,
+        modelOutputRecovery: { ...reserved.modelOutputRecovery, targetOutputTokens: 16_384 },
+      }).success,
+    ).toBe(false);
+    expect(
+      stateSchema.safeParse({
+        ...baseState,
+        modelOutputRecovery: { ...reserved.modelOutputRecovery, unexpected: true },
+      }).success,
+    ).toBe(false);
+    expect(
+      stateSchema.safeParse({
+        ...baseState,
+        modelOutputRecovery: {
+          ...reserved.modelOutputRecovery,
+          phase: "OPENED",
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      stateSchema.safeParse({
+        ...baseState,
+        modelOutputRecovery: {
+          ...opened.modelOutputRecovery,
+          phase: "RESERVED",
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects negative counters and an unbounded event-history field", () => {

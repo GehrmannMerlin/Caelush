@@ -466,7 +466,7 @@ const RunProcessProjectionSchema = z.discriminatedUnion("kind", [
       maxAttempts: SafeTokenCountSchema,
       episode: SafeTokenCountSchema.optional(),
       totalAttempts: SafeTokenCountSchema.optional(),
-      errorCode: z.enum(["LLM_RATE_LIMIT", "LLM_NETWORK", "LLM_TIMEOUT"]),
+      errorCode: z.enum(["LLM_RATE_LIMIT", "LLM_NETWORK", "LLM_TIMEOUT", "LLM_OUTPUT_TRUNCATED"]),
     })
     .strict(),
   z

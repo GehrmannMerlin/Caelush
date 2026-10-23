@@ -71,6 +71,14 @@ export const WorkingSetPolicyV2Schema = z
   })
   .strict();
 
+const OutputRecoveryPolicySchema = z
+  .object({
+    version: z.literal("OUTPUT_RECOVERY_V1"),
+    maxRecoveryTurns: z.literal(1),
+    outputMultiplier: z.literal(2),
+  })
+  .strict();
+
 /**
  * The Run-frozen `HEADROOM_V1` parameters.
  *
@@ -87,6 +95,7 @@ export const TurnBudgetPolicySnapshotSchema = z
     safetyTokens: z.number().int().safe().nonnegative(),
     expectedGrowthTokens: z.number().int().safe().positive(),
     postCompactionRatio: z.number().finite().gt(0).lt(1),
+    outputRecovery: OutputRecoveryPolicySchema.optional(),
   })
   .strict();
 
