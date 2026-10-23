@@ -59,6 +59,7 @@ import {
   LlmFailedEventSchema,
   LlmStartedEventSchema,
   RetryScheduledEventSchema,
+  RetryScheduledEventV2Schema,
   RetryStartedEventSchema,
   RetryExhaustedEventSchema,
   TransportFallbackSelectedEventSchema,
@@ -157,10 +158,15 @@ export {
   LlmFailedEventSchema,
   RetryExhaustedEventSchema,
   RetryScheduledEventSchema,
+  RetryScheduledEventV2Schema,
   RetryStartedEventSchema,
   TransportFallbackSelectedEventSchema,
 } from "./llm.js";
-export type { RetryExhaustedEvent, TransportFallbackSelectedEvent } from "./llm.js";
+export type {
+  RetryExhaustedEvent,
+  RetryScheduledEventV2,
+  TransportFallbackSelectedEvent,
+} from "./llm.js";
 export { RunTimedOutEventSchema } from "./run.js";
 export type { RunTimedOutEvent } from "./run.js";
 export { VerificationPlannedEventSchema } from "./verification.js";
@@ -217,6 +223,7 @@ const currentRunEventSchema = z.union([
   LlmCompletedEventSchema,
   LlmFailedEventSchema,
   RetryScheduledEventSchema,
+  RetryScheduledEventV2Schema,
   RetryStartedEventSchema,
   RetryExhaustedEventSchema,
   TransportFallbackSelectedEventSchema,

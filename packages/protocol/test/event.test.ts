@@ -193,6 +193,95 @@ describe("protocol AgentEvent", () => {
     ).toThrow(/invalid payload/i);
   });
 
+  it("keeps retry scheduling v1 history separate from v2 output recovery", () => {
+    const registry = (protocol as Record<string, unknown>).RUN_EVENT_SCHEMA_REGISTRY as
+      | { supports: (type: string, version: number) => boolean; parse: (value: unknown) => unknown }
+      | undefined;
+    const catalog = (protocol as Record<string, unknown>).RUN_EVENT_TYPE_CATALOG as
+      | readonly { type: string; schemaVersion: number; visibility: string; delivery: unknown }[]
+      | undefined;
+    const v1Schema = getSchema("RetryScheduledEventSchema");
+    const v2Schema = getSchema("RetryScheduledEventV2Schema");
+    const createEventId = getFactory("createEventId");
+    const createRunId = getFactory("createRunId");
+    const createSessionId = getFactory("createSessionId");
+    if (
+      registry === undefined ||
+      catalog === undefined ||
+      v1Schema === undefined ||
+      v2Schema === undefined ||
+      createEventId === undefined ||
+      createRunId === undefined ||
+      createSessionId === undefined
+    ) {
+      return;
+    }
+
+    const base = {
+      eventId: createEventId(),
+      runId: createRunId(),
+      sessionId: createSessionId(),
+      timestamp: 1_700_000_000_000,
+      visibility: "USER_VISIBLE" as const,
+      durability: { kind: "DURABLE" as const, version: 1, sequence: 1 },
+      type: "retry.scheduled",
+    };
+    const scheduled = (schemaVersion: number, errorCode: string, attempt = 2, maxAttempts = 2) => ({
+      ...base,
+      eventId: createEventId(),
+      schemaVersion,
+      payload: {
+        attempt,
+        maxAttempts,
+        delayMs: 1_000,
+        nextAttemptAt: 1_700_000_001_000,
+        errorCode,
+      },
+    });
+
+    for (const errorCode of ["LLM_RATE_LIMIT", "LLM_NETWORK", "LLM_TIMEOUT"]) {
+      const historical = scheduled(1, errorCode, 2, 3);
+      expect(registry.parse(historical)).toEqual(historical);
+      expect(v1Schema.safeParse(historical).success).toBe(true);
+    }
+
+    const outputRecovery = scheduled(2, "LLM_OUTPUT_TRUNCATED");
+    expect(v1Schema.safeParse(scheduled(1, "LLM_OUTPUT_TRUNCATED")).success).toBe(false);
+    expect(v2Schema.parse(outputRecovery)).toEqual(outputRecovery);
+    expect(registry.parse(outputRecovery)).toEqual(outputRecovery);
+    expect(v2Schema.safeParse(scheduled(2, "LLM_NETWORK")).success).toBe(false);
+    expect(v2Schema.safeParse(scheduled(2, "LLM_OUTPUT_TRUNCATED", 1, 2)).success).toBe(false);
+    expect(v2Schema.safeParse(scheduled(2, "LLM_OUTPUT_TRUNCATED", 2, 3)).success).toBe(false);
+    expect(
+      v2Schema.safeParse({
+        ...outputRecovery,
+        payload: { ...outputRecovery.payload, transport: "backup" },
+      }).success,
+    ).toBe(false);
+
+    expect(registry.supports("retry.scheduled", 1)).toBe(true);
+    expect(registry.supports("retry.scheduled", 2)).toBe(true);
+    expect(registry.supports("retry.scheduled", 3)).toBe(false);
+    expect(registry.supports("retry.started", 2)).toBe(false);
+    expect(catalog.filter(({ type }) => type === "retry.scheduled")).toEqual([
+      {
+        type: "retry.scheduled",
+        schemaVersion: 1,
+        visibility: "USER_VISIBLE",
+        delivery: { kind: "DURABLE" },
+      },
+      {
+        type: "retry.scheduled",
+        schemaVersion: 2,
+        visibility: "USER_VISIBLE",
+        delivery: { kind: "DURABLE" },
+      },
+    ]);
+    expect(() => registry.parse(scheduled(3, "LLM_OUTPUT_TRUNCATED"))).toThrow(
+      /unsupported event schema version/i,
+    );
+  });
+
   it("keeps current v1 ephemeral compatibility separate from canonical transient metadata", () => {
     const eventSchema = getSchema("AgentEventSchema");
     const createEventId = getFactory("createEventId");

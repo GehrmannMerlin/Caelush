@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ModelRefSchema } from "../model.js";
 import { AgentErrorSchema } from "../error.js";
 import { UsageStateSchema } from "../usage.js";
-import { createEventSchema } from "./base.js";
+import { createEventSchema, createVersionedEventSchema } from "./base.js";
 
 export const LlmStartedEventSchema = createEventSchema(
   "llm.started",
@@ -34,6 +34,32 @@ export const RetryScheduledEventSchema = createEventSchema(
     nextAttemptAt: z.number().int().nonnegative().safe(),
     errorCode: z.enum(["LLM_RATE_LIMIT", "LLM_NETWORK", "LLM_TIMEOUT"]),
   }).strict(),
+);
+export const RetryScheduledEventV2Schema = createVersionedEventSchema(
+  "retry.scheduled",
+  2,
+  RetryEventBaseSchema.extend({
+    delayMs: z.number().int().nonnegative().safe(),
+    nextAttemptAt: z.number().int().nonnegative().safe(),
+    errorCode: z.literal("LLM_OUTPUT_TRUNCATED"),
+  })
+    .strict()
+    .superRefine((value, context) => {
+      if (value.attempt !== 2) {
+        context.addIssue({
+          code: "custom",
+          path: ["attempt"],
+          message: "output recovery attempt must be 2",
+        });
+      }
+      if (value.maxAttempts !== 2) {
+        context.addIssue({
+          code: "custom",
+          path: ["maxAttempts"],
+          message: "output recovery maxAttempts must be 2",
+        });
+      }
+    }),
 );
 export const RetryStartedEventSchema = createEventSchema("retry.started", RetryEventBaseSchema);
 const RetryExhaustedPayloadSchema = z
@@ -100,6 +126,7 @@ export type LlmStartedEvent = z.infer<typeof LlmStartedEventSchema>;
 export type LlmCompletedEvent = z.infer<typeof LlmCompletedEventSchema>;
 export type LlmFailedEvent = z.infer<typeof LlmFailedEventSchema>;
 export type RetryScheduledEvent = z.infer<typeof RetryScheduledEventSchema>;
+export type RetryScheduledEventV2 = z.infer<typeof RetryScheduledEventV2Schema>;
 export type RetryStartedEvent = z.infer<typeof RetryStartedEventSchema>;
 export type RetryExhaustedEvent = z.infer<typeof RetryExhaustedEventSchema>;
 export type TransportFallbackSelectedEvent = z.infer<typeof TransportFallbackSelectedEventSchema>;

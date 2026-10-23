@@ -12,11 +12,12 @@ export interface RunEventTypeDefinition {
 function durable(
   type: string,
   visibility: EventVisibility = "USER_VISIBLE",
+  schemaVersion: EventSchemaVersion = 1,
 ): RunEventTypeDefinition {
   const delivery = Object.freeze({ kind: "DURABLE" as const });
   return Object.freeze({
     type,
-    schemaVersion: 1,
+    schemaVersion,
     visibility,
     delivery,
   });
@@ -81,6 +82,7 @@ export const RUN_EVENT_TYPE_CATALOG: readonly RunEventTypeDefinition[] = Object.
   durable("llm.completed"),
   durable("llm.failed"),
   durable("retry.scheduled"),
+  durable("retry.scheduled", "USER_VISIBLE", 2),
   durable("retry.started"),
   durable("retry.exhausted"),
   durable("transport.fallback.selected"),

@@ -102,6 +102,38 @@ describe("PublicRunEvent protocol contract", () => {
     ).toBe(false);
   });
 
+  it("projects v2 output recovery scheduling with its narrow attempt contract", () => {
+    const scheduled = event({
+      schemaVersion: 2,
+      type: "retry.scheduled",
+      payload: {
+        attempt: 2,
+        maxAttempts: 2,
+        delayMs: 1_000,
+        nextAttemptAt: 1_700_000_001_000,
+        errorCode: "LLM_OUTPUT_TRUNCATED",
+      },
+    });
+
+    expect(PublicRunEventSchema.parse(scheduled)).toMatchObject({
+      schemaVersion: 2,
+      type: "retry.scheduled",
+      payload: { attempt: 2, maxAttempts: 2, errorCode: "LLM_OUTPUT_TRUNCATED" },
+    });
+    expect(
+      PublicRunEventSchema.safeParse({
+        ...scheduled,
+        payload: { ...(scheduled.payload as Record<string, unknown>), attempt: 1 },
+      }).success,
+    ).toBe(false);
+    expect(
+      PublicRunEventSchema.safeParse({
+        ...scheduled,
+        payload: { ...(scheduled.payload as Record<string, unknown>), errorCode: "LLM_NETWORK" },
+      }).success,
+    ).toBe(false);
+  });
+
   it("publishes only safe transport fallback identities", () => {
     const payload = {
       attempt: 2,
