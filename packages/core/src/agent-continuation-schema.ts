@@ -354,7 +354,11 @@ export const WaitingSteeringContinuationSchema = z
     }
   });
 
-const RetryErrorCodeSchema = z.enum(["LLM_RATE_LIMIT", "LLM_NETWORK", "LLM_TIMEOUT"]);
+const ProviderRetryErrorCodeSchema = z.enum(["LLM_RATE_LIMIT", "LLM_NETWORK", "LLM_TIMEOUT"]);
+const RetryErrorCodeSchema = z.union([
+  ProviderRetryErrorCodeSchema,
+  z.literal("LLM_OUTPUT_TRUNCATED"),
+]);
 const RetryAttemptSchema = z.number().int().positive().safe().max(10);
 const TransportIdSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/);
 const ModelTransportRecoverySchema = z
@@ -386,18 +390,19 @@ const WaitingRetryBase = {
   transport: ModelTransportRecoverySchema.optional(),
 };
 
-function createRetryBoundarySchema<const Type extends "WAITING_RETRY" | "WAITING_PROVIDER">(
-  type: Type,
-) {
-  const base = { ...WaitingRetryBase, type: z.literal(type) };
+function createRetryBoundarySchema<
+  const Type extends "WAITING_RETRY" | "WAITING_PROVIDER",
+  const ErrorCodeSchema extends z.ZodType<
+    "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT" | "LLM_OUTPUT_TRUNCATED"
+  >,
+>(type: Type, errorCodeSchema: ErrorCodeSchema) {
+  const base = { ...WaitingRetryBase, errorCode: errorCodeSchema, type: z.literal(type) };
   return z.discriminatedUnion("mode", [
     z
       .object({ ...base, mode: z.literal("START") })
       .strict()
       .superRefine((value, context) => {
-        if (value.attempt > value.maxAttempts) {
-          context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
-        }
+        refineRetryBoundary(value, context);
       }),
     z
       .object({
@@ -413,9 +418,7 @@ function createRetryBoundarySchema<const Type extends "WAITING_RETRY" | "WAITING
       })
       .strict()
       .superRefine((value, context) => {
-        if (value.attempt > value.maxAttempts) {
-          context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
-        }
+        refineRetryBoundary(value, context);
       }),
     z
       .object({
@@ -426,9 +429,7 @@ function createRetryBoundarySchema<const Type extends "WAITING_RETRY" | "WAITING
       })
       .strict()
       .superRefine((value, context) => {
-        if (value.attempt > value.maxAttempts) {
-          context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
-        }
+        refineRetryBoundary(value, context);
         if (new Set(value.messageIds).size !== value.messageIds.length) {
           context.addIssue({ code: "custom", message: "steering message ids must be unique" });
         }
@@ -436,8 +437,53 @@ function createRetryBoundarySchema<const Type extends "WAITING_RETRY" | "WAITING
   ]);
 }
 
-export const WaitingRetryContinuationSchema = createRetryBoundarySchema("WAITING_RETRY");
-export const WaitingProviderContinuationSchema = createRetryBoundarySchema("WAITING_PROVIDER");
+function refineRetryBoundary(
+  value: {
+    readonly attempt?: number | undefined;
+    readonly maxAttempts?: number | undefined;
+    readonly errorCode?: string | undefined;
+    readonly episode?: unknown;
+    readonly totalAttempts?: unknown;
+    readonly transport?: unknown;
+  },
+  context: z.RefinementCtx,
+): void {
+  if (
+    value.attempt !== undefined &&
+    value.maxAttempts !== undefined &&
+    value.attempt > value.maxAttempts
+  ) {
+    context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
+  }
+  if (value.errorCode !== "LLM_OUTPUT_TRUNCATED") return;
+
+  if (value.attempt !== 2 || value.maxAttempts !== 2) {
+    context.addIssue({
+      code: "custom",
+      path: ["attempt"],
+      message: "output recovery is limited to attempt two of two",
+    });
+  }
+  if (
+    Object.hasOwn(value, "episode") ||
+    Object.hasOwn(value, "totalAttempts") ||
+    Object.hasOwn(value, "transport")
+  ) {
+    context.addIssue({
+      code: "custom",
+      message: "output recovery cannot carry provider retry or transport state",
+    });
+  }
+}
+
+export const WaitingRetryContinuationSchema = createRetryBoundarySchema(
+  "WAITING_RETRY",
+  RetryErrorCodeSchema,
+);
+export const WaitingProviderContinuationSchema = createRetryBoundarySchema(
+  "WAITING_PROVIDER",
+  ProviderRetryErrorCodeSchema,
+);
 
 export const RunContinuationCheckpointSchema = z.discriminatedUnion("type", [
   WaitingToolResultsContinuationSchema,

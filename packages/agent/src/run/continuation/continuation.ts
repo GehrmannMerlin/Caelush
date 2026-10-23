@@ -136,8 +136,11 @@ export type WaitingResourceContinuation =
       readonly reasonCode: "DOES_NOT_MATCH" | "INCONCLUSIVE" | "UNSUPPORTED" | "UNAVAILABLE";
     };
 
-/** The durable retry error spellings, which are part of the persisted contract. */
-export type RetryErrorCode = "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT";
+/** Provider failures that may enter cooldown and transport recovery. */
+export type ProviderRetryErrorCode = "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT";
+
+/** The durable retry error spellings, including the bounded output recovery retry. */
+export type RetryErrorCode = ProviderRetryErrorCode | "LLM_OUTPUT_TRUNCATED";
 
 /** A bounded transport identity snapshot carried across a durable retry boundary. */
 export interface ModelTransportRecoveryCheckpoint {
@@ -208,10 +211,13 @@ type ReplaceContinuationType<T, Type extends string> = T extends { readonly type
   ? Omit<T, "type"> & { readonly type: Type }
   : never;
 
+type NarrowRetryErrorCode<T> = T extends { readonly errorCode: RetryErrorCode }
+  ? Omit<T, "errorCode"> & { readonly errorCode: ProviderRetryErrorCode }
+  : never;
+
 /** A durable wait after one provider retry episode is exhausted. */
-export type WaitingProviderContinuation = ReplaceContinuationType<
-  WaitingRetryContinuation,
-  "WAITING_PROVIDER"
+export type WaitingProviderContinuation = NarrowRetryErrorCode<
+  ReplaceContinuationType<WaitingRetryContinuation, "WAITING_PROVIDER">
 >;
 
 /** Every durable continuation a Run may hold. */

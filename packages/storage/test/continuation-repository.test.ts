@@ -54,6 +54,36 @@ function waitingCheckpoint(runId: RunId, sourceStepId: StepId): WaitingToolResul
 }
 
 describe("ContinuationRepository", () => {
+  it("round-trips an output-truncation retry as JSON without provider scheduling state", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const session = makeSession();
+    const run = makeRun(session.id, { status: "RUNNING", startedAt: createTimestampMs(1) });
+    const step = makeStep(run.id, {
+      status: "FAILED",
+      finishedAt: createTimestampMs(2),
+    });
+    const checkpoint: WaitingRetryContinuation = {
+      type: "WAITING_RETRY",
+      runId: run.id,
+      failedStepId: step.id,
+      attempt: 2,
+      maxAttempts: 2,
+      nextAttemptAt: createTimestampMs(1_000),
+      errorCode: "LLM_OUTPUT_TRUNCATED",
+      mode: "START",
+    };
+    await storage.sessions.insert(session);
+    await storage.runs.insert(run);
+    await storage.steps.insert(step);
+
+    await storage.continuations.set(run.id, checkpoint, createTimestampMs(3), null);
+
+    const stored = await storage.continuations.get(run.id);
+    expect(stored?.checkpoint).toEqual(checkpoint);
+    expect(JSON.stringify(stored?.checkpoint)).toBe(JSON.stringify(checkpoint));
+    await storage.close();
+  });
+
   it("maps a WAITING_RETRY failedStepId to the legacy source-step index", async () => {
     const storage = await openCaelushStorage({ path: ":memory:" });
     const session = makeSession();

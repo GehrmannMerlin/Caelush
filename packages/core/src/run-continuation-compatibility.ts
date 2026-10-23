@@ -114,10 +114,51 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
         sourceStepId: checkpoint.sourceStepId,
         messageIds: [...checkpoint.messageIds],
       };
-    case "WAITING_PROVIDER":
+    case "WAITING_PROVIDER": {
+      const base = {
+        type: "WAITING_PROVIDER" as const,
+        runId: checkpoint.runId,
+        failedStepId: checkpoint.failedStepId,
+        attempt: checkpoint.attempt,
+        maxAttempts: checkpoint.maxAttempts,
+        ...(checkpoint.episode === undefined ? {} : { episode: checkpoint.episode }),
+        ...(checkpoint.totalAttempts === undefined
+          ? {}
+          : { totalAttempts: checkpoint.totalAttempts }),
+        nextAttemptAt: checkpoint.nextAttemptAt,
+        errorCode: checkpoint.errorCode,
+        ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
+      };
+      switch (checkpoint.mode) {
+        case "START":
+          return { ...base, mode: "START" };
+        case "STEERING":
+          return {
+            ...base,
+            mode: "STEERING",
+            messageIds: [...checkpoint.messageIds],
+            sourceStepId: checkpoint.sourceStepId,
+          };
+        case "TOOL_RESULTS":
+          return {
+            ...base,
+            mode: "TOOL_RESULTS",
+            pendingDecision: canonicalPendingDecision(checkpoint.pendingDecision),
+            receivedResults: checkpoint.receivedResults.map(asTool),
+            ...(checkpoint.sourceStepId === undefined
+              ? {}
+              : { sourceStepId: checkpoint.sourceStepId }),
+            ...(checkpoint.observationPolicy === undefined
+              ? {}
+              : { observationPolicy: checkpoint.observationPolicy }),
+          };
+        default:
+          return assertNever(checkpoint, "canonical retry mode");
+      }
+    }
     case "WAITING_RETRY": {
       const base = {
-        type: checkpoint.type,
+        type: "WAITING_RETRY" as const,
         runId: checkpoint.runId,
         failedStepId: checkpoint.failedStepId,
         attempt: checkpoint.attempt,
@@ -292,10 +333,51 @@ export function toAgentContinuation(
         sourceStepId: checkpoint.sourceStepId,
         messageIds: [...checkpoint.messageIds],
       };
-    case "WAITING_PROVIDER":
+    case "WAITING_PROVIDER": {
+      const base = {
+        type: "WAITING_PROVIDER" as const,
+        runId: checkpoint.runId,
+        failedStepId: checkpoint.failedStepId,
+        attempt: checkpoint.attempt,
+        maxAttempts: checkpoint.maxAttempts,
+        ...(checkpoint.episode === undefined ? {} : { episode: checkpoint.episode }),
+        ...(checkpoint.totalAttempts === undefined
+          ? {}
+          : { totalAttempts: checkpoint.totalAttempts }),
+        nextAttemptAt: checkpoint.nextAttemptAt,
+        errorCode: checkpoint.errorCode,
+        ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
+      };
+      switch (checkpoint.mode) {
+        case "START":
+          return { ...base, mode: "START" };
+        case "STEERING":
+          return {
+            ...base,
+            mode: "STEERING",
+            messageIds: [...checkpoint.messageIds],
+            sourceStepId: checkpoint.sourceStepId,
+          };
+        case "TOOL_RESULTS":
+          return {
+            ...base,
+            mode: "TOOL_RESULTS",
+            pendingDecision: canonicalPendingDecision(checkpoint.pendingDecision),
+            receivedResults: checkpoint.receivedResults.map(asTool),
+            ...(checkpoint.sourceStepId === undefined
+              ? {}
+              : { sourceStepId: checkpoint.sourceStepId }),
+            ...(checkpoint.observationPolicy === undefined
+              ? {}
+              : { observationPolicy: checkpoint.observationPolicy }),
+          };
+        default:
+          return assertNever(checkpoint, "persisted retry mode");
+      }
+    }
     case "WAITING_RETRY": {
       const base = {
-        type: checkpoint.type,
+        type: "WAITING_RETRY" as const,
         runId: checkpoint.runId,
         failedStepId: checkpoint.failedStepId,
         attempt: checkpoint.attempt,

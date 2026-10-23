@@ -89,7 +89,9 @@ export interface WaitingSteeringContinuation {
   readonly messageIds: readonly string[];
 }
 
-export type RetryErrorCode = "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT";
+export type ProviderRetryErrorCode = "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT";
+
+export type RetryErrorCode = ProviderRetryErrorCode | "LLM_OUTPUT_TRUNCATED";
 
 interface WaitingRetryContinuationBase {
   readonly type: "WAITING_RETRY";
@@ -155,10 +157,13 @@ type ReplaceContinuationType<T, Type extends string> = T extends { readonly type
   ? Omit<T, "type"> & { readonly type: Type }
   : never;
 
+type NarrowRetryErrorCode<T> = T extends { readonly errorCode: RetryErrorCode }
+  ? Omit<T, "errorCode"> & { readonly errorCode: ProviderRetryErrorCode }
+  : never;
+
 /** A durable wait after one provider retry episode is exhausted. */
-export type WaitingProviderContinuation = ReplaceContinuationType<
-  WaitingRetryContinuation,
-  "WAITING_PROVIDER"
+export type WaitingProviderContinuation = NarrowRetryErrorCode<
+  ReplaceContinuationType<WaitingRetryContinuation, "WAITING_PROVIDER">
 >;
 
 export type RunContinuationCheckpoint =

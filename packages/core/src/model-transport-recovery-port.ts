@@ -1,5 +1,5 @@
 import type { ModelRef } from "@caelush/protocol";
-import type { RetryErrorCode } from "./agent-continuation.js";
+import type { ProviderRetryErrorCode } from "./agent-continuation.js";
 
 export type { ModelTransportRecoveryCheckpoint } from "@caelush/agent";
 
@@ -23,6 +23,6 @@ export interface ModelTransportRecoveryPort {
   next(input: {
     readonly current: ModelTransportSelection;
     readonly attemptedTransportIds: readonly string[];
-    readonly errorCode: RetryErrorCode;
+    readonly errorCode: ProviderRetryErrorCode;
   }): ModelTransportSelection | undefined;
 }

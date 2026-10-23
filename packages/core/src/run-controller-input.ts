@@ -10,7 +10,7 @@ import type {
   VerificationPlanId,
 } from "@caelush/protocol";
 import type { AgentToolRequest } from "./agent-decision.js";
-import type { RetryErrorCode } from "./agent-continuation.js";
+import type { ProviderRetryErrorCode, RetryErrorCode } from "./agent-continuation.js";
 
 export type RunControllerResult =
   | { readonly status: "PENDING"; readonly run: AgentRun; readonly state?: AgentState }
@@ -72,7 +72,7 @@ export type RunControllerResult =
       readonly maxAttempts: number;
       readonly episode?: number;
       readonly totalAttempts?: number;
-      readonly errorCode: RetryErrorCode;
+      readonly errorCode: ProviderRetryErrorCode;
     }
   | {
       readonly status: "AWAITING_VERIFICATION";
