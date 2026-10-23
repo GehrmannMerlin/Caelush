@@ -2230,10 +2230,14 @@ export class RunController {
       openTurn: (turn, selection) => this.openAgentTurn(turn, selection),
     });
 
+    const outputAllowanceTokens = isReservedOutputRecoveryAttempt(snapshot)
+      ? snapshot.state?.modelOutputRecovery?.targetOutputTokens
+      : undefined;
     const contextEngine = execution.createContextEngine(
       snapshot.run,
       await this.verificationRepairContext(snapshot),
       directive.mode,
+      outputAllowanceTokens,
     );
     const modelAdmission = this.modelAdmissionPort(observation, snapshot, step);
     const loop = createRunAgentLoop(
@@ -2264,6 +2268,10 @@ export class RunController {
       // and a completion directive arriving here would be a misrouted effect.
       completionGate: MISROUTED_COMPLETION_GATE,
     });
+    const modelSettings =
+      outputAllowanceTokens === undefined
+        ? execution.modelSettings
+        : { ...execution.modelSettings, maxOutputTokens: outputAllowanceTokens };
 
     try {
       const effect = await driver.execute(directive, {
@@ -2276,9 +2284,7 @@ export class RunController {
         conversation,
         model: execution.models.resolve(snapshot.run.model),
         tools: execution.tools,
-        ...(execution.modelSettings === undefined
-          ? {}
-          : { modelSettings: execution.modelSettings }),
+        ...(modelSettings === undefined ? {} : { modelSettings }),
         signal,
         privateCompletionSink: (completion) => {
           observation.privateCompletion = completion;

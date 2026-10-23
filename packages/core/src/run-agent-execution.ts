@@ -116,6 +116,7 @@ export interface RunAgentExecutionContext {
     run: AgentRun,
     verificationRepairContext?: AgentVerificationRepairContext,
     runMode?: RunExecutionMode,
+    outputAllowanceTokens?: number,
   ) => ContextEnginePort;
 }
 
@@ -179,11 +180,15 @@ export function createRunAgentExecutionContext(
     tools: [...config.tools],
     ...(modelSettings === undefined ? {} : { modelSettings }),
     ...(config.historyPrefix === undefined ? {} : { historyPrefix: config.historyPrefix }),
-    createContextEngine: (run, verificationRepairContext, runMode) => {
+    createContextEngine: (run, verificationRepairContext, runMode, outputAllowanceTokens) => {
+      const turnModelSettings =
+        outputAllowanceTokens === undefined
+          ? modelSettings
+          : { ...modelSettings, maxOutputTokens: outputAllowanceTokens };
       const contextEngine = dependencies.createContextEngine({
         run,
         identity: { runId: run.id, sessionId: run.sessionId, goal: run.goal },
-        ...(modelSettings === undefined ? {} : { modelSettings }),
+        ...(turnModelSettings === undefined ? {} : { modelSettings: turnModelSettings }),
         baseSystemPrompt: config.baseSystemPrompt,
         ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
         ...(config.explicitPaths === undefined ? {} : { explicitPaths: config.explicitPaths }),
