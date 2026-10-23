@@ -1119,15 +1119,21 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       if (requestedContextBudgetPolicy === "TURN_BUDGET_V3") {
         const model = ai.models.resolve(run.model);
         const config = await executionConfigResolver.resolve(run);
-        return Object.freeze(
-          resolveTurnBudgetPolicy({
-            contextWindowTokens: model.limits.contextWindowTokens,
-            maxOutputTokens: model.limits.maxOutputTokens,
-            ...(config.modelSettings?.maxOutputTokens === undefined
-              ? {}
-              : { configuredOutputCeiling: config.modelSettings.maxOutputTokens }),
+        const turnBudgetPolicy = resolveTurnBudgetPolicy({
+          contextWindowTokens: model.limits.contextWindowTokens,
+          maxOutputTokens: model.limits.maxOutputTokens,
+          ...(config.modelSettings?.maxOutputTokens === undefined
+            ? {}
+            : { configuredOutputCeiling: config.modelSettings.maxOutputTokens }),
+        });
+        return Object.freeze({
+          ...turnBudgetPolicy,
+          outputRecovery: Object.freeze({
+            version: "OUTPUT_RECOVERY_V1" as const,
+            maxRecoveryTurns: 1 as const,
+            outputMultiplier: 2 as const,
           }),
-        );
+        });
       }
       if (requestedContextBudgetPolicy === "WORKING_SET_V2") {
         const model = ai.models.resolve(run.model);

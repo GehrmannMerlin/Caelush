@@ -2327,10 +2327,25 @@ function promptSurfaceIdentity(
       stableJson({
         api: input.contextInput.model.api,
         promptCaching: input.contextInput.model.capabilities.promptCaching,
-        settings: input.modelSettings ?? null,
+        // The output cap changes generation capacity, not the replayable prompt or its cache
+        // identity. Output recovery deliberately raises it for one Step while preserving the
+        // same Prompt Surface. Other request settings retain their existing identity semantics.
+        settings: promptCacheSettings(input.modelSettings),
       }),
     ),
   };
+}
+
+function promptCacheSettings(
+  settings: AIModelSettings | undefined,
+): Omit<AIModelSettings, "maxOutputTokens"> | null {
+  if (settings === undefined) return null;
+  const promptSettings = {
+    ...(settings.temperature === undefined ? {} : { temperature: settings.temperature }),
+    ...(settings.reasoning === undefined ? {} : { reasoning: settings.reasoning }),
+    ...(settings.cache === undefined ? {} : { cache: settings.cache }),
+  };
+  return Object.keys(promptSettings).length === 0 ? null : promptSettings;
 }
 
 /** Bind the reusable stable head to the durable checkpoint revision it accompanies. */

@@ -495,6 +495,22 @@ describe("Prompt Surface Context Engine integration", () => {
     expect(value.state.usage.every((usage) => usage.promptSurface !== undefined)).toBe(true);
   });
 
+  it("keeps the Prompt Surface identity stable when only the per-turn output allowance changes", async () => {
+    const value = fixture();
+    const history = fullHistory(value.runId, value.sessionId, 4);
+    const first = await value
+      .engine()
+      .prepare(request(value.runId, value.sessionId, 1, history.slice(0, 2)));
+    const second = await value
+      .engine({ settings: { maxOutputTokens: 512 } })
+      .prepare(request(value.runId, value.sessionId, 2, history));
+
+    expect(second.messages.slice(0, first.messages.length)).toEqual(first.messages);
+    expect(value.store.inspectEpochs(value.runId)).toHaveLength(1);
+    expect(value.store.inspect(value.runId)?.records).toHaveLength(2);
+    expect(value.store.inspect(value.runId)?.resetReason).toBe("INITIAL");
+  });
+
   it("reprojects a failed same-Step context attempt into a new forced-recovery epoch", async () => {
     const value = fixture();
     const engine = value.engine();

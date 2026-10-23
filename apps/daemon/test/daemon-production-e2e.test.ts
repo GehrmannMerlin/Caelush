@@ -131,6 +131,11 @@ describe("daemon production composition E2E", () => {
       safetyTokens: 640,
       expectedGrowthTokens: 2_560,
       postCompactionRatio: 0.8,
+      outputRecovery: {
+        version: "OUTPUT_RECOVERY_V1",
+        maxRecoveryTurns: 1,
+        outputMultiplier: 2,
+      },
     });
     await client.startRun(run.id);
 

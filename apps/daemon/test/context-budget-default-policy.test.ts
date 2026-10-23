@@ -111,6 +111,11 @@ describe("Context budget policy default", () => {
       safetyTokens: 640,
       expectedGrowthTokens: 2_560,
       postCompactionRatio: 0.8,
+      outputRecovery: {
+        version: "OUTPUT_RECOVERY_V1",
+        maxRecoveryTurns: 1,
+        outputMultiplier: 2,
+      },
     });
   }, 20_000);
 
@@ -128,9 +133,17 @@ describe("Context budget policy default", () => {
       databasePath: join(directory, "working-set.db"),
       contextBudgetPolicyVersion: "WORKING_SET_V2",
     });
-    expect(
-      (await createRun(workingSet.client, workingSet.session)).contextBudgetPolicy.version,
-    ).toBe("WORKING_SET_V2");
+    const workingSetRun = await createRun(workingSet.client, workingSet.session);
+    expect(workingSetRun.contextBudgetPolicy.version).toBe("WORKING_SET_V2");
+    expect(workingSetRun.contextBudgetPolicy).not.toHaveProperty("outputRecovery");
+
+    const adaptive = await boot({
+      databasePath: join(directory, "adaptive.db"),
+      contextBudgetPolicyVersion: "ADAPTIVE_V1",
+    });
+    const adaptiveRun = await createRun(adaptive.client, adaptive.session);
+    expect(adaptiveRun.contextBudgetPolicy.version).toBe("ADAPTIVE_V1");
+    expect(adaptiveRun.contextBudgetPolicy).not.toHaveProperty("outputRecovery");
   }, 30_000);
 
   it("never rewrites the policy a historical Run was frozen with", async () => {
