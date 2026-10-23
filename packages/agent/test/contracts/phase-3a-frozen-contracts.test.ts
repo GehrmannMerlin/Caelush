@@ -237,7 +237,8 @@ interface FrozenModelRequestAdmissionInput {
 
 type FrozenModelRequestAdmissionDecision =
   | { readonly kind: "ALLOWED"; readonly request: AIModelRequest }
-  | { readonly kind: "BLOCKED"; readonly reason: "BUDGET"; readonly block: AgentBudgetBlock };
+  | { readonly kind: "BLOCKED"; readonly reason: "BUDGET"; readonly block: AgentBudgetBlock }
+  | { readonly kind: "STOPPED"; readonly reason: "OUTPUT_RECOVERY_NO_INCREMENT" };
 
 interface FrozenModelTurnBoundaryInput {
   readonly identity: FrozenAgentExecutionIdentity;

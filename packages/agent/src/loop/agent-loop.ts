@@ -150,6 +150,15 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
           return failed(input.turn, toInternalFailure(), appended, receipt(context, recovery));
         }
         if (input.signal.aborted) return cancelled(input.turn, receipt(context, recovery));
+        if (decision.kind === "STOPPED") {
+          return {
+            kind: "FAILED",
+            turn: input.turn,
+            error: outputRecoveryStoppedError(),
+            messagesToAppend: [...appended],
+            context: receipt(context, recovery),
+          };
+        }
         if (decision.kind === "BLOCKED") {
           return {
             kind: "FAILED",
@@ -219,6 +228,15 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
             return failed(input.turn, toInternalFailure(), appended, receipt(context, recovery));
           }
           if (input.signal.aborted) return cancelled(input.turn, receipt(context, recovery));
+          if (decision.kind === "STOPPED") {
+            return {
+              kind: "FAILED",
+              turn: input.turn,
+              error: outputRecoveryStoppedError(),
+              messagesToAppend: [...appended],
+              context: receipt(context, recovery),
+            };
+          }
           if (decision.kind === "BLOCKED") {
             return {
               kind: "FAILED",
@@ -299,6 +317,16 @@ function buildRequest(
     tools: input.tools,
     ...(input.modelSettings === undefined ? {} : { settings: input.modelSettings }),
   });
+}
+
+function outputRecoveryStoppedError() {
+  return {
+    code: "MODEL_ERROR" as const,
+    message: "恢复请求没有获得更大的输出上限",
+    retryable: false,
+    phase: "LLM" as const,
+    details: { modelOutputFailure: "OUTPUT_TRUNCATED" as const },
+  };
 }
 
 function executeTurn(

@@ -11,6 +11,7 @@ import type { AgentExecutionIdentity, AgentTurnRef } from "../types.js";
  * ```text
  * ALLOWED(request)      the turn may proceed, with the request admission approved
  * BLOCKED(BUDGET)       a durable budget authority refused it
+ * STOPPED(NO_INCREMENT) output recovery did not increase the approved output ceiling
  * ```
  *
  * A budget refusal is a normal, expected outcome — a Run that has spent its budget is a
@@ -37,6 +38,11 @@ export type ModelRequestAdmissionDecision =
       readonly reason: "BUDGET";
 
       readonly block: AgentBudgetBlock;
+    }
+  | {
+      readonly kind: "STOPPED";
+
+      readonly reason: "OUTPUT_RECOVERY_NO_INCREMENT";
     };
 
 /**

@@ -513,6 +513,43 @@ describe("AgentLoop.advance() failure classification", () => {
     expect(turns.callCount()).toBe(0);
   });
 
+  it("maps a stopped output recovery admission before the boundary or provider", async () => {
+    let boundaryCalls = 0;
+    const turns = modelTurns([{ kind: "COMPLETED", result: turnResult({ text: "never" }) }]);
+
+    const result = await loopWith({
+      turns,
+      admission: {
+        admit: () =>
+          Promise.resolve({
+            kind: "STOPPED" as const,
+            reason: "OUTPUT_RECOVERY_NO_INCREMENT" as const,
+          }),
+      },
+      boundary: {
+        beforeExecute: () => {
+          boundaryCalls += 1;
+          return Promise.resolve();
+        },
+      },
+    }).advance(advanceInput());
+
+    expect(result.kind).toBe("FAILED");
+    if (result.kind !== "FAILED") throw new Error("expected output recovery stop");
+    expect(result.error).toEqual({
+      code: "MODEL_ERROR",
+      message: "恢复请求没有获得更大的输出上限",
+      retryable: false,
+      phase: "LLM",
+      details: { modelOutputFailure: "OUTPUT_TRUNCATED" },
+    });
+    expect(result.modelTurn).toBeUndefined();
+    expect(result.usage).toBeUndefined();
+    expect(result.messagesToAppend).toEqual([]);
+    expect(boundaryCalls).toBe(0);
+    expect(turns.callCount()).toBe(0);
+  });
+
   it("fails closed as unavailable when budget enforcement cannot be established", async () => {
     const turns = modelTurns([{ kind: "COMPLETED", result: turnResult({ text: "never" }) }]);
 
