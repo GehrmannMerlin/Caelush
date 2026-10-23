@@ -344,7 +344,6 @@ try {
   assert(continued.stdout.trim() === "PACKAGED-ORANGE-912", "Session history was not reused");
 
   await stopArtifactDaemons(bundleDirectory);
-  await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
   const parallelHome = join(testRoot, "parallel-home");
   const parallelWorkspaceA = join(testRoot, "parallel-workspace-a");
   const parallelWorkspaceB = join(testRoot, "parallel-workspace-b");
@@ -422,7 +421,6 @@ try {
   );
 
   await stopArtifactDaemons(bundleDirectory);
-  await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
   const incompatibleOwner = await startIncompatiblePortOwner();
   try {
     const incompatible = await runLauncher(binPath, ["-p", "Reply exactly INCOMPATIBLE_OK"], {
@@ -1196,7 +1194,6 @@ async function assertRestrictedSandbox({
   const sandboxBefore = await client.getSecurityCapabilities();
   const capabilitiesBefore = await client.getWorkspaceSecurityCapabilities(ref.id);
   await stopArtifactDaemons(bundleDirectory);
-  await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
 
   // Re-seed the fixture so the post-restart Run is a fresh, independent mutation rather than a repeat
   // of the one that already landed. Its success is what shows the grant is still *usable*, not merely
@@ -1273,7 +1270,15 @@ async function stopStaleArtifactDaemons() {
 }
 
 async function stopArtifactDaemons(bundleDirectory) {
-  const needle = join(bundleDirectory, "node_modules", "@caelush", "daemon", "dist", "main.js");
+  const daemonEntry = join(
+    bundleDirectory,
+    "node_modules",
+    "@caelush",
+    "daemon",
+    "dist",
+    "main.js",
+  );
+  const needle = process.platform === "win32" ? daemonEntry : await realpath(daemonEntry);
   if (process.platform === "win32") {
     const escaped = needle.replaceAll("'", "''");
     const script = `$needle='${escaped}'; Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -like "*$needle*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`;
@@ -1282,17 +1287,29 @@ async function stopArtifactDaemons(bundleDirectory) {
     } catch {
       /* The daemon may already have exited. */
     }
-    return;
-  }
-  try {
-    const processes = execFileSync("ps", ["-eo", "pid=,args="], { encoding: "utf8" });
-    for (const line of processes.split("\n")) {
-      if (!line.includes(needle)) continue;
-      const pid = Number.parseInt(line.trim().split(/\s+/, 1)[0] ?? "", 10);
-      if (Number.isSafeInteger(pid) && pid !== process.pid) process.kill(pid, "SIGTERM");
+  } else {
+    try {
+      const processes = execFileSync("ps", ["-eo", "pid=,args="], { encoding: "utf8" });
+      for (const line of processes.split("\n")) {
+        if (!line.includes(needle)) continue;
+        const pid = Number.parseInt(line.trim().split(/\s+/, 1)[0] ?? "", 10);
+        if (Number.isSafeInteger(pid) && pid !== process.pid) process.kill(pid, "SIGTERM");
+      }
+    } catch {
+      /* Best-effort signal; the bounded wait below reports any process still alive. */
     }
-  } catch {
-    /* Best-effort cleanup for the host process. */
+  }
+
+  const deadline = Date.now() + 10_000;
+  let remaining = await countArtifactDaemons(bundleDirectory);
+  while (remaining > 0 && Date.now() < deadline) {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+    remaining = await countArtifactDaemons(bundleDirectory);
+  }
+  if (remaining > 0) {
+    throw new Error(
+      `Packaged daemon cleanup timed out with ${remaining} process(es) still running.`,
+    );
   }
 }
 

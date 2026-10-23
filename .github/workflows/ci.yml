@@ -413,7 +413,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          # The Windows Desktop build stages the D0-C verified Node binary by its exact hash.
+          # Use that same pinned runtime for this job instead of the latest Node 24 patch.
+          node-version: 24.18.0
           cache: pnpm
 
       - name: Enable Corepack
