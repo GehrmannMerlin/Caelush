@@ -5,6 +5,7 @@ import {
   createEventId,
   createRunId,
   createSessionId,
+  createStepId,
   createTimestampMs,
   createWorkspaceId,
   type ContextBudgetPolicySnapshot,
@@ -12,7 +13,7 @@ import {
 import { describe, expect, it } from "vitest";
 import type { RunBudgetPort } from "../src/budget-ports.js";
 import { RunController } from "../src/run-controller.js";
-import type { RunExecutionCommit } from "../src/run-execution-store.js";
+import { RunExecutionInvariantError, type RunExecutionCommit } from "../src/run-execution-store.js";
 import { RunRetryRegistry, type RunRetryTimerPort } from "../src/run-retry-registry.js";
 import { completionStoreOver } from "./support/completion-store.js";
 import { modelTurnResult } from "./support/fake-model-turn-executor.js";
@@ -59,6 +60,8 @@ function recoveryEnabledRun(maxSteps = 8) {
 
 class RecoveryCommitTraceStore extends MemoryRunStore {
   readonly trace: string[] = [];
+  readonly providerCallsAtRecoveryOpenCommit: number[] = [];
+  providerCallCount: () => number = () => 0;
   rejectRecoveryCommit = false;
   cancelBeforeRecoveryCommit = false;
 
@@ -66,10 +69,18 @@ class RecoveryCommitTraceStore extends MemoryRunStore {
     const isRecoverySchedule = command.events.some(
       (event) => event.type === "retry.scheduled" && event.schemaVersion === 2,
     );
-    if (isRecoverySchedule) {
-      this.trace.push("commit:start");
+    const isRecoveryOpen =
+      command.state?.modelOutputRecovery?.phase === "OPENED" &&
+      command.stepWrites.some(
+        (write) =>
+          write.operation === "INSERT" &&
+          write.step.id === command.state?.modelOutputRecovery?.recoveryStepId,
+      );
+    if (isRecoverySchedule || isRecoveryOpen) {
+      this.trace.push(isRecoverySchedule ? "commit:start" : "open:commit:start");
+      if (isRecoveryOpen) this.providerCallsAtRecoveryOpenCommit.push(this.providerCallCount());
       if (this.rejectRecoveryCommit) throw new Error("fixture rejects recovery schedule commit");
-      if (this.cancelBeforeRecoveryCommit) {
+      if (isRecoverySchedule && this.cancelBeforeRecoveryCommit) {
         await this.requestCancellation(command.run.id, {
           runId: command.run.id,
           cause: "USER_REQUESTED",
@@ -82,7 +93,7 @@ class RecoveryCommitTraceStore extends MemoryRunStore {
         }
       }
       const result = await super.commit(command);
-      this.trace.push("commit:done");
+      this.trace.push(isRecoverySchedule ? "commit:done" : "open:commit:done");
       return result;
     }
     return super.commit(command);
@@ -95,6 +106,7 @@ function createHarness(
     readonly cancelBeforeRecoveryCommit?: boolean;
     readonly cancelDuringBudgetSettlement?: boolean;
     readonly maxSteps?: number;
+    readonly recoveryAdmittedOutputTokens?: number;
   } = {},
 ) {
   const run = recoveryEnabledRun(options.maxSteps);
@@ -123,10 +135,18 @@ function createHarness(
   };
   const budget: RunBudgetPort = {
     async admitLLM() {
-      return { kind: "ALLOWED", effectiveMaxOutputTokens: PREVIOUS_OUTPUT_TOKENS };
+      const outputTokens =
+        executor.callCount() === 0
+          ? PREVIOUS_OUTPUT_TOKENS
+          : (options.recoveryAdmittedOutputTokens ?? PREVIOUS_OUTPUT_TOKENS * 2);
+      return { kind: "ALLOWED", effectiveMaxOutputTokens: outputTokens };
     },
     async admitLLMRecovery() {
-      return { kind: "ALLOWED", effectiveMaxOutputTokens: PREVIOUS_OUTPUT_TOKENS * 2 };
+      return {
+        kind: "ALLOWED",
+        effectiveMaxOutputTokens:
+          options.recoveryAdmittedOutputTokens ?? PREVIOUS_OUTPUT_TOKENS * 2,
+      };
     },
     async settleLLM(input) {
       settlements.push(input);
@@ -150,6 +170,9 @@ function createHarness(
         if (events.some((event) => event.type === "retry.scheduled" && event.schemaVersion === 2)) {
           trace.push("notify:recovery");
         }
+        if (events.some((event) => event.type === "retry.started")) {
+          trace.push("notify:retry-started");
+        }
         notified.push(...events.map((event) => event.type));
       },
       emitTransient: () => undefined,
@@ -168,6 +191,7 @@ function createHarness(
     }),
     budget,
   });
+  store.providerCallCount = () => executor.callCount();
   return { controller, run, store, executor, notified, settlements, scheduledDelays, trace };
 }
 
@@ -345,5 +369,114 @@ describe("RunController output recovery scheduling transaction", () => {
     expect(harness.trace).toEqual(["commit:start"]);
     expect(harness.scheduledDelays).toEqual([]);
     expect(harness.notified).not.toContain("retry.scheduled");
+  });
+
+  it("opens the reserved recovery and consumes its continuation before the recovery Provider call", async () => {
+    const harness = createHarness();
+    await harness.controller.start(harness.run.id);
+    harness.trace.length = 0;
+    harness.executor.resetScript((_request, _signal, callIndex) => {
+      if (callIndex === 1) {
+        harness.trace.push("provider:recovery");
+        throw new Error("stop after observing the recovery request");
+      }
+      throw new Error("unexpected Provider call count");
+    });
+
+    const result = await harness.controller.recover(harness.run.id);
+
+    const openingCommit = harness.store.commits.find(
+      (candidate) =>
+        candidate.state?.modelOutputRecovery?.phase === "OPENED" &&
+        candidate.stepWrites.some(
+          (write) =>
+            write.operation === "INSERT" &&
+            write.step.id === candidate.state?.modelOutputRecovery?.recoveryStepId,
+        ),
+    );
+    const reservationCommit = harness.store.commits.find(
+      (candidate) => candidate.state?.modelOutputRecovery?.phase === "RESERVED",
+    );
+    expect(openingCommit).toBeDefined();
+    expect(openingCommit?.run.currentStepId).toBe(openingCommit?.stepWrites[0]?.step.id);
+    expect(openingCommit?.state?.currentStepId).toBe(openingCommit?.stepWrites[0]?.step.id);
+    expect(openingCommit?.stepWrites).toHaveLength(1);
+    expect(openingCommit?.stepWrites[0]).toMatchObject({
+      operation: "INSERT",
+      step: { status: "RUNNING" },
+    });
+    expect(openingCommit?.state?.modelOutputRecovery).toMatchObject({
+      version: 1,
+      sourceStepId: reservationCommit?.stepWrites[0]?.step.id,
+      previousOutputTokens: PREVIOUS_OUTPUT_TOKENS,
+      targetOutputTokens: PREVIOUS_OUTPUT_TOKENS * 2,
+      phase: "OPENED",
+      recoveryStepId: openingCommit?.stepWrites[0]?.step.id,
+    });
+    expect(openingCommit?.continuation).toEqual({ operation: "CLEAR" });
+    expect(openingCommit?.events.map((event) => event.type)).toEqual([
+      "retry.started",
+      "llm.started",
+    ]);
+    expect(openingCommit?.events[0]).toMatchObject({ schemaVersion: 1, type: "retry.started" });
+    expect(harness.store.providerCallsAtRecoveryOpenCommit).toEqual([1]);
+    expect(result.status).toBe("FAILED");
+    expect(harness.trace.filter((entry) => entry !== "timer:schedule")).toEqual([
+      "open:commit:start",
+      "open:commit:done",
+      "notify:retry-started",
+      "provider:recovery",
+    ]);
+    expect(harness.executor.callCount()).toBe(2);
+    expect(harness.executor.requests[1]?.settings?.maxOutputTokens).toBe(
+      PREVIOUS_OUTPUT_TOKENS * 2,
+    );
+  });
+
+  it("fails closed when the durable recovery fact says the one recovery was already opened", async () => {
+    const harness = createHarness();
+    await harness.controller.start(harness.run.id);
+    const reserved = harness.store.snapshot.state?.modelOutputRecovery;
+    if (reserved?.phase !== "RESERVED") throw new Error("missing RESERVED recovery fact");
+    harness.store.snapshot = {
+      ...harness.store.snapshot,
+      state: {
+        ...harness.store.snapshot.state!,
+        modelOutputRecovery: {
+          ...reserved,
+          phase: "OPENED",
+          recoveryStepId: createStepId(),
+        },
+      },
+    };
+
+    await expect(harness.controller.recover(harness.run.id)).rejects.toBeInstanceOf(
+      RunExecutionInvariantError,
+    );
+
+    expect(harness.executor.callCount()).toBe(1);
+    expect(harness.store.providerCallsAtRecoveryOpenCommit).toEqual([]);
+  });
+
+  it("does not open or send when the recovery admission grants no output increment", async () => {
+    const harness = createHarness({ recoveryAdmittedOutputTokens: PREVIOUS_OUTPUT_TOKENS });
+    await harness.controller.start(harness.run.id);
+
+    await harness.controller.recover(harness.run.id);
+
+    expect(harness.executor.callCount()).toBe(1);
+    expect(harness.store.providerCallsAtRecoveryOpenCommit).toEqual([]);
+    expect(
+      harness.store.commits.some(
+        (candidate) =>
+          candidate.state?.modelOutputRecovery?.phase === "OPENED" &&
+          candidate.stepWrites.some(
+            (write) =>
+              write.operation === "INSERT" &&
+              write.step.id === candidate.state?.modelOutputRecovery?.recoveryStepId,
+          ),
+      ),
+    ).toBe(false);
+    expect(harness.store.snapshot.state?.modelOutputRecovery?.phase).toBe("RESERVED");
   });
 });

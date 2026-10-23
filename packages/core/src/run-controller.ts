@@ -22,6 +22,7 @@ import { ToolBatchInputError } from "@caelush/agent";
 import { orderedToolCalls } from "./agent-decision.js";
 import {
   AgentRunSchema,
+  AgentStateSchema,
   ApprovalResolutionSchema,
   createTimestampMs,
   type ApprovalRequestId,
@@ -1411,6 +1412,15 @@ export class RunController {
     if (loaded.state === undefined) {
       throw new RunControllerInvariantError("Retry boundary requires an AgentState");
     }
+    if (
+      loaded.continuation.errorCode === "LLM_OUTPUT_TRUNCATED" &&
+      hasOutputRecoveryPolicy(loaded.run) &&
+      !isReservedOutputRecoveryAttempt(loaded)
+    ) {
+      throw new RunExecutionInvariantError(
+        "An output recovery retry requires its unused RESERVED recovery fact.",
+      );
+    }
     const now = this.dependencies.clock.now();
     if (now < loaded.continuation.nextAttemptAt) {
       this.scheduleRetry(loaded.run.id, loaded.continuation.nextAttemptAt);
@@ -2345,6 +2355,9 @@ export class RunController {
               deadlineExceeded: this.isExpired(snapshot),
             })
           : undefined;
+      if (outputRecoveryPlan === undefined) {
+        return await this.settle(snapshot, directive, effect.result, observation);
+      }
       return await this.settle(snapshot, directive, effect.result, observation, outputRecoveryPlan);
     } finally {
       const privateCompletion = observation.privateCompletion;
@@ -2879,8 +2892,34 @@ export class RunController {
     // The Step becomes durable here, and only here. The Run and the AgentState are projected from
     // the *current* durable records, never from a pre-provider copy carried into the boundary.
     const activeRun = AgentRunSchema.parse({ ...current.run, currentStepId: pending.step.id });
-    const activeState = beginAgentStepState(current.state, pending.step.id, pending.step.startedAt);
     const consumption = this.continuationConsumption(current, pending);
+    let activeState = beginAgentStepState(current.state, pending.step.id, pending.step.startedAt);
+    if (
+      consumption === "CONSUME" &&
+      current.continuation?.type === "WAITING_RETRY" &&
+      current.continuation.errorCode === "LLM_OUTPUT_TRUNCATED" &&
+      hasOutputRecoveryPolicy(current.run)
+    ) {
+      const recovery = current.state.modelOutputRecovery;
+      if (!isReservedOutputRecoveryAttempt(current) || recovery?.phase !== "RESERVED") {
+        throw new RunExecutionInvariantError(
+          "An output recovery Step cannot open without its exact RESERVED recovery fact.",
+        );
+      }
+      if (pending.step.id === recovery.sourceStepId) {
+        throw new RunExecutionInvariantError(
+          "An output recovery Step must have a new identity distinct from its failed source Step.",
+        );
+      }
+      activeState = AgentStateSchema.parse({
+        ...activeState,
+        modelOutputRecovery: {
+          ...recovery,
+          phase: "OPENED",
+          recoveryStepId: pending.step.id,
+        },
+      });
+    }
     const now = this.dependencies.clock.now();
     // T3: only messages the prepared request actually carried are associated. A Context plan that
     // dropped one leaves it RECORDED — a truthful state, and one completion still protects.
@@ -5796,6 +5835,13 @@ function isReservedOutputRecoveryAttempt(snapshot: RunExecutionSnapshot): boolea
     recovery.targetOutputTokens > recovery.previousOutputTokens &&
     policy?.version === "TURN_BUDGET_V3" &&
     policy.outputRecovery?.version === "OUTPUT_RECOVERY_V1"
+  );
+}
+
+function hasOutputRecoveryPolicy(run: AgentRun): boolean {
+  return (
+    run.contextBudgetPolicy?.version === "TURN_BUDGET_V3" &&
+    run.contextBudgetPolicy.outputRecovery?.version === "OUTPUT_RECOVERY_V1"
   );
 }
 
