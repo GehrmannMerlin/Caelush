@@ -1151,6 +1151,9 @@ export class RunController {
   }
 
   private async recoverLocked(runId: RunId): Promise<RunControllerResult> {
+    if (this.dependencies.budget?.recover !== undefined) {
+      await this.dependencies.budget.recover(runId, this.dependencies.clock.now());
+    }
     const loaded = await this.load(runId);
     if (isTerminal(loaded.run.status)) return this.resultFromSnapshot(loaded);
     if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);

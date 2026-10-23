@@ -8,7 +8,7 @@ import type {
   ToolInvocationId,
   ToolName,
 } from "@caelush/protocol";
-import { AgentRunSchema, AgentStateSchema } from "@caelush/protocol";
+import { AgentRunSchema, AgentStateSchema, StepIdSchema } from "@caelush/protocol";
 import {
   BudgetManager,
   createDefaultLLMTokenEstimator,
@@ -25,6 +25,7 @@ import {
 } from "@caelush/core";
 import type { AgentBudgetBlock, ToolBudgetAdmissionPort } from "@caelush/agent";
 import { SqliteBudgetLedgerRepository } from "./budget-ledger-repository.js";
+import { SqliteStepRepository } from "./repositories/step-repository.js";
 import {
   SqliteProviderInvocationUsageStore,
   type ProviderInvocationUsageRecord,
@@ -94,6 +95,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
   private readonly tokenEstimator: LLMTokenEstimator;
   private readonly clock: { now(): TimestampMs };
   private readonly ledger: SqliteBudgetLedgerRepository;
+  private readonly steps: SqliteStepRepository;
   private readonly providerUsage: SqliteProviderInvocationUsageStore;
   private readonly recoveryAdmissions = new Set<string>();
 
@@ -102,6 +104,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
     private readonly options: SqliteRunBudgetPortOptions = {},
   ) {
     this.ledger = new SqliteBudgetLedgerRepository(database);
+    this.steps = new SqliteStepRepository(database);
     this.providerUsage = new SqliteProviderInvocationUsageStore(database);
     this.clock = options.clock ?? { now: () => Date.now() as TimestampMs };
     this.tokenEstimator = options.tokenEstimator ?? createDefaultLLMTokenEstimator();
@@ -568,6 +571,19 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
   }
 
   async recover(runId: RunId, settledAt: TimestampMs): Promise<void> {
+    const entries = await this.ledger.listByRun(runId);
+    for (const entry of entries) {
+      if (entry.kind !== "LLM_ATTEMPT" || entry.state !== "IN_FLIGHT") continue;
+      const stepId = StepIdSchema.safeParse(entry.ownerId);
+      // Invalid owner identities and any persisted Step must remain conservative below.
+      if (!stepId.success || (await this.steps.get(stepId.data)) !== null) continue;
+      await this.settleLLM({
+        runId,
+        stepId: stepId.data,
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        settledAt,
+      });
+    }
     await this.ledger.recoverInFlight(runId, settledAt);
   }
 
