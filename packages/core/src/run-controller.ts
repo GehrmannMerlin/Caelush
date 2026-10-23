@@ -2331,6 +2331,11 @@ export class RunController {
           const current = await this.load(snapshot.run.id);
           return this.finalizeBudgetExceeded(current, exceeded);
         }
+        const current = await this.load(snapshot.run.id);
+        const authority = this.resolveAuthority(current, signal.aborted);
+        if (authority === "CANCELLED") return this.finalizeCancellation(current);
+        if (authority === "TIMEOUT") return this.finalizeTimeout(current);
+        if (authority === "TERMINAL") return this.resultFromSnapshot(current);
         // The durable open-Step commit did not succeed. No provider call was allowed, no Agent effect
         // exists, and settling this as a model failure would durably record an answer the model never
         // gave. The Run stays recoverable and the caller repairs or retries.
@@ -2889,6 +2894,17 @@ export class RunController {
       );
     }
 
+    const outputRecoveryOpening =
+      pending.advanceReason === "RETRY" && isReservedOutputRecoveryAttempt(current);
+    if (
+      outputRecoveryOpening &&
+      this.resolveAuthority(current, this.executionSignal(current.run.id).aborted) !== undefined
+    ) {
+      throw new RunExecutionConflictError(
+        "An output recovery Provider boundary lost cancellation or deadline authority.",
+      );
+    }
+
     // The Step becomes durable here, and only here. The Run and the AgentState are projected from
     // the *current* durable records, never from a pre-provider copy carried into the boundary.
     const activeRun = AgentRunSchema.parse({ ...current.run, currentStepId: pending.step.id });
@@ -2930,6 +2946,7 @@ export class RunController {
       state: activeState,
       expectedStateRevision: pending.expectedStateRevision,
       expectedContinuationRevision: pending.expectedContinuationRevision,
+      ...(outputRecoveryOpening ? { failIfCancellationRequested: true as const } : {}),
       stepWrites: [{ operation: "INSERT", step: pending.step }],
       messagesToAppend: [],
       ...(assigned.length === 0
@@ -3639,7 +3656,7 @@ export class RunController {
     result: AgentLoopFailedResult,
     observation: AgentTurnObservation,
   ): Promise<RunControllerResult> {
-    const current = await this.load(before.run.id);
+    let current = await this.load(before.run.id);
     const authority = this.resolveAuthority(current, false);
     if (authority === "CANCELLED") return this.finalizeCancellation(current);
     if (authority === "TIMEOUT") return this.finalizeTimeout(current);
@@ -3650,6 +3667,16 @@ export class RunController {
     const budgetSettlement = await this.settleBudgetAttempt(current, result);
     if (budgetSettlement !== undefined) {
       return this.finalizeBudgetExceeded(current, budgetSettlement);
+    }
+    if (isReservedOutputRecoveryAttempt(before)) {
+      current = await this.load(before.run.id);
+      const settlementAuthority = this.resolveAuthority(current, false);
+      if (settlementAuthority === "CANCELLED") return this.finalizeCancellation(current);
+      if (settlementAuthority === "TIMEOUT") return this.finalizeTimeout(current);
+      if (settlementAuthority === "TERMINAL") return this.resultFromSnapshot(current);
+      if (settlementAuthority === "UNEXPECTED_ABORT") {
+        throw new RunControllerInvariantError("Run execution aborted without a known authority");
+      }
     }
     if (current.state === undefined) {
       throw new RunControllerInfrastructureError("Run state disappeared during settlement");
@@ -3743,6 +3770,36 @@ export class RunController {
       });
       this.notify(commit.events);
       return this.resultFromSnapshot(commit.snapshot);
+    }
+
+    if (isReservedOutputRecoveryAttempt(before)) {
+      const state = markAgentStateFailed(settledState, result.error, now);
+      const failedRun = markAgentRunFailed(
+        AgentRunSchema.parse({ ...current.run, currentStepId: undefined }),
+        now,
+      );
+      const command: RunExecutionCommit = {
+        run: failedRun,
+        state,
+        expectedStateRevision: current.stateRevision ?? null,
+        expectedContinuationRevision: current.continuationRevision ?? null,
+        failIfCancellationRequested: true,
+        stepWrites: [{ operation: "UPDATE", step: failedStep }],
+        messagesToAppend: [],
+        ...(current.continuation === undefined ? {} : { continuation: { operation: "CLEAR" } }),
+        events: this.failureEvents(
+          current.run,
+          failedRun,
+          result.error,
+          failedStep,
+          now,
+          observation.providerTurnState,
+        ),
+      };
+      const outcome = await this.commitOutputRecoveryBoundary(command);
+      if (outcome.kind === "RESULT") return outcome.result;
+      this.notify(outcome.commit.events);
+      return this.resultFromSnapshot(outcome.commit.snapshot);
     }
 
     /*
@@ -4013,7 +4070,7 @@ export class RunController {
       return this.resultFromSnapshot(outcome.commit.snapshot);
     }
 
-    const retryContext = this.retryResumeContext(current.continuation);
+    const retryContext = this.retryResumeContext(current.continuation ?? before.continuation);
     const command = createOutputRecoveryScheduleCommit({
       current,
       failedStep,

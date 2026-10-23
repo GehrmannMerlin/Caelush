@@ -11,7 +11,17 @@ import {
   type ContextBudgetPolicySnapshot,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
+import type { AgentToolCallsDecision } from "../src/agent-decision.js";
+import type { RunContinuationCheckpoint } from "../src/agent-continuation.js";
+import { createInitialAgentState, startAgentState } from "../src/agent-state.js";
 import type { RunBudgetPort } from "../src/budget-ports.js";
+import { RunControllerInfrastructureError } from "../src/run-controller-errors.js";
+import {
+  createAssistantMessageAppend,
+  createExternalToolResultMessageAppend,
+  createSteeringMessageAppend,
+  createUserMessageAppend,
+} from "../src/run-message-materializer.js";
 import { RunController } from "../src/run-controller.js";
 import { RunExecutionInvariantError, type RunExecutionCommit } from "../src/run-execution-store.js";
 import { RunRetryRegistry, type RunRetryTimerPort } from "../src/run-retry-registry.js";
@@ -23,6 +33,7 @@ import {
   testRunAgentExecution,
 } from "./support/run-agent-execution.js";
 import { testRunMessageAuthority } from "./support/run-message-authority.js";
+import { aiError } from "./support/fake-model-turn-executor.js";
 
 const outputRecoveryPolicy = {
   version: "TURN_BUDGET_V3",
@@ -41,7 +52,7 @@ const outputRecoveryPolicy = {
 
 const PREVIOUS_OUTPUT_TOKENS = 100;
 
-function recoveryEnabledRun(maxSteps = 8) {
+function recoveryEnabledRun(maxSteps = 8, timeoutMs = 100_000) {
   return AgentRunSchema.parse({
     id: createRunId(),
     sessionId: createSessionId(),
@@ -52,7 +63,8 @@ function recoveryEnabledRun(maxSteps = 8) {
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "READ_ONLY",
     approvalPolicy: "ALWAYS_ASK",
-    limits: { maxSteps, maxToolCalls: 8, timeoutMs: 100_000, maxTokens: 100_000 },
+    limits: { maxSteps, maxToolCalls: 8, timeoutMs, maxTokens: 100_000 },
+    completionContract: "NATURAL_V1",
     contextBudgetPolicy: outputRecoveryPolicy,
     createdAt: createTimestampMs(1),
   });
@@ -61,24 +73,46 @@ function recoveryEnabledRun(maxSteps = 8) {
 class RecoveryCommitTraceStore extends MemoryRunStore {
   readonly trace: string[] = [];
   readonly providerCallsAtRecoveryOpenCommit: number[] = [];
+  readonly recoveryOpenCancellationGuards: boolean[] = [];
+  readonly recoveryFailureCancellationGuards: boolean[] = [];
   providerCallCount: () => number = () => 0;
   rejectRecoveryCommit = false;
   cancelBeforeRecoveryCommit = false;
+  cancelBeforeRecoveryFailureCommit = false;
+  beforeRecoveryOpenCommit: (() => Promise<void>) | undefined;
 
   override async commit(command: RunExecutionCommit) {
     const isRecoverySchedule = command.events.some(
       (event) => event.type === "retry.scheduled" && event.schemaVersion === 2,
     );
-    const isRecoveryOpen =
+    const isRecoveryOpen = isRecoveryOpenCommit(command);
+    const isRecoveryFailure =
+      command.run.status === "FAILED" &&
       command.state?.modelOutputRecovery?.phase === "OPENED" &&
       command.stepWrites.some(
-        (write) =>
-          write.operation === "INSERT" &&
-          write.step.id === command.state?.modelOutputRecovery?.recoveryStepId,
+        (write) => write.operation === "UPDATE" && write.step.status === "FAILED",
       );
+    if (isRecoveryFailure) {
+      this.recoveryFailureCancellationGuards.push(command.failIfCancellationRequested === true);
+      if (this.cancelBeforeRecoveryFailureCommit) {
+        await this.requestCancellation(command.run.id, {
+          runId: command.run.id,
+          cause: "USER_REQUESTED",
+          requestedAt: createTimestampMs(20),
+        });
+        if (command.failIfCancellationRequested === true) {
+          throw new RunExecutionConflictError(
+            "cancellation intent appeared before output recovery failure commit",
+          );
+        }
+      }
+    }
     if (isRecoverySchedule || isRecoveryOpen) {
       this.trace.push(isRecoverySchedule ? "commit:start" : "open:commit:start");
-      if (isRecoveryOpen) this.providerCallsAtRecoveryOpenCommit.push(this.providerCallCount());
+      if (isRecoveryOpen) {
+        this.providerCallsAtRecoveryOpenCommit.push(this.providerCallCount());
+        this.recoveryOpenCancellationGuards.push(command.failIfCancellationRequested === true);
+      }
       if (this.rejectRecoveryCommit) throw new Error("fixture rejects recovery schedule commit");
       if (isRecoverySchedule && this.cancelBeforeRecoveryCommit) {
         await this.requestCancellation(command.run.id, {
@@ -91,6 +125,14 @@ class RecoveryCommitTraceStore extends MemoryRunStore {
             "cancellation intent appeared before execution commit",
           );
         }
+      }
+      if (isRecoveryOpen) await this.beforeRecoveryOpenCommit?.();
+      if (
+        isRecoveryOpen &&
+        command.failIfCancellationRequested === true &&
+        this.snapshot.cancellationIntent !== undefined
+      ) {
+        throw new RunExecutionConflictError("cancellation intent appeared before execution commit");
       }
       const result = await super.commit(command);
       this.trace.push(isRecoverySchedule ? "commit:done" : "open:commit:done");
@@ -107,12 +149,19 @@ function createHarness(
     readonly cancelDuringBudgetSettlement?: boolean;
     readonly maxSteps?: number;
     readonly recoveryAdmittedOutputTokens?: number;
+    readonly recoveryAdmissionExceeded?: boolean;
+    readonly onRecoveryAdmission?: () => void | Promise<void>;
+    readonly cancelDuringRecoverySettlement?: boolean;
+    readonly cancelBeforeRecoveryFailureCommit?: boolean;
+    readonly now?: () => ReturnType<typeof createTimestampMs>;
+    readonly timeoutMs?: number;
   } = {},
 ) {
-  const run = recoveryEnabledRun(options.maxSteps);
+  const run = recoveryEnabledRun(options.maxSteps, options.timeoutMs);
   const store = new RecoveryCommitTraceStore({ run, conversationRecords: [] });
   store.rejectRecoveryCommit = options.rejectRecoveryCommit ?? false;
   store.cancelBeforeRecoveryCommit = options.cancelBeforeRecoveryCommit ?? false;
+  store.cancelBeforeRecoveryFailureCommit = options.cancelBeforeRecoveryFailureCommit ?? false;
   const executor = fakeFrozenModelTurnExecutor((): ModelTurnExecutionResult => ({
     kind: "COMPLETED",
     result: modelTurnResult({
@@ -135,6 +184,15 @@ function createHarness(
   };
   const budget: RunBudgetPort = {
     async admitLLM() {
+      if (executor.callCount() > 0) await options.onRecoveryAdmission?.();
+      if (executor.callCount() > 0 && options.recoveryAdmissionExceeded) {
+        return {
+          kind: "EXCEEDED" as const,
+          dimension: "TOKENS" as const,
+          accounted: 100,
+          limit: 100,
+        };
+      }
       const outputTokens =
         executor.callCount() === 0
           ? PREVIOUS_OUTPUT_TOKENS
@@ -150,7 +208,10 @@ function createHarness(
     },
     async settleLLM(input) {
       settlements.push(input);
-      if (options.cancelDuringBudgetSettlement) {
+      if (
+        options.cancelDuringBudgetSettlement ||
+        (options.cancelDuringRecoverySettlement && settlements.length > 1)
+      ) {
         await store.requestCancellation(run.id, {
           runId: run.id,
           cause: "USER_REQUESTED",
@@ -183,7 +244,7 @@ function createHarness(
         contextLimits: { maxInputTokens: 1_000 },
       }),
     },
-    clock: { now: () => createTimestampMs(20) },
+    clock: { now: options.now ?? (() => createTimestampMs(20)) },
     eventIdFactory: { create: createEventId },
     retryRegistry: new RunRetryRegistry({
       clock: { now: () => createTimestampMs(20) },
@@ -193,6 +254,132 @@ function createHarness(
   });
   store.providerCallCount = () => executor.callCount();
   return { controller, run, store, executor, notified, settlements, scheduledDelays, trace };
+}
+
+const TOOL_RESUME_DECISION = {
+  type: "TOOL_CALLS_REQUESTED",
+  modelTurn: {
+    callId: "llm_0195f3a0-0000-7000-8000-000000000b02",
+    model: { provider: "fixture", model: "fixture-model" },
+    finishReason: "TOOL_CALLS",
+    assistantMessage: {
+      role: "assistant",
+      content: [
+        {
+          type: "tool-call",
+          toolCallId: "call_a",
+          toolName: "read_file",
+          input: { path: "src/index.ts" },
+        },
+      ],
+    },
+  },
+  toolRequests: [
+    { externalCallId: "call_a", toolName: "read_file", args: { path: "src/index.ts" } },
+  ],
+} as AgentToolCallsDecision;
+
+const TOOL_RESUME_RESULTS = [
+  {
+    role: "tool" as const,
+    toolCallId: "call_a",
+    toolName: "read_file",
+    content: "export const value = 1;",
+    isError: false,
+  },
+];
+
+function seedRetryMode(
+  harness: ReturnType<typeof createHarness>,
+  mode: "START" | "TOOL_RESULTS" | "STEERING",
+) {
+  const messages = testRunMessageAuthority();
+  const runningRun = AgentRunSchema.parse({
+    ...harness.run,
+    status: "RUNNING",
+    startedAt: createTimestampMs(1),
+  });
+  const state = startAgentState(
+    createInitialAgentState(harness.run, createTimestampMs(1)),
+    createTimestampMs(1),
+  );
+  const sourceStepId = createStepId();
+  const records = [
+    {
+      runId: runningRun.id,
+      sequence: 1,
+      ...createUserMessageAppend(messages, runningRun, "GOAL").draft,
+    },
+  ];
+  let modeFields: Record<string, unknown> = { mode: "START" };
+  let steeringMessageIds: readonly string[] | undefined;
+  if (mode === "TOOL_RESULTS") {
+    const assistant = createAssistantMessageAppend(
+      messages,
+      runningRun,
+      sourceStepId,
+      TOOL_RESUME_DECISION.modelTurn,
+      "COMMENTARY",
+    );
+    const result = createExternalToolResultMessageAppend(
+      messages,
+      runningRun,
+      sourceStepId,
+      TOOL_RESUME_RESULTS[0]!,
+      { maxSingleObservationTokens: 100, maxObservationBatchTokens: 200 },
+    );
+    records.push(
+      { runId: runningRun.id, sequence: 2, ...assistant.draft },
+      { runId: runningRun.id, sequence: 3, ...result.draft },
+    );
+    modeFields = {
+      mode: "TOOL_RESULTS",
+      pendingDecision: TOOL_RESUME_DECISION,
+      receivedResults: TOOL_RESUME_RESULTS,
+      sourceStepId,
+    };
+  } else if (mode === "STEERING") {
+    const steering = createSteeringMessageAppend(messages, runningRun, "keep the existing parser");
+    records.push({ runId: runningRun.id, sequence: 2, ...steering.append.draft });
+    steeringMessageIds = [steering.messageId];
+    modeFields = {
+      mode: "STEERING",
+      messageIds: steeringMessageIds,
+      sourceStepId,
+    };
+  }
+  const continuation: RunContinuationCheckpoint = {
+    type: "WAITING_RETRY",
+    runId: runningRun.id,
+    failedStepId: createStepId(),
+    attempt: 1,
+    maxAttempts: 2,
+    episode: 1,
+    totalAttempts: 1,
+    nextAttemptAt: createTimestampMs(2),
+    errorCode: "LLM_NETWORK",
+    ...modeFields,
+  } as RunContinuationCheckpoint;
+  harness.store.stateRevision = 1;
+  harness.store.continuationRevision = 1;
+  harness.store.snapshot = {
+    ...harness.store.snapshot,
+    run: runningRun,
+    state,
+    stateRevision: 1,
+    continuation,
+    continuationRevision: 1,
+    conversationRecords: records,
+  };
+  return { run: runningRun, sourceStepId, records, steeringMessageIds };
+}
+
+function isRecoveryOpenCommit(command: RunExecutionCommit): boolean {
+  const recovery = command.state?.modelOutputRecovery;
+  if (recovery?.phase !== "OPENED") return false;
+  return command.stepWrites.some(
+    (write) => write.operation === "INSERT" && write.step.id === recovery.recoveryStepId,
+  );
 }
 
 describe("RunController output recovery scheduling transaction", () => {
@@ -385,14 +572,8 @@ describe("RunController output recovery scheduling transaction", () => {
 
     const result = await harness.controller.recover(harness.run.id);
 
-    const openingCommit = harness.store.commits.find(
-      (candidate) =>
-        candidate.state?.modelOutputRecovery?.phase === "OPENED" &&
-        candidate.stepWrites.some(
-          (write) =>
-            write.operation === "INSERT" &&
-            write.step.id === candidate.state?.modelOutputRecovery?.recoveryStepId,
-        ),
+    const openingCommit = harness.store.commits.find((candidate) =>
+      isRecoveryOpenCommit(candidate),
     );
     const reservationCommit = harness.store.commits.find(
       (candidate) => candidate.state?.modelOutputRecovery?.phase === "RESERVED",
@@ -466,17 +647,290 @@ describe("RunController output recovery scheduling transaction", () => {
 
     expect(harness.executor.callCount()).toBe(1);
     expect(harness.store.providerCallsAtRecoveryOpenCommit).toEqual([]);
-    expect(
-      harness.store.commits.some(
-        (candidate) =>
-          candidate.state?.modelOutputRecovery?.phase === "OPENED" &&
-          candidate.stepWrites.some(
-            (write) =>
-              write.operation === "INSERT" &&
-              write.step.id === candidate.state?.modelOutputRecovery?.recoveryStepId,
-          ),
-      ),
-    ).toBe(false);
+    expect(harness.store.commits.some((candidate) => isRecoveryOpenCommit(candidate))).toBe(false);
     expect(harness.store.snapshot.state?.modelOutputRecovery?.phase).toBe("RESERVED");
+  });
+});
+
+describe("RunController output recovery exits and provenance", () => {
+  it.each(["START", "TOOL_RESULTS", "STEERING"] as const)(
+    "preserves %s provenance and does not repeat history after the one recovery also truncates",
+    async (mode) => {
+      const harness = createHarness();
+      const seeded = seedRetryMode(harness, mode);
+
+      const first = await harness.controller.recover(harness.run.id);
+
+      expect(first.status).toBe("WAITING_RETRY");
+      const recoveryContinuation = harness.store.snapshot.continuation;
+      expect(recoveryContinuation).toMatchObject({
+        type: "WAITING_RETRY",
+        attempt: 2,
+        maxAttempts: 2,
+        errorCode: "LLM_OUTPUT_TRUNCATED",
+        mode,
+      });
+      if (mode === "TOOL_RESULTS") {
+        expect(recoveryContinuation).toMatchObject({
+          pendingDecision: TOOL_RESUME_DECISION,
+          receivedResults: TOOL_RESUME_RESULTS,
+          sourceStepId: seeded.sourceStepId,
+        });
+      } else if (mode === "STEERING") {
+        expect(recoveryContinuation).toMatchObject({
+          messageIds: seeded.steeringMessageIds,
+          sourceStepId: seeded.sourceStepId,
+        });
+      }
+
+      const second = await harness.controller.recover(harness.run.id);
+
+      expect(second.run.status).toBe("FAILED");
+      expect(harness.store.snapshot.state?.modelOutputRecovery).toMatchObject({ phase: "OPENED" });
+      expect(harness.store.snapshot.continuation).toBeUndefined();
+      expect(
+        harness.store.commits
+          .flatMap((commit) => commit.events)
+          .filter((event) => event.type === "retry.scheduled"),
+      ).toHaveLength(1);
+      expect(
+        harness.store.commits
+          .flatMap((commit) => commit.events)
+          .filter((event) => event.type === "retry.scheduled" && event.schemaVersion === 2),
+      ).toHaveLength(1);
+      expect(harness.executor.callCount()).toBe(2);
+      expect(harness.executor.requests[0]?.messages.map(({ role }) => role)).toEqual(
+        harness.executor.requests[1]?.messages.map(({ role }) => role),
+      );
+      expect(harness.store.snapshot.conversationRecords).toHaveLength(seeded.records.length);
+      expect(
+        harness.store.snapshot.conversationRecords.filter(
+          (record) => record.messageType === "USER",
+        ),
+      ).toHaveLength(mode === "STEERING" ? 2 : 1);
+      expect(
+        harness.store.commits
+          .flatMap((commit) => commit.events)
+          .some((event) => event.type.startsWith("tool.")),
+      ).toBe(false);
+    },
+  );
+
+  it("fails a network error from the opened recovery without creating a normal retry episode", async () => {
+    const harness = createHarness();
+    await harness.controller.start(harness.run.id);
+    harness.executor.resetScript(() => {
+      throw aiError("AI_NETWORK", { message: "recovery socket closed" });
+    });
+
+    const result = await harness.controller.recover(harness.run.id);
+
+    expect(result.run.status).toBe("FAILED");
+    expect(harness.store.snapshot.state?.modelOutputRecovery).toMatchObject({ phase: "OPENED" });
+    expect(harness.store.snapshot.continuation).toBeUndefined();
+    const eventTypes = harness.store.commits.flatMap((commit) =>
+      commit.events.map((event) => event.type),
+    );
+    expect(eventTypes.filter((type) => type === "retry.scheduled")).toHaveLength(1);
+    expect(eventTypes).not.toContain("retry.exhausted");
+    expect(harness.executor.callCount()).toBe(2);
+  });
+
+  it("lets cancellation during recovery usage settlement win over the network failure", async () => {
+    const harness = createHarness({ cancelDuringRecoverySettlement: true });
+    await harness.controller.start(harness.run.id);
+    harness.executor.resetScript(() => {
+      throw aiError("AI_NETWORK", { message: "recovery socket closed" });
+    });
+
+    const result = await harness.controller.recover(harness.run.id);
+
+    expect(result.run.status).toBe("CANCELLED");
+    expect(harness.store.snapshot.state?.modelOutputRecovery).toMatchObject({ phase: "OPENED" });
+    expect(harness.store.snapshot.state?.currentStepId).toBeUndefined();
+    expect(harness.store.snapshot.continuation).toBeUndefined();
+    const retrySchedules = harness.store.commits
+      .flatMap((commit) => commit.events)
+      .filter((event) => event.type === "retry.scheduled");
+    expect(retrySchedules).toHaveLength(1);
+    expect(retrySchedules[0]).toMatchObject({ schemaVersion: 2 });
+  });
+
+  it("lets cancellation at the opened recovery failure commit win over FAILED", async () => {
+    const harness = createHarness({ cancelBeforeRecoveryFailureCommit: true });
+    await harness.controller.start(harness.run.id);
+    harness.executor.resetScript(() => {
+      throw aiError("AI_NETWORK", { message: "recovery socket closed" });
+    });
+
+    const result = await harness.controller.recover(harness.run.id);
+
+    expect(result.run.status).toBe("CANCELLED");
+    expect(harness.store.snapshot.state?.modelOutputRecovery).toMatchObject({ phase: "OPENED" });
+    expect(harness.store.snapshot.state?.currentStepId).toBeUndefined();
+    expect(harness.store.snapshot.continuation).toBeUndefined();
+    expect(harness.store.recoveryFailureCancellationGuards).toEqual([true]);
+    expect(
+      harness.store.commits.flatMap((commit) => commit.events.map((event) => event.type)),
+    ).not.toContain("run.failed");
+    expect(harness.executor.callCount()).toBe(2);
+  });
+
+  it("fails an opened recovery closed on managed restart without creating a retry episode", async () => {
+    const harness = createHarness();
+    await harness.controller.start(harness.run.id);
+    let enteredProvider!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enteredProvider = resolve;
+    });
+    harness.executor.resetScript((_request, signal, callIndex) => {
+      if (callIndex !== 1) throw new Error("unexpected Provider call count");
+      enteredProvider();
+      return new Promise((resolve) => {
+        signal.addEventListener("abort", () => resolve({ kind: "CANCELLED" }), { once: true });
+      });
+    });
+    const recovery = harness.controller.recover(harness.run.id);
+    await entered;
+
+    const checkpoint = await harness.controller.prepareForShutdown(harness.run.id);
+    const result = await recovery;
+
+    expect(checkpoint).toBe("ALREADY_SAFE");
+    expect(result.run.status).toBe("FAILED");
+    expect(harness.store.snapshot.state?.modelOutputRecovery).toMatchObject({ phase: "OPENED" });
+    expect(harness.store.snapshot.continuation).toBeUndefined();
+    expect(
+      harness.store.commits
+        .flatMap((commit) => commit.events)
+        .filter((event) => event.type === "retry.scheduled"),
+    ).toHaveLength(1);
+    expect(harness.executor.callCount()).toBe(2);
+  });
+
+  it("retains OPENED after the recovery model turn returns a complete answer", async () => {
+    const harness = createHarness();
+    await harness.controller.start(harness.run.id);
+    harness.executor.resetScript(() => ({
+      text: "the recovered complete answer",
+      finishReason: "STOP",
+      usage: { inputTokens: 14, outputTokens: 60, totalTokens: 74 },
+    }));
+
+    const result = await harness.controller.recover(harness.run.id);
+
+    expect(result.status).toBe("TERMINAL");
+    expect(result.run.status).toBe("COMPLETED");
+    expect(result.run.finalResult).toMatchObject({
+      type: "NORMAL_COMPLETION",
+      text: "the recovered complete answer",
+    });
+    expect(harness.store.snapshot.state?.modelOutputRecovery).toMatchObject({ phase: "OPENED" });
+    expect(harness.store.snapshot.conversationRecords).toHaveLength(2);
+    expect(harness.store.snapshot.conversationRecords.at(-1)).toMatchObject({
+      messageType: "ASSISTANT",
+      source: { kind: "MODEL" },
+      data: { phase: "FINAL_ANSWER" },
+    });
+    expect(harness.store.snapshot.continuation).toBeUndefined();
+    expect(harness.executor.requests[1]?.settings?.maxOutputTokens).toBe(
+      PREVIOUS_OUTPUT_TOKENS * 2,
+    );
+    expect(harness.executor.callCount()).toBe(2);
+  });
+
+  it("keeps a genuine recovery budget refusal on the existing budget authority path", async () => {
+    const harness = createHarness({ recoveryAdmissionExceeded: true });
+    await harness.controller.start(harness.run.id);
+
+    const result = await harness.controller.recover(harness.run.id);
+
+    expect(result.run.status).toBe("BUDGET_EXCEEDED");
+    expect(harness.executor.callCount()).toBe(1);
+    expect(harness.store.snapshot.state?.modelOutputRecovery).toMatchObject({ phase: "RESERVED" });
+    expect(
+      harness.store.commits
+        .flatMap((commit) => commit.stepWrites)
+        .filter((write) => write.operation === "INSERT"),
+    ).toHaveLength(1);
+    expect(harness.store.providerCallsAtRecoveryOpenCommit).toEqual([]);
+    const eventTypes = harness.store.commits.flatMap((commit) =>
+      commit.events.map((event) => event.type),
+    );
+    expect(eventTypes).toContain("budget.exceeded");
+    expect(eventTypes).not.toContain("run.failed");
+  });
+
+  it("lets a deadline reached during recovery admission win before Provider I/O", async () => {
+    let now = createTimestampMs(20);
+    let harness: ReturnType<typeof createHarness>;
+    harness = createHarness({
+      timeoutMs: 1_000,
+      now: () => now,
+      onRecoveryAdmission: () => {
+        if (harness.executor.callCount() === 1) now = createTimestampMs(1_021);
+      },
+    });
+    await harness.controller.start(harness.run.id);
+    let providerExecutions = 0;
+    harness.executor.resetScript(() => {
+      providerExecutions += 1;
+      throw aiError("AI_NETWORK", { message: "deadline raced recovery admission" });
+    });
+
+    const result = await harness.controller.recover(harness.run.id);
+
+    expect(result.run.status).toBe("TIMEOUT");
+    expect(providerExecutions).toBe(0);
+    expect(harness.store.snapshot.state?.modelOutputRecovery).toMatchObject({ phase: "RESERVED" });
+  });
+
+  it("settles cancellation that arrives during the recovery open boundary before Provider I/O", async () => {
+    const harness = createHarness();
+    await harness.controller.start(harness.run.id);
+    let providerExecutions = 0;
+    harness.executor.resetScript(() => {
+      providerExecutions += 1;
+      return { text: "must not be requested", finishReason: "STOP" };
+    });
+    let cancellation: Promise<unknown> | undefined;
+    harness.store.beforeRecoveryOpenCommit = async () => {
+      cancellation ??= harness.controller.cancel(harness.run.id);
+      for (
+        let attempt = 0;
+        attempt < 10 && harness.store.snapshot.cancellationIntent === undefined;
+        attempt += 1
+      ) {
+        await Promise.resolve();
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    };
+
+    const result = await harness.controller.recover(harness.run.id);
+    await cancellation;
+
+    expect(result.run.status).toBe("CANCELLED");
+    expect(providerExecutions).toBe(0);
+    expect(harness.store.recoveryOpenCancellationGuards).toEqual([true]);
+  });
+
+  it("fails closed on an open-boundary CAS conflict without entering Provider I/O", async () => {
+    let harness: ReturnType<typeof createHarness>;
+    harness = createHarness({
+      onRecoveryAdmission: () => {
+        if (harness.executor.callCount() !== 1) return;
+        const nextRevision = (harness.store.stateRevision ?? 0) + 1;
+        harness.store.stateRevision = nextRevision;
+        harness.store.snapshot = { ...harness.store.snapshot, stateRevision: nextRevision };
+      },
+    });
+    await harness.controller.start(harness.run.id);
+
+    await expect(harness.controller.recover(harness.run.id)).rejects.toBeInstanceOf(
+      RunControllerInfrastructureError,
+    );
+
+    expect(harness.executor.callCount()).toBe(1);
+    expect(harness.store.providerCallsAtRecoveryOpenCommit).toEqual([]);
   });
 });
