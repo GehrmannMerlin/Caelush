@@ -806,6 +806,35 @@ describe("TurnPresentationFeed", () => {
     ).toEqual({ title: "思考中", detail: "正在接收模型响应" });
   });
 
+  it("describes v2 truncated-output scheduling without saying the Provider is reconnecting", () => {
+    const now = 1_700_000_000_000;
+    const wait: ModelWaitState = {
+      runId,
+      phase: "RETRY_SCHEDULED",
+      lastActivityAt: now,
+      idleForMs: 0,
+      providerEventReceived: false,
+      displayableEventReceived: false,
+      attempt: 2,
+      maxAttempts: 2,
+      retryOrdinal: 1,
+      maxRetries: 1,
+      nextAttemptAt: now + 2_000,
+      errorCode: "LLM_OUTPUT_TRUNCATED",
+    };
+
+    const message = modelWaitMessage(wait, now);
+
+    expect(message.title).toContain("输出已截断");
+    expect(`${message.title} ${message.detail}`).toContain("有界恢复");
+    expect(message.detail).toContain("第 2/2 次请求");
+    expect(`${message.title} ${message.detail}`).not.toContain("重新连接");
+
+    const startedMessage = modelWaitMessage({ ...wait, phase: "RETRYING" }, now);
+    expect(startedMessage.title).toContain("输出已截断");
+    expect(`${startedMessage.title} ${startedMessage.detail}`).not.toContain("重新连接");
+  });
+
   it("shows the five-minute idle termination notice as text, not a loading mark", () => {
     const liveActivity = {
       ...createInitialLiveActivityState(runId),

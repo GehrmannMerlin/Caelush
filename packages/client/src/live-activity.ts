@@ -666,6 +666,9 @@ function retryWaitState(
           errorCode: event.payload.errorCode,
         }
       : {}),
+    ...(event.type === "retry.started" && current?.errorCode === "LLM_OUTPUT_TRUNCATED"
+      ? { errorCode: current.errorCode }
+      : {}),
     ...(event.type === "retry.exhausted"
       ? { errorCode: event.payload.errorCode, exhaustionReason: event.payload.reason }
       : {}),

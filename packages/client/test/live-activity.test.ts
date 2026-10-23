@@ -439,7 +439,7 @@ describe("LiveActivity projection", () => {
   });
 
   it("accepts live v2 output recovery scheduling without adding transport details", () => {
-    const state = reduceLiveActivityEvent(
+    let state = reduceLiveActivityEvent(
       createInitialLiveActivityState(runId),
       durableEvent(
         "retry.scheduled",
@@ -467,6 +467,16 @@ describe("LiveActivity projection", () => {
     });
     expect(state.modelWait).not.toHaveProperty("fromTransportId");
     expect(state.modelWait).not.toHaveProperty("toTransportId");
+
+    state = reduceLiveActivityEvent(
+      state,
+      durableEvent("retry.started", { attempt: 2, maxAttempts: 2 }, 2, 101),
+    );
+
+    expect(state.modelWait).toMatchObject({
+      phase: "RETRYING",
+      errorCode: "LLM_OUTPUT_TRUNCATED",
+    });
   });
 
   it("does not resurrect a settled model wait when late status arrives or the Run ends", () => {

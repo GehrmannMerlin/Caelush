@@ -90,12 +90,24 @@ export function modelWaitMessage(
     case "RETRY_SCHEDULED": {
       const remainingMs = Math.max(0, (wait.nextAttemptAt ?? now) - now);
       const remainingSeconds = Math.ceil(remainingMs / 1_000);
+      if (wait.errorCode === "LLM_OUTPUT_TRUNCATED") {
+        return {
+          title: "模型输出已截断，正在进行有界恢复",
+          detail: `将在 ${remainingSeconds} 秒后发送第 ${wait.attempt ?? 2}/${wait.maxAttempts ?? 2} 次请求`,
+        };
+      }
       return {
         title: "正在等待重试",
         detail: `将在 ${remainingSeconds} 秒后重新连接 ${retryCount}`,
       };
     }
     case "RETRYING":
+      if (wait.errorCode === "LLM_OUTPUT_TRUNCATED") {
+        return {
+          title: "模型输出已截断，正在进行有界恢复",
+          detail: `正在发送第 ${wait.attempt ?? 2}/${wait.maxAttempts ?? 2} 次请求`,
+        };
+      }
       return { title: "正在重新连接", detail: `正在重新连接 ${retryCount}` };
     case "FALLBACK_SELECTED": {
       const transport = safeTransportId(wait.toTransportId);
