@@ -162,6 +162,68 @@ describe("DefaultPublicEventProjector", () => {
     expect(JSON.stringify(projected)).not.toMatch(/endpoint|https?:|credential|header/iu);
   });
 
+  it("keeps historical v1 retry projection unchanged", () => {
+    const event = makeEvent("retry.scheduled", {
+      attempt: 1,
+      maxAttempts: 2,
+      delayMs: 1_000,
+      nextAttemptAt: 1_700_000_001_000,
+      errorCode: "LLM_NETWORK",
+    });
+
+    expect(projector.project(event)).toMatchObject({
+      schemaVersion: 1,
+      type: "retry.scheduled",
+      payload: {
+        attempt: 1,
+        maxAttempts: 2,
+        delayMs: 1_000,
+        nextAttemptAt: 1_700_000_001_000,
+        errorCode: "LLM_NETWORK",
+      },
+    });
+  });
+
+  it("projects v2 output recovery with only its safe scheduling fields", () => {
+    const event = makeEvent(
+      "retry.scheduled",
+      {
+        attempt: 2,
+        maxAttempts: 2,
+        delayMs: 1_000,
+        nextAttemptAt: 1_700_000_001_000,
+        errorCode: "LLM_OUTPUT_TRUNCATED",
+      },
+      { schemaVersion: 2 },
+    );
+    const contaminated = {
+      ...event,
+      payload: {
+        ...event.payload,
+        providerResponse: "private provider response",
+        replayBytes: "private replay bytes",
+      },
+    } as RunEvent;
+
+    const projected = projector.project(contaminated);
+
+    expect(projected).toMatchObject({
+      schemaVersion: 2,
+      type: "retry.scheduled",
+      payload: {
+        attempt: 2,
+        maxAttempts: 2,
+        delayMs: 1_000,
+        nextAttemptAt: 1_700_000_001_000,
+        errorCode: "LLM_OUTPUT_TRUNCATED",
+      },
+    });
+    expect(projected?.payload).not.toHaveProperty("providerResponse");
+    expect(projected?.payload).not.toHaveProperty("replayBytes");
+    expect(JSON.stringify(projected)).not.toContain("private provider response");
+    expect(JSON.stringify(projected)).not.toContain("private replay bytes");
+  });
+
   it.each([
     ["DEBUG", "shell.output"],
     ["SYSTEM", "shell.output"],
@@ -653,7 +715,15 @@ describe("DefaultPublicEventProjector", () => {
               assistantItemId: "assistant_item_fixture",
               phase: "FINAL_ANSWER",
             }
-          : payloads[definition.type];
+          : definition.type === "retry.scheduled" && definition.schemaVersion === 2
+            ? {
+                attempt: 2,
+                maxAttempts: 2,
+                delayMs: 0,
+                nextAttemptAt: 1_700_000_000_001,
+                errorCode: "LLM_OUTPUT_TRUNCATED",
+              }
+            : payloads[definition.type];
       expect(payload, `fixture missing for ${definition.type}`).toBeDefined();
       const modelScoped = definition.type.startsWith("model.");
       const contextScoped = definition.type === "context.compaction.progress";

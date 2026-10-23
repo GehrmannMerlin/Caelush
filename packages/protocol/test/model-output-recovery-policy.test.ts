@@ -128,6 +128,20 @@ describe("bounded model output recovery protocol contract", () => {
         }).success,
       ).toBe(true);
     }
+
+    for (const invalidProcess of [
+      { ...retryWait, attempt: 1 },
+      { ...retryWait, maxAttempts: 3 },
+      { ...retryWait, episode: 1 },
+      { ...retryWait, totalAttempts: 1 },
+    ]) {
+      expect(
+        protocol.ContextUsageProjectionSchema.safeParse({
+          ...baseUsage,
+          process: invalidProcess,
+        }).success,
+      ).toBe(false);
+    }
   });
 });
 

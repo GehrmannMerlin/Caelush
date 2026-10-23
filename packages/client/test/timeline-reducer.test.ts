@@ -976,6 +976,44 @@ describe("shared Timeline reducer", () => {
     expect(state.retries).toEqual([expect.objectContaining({ attempt: 1, status: "RUNNING" })]);
   });
 
+  it("replays v2 output recovery without classifying it as a provider retry reason", () => {
+    let state = reduceTimelineEvent(
+      createInitialTimelineState(runId),
+      eventOf(
+        "retry.scheduled",
+        1,
+        {
+          attempt: 2,
+          maxAttempts: 2,
+          delayMs: 0,
+          nextAttemptAt: 1,
+          errorCode: "LLM_OUTPUT_TRUNCATED",
+        },
+        { schemaVersion: 2 },
+      ),
+    );
+
+    expect(state.retries).toEqual([
+      expect.objectContaining({
+        attempt: 2,
+        maxAttempts: 2,
+        retryOrdinal: 1,
+        maxRetries: 1,
+        reason: "LLM_OUTPUT_TRUNCATED",
+        status: "PENDING",
+      }),
+    ]);
+
+    state = reduceTimelineEvent(state, eventOf("retry.started", 2, { attempt: 2, maxAttempts: 2 }));
+
+    expect(state.retries).toHaveLength(1);
+    expect(state.retries[0]).toMatchObject({
+      reason: "LLM_OUTPUT_TRUNCATED",
+      status: "RUNNING",
+      started: true,
+    });
+  });
+
   it("projects retry count and fallback consistently when a retry opens a new Step", () => {
     const retryStepId = createStepId();
     const nextAttemptStepId = createStepId();

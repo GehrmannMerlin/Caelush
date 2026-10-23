@@ -132,6 +132,13 @@ describe("PublicRunEvent protocol contract", () => {
         payload: { ...(scheduled.payload as Record<string, unknown>), errorCode: "LLM_NETWORK" },
       }).success,
     ).toBe(false);
+    expect(
+      PublicRunEventSchema.safeParse({
+        ...scheduled,
+        payload: { ...(scheduled.payload as Record<string, unknown>), replayBytes: "private" },
+      }).success,
+    ).toBe(false);
+    expect(PublicRunEventSchema.safeParse({ ...scheduled, schemaVersion: 3 }).success).toBe(false);
   });
 
   it("publishes only safe transport fallback identities", () => {

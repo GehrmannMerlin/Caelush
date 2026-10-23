@@ -438,6 +438,37 @@ describe("LiveActivity projection", () => {
     });
   });
 
+  it("accepts live v2 output recovery scheduling without adding transport details", () => {
+    const state = reduceLiveActivityEvent(
+      createInitialLiveActivityState(runId),
+      durableEvent(
+        "retry.scheduled",
+        {
+          attempt: 2,
+          maxAttempts: 2,
+          delayMs: 0,
+          nextAttemptAt: 1_700_000_000_000,
+          errorCode: "LLM_OUTPUT_TRUNCATED",
+        },
+        1,
+        100,
+        undefined,
+        2,
+      ),
+    );
+
+    expect(state.modelWait).toMatchObject({
+      phase: "RETRY_SCHEDULED",
+      attempt: 2,
+      maxAttempts: 2,
+      retryOrdinal: 1,
+      maxRetries: 1,
+      errorCode: "LLM_OUTPUT_TRUNCATED",
+    });
+    expect(state.modelWait).not.toHaveProperty("fromTransportId");
+    expect(state.modelWait).not.toHaveProperty("toTransportId");
+  });
+
   it("does not resurrect a settled model wait when late status arrives or the Run ends", () => {
     let state = reduceLiveActivityEvent(
       createInitialLiveActivityState(runId),
@@ -790,10 +821,11 @@ function durableEvent(
   sequence: number,
   timestamp = 100,
   presentation?: { readonly title: string; readonly summary: string },
+  schemaVersion: 1 | 2 = 1,
 ) {
   return PublicRunEventSchema.parse({
     eventId: createEventId(),
-    schemaVersion: 1,
+    schemaVersion,
     runId,
     sessionId,
     ...(type.startsWith("llm.") ||

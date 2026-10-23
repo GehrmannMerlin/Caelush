@@ -196,6 +196,22 @@ function createRunProcessPanel(props: {
     const delay = Math.max(0, process.nextAttemptAt - Date.now());
     const minutes = Math.floor(delay / 60_000);
     const seconds = Math.ceil((delay % 60_000) / 1_000);
+    if (process.errorCode === "LLM_OUTPUT_TRUNCATED") {
+      return createElement(
+        "section",
+        {
+          className: "context-inspector-process",
+          role: "status",
+          "aria-label": "模型输出恢复状态",
+        },
+        createElement("strong", null, "模型输出已截断，正在进行一次有界恢复"),
+        createElement(
+          "p",
+          null,
+          `预计约 ${minutes} 分 ${seconds} 秒后，以第 ${process.attempt}/${process.maxAttempts} 次请求继续。`,
+        ),
+      );
+    }
     return createElement(
       "section",
       { className: "context-inspector-process", role: "status", "aria-label": "模型重试状态" },

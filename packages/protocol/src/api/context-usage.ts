@@ -538,6 +538,37 @@ export const ContextUsageProjectionSchema = z
   })
   .strict()
   .superRefine((usage, context) => {
+    const process = usage.process;
+    if (process?.kind === "RETRY_WAIT" && process.errorCode === "LLM_OUTPUT_TRUNCATED") {
+      if (process.attempt !== 2) {
+        context.addIssue({
+          code: "custom",
+          path: ["process", "attempt"],
+          message: "output recovery attempt must be 2",
+        });
+      }
+      if (process.maxAttempts !== 2) {
+        context.addIssue({
+          code: "custom",
+          path: ["process", "maxAttempts"],
+          message: "output recovery maxAttempts must be 2",
+        });
+      }
+      if (process.episode !== undefined) {
+        context.addIssue({
+          code: "custom",
+          path: ["process", "episode"],
+          message: "output recovery cannot include a provider retry episode",
+        });
+      }
+      if (process.totalAttempts !== undefined) {
+        context.addIssue({
+          code: "custom",
+          path: ["process", "totalAttempts"],
+          message: "output recovery cannot include provider retry totals",
+        });
+      }
+    }
     const fullEstimate = usage.fullRequestInputEstimateTokens;
     const fullRatio = usage.fullWindowUsedRatio;
     if ((fullEstimate === undefined) !== (fullRatio === undefined)) {

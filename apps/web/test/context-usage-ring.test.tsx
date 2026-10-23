@@ -356,6 +356,27 @@ describe("ContextUsageRing", () => {
     expect(markup).toContain("LLM_NETWORK");
   });
 
+  it("describes truncated output as bounded recovery instead of provider unavailability", () => {
+    const markup = renderToStaticMarkup(
+      <ContextRunProcessPanel
+        runId={baseUsage.runId}
+        process={{
+          kind: "RETRY_WAIT",
+          nextAttemptAt: Date.now() + 1_000,
+          attempt: 2,
+          maxAttempts: 2,
+          errorCode: "LLM_OUTPUT_TRUNCATED",
+        }}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="模型输出恢复状态"');
+    expect(markup).toContain("模型输出已截断");
+    expect(markup).toContain("一次有界恢复");
+    expect(markup).not.toContain("模型服务暂时不可用");
+    expect(markup).not.toContain("重新连接");
+  });
+
   it("clamps invalid ratios to the visible 0%–100% ring range", () => {
     const overfull = renderToStaticMarkup(
       <ContextUsageRing usage={{ ...baseUsage, fullWindowUsedRatio: 1.4 }} />,
