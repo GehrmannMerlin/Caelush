@@ -1,3 +1,4 @@
+import { RunExecutionConflictError } from "@caelush/agent";
 import { createTimestampMs } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
@@ -31,5 +32,33 @@ describe("RunExecutionStore cancellation visibility", () => {
       cause: "USER_REQUESTED",
       requestedAt,
     });
+  });
+
+  it("rejects a guarded execution commit when cancellation was requested first", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    stores.push(storage);
+    const session = makeSession();
+    const run = makeRun(session.id);
+    await storage.sessions.insert(session);
+    await storage.runs.insert(run);
+    await storage.execution.requestCancellation!(run.id, {
+      runId: run.id,
+      cause: "USER_REQUESTED",
+      requestedAt: createTimestampMs(200),
+    });
+
+    await expect(
+      storage.execution.commit({
+        run,
+        expectedStateRevision: null,
+        expectedContinuationRevision: null,
+        stepWrites: [],
+        messagesToAppend: [],
+        events: [],
+        failIfCancellationRequested: true,
+      }),
+    ).rejects.toBeInstanceOf(RunExecutionConflictError);
+
+    expect((await storage.execution.load(run.id))?.run.status).toBe("PENDING");
   });
 });

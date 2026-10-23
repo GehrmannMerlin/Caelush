@@ -1,6 +1,7 @@
 import type { AdvanceAgentDirective, AgentLoopAdvanceResult } from "@caelush/agent";
 
 import type { AgentTurnObservation } from "./run-model-turn-boundary.js";
+import type { ModelOutputRecoveryPlan } from "./model-output-recovery.js";
 
 /**
  * The production Agent effect settlement router.
@@ -46,6 +47,10 @@ export type AgentEffectSettlementRoute =
     }
   | { readonly route: "VERIFICATION_COMPATIBILITY" }
   | { readonly route: "RETRY_COMPATIBILITY" }
+  | {
+      readonly route: "OUTPUT_RECOVERY_SCHEDULE";
+      readonly plan: Extract<ModelOutputRecoveryPlan, { readonly kind: "RECOVER" }>;
+    }
   | { readonly route: "OUTPUT_RECOVERY_STOP" }
   | { readonly route: "TERMINATION_AUTHORITY" }
   | { readonly route: "BUDGET_AUTHORITY" };
@@ -72,6 +77,8 @@ export interface AgentEffectSettlementInput {
    * turn with a durable block.
    */
   readonly observation: AgentTurnObservation;
+  /** A pure Core decision for the exact classified LENGTH result, when recovery is eligible. */
+  readonly outputRecoveryPlan?: ModelOutputRecoveryPlan | undefined;
 }
 
 /** Classify one executed Agent effect onto exactly one settlement authority. */
@@ -94,6 +101,10 @@ export function classifyAgentEffectSettlement(
   // admitted cap that could not increase. The public Agent error is deliberately not a routing
   // authority: an ordinary provider truncation carries the same safe error projection.
   if (observation.outputRecoveryStop) return { route: "OUTPUT_RECOVERY_STOP" };
+
+  if (result.kind === "FAILED" && input.outputRecoveryPlan?.kind === "RECOVER") {
+    return { route: "OUTPUT_RECOVERY_SCHEDULE", plan: input.outputRecoveryPlan };
+  }
 
   if (result.kind === "FINAL_CANDIDATE") {
     // The durable Run contract selects one authority. New Runs use the canonical normal transition;

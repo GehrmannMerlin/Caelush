@@ -170,6 +170,12 @@ import type {
 } from "./model-transport-recovery-port.js";
 import { toDurableRetryCode } from "./ai-invocation-projection.js";
 import type { AgentBudgetBlock } from "./agent-errors.js";
+import { planModelOutputRecovery, type ModelOutputRecoveryPlan } from "./model-output-recovery.js";
+import {
+  createOutputRecoveryMaxStepsCommit,
+  createOutputRecoveryScheduleCommit,
+  type OutputRecoveryRetryResumeContext,
+} from "./model-output-recovery-commit.js";
 
 export {
   RunControllerBusyError,
@@ -2206,6 +2212,7 @@ export class RunController {
 
     const execution = await this.dependencies.agentExecution.resolve(snapshot.run);
     const transportSelection = this.resolveModelTransportSelection(snapshot);
+    const model = execution.models.resolve(snapshot.run.model);
     const step = allocateRunAgentStep({
       state,
       runId: snapshot.run.id,
@@ -2282,7 +2289,7 @@ export class RunController {
         },
         turn: { stepId: step.id, sequence: step.sequence },
         conversation,
-        model: execution.models.resolve(snapshot.run.model),
+        model,
         tools: execution.tools,
         ...(modelSettings === undefined ? {} : { modelSettings }),
         signal,
@@ -2322,7 +2329,23 @@ export class RunController {
         });
       }
 
-      return await this.settle(snapshot, directive, effect.result, observation);
+      const outputRecoveryPlan =
+        effect.result.kind === "FAILED" &&
+        observation.providerTurnState === "COMPLETED" &&
+        isOutputTruncatedModelFailure(effect.result.error)
+          ? planModelOutputRecovery({
+              policy: snapshot.run.contextBudgetPolicy,
+              recovery: snapshot.state?.modelOutputRecovery,
+              trustedAdmittedOutputTokens: observation.admissionAllowed
+                ? observation.admittedOutputTokens
+                : undefined,
+              modelMaxOutputTokens: model.limits.maxOutputTokens,
+              explicitUserMaxOutputTokens: execution.modelSettings?.maxOutputTokens,
+              cancelled: signal.aborted,
+              deadlineExceeded: this.isExpired(snapshot),
+            })
+          : undefined;
+      return await this.settle(snapshot, directive, effect.result, observation, outputRecoveryPlan);
     } finally {
       const privateCompletion = observation.privateCompletion;
       if (privateCompletion?.completeness === "COMPLETE") privateCompletion.payload.fill(0);
@@ -3033,6 +3056,7 @@ export class RunController {
     directive: AdvanceAgentDirective,
     rawResult: AgentLoopAdvanceResult,
     observation: AgentTurnObservation,
+    outputRecoveryPlan?: ModelOutputRecoveryPlan,
   ): Promise<RunControllerResult> {
     if (rawResult.kind === "FAILED" || rawResult.kind === "CANCELLED") {
       await this.settleUnopenedLLMReservation(before.run.id, observation);
@@ -3045,6 +3069,7 @@ export class RunController {
       directive,
       observation,
       completionContract: before.run.completionContract,
+      outputRecoveryPlan,
     });
 
     // The canonical branch is planned or it fails loudly. A planner error is never caught and turned
@@ -3073,6 +3098,13 @@ export class RunController {
         );
       case "RETRY_COMPATIBILITY":
         return this.settleRetryCompatibility(before, result as AgentLoopFailedResult, observation);
+      case "OUTPUT_RECOVERY_SCHEDULE":
+        if (result.kind !== "FAILED") {
+          throw new RunControllerInvariantError(
+            "An output recovery schedule requires the Agent's classified LENGTH failure.",
+          );
+        }
+        return this.settleOutputRecovery(before, result, observation, route.plan);
       case "OUTPUT_RECOVERY_STOP": {
         const current = await this.load(before.run.id);
         const authority = this.resolveAuthority(
@@ -3870,6 +3902,127 @@ export class RunController {
   }
 
   /**
+   * Atomically persist one explicit output recovery reservation after a classified LENGTH result.
+   *
+   * The pure plan supplies only a target. This method revalidates the live Run authority and the
+   * admitted source cap, settles real usage first, then commits the failed Step, RESERVED fact,
+   * WAITING_RETRY continuation and the two durable facts together. The timer is armed only after
+   * Storage commits and subscribers have been notified.
+   */
+  private async settleOutputRecovery(
+    before: RunExecutionSnapshot,
+    result: AgentLoopFailedResult,
+    observation: AgentTurnObservation,
+    plan: Extract<ModelOutputRecoveryPlan, { readonly kind: "RECOVER" }>,
+  ): Promise<RunControllerResult> {
+    const initial = await this.load(before.run.id);
+    const authority = this.resolveAuthority(initial, false);
+    if (authority === "CANCELLED") return this.finalizeCancellation(initial);
+    if (authority === "TIMEOUT") return this.finalizeTimeout(initial);
+    if (authority === "TERMINAL") return this.resultFromSnapshot(initial);
+    if (authority === "UNEXPECTED_ABORT") {
+      throw new RunControllerInvariantError("Run execution aborted without a known authority");
+    }
+    const budgetSettlement = await this.settleBudgetAttempt(initial, result);
+    if (budgetSettlement !== undefined)
+      return this.finalizeBudgetExceeded(initial, budgetSettlement);
+
+    // Usage settlement is asynchronous. Re-read durable authority afterward so cancellation or a
+    // deadline that arrived during accounting wins before a recovery schedule is constructed.
+    const current = await this.load(before.run.id);
+    const settledAuthority = this.resolveAuthority(current, false);
+    if (settledAuthority === "CANCELLED") return this.finalizeCancellation(current);
+    if (settledAuthority === "TIMEOUT") return this.finalizeTimeout(current);
+    if (settledAuthority === "TERMINAL") return this.resultFromSnapshot(current);
+    if (settledAuthority === "UNEXPECTED_ABORT") {
+      throw new RunControllerInvariantError("Run execution aborted without a known authority");
+    }
+    if (current.state === undefined) {
+      throw new RunControllerInfrastructureError("Run state disappeared during output settlement");
+    }
+    if (current.state.modelOutputRecovery !== undefined) {
+      throw new RunControllerConflictError("The Run already has a durable output recovery fact.");
+    }
+    if (
+      !observation.admissionAllowed ||
+      !isPositiveSafeInteger(observation.admittedOutputTokens) ||
+      plan.targetOutputTokens <= observation.admittedOutputTokens
+    ) {
+      throw new RunControllerInvariantError(
+        "Output recovery requires a target above the budget-admitted source ceiling.",
+      );
+    }
+
+    const now = this.dependencies.clock.now();
+    const step = this.requireExecutedStep(current, result.turn.stepId, "An output-truncated turn");
+    const failedStep = failAgentStep(step, now);
+    const settledState = this.settleExecutedStepState(current.state, step, result, now);
+
+    if (settledState.usage.steps >= current.run.limits.maxSteps) {
+      const command = createOutputRecoveryMaxStepsCommit({
+        current,
+        failedStep,
+        resultError: result.error,
+        settledState,
+        now,
+        eventFactory: this.eventFactory,
+        nextEventId: () => this.nextEventId(),
+      });
+      const outcome = await this.commitOutputRecoveryBoundary(command);
+      if (outcome.kind === "RESULT") return outcome.result;
+      this.notify(outcome.commit.events);
+      return this.resultFromSnapshot(outcome.commit.snapshot);
+    }
+
+    const retryContext = this.retryResumeContext(current.continuation);
+    const command = createOutputRecoveryScheduleCommit({
+      current,
+      failedStep,
+      resultError: result.error,
+      settledState,
+      now,
+      eventFactory: this.eventFactory,
+      nextEventId: () => this.nextEventId(),
+      admittedOutputTokens: observation.admittedOutputTokens,
+      targetOutputTokens: plan.targetOutputTokens,
+      retryContext,
+    });
+    const outcome = await this.commitOutputRecoveryBoundary(command);
+    if (outcome.kind === "RESULT") return outcome.result;
+    this.notify(outcome.commit.events);
+    this.scheduleRetry(command.run.id, now, deriveRunDeadline(command.run)?.deadlineAt);
+    return this.resultFromSnapshot(outcome.commit.snapshot);
+  }
+
+  private async commitOutputRecoveryBoundary(
+    command: RunExecutionCommit,
+  ): Promise<
+    | { readonly kind: "COMMITTED"; readonly commit: RunExecutionCommitResult }
+    | { readonly kind: "RESULT"; readonly result: RunControllerResult }
+  > {
+    try {
+      return { kind: "COMMITTED", commit: await this.commit(command) };
+    } catch (error) {
+      if (!(error instanceof RunExecutionConflictError)) throw error;
+      const latest = await this.load(command.run.id);
+      const authority = this.resolveAuthority(latest, false);
+      if (authority === "CANCELLED") {
+        return { kind: "RESULT", result: await this.finalizeCancellation(latest) };
+      }
+      if (authority === "TIMEOUT") {
+        return { kind: "RESULT", result: await this.finalizeTimeout(latest) };
+      }
+      if (authority === "TERMINAL") {
+        return { kind: "RESULT", result: this.resultFromSnapshot(latest) };
+      }
+      if (authority === "UNEXPECTED_ABORT") {
+        throw new RunControllerInvariantError("Run execution aborted without a known authority");
+      }
+      throw error;
+    }
+  }
+
+  /**
    * The retry provenance a new checkpoint carries forward.
    *
    * A first retry of a Tool resume captures the original Tool request's Step on the way in, so it
@@ -3878,7 +4031,7 @@ export class RunController {
    */
   private retryResumeContext(
     previous: RunExecutionSnapshot["continuation"],
-  ): WaitingRetryResumeContext {
+  ): OutputRecoveryRetryResumeContext {
     if (previous?.type === "WAITING_TOOL_RESULTS" && previous.receivedResults !== undefined) {
       return {
         mode: "TOOL_RESULTS",
@@ -5594,22 +5747,6 @@ function assignedRunInputs(
   return (snapshot.runInputs?.recorded ?? []).filter((entry) => included.has(entry.messageId));
 }
 
-type WaitingRetryResumeContext =
-  | {
-      readonly mode: "START";
-    }
-  | {
-      readonly mode: "STEERING";
-      readonly messageIds: readonly string[];
-      readonly sourceStepId: StepId;
-    }
-  | {
-      readonly mode: "TOOL_RESULTS";
-      readonly pendingDecision: import("./agent-decision.js").AgentToolCallsDecision;
-      readonly receivedResults: readonly import("@caelush/ai").AIToolResultMessage[];
-      readonly sourceStepId?: StepId | undefined;
-    };
-
 /**
  * The usage one frozen Agent result reported, when it reported any.
  *
@@ -5664,6 +5801,14 @@ function isReservedOutputRecoveryAttempt(snapshot: RunExecutionSnapshot): boolea
 
 function isPositiveSafeInteger(value: number | undefined): value is number {
   return value !== undefined && Number.isSafeInteger(value) && value > 0;
+}
+
+function isOutputTruncatedModelFailure(error: AgentError): boolean {
+  return (
+    error.code === "MODEL_ERROR" &&
+    error.phase === "LLM" &&
+    error.details?.modelOutputFailure === "OUTPUT_TRUNCATED"
+  );
 }
 
 /**

@@ -7,6 +7,7 @@ import type {
   JsonValue,
   RunSecurityPolicySnapshotV1,
   RetryExhaustedEvent,
+  RetryScheduledEventV2,
   StepId,
   TransportFallbackSelectedEvent,
   TimestampMs,
@@ -73,6 +74,13 @@ export interface RunEventFactory {
     delayMs: number,
     nextAttemptAt: TimestampMs,
     errorCode: "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT",
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
+  retryScheduledV2(
+    run: AgentRun,
+    step: AgentStep,
+    payload: RetryScheduledEventV2["payload"],
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
@@ -290,6 +298,12 @@ export function createRunEventFactory(): RunEventFactory {
       ...base(run, eventId, timestamp, step.id),
       type: "retry.scheduled",
       payload: { attempt, maxAttempts, delayMs, nextAttemptAt, errorCode },
+    }),
+    retryScheduledV2: (run, step, payload, eventId, timestamp) => ({
+      ...base(run, eventId, timestamp, step.id),
+      schemaVersion: 2,
+      type: "retry.scheduled",
+      payload,
     }),
     retryStarted: (run, step, attempt, maxAttempts, eventId, timestamp) => ({
       ...base(run, eventId, timestamp, step.id),

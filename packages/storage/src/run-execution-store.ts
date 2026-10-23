@@ -977,6 +977,17 @@ export class SqliteRunExecutionStore
     return withAuthoritativeTransaction(client, async () => {
       client.exec("BEGIN IMMEDIATE");
       try {
+        if (command.failIfCancellationRequested === true) {
+          const current = await this.load(command.run.id);
+          if (current === null) {
+            throw new StorageError(`AgentRun ${command.run.id} was not found`);
+          }
+          if (current.cancellationIntent !== undefined) {
+            throw new RunExecutionConflictError(
+              "cancellation intent appeared before execution commit",
+            );
+          }
+        }
         if (normalFinalResult !== undefined) {
           // Re-read after acquiring SQLite's write lock. Cancellation committed first wins;
           // otherwise this is the one terminal writer for the persisted natural-completion

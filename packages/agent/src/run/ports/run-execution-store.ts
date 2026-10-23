@@ -112,6 +112,8 @@ export type RunExecutionContinuationWrite =
 export interface RunExecutionCommit {
   /** Already encrypted by the host. Written with the Assistant reference in this transaction. */
   readonly privateReplayWrites?: readonly PrivateReplayWrite[];
+  /** Reject the commit if a durable cancellation intent exists when the write lock is held. */
+  readonly failIfCancellationRequested?: true;
   readonly run: AgentRun;
   readonly state?: AgentState;
   readonly expectedStateRevision: number | null;
