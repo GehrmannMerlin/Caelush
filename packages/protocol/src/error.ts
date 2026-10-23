@@ -109,9 +109,7 @@ export const ContextPreparationFailureReasonSchema = z.enum([
   "CONTEXT_WINDOW_EXHAUSTED",
   "CONTEXT_PREPARATION_FAILED",
 ]);
-export type ContextPreparationFailureReason = z.infer<
-  typeof ContextPreparationFailureReasonSchema
->;
+export type ContextPreparationFailureReason = z.infer<typeof ContextPreparationFailureReasonSchema>;
 
 /**
  * The one object a Run error may publish about Context preparation.

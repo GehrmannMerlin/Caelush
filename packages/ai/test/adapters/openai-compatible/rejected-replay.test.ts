@@ -5,7 +5,11 @@ import {
   deepSeekReplayConnectionFingerprint,
 } from "../../../src/adapters/openai-compatible/private-replay.js";
 import { modelDescriptor } from "../../support/fixtures.js";
-import { finishChunk, openAIChunk, sseResponse } from "../../support/openai-compatible-transport.js";
+import {
+  finishChunk,
+  openAIChunk,
+  sseResponse,
+} from "../../support/openai-compatible-transport.js";
 import type { AIAdapterEvent } from "../../../src/adapters/api-adapter-event.js";
 import type { ApiAdapterStreamInput } from "../../../src/adapters/api-adapter.js";
 import type { AIAssistantMessage } from "../../../src/messages/message.js";
@@ -40,7 +44,12 @@ function assistantMessage(): AIAssistantMessage {
   return {
     role: "assistant",
     content: [
-      { type: "tool-call", toolCallId: "call-good", toolName: "read_file", input: { path: "a.ts" } },
+      {
+        type: "tool-call",
+        toolCallId: "call-good",
+        toolName: "read_file",
+        input: { path: "a.ts" },
+      },
       {
         type: "tool-call-rejected",
         toolCallId: "call-bad",

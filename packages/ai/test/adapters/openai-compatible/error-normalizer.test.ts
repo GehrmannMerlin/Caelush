@@ -83,7 +83,10 @@ describe("OpenAI-compatible error normalization", () => {
   it("parses an HTTP-date Retry-After relative to the injected clock", () => {
     expect(
       normalize(
-        apiError({ statusCode: 429, responseHeaders: { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" } }),
+        apiError({
+          statusCode: 429,
+          responseHeaders: { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" },
+        }),
         Date.parse("2026-10-04T00:00:00.000Z"),
       ).retryAfterMs,
     ).toBe(Date.parse("2026-10-21T07:28:00.000Z") - Date.parse("2026-10-04T00:00:00.000Z"));

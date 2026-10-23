@@ -18,7 +18,9 @@ const codecs = createStandardAgentMessageCodecRegistry((type) => projectors.curr
 function messageFactory() {
   let cursor = 0;
   return createAgentMessageFactory({
-    ids: { create: () => `amsg_0192f5b1-4d3a-7c2e-8a91-${String(cursor++).padStart(12, "0")}` as never },
+    ids: {
+      create: () => `amsg_0192f5b1-4d3a-7c2e-8a91-${String(cursor++).padStart(12, "0")}` as never,
+    },
     now: () => createTimestampMs(1_700_000_000_000),
     turns,
   });
@@ -85,9 +87,23 @@ describe("Phase 5F final Message V2 record store", () => {
       content: [{ type: "TEXT", text: "second" }],
     });
 
-    expect((await storage.messageRecords.append(run.id, [await recordDraftOf(run.id, session.id, first)])).map((record) => record.sequence)).toEqual([1]);
-    expect((await storage.messageRecords.append(run.id, [await recordDraftOf(run.id, session.id, second)])).map((record) => record.sequence)).toEqual([2]);
-    expect((await storage.messageRecords.listByRun(run.id)).map((record) => record.sequence)).toEqual([1, 2]);
+    expect(
+      (
+        await storage.messageRecords.append(run.id, [
+          await recordDraftOf(run.id, session.id, first),
+        ])
+      ).map((record) => record.sequence),
+    ).toEqual([1]);
+    expect(
+      (
+        await storage.messageRecords.append(run.id, [
+          await recordDraftOf(run.id, session.id, second),
+        ])
+      ).map((record) => record.sequence),
+    ).toEqual([2]);
+    expect(
+      (await storage.messageRecords.listByRun(run.id)).map((record) => record.sequence),
+    ).toEqual([1, 2]);
     expect(await storage.messageRecords.listBySession(session.id)).toHaveLength(2);
     await storage.close();
   });

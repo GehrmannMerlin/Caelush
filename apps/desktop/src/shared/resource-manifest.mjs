@@ -115,7 +115,7 @@ export function validateDesktopResourceManifest(input) {
     new Set(nativeModules.map((module) => module.name)).size !== nativeModules.length ||
     nativeModules.length !== 1 ||
     nativeModules[0].name !== "node-pty" ||
-    nativeModules[0].version !== "1.1.0" ||
+    nativeModules[0].version !== "1.2.0-beta.14" ||
     nativeModules[0].platform !== "win32" ||
     nativeModules[0].architecture !== "x64"
   ) {

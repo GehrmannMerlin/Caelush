@@ -79,7 +79,7 @@ export async function resolveDesktopDaemonResources(
     !("name" in ptyManifest) ||
     ptyManifest.name !== "node-pty" ||
     !("version" in ptyManifest) ||
-    ptyManifest.version !== "1.1.0"
+    ptyManifest.version !== "1.2.0-beta.14"
   ) {
     throw new Error("The staged USER_TERMINAL runtime version is invalid.");
   }
@@ -250,8 +250,8 @@ async function verifyRuntimePackages(
   ) as { version?: unknown };
   const ptyEntry = manifest.nativeModules.find((module) => module.name === "node-pty");
   if (
-    pty.version !== "1.1.0" ||
-    ptyEntry?.version !== "1.1.0" ||
+    pty.version !== "1.2.0-beta.14" ||
+    ptyEntry?.version !== "1.2.0-beta.14" ||
     daemon.version !== manifest.daemonVersion
   ) {
     throw new Error("DESKTOP_RUNTIME_PACKAGE_VERSION_MISMATCH");

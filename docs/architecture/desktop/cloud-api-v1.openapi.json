@@ -322,9 +322,7 @@
     },
     "/v1/desktop/releases": {
       "get": {
-        "tags": [
-          "Desktop Update"
-        ],
+        "tags": ["Desktop Update"],
         "summary": "List published Desktop release notes",
         "description": "Returns bounded release notes for published and retired Desktop releases. Installer URLs, hashes, signatures, and draft release metadata are never included.",
         "operationId": "listDesktopReleaseHistory",
@@ -414,11 +412,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "enum": [
-                "dev",
-                "beta",
-                "stable"
-              ]
+              "enum": ["dev", "beta", "stable"]
             }
           }
         ],
@@ -433,9 +427,7 @@
     },
     "/v1/account/me/profile": {
       "get": {
-        "tags": [
-          "Account"
-        ],
+        "tags": ["Account"],
         "summary": "Read the authenticated account profile",
         "operationId": "getCurrentAccountProfile",
         "responses": {
@@ -503,9 +495,7 @@
         "x-caelush-idempotency": "Safe read; returns only the authenticated account profile."
       },
       "patch": {
-        "tags": [
-          "Account"
-        ],
+        "tags": ["Account"],
         "summary": "Update the authenticated account profile",
         "operationId": "updateCurrentAccountProfile",
         "requestBody": {
@@ -616,9 +606,7 @@
     },
     "/v1/account/me/profile/avatar": {
       "get": {
-        "tags": [
-          "Account"
-        ],
+        "tags": ["Account"],
         "summary": "Read the authenticated account avatar",
         "operationId": "getCurrentAccountAvatar",
         "responses": {
@@ -1273,11 +1261,7 @@
           },
           "channel": {
             "type": "string",
-            "enum": [
-              "dev",
-              "beta",
-              "stable"
-            ],
+            "enum": ["dev", "beta", "stable"],
             "title": "Channel"
           },
           "publishedAt": {
@@ -1294,12 +1278,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "version",
-          "channel",
-          "publishedAt",
-          "releaseNotes"
-        ],
+        "required": ["version", "channel", "publishedAt", "releaseNotes"],
         "title": "DesktopReleaseHistoryItem"
       },
       "DesktopReleaseHistoryResponse": {
@@ -1321,10 +1300,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "requestId",
-          "releases"
-        ],
+        "required": ["requestId", "releases"],
         "title": "DesktopReleaseHistoryResponse"
       },
       "RegisterRequest": {
@@ -1443,11 +1419,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "displayName",
-          "avatarRevision",
-          "updatedAt"
-        ],
+        "required": ["displayName", "avatarRevision", "updatedAt"],
         "title": "AccountProfile"
       },
       "AccountProfileResponse": {
@@ -1463,10 +1435,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "requestId",
-          "profile"
-        ],
+        "required": ["requestId", "profile"],
         "title": "AccountProfileResponse"
       },
       "Body_updateCurrentAccountProfile": {
@@ -1539,9 +1508,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "displayName"
-        ],
+        "required": ["displayName"],
         "title": "Body_updateCurrentAccountProfile"
       }
     }

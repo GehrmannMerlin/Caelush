@@ -349,10 +349,7 @@ export function assertToolPreparationFailureFact(
     throw new TypeError("Tool preparation failure code is invalid.");
   }
   const issues = candidate["issues"];
-  if (
-    !Array.isArray(issues) ||
-    issues.length > TOOL_PREPARATION_FAILURE_LIMITS.maxIssues
-  ) {
+  if (!Array.isArray(issues) || issues.length > TOOL_PREPARATION_FAILURE_LIMITS.maxIssues) {
     throw new TypeError("Tool preparation failure issues exceed the bounded limit.");
   }
   for (const issue of issues) assertToolPreparationFailureIssue(issue);

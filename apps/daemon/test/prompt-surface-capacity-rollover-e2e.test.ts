@@ -82,7 +82,9 @@ class LegacyCapacityAdapter implements ApiAdapter {
       yield finish("TOOL_CALLS");
       return;
     }
-    yield* answer("The 128-record capacity boundary was crossed without a local projection failure.");
+    yield* answer(
+      "The 128-record capacity boundary was crossed without a local projection failure.",
+    );
   }
 }
 
@@ -90,7 +92,10 @@ function makeEvidence(): string {
   return Array.from(
     { length: 40 },
     (_, index) =>
-      "CONTAINER_EVIDENCE_" + String(index).padStart(3, "0") + " " + "closed observation ".repeat(5),
+      "CONTAINER_EVIDENCE_" +
+      String(index).padStart(3, "0") +
+      " " +
+      "closed observation ".repeat(5),
   ).join("\n");
 }
 

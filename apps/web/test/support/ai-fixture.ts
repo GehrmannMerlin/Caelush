@@ -1,8 +1,4 @@
-import type {
-  AIProviderBinding,
-  ModelDescriptor,
-  ModelDescriptorSourcePort,
-} from "@caelush/ai";
+import type { AIProviderBinding, ModelDescriptor, ModelDescriptorSourcePort } from "@caelush/ai";
 
 /**
  * The Web fixture model, expressed as Architecture V2 composition input.

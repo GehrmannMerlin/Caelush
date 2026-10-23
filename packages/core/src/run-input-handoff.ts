@@ -41,9 +41,7 @@ export function hasUnassignedRunInputs(snapshot: RunExecutionSnapshot): boolean 
 }
 
 /** The frozen FIFO prefix this snapshot offers, and nothing beyond it. */
-export function frozenRunInputBatch(
-  snapshot: RunExecutionSnapshot,
-): readonly {
+export function frozenRunInputBatch(snapshot: RunExecutionSnapshot): readonly {
   readonly inputId: string;
   readonly acceptedSequence: number;
   readonly text: string;

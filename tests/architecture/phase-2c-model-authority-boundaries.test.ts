@@ -814,7 +814,6 @@ describe("Phase 2C package edges", () => {
         "rolloverPromptSurface",
         "ToolResultPruningPolicy",
         "ToolResultPruningStats",
-
       ].sort(),
     );
   });

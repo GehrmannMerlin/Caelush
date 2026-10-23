@@ -200,8 +200,7 @@ describe(`long-run context acceptance (${String(STEPS)} steps, ${POLICY} policy)
      * different product than the one a user gets.
      */
     let headroom:
-      | { readonly expectedGrowthTokens: number; readonly preferredOutputTokens: number }
-      | undefined;
+      { readonly expectedGrowthTokens: number; readonly preferredOutputTokens: number } | undefined;
     if (POLICY === "default") {
       /*
        * The production default no longer carries a working set. It freezes the headroom algorithm and
@@ -354,7 +353,9 @@ describe(`long-run context acceptance (${String(STEPS)} steps, ${POLICY} policy)
        * against a byte heuristic: the last turn's `inputTokens + outputAllowanceTokens + safetyTokens`
        * must fit its `windowTokens`, and its remaining room must cover the growth it expects.
        */
-      expect(largestBytes).toBeLessThanOrEqual(MODEL_LIMITS.contextWindowTokens * UTF8_BYTES_PER_TOKEN);
+      expect(largestBytes).toBeLessThanOrEqual(
+        MODEL_LIMITS.contextWindowTokens * UTF8_BYTES_PER_TOKEN,
+      );
       const decisionDb = new DatabaseSync(fixture.databasePath, { readOnly: true });
       try {
         const row = decisionDb
@@ -379,9 +380,9 @@ describe(`long-run context acceptance (${String(STEPS)} steps, ${POLICY} policy)
         expect(decision!.version).toBe("TURN_BUDGET_DECISION_V1");
         expect(decision!.windowTokens).toBe(MODEL_LIMITS.contextWindowTokens);
         expect(decision!.outputAllowanceTokens).toBe(headroom.preferredOutputTokens);
-        expect(decision!.inputTokens + decision!.outputAllowanceTokens + decision!.safetyTokens).toBeLessThanOrEqual(
-          decision!.windowTokens,
-        );
+        expect(
+          decision!.inputTokens + decision!.outputAllowanceTokens + decision!.safetyTokens,
+        ).toBeLessThanOrEqual(decision!.windowTokens);
         expect(decision!.decision).toBe("KEEP");
         expect(decision!.remainingTokens).toBeGreaterThanOrEqual(decision!.expectedGrowthTokens);
       } finally {

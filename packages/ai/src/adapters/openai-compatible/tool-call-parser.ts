@@ -76,7 +76,8 @@ export function classifyOpenAICompatibleToolInput(
     : { kind: "REJECTED", issue: { code: "EXPECTED_OBJECT", argumentBytes: 0 } };
 }
 
-type JsonDocument = { readonly kind: "VALUE"; readonly value: unknown } | { readonly kind: "FAILED" };
+type JsonDocument =
+  { readonly kind: "VALUE"; readonly value: unknown } | { readonly kind: "FAILED" };
 
 function parseJsonDocument(text: string): JsonDocument {
   try {

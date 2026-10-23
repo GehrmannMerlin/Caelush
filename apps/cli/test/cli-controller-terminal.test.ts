@@ -38,7 +38,10 @@ describe("CLI terminal lifecycle", () => {
         return completed;
       },
       getSessionTranscript: async () => ({
-        items: [userTranscript(completed, "complete this"), assistantTranscript(completed, "verified answer")],
+        items: [
+          userTranscript(completed, "complete this"),
+          assistantTranscript(completed, "verified answer"),
+        ],
       }),
     });
     const controller = new CliConversationController({

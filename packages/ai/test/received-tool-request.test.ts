@@ -227,11 +227,11 @@ describe("AIReceivedToolRequest", () => {
       "tool_call.completed",
       "adapter.finish",
     ]);
-    expect(events.filter((event) => event.type === "tool_call.start").map((event) => (event.payload as { readonly toolCallId: string }).toolCallId)).toEqual([
-      "good",
-      "bad",
-      "good-2",
-    ]);
+    expect(
+      events
+        .filter((event) => event.type === "tool_call.start")
+        .map((event) => (event.payload as { readonly toolCallId: string }).toolCallId),
+    ).toEqual(["good", "bad", "good-2"]);
   });
 
   it("still fails the stream when the provider repeats a tool call id", async () => {

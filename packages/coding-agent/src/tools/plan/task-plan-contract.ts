@@ -365,8 +365,8 @@ function byteLengthOf(value: unknown): number {
  * reason to re-print it into the conversation, into a log, or into a support bundle. The correction is
  * a fixed sentence per code, so its size and its content are known before the call is made.
  */
-const TASK_PLAN_REJECTION_GUIDANCE: Readonly<Record<string, TaskPlanRejectionGuidance>> = Object.freeze(
-  {
+const TASK_PLAN_REJECTION_GUIDANCE: Readonly<Record<string, TaskPlanRejectionGuidance>> =
+  Object.freeze({
     PLAN_ARGUMENTS_NOT_AN_OBJECT: {
       problem: "The arguments were not a JSON object with a `plan` array.",
       fix: 'Send `{ "plan": [ ... ] }`, optionally with `planVersion: 2`, `explanation` and `execution`.',
@@ -376,7 +376,8 @@ const TASK_PLAN_REJECTION_GUIDANCE: Readonly<Record<string, TaskPlanRejectionGui
       fix: "Shorten the step text, the acceptance items, the evidence references and the working record; the plan is a summary, not a document.",
     },
     PLAN_VERSION_UNSUPPORTED: {
-      problem: "`planVersion` was present and was not 2. A plain checklist is expressed by omitting it.",
+      problem:
+        "`planVersion` was present and was not 2. A plain checklist is expressed by omitting it.",
       fix: "Omit `planVersion` for a v1 checklist, or send exactly `planVersion: 2`.",
     },
     PLAN_VERSION_REQUIRED: {
@@ -480,8 +481,7 @@ const TASK_PLAN_REJECTION_GUIDANCE: Readonly<Record<string, TaskPlanRejectionGui
       problem: `\`execution.nextAction\` was not a string or was longer than ${String(TASK_PLAN_LIMITS.maxNextActionChars)} characters.`,
       fix: "State the next concrete action in one sentence.",
     },
-  },
-);
+  });
 
 export interface TaskPlanRejectionGuidance {
   /** What was wrong, in terms of the contract's fields. */

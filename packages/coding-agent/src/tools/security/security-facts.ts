@@ -209,7 +209,8 @@ export function projectReadHistorySecurityFacts(args: Readonly<JsonObject>): Too
   };
 }
 
-export function projectListDirectorySecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {  const path = pathOf(args.path, "path");
+export function projectListDirectorySecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
+  const path = pathOf(args.path, "path");
   return {
     resourceAccesses: [],
     secretScanInputs: [],

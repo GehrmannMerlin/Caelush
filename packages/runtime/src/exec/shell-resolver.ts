@@ -37,7 +37,13 @@ export class LocalShellResolver {
     if (powershell !== undefined) {
       return {
         executable: powershell,
-        args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", windowsPowerShellScript(command)],
+        args: [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          windowsPowerShellScript(command),
+        ],
       };
     }
     if (!this.executableExists("cmd.exe")) throw new RuntimeExecError("SHELL_UNAVAILABLE");

@@ -399,7 +399,8 @@ jobs:
   check:
     needs:
       - architecture
-    runs-on: ubuntu-latest
+    # The full desktop suite exercises Windows DPAPI, Windows install roots and Windows path rules.
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -422,7 +423,7 @@ jobs:
         run: corepack pnpm@11.21.0 install --frozen-lockfile
 
       - name: Install Chromium for browser E2E
-        run: corepack pnpm@11.21.0 exec playwright install --with-deps chromium
+        run: corepack pnpm@11.21.0 exec playwright install chromium
 
       - name: Run production browser E2E
         run: corepack pnpm@11.21.0 test:web:e2e

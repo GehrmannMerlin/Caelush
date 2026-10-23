@@ -350,9 +350,10 @@ describe("protocol AgentEvent", () => {
       type: "transport.fallback.selected",
       payload,
     });
-    expect(eventSchema.safeParse({ ...common, payload: { ...payload, endpoint: "https://secret" } }).success).toBe(
-      false,
-    );
+    expect(
+      eventSchema.safeParse({ ...common, payload: { ...payload, endpoint: "https://secret" } })
+        .success,
+    ).toBe(false);
     expect(
       eventSchema.safeParse({ ...common, payload: { ...payload, toTransportId: "../backup" } })
         .success,
@@ -395,29 +396,37 @@ describe("protocol AgentEvent", () => {
       type: "retry.exhausted",
       payload: exhausted,
     });
-    expect(eventSchema.safeParse({
-      ...common,
-      payload: { ...exhausted, retriesUsed: 4 },
-    }).success).toBe(false);
-    expect(eventSchema.safeParse({
-      ...common,
-      payload: { ...exhausted, maxRetries: 4 },
-    }).success).toBe(false);
-    expect(eventSchema.safeParse({
-      ...common,
-      payload: {
-        attempt: 10,
-        maxAttempts: 10,
-        retriesUsed: 9,
-        maxRetries: 9,
-        errorCode: "LLM_TIMEOUT",
-        reason: "RETRY_AFTER_EXCEEDS_POLICY",
-      },
-    }).success).toBe(true);
-    expect(eventSchema.safeParse({
-      ...common,
-      payload: { ...exhausted, message: "provider says wait" },
-    }).success).toBe(false);
+    expect(
+      eventSchema.safeParse({
+        ...common,
+        payload: { ...exhausted, retriesUsed: 4 },
+      }).success,
+    ).toBe(false);
+    expect(
+      eventSchema.safeParse({
+        ...common,
+        payload: { ...exhausted, maxRetries: 4 },
+      }).success,
+    ).toBe(false);
+    expect(
+      eventSchema.safeParse({
+        ...common,
+        payload: {
+          attempt: 10,
+          maxAttempts: 10,
+          retriesUsed: 9,
+          maxRetries: 9,
+          errorCode: "LLM_TIMEOUT",
+          reason: "RETRY_AFTER_EXCEEDS_POLICY",
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      eventSchema.safeParse({
+        ...common,
+        payload: { ...exhausted, message: "provider says wait" },
+      }).success,
+    ).toBe(false);
   });
   it("parses a durable run.timed_out event with only deadline metadata", () => {
     const eventSchema = getSchema("AgentEventSchema");

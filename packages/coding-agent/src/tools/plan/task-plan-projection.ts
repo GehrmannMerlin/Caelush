@@ -170,7 +170,8 @@ function lastRefusedUpdate(
     if (message.type !== "TOOL_RESULT" || message.runId !== runId) continue;
     if (message.toolName !== "update_plan" || !message.isError) continue;
     if (entry === undefined || entry.sequence <= afterSequence) return undefined;
-    const text = typeof message.projectedContent === "string" ? message.projectedContent.trim() : "";
+    const text =
+      typeof message.projectedContent === "string" ? message.projectedContent.trim() : "";
     const code = REFUSAL_CODE.exec(text)?.[1];
     return { reason: code ?? "REJECTED" };
   }

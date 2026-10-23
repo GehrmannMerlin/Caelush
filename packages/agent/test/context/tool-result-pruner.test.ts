@@ -68,10 +68,11 @@ describe("pruneSettledToolResult", () => {
 
   it("never splits a surrogate pair at the tail budget boundary", () => {
     const text = `${"H".repeat(20)}😀`;
-    const pruned = pruneSettledToolResult(
-      toolMessage(text),
-      { maxBytes: 10, headBytes: 2, tailBytes: 4 },
-    );
+    const pruned = pruneSettledToolResult(toolMessage(text), {
+      maxBytes: 10,
+      headBytes: 2,
+      tailBytes: 4,
+    });
 
     expect((pruned.message.content as string).endsWith("😀")).toBe(true);
   });

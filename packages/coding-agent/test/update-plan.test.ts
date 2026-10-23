@@ -403,7 +403,10 @@ describe("task plan projection", () => {
       runId: "run_1",
       messages: [
         ...accepted,
-        refusal(3, "Tool operation failed: PLAN_VERSION_REQUIRED.\nFix: resend with planVersion: 2."),
+        refusal(
+          3,
+          "Tool operation failed: PLAN_VERSION_REQUIRED.\nFix: resend with planVersion: 2.",
+        ),
       ],
     });
     // The accepted plan is still the current one; the refusal is a fact about a later attempt.

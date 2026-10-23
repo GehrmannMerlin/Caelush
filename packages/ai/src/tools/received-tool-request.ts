@@ -138,7 +138,9 @@ export function countReceivedToolRequests(turn: {
  * request cannot be executable-by-declaration while its call is malformed. The rejected arm checks
  * only identity and a typed reason, because that is all it claims to know.
  */
-export function assertAIReceivedToolRequest(value: unknown): asserts value is AIReceivedToolRequest {
+export function assertAIReceivedToolRequest(
+  value: unknown,
+): asserts value is AIReceivedToolRequest {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError("AI received tool request must be an object.");
   }

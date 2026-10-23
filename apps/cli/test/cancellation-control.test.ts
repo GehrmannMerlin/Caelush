@@ -39,13 +39,13 @@ describe("CLI cancellation and detach", () => {
     const controller = await boot(
       makeClient({
         listRuns: async (): Promise<RunListResponse> => ({ items: [running] }),
-      cancelRun,
-      getSessionTranscript: async () => ({
-        items: [
-          userTranscript(completed, "cancel this Run"),
-          assistantTranscript(completed, "completed before cancellation settled"),
-        ],
-      }),
+        cancelRun,
+        getSessionTranscript: async () => ({
+          items: [
+            userTranscript(completed, "cancel this Run"),
+            assistantTranscript(completed, "completed before cancellation settled"),
+          ],
+        }),
       }),
     );
 

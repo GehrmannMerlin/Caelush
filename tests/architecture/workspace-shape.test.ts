@@ -55,7 +55,9 @@ describe("workspace shape", () => {
        */
       const applicationEntry =
         manifestPath.includes("apps/") && typeof manifest.main === "string"
-          ? manifestPath.replace(/package\.json$/, String(manifest.main)).replace(/\/dist\//, "/src/")
+          ? manifestPath
+              .replace(/package\.json$/, String(manifest.main))
+              .replace(/\/dist\//, "/src/")
               .replace(/\.js$/, ".ts")
           : undefined;
       if (applicationEntry !== undefined && (await pathExists(applicationEntry))) {

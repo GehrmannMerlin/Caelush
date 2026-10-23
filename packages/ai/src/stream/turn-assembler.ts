@@ -186,9 +186,7 @@ export function createAIModelTurnAssembler(): AIModelTurnAssembler {
               part.type === "PENDING_TOOL_CALL" && part.toolCallId === event.payload.toolCallId,
           );
           if (item === undefined || slot === undefined || slot < 0) {
-            return failInvalidResponse(
-              "AI adapter rejected a Tool call without its announcement.",
-            );
+            return failInvalidResponse("AI adapter rejected a Tool call without its announcement.");
           }
           // The recorded part keeps the identity and the reason, and never an `input`: the model
           // produced no argument object, so none is written down.

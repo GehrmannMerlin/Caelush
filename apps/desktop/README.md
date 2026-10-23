@@ -14,14 +14,23 @@ On a fresh checkout or after dependency/lockfile changes, first run
 pre-run dependency reinstall; build and launch commands reuse installed
 dependencies.
 
-| Command                                      | Behavior                                                                                                        |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `pnpm dev:desktop`                           | Build the daemon, shared workbench, Electron main/preload, and account renderer, then launch Desktop with Vite. |
-| `pnpm build:desktop`                         | Build all Desktop development artifacts, including the account renderer. Does not create an installer.          |
-| `pnpm start:desktop`                         | Launch the existing build without rebuilding. Missing artifacts produce a rebuild instruction.                  |
-| `pnpm --filter @caelush/web build:desktop`   | Rebuild only the shared Agent workbench for Desktop. Reload the workbench afterwards.                           |
-| `pnpm --filter @caelush/desktop build:main`  | Rebuild Electron main/preload. Restart Desktop afterwards.                                                      |
-| `pnpm --filter @caelush/desktop package:win` | Explicitly create a Windows installer using the release build configuration.                                    |
+| Command                                                     | Behavior                                                                                                        |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `pnpm dev:desktop`                                          | Build the daemon, shared workbench, Electron main/preload, and account renderer, then launch Desktop with Vite. |
+| `pnpm build:desktop`                                        | Build all Desktop development artifacts, including the account renderer. Does not create an installer.          |
+| `pnpm start:desktop`                                        | Launch the existing build without rebuilding. Missing artifacts produce a rebuild instruction.                  |
+| `pnpm --filter @caelush/web build:desktop`                  | Rebuild only the shared Agent workbench for Desktop. Reload the workbench afterwards.                           |
+| `pnpm --filter @caelush/desktop build:main`                 | Rebuild Electron main/preload. Restart Desktop afterwards.                                                      |
+| `pnpm --filter @caelush/desktop package:win`                | Explicitly create a Windows installer using the release build configuration.                                    |
+| `pnpm --filter @caelush/desktop test:reliability:workbench` | Launch the isolated Electron workbench smoke on Windows x64 with local Cloud and Provider fixtures.             |
+
+The reliability workbench smoke launches a real Electron window with a
+disposable user-data directory and local Cloud/Provider fixtures. It exercises
+the shared workbench through the Desktop host, including workspace isolation,
+a model-backed fixture Run, and the integrated terminal. It does not use the
+signed-in user profile, a real Provider, or a paid model request. The existing
+`test:windows:d5` command remains available as the platform-specific name for
+the same smoke.
 
 The Desktop dev process starts Vite on loopback port 5174 and rebuilds the
 account renderer before launch. Account views opened from the shared workbench

@@ -154,7 +154,8 @@ export function* translateOpenAICompatiblePart(
         // Truncation is a fact about the turn, and the provider states it in the finish reason. When
         // it is known, the reason is upgraded; otherwise the parse failure stands on its own.
         const issue =
-          classification.issue.code === "MALFORMED_JSON" && state.raw.nativeFinishReason() === "length"
+          classification.issue.code === "MALFORMED_JSON" &&
+          state.raw.nativeFinishReason() === "length"
             ? { ...classification.issue, code: "INCOMPLETE_ARGUMENTS" as const }
             : classification.issue;
         yield {

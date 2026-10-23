@@ -259,9 +259,11 @@ describe("parseEvalArguments", () => {
 
   it("refuses a non-loopback Daemon URL", () => {
     expect(() =>
-      parseEvalArguments([...base, "--scenario", "argument-drift"].map((value) =>
-        value === "http://127.0.0.1:43120" ? "https://example.com" : value,
-      )),
+      parseEvalArguments(
+        [...base, "--scenario", "argument-drift"].map((value) =>
+          value === "http://127.0.0.1:43120" ? "https://example.com" : value,
+        ),
+      ),
     ).toThrow(EvalUsageError);
   });
 
@@ -486,7 +488,9 @@ describe("runEvaluation", () => {
     const options = await evaluationOptions();
     const { client } = createFakeClient({
       async createWorkspace() {
-        throw new Error(`permission denied for ${path.join(REPOSITORY_ROOT, "packages", "secret")}`);
+        throw new Error(
+          `permission denied for ${path.join(REPOSITORY_ROOT, "packages", "secret")}`,
+        );
       },
     });
     const report = await runEvaluation({

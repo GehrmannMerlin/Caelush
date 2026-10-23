@@ -399,8 +399,12 @@ export class SqliteAgentMessageRecordStore {
          WHERE run_id = ? AND sequence >= ? AND sequence <= ?
          ORDER BY sequence ASC LIMIT ?`,
       )
-      .all(query.runId, query.fromSequence, query.toSequence, query.limit + 1) as unknown as
-      MessageRow[];
+      .all(
+        query.runId,
+        query.fromSequence,
+        query.toSequence,
+        query.limit + 1,
+      ) as unknown as MessageRow[];
     const hasMore = rows.length > query.limit;
     const page = hasMore ? rows.slice(0, query.limit) : rows;
     return Object.freeze({

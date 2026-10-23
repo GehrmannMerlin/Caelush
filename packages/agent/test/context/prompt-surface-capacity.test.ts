@@ -31,9 +31,7 @@ function decisions(
   kind: PromptSurfaceRecordKind,
   byteLength: number,
 ): readonly { kind: PromptSurfaceRecordKind; byteLength: number }[] {
-  return Object.freeze(
-    Array.from({ length: count }, () => Object.freeze({ kind, byteLength })),
-  );
+  return Object.freeze(Array.from({ length: count }, () => Object.freeze({ kind, byteLength })));
 }
 
 const TARGET = Object.freeze([sectionState(1, "workspace state: clean")]);
@@ -169,9 +167,7 @@ describe("Prompt Surface capacity decisions", () => {
       "BASELINE",
       diffPromptSurfaceSections([], unicode, true).updates,
     );
-    expect(promptSurfaceBaselineByteLength(unicode)).toBe(
-      Buffer.byteLength(rendered, "utf8"),
-    );
+    expect(promptSurfaceBaselineByteLength(unicode)).toBe(Buffer.byteLength(rendered, "utf8"));
     expect(promptSurfaceBaselineByteLength(unicode)).toBeGreaterThan(rendered.length);
   });
 

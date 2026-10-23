@@ -687,7 +687,8 @@ function safeFailureReason(events: readonly DurableRunEvent[]): string {
     CONTEXT_SURFACE_ROLLOVER_CONFLICT:
       "整理任务上下文时失败：上下文切换与另一次写入冲突，Run 状态为失败。",
     CONTEXT_SURFACE_ROLLOVER_FAILED: "整理任务上下文时失败：上下文切换未能完成，Run 状态为失败。",
-    CONTEXT_SURFACE_PERSISTENCE_FAILED: "整理任务上下文时失败：上下文记录未能保存，Run 状态为失败。",
+    CONTEXT_SURFACE_PERSISTENCE_FAILED:
+      "整理任务上下文时失败：上下文记录未能保存，Run 状态为失败。",
     CONTEXT_PRESSURE_ACCOUNTING_FAILED:
       "整理任务上下文时失败：输入预算无法可靠估算，Run 状态为失败。",
     CONTEXT_WINDOW_EXHAUSTED:

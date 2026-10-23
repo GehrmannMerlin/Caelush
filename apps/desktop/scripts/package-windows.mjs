@@ -40,7 +40,7 @@ const RESOURCE_STAGE = path.resolve(
 );
 const NODE_RUNTIME_SHA256 = "9a4eb5f1c29c6a2e93852ead46b999e284a6a5ca8bab4d4e241d587d025a52de";
 const EXPECTED_NODE_VERSION = "24.18.0";
-const EXPECTED_PTY_VERSION = "1.1.0";
+const EXPECTED_PTY_VERSION = "1.2.0-beta.14";
 const INTERNAL_TEST_IDENTITY_PATH = path.join(DESKTOP_OUTPUT, ".d6-internal-test-identity.json");
 const BUILD_IDENTITY_SEED_PATH = path.join(DESKTOP_OUTPUT, ".d6-build-input-identity.json");
 const REQUIRED_CAPABILITIES = [
@@ -619,7 +619,7 @@ function fileTypeFor(resourcePath) {
 function runtimeIdentityFor(resourcePath) {
   if (resourcePath === "daemon/node.exe") return "Node.js 24.18.0 win32-x64; modules=137; N-API=10";
   if (resourcePath.endsWith(".node") && resourcePath.includes("/node-pty/")) {
-    return "node-pty 1.1.0 N-API native addon";
+    return "node-pty 1.2.0-beta.14 N-API native addon";
   }
   if (resourcePath.endsWith(".node") && resourcePath.includes("/canvas-win32-x64-msvc/")) {
     return "@napi-rs/canvas 1.0.11 win32-x64 N-API native addon";

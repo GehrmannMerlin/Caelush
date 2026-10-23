@@ -150,19 +150,14 @@ function executeWorkspacePickerProcess(
         deadline = undefined;
       }
     };
-    const child = execFile(
-      file,
-      [...args],
-      { ...options, encoding: "utf8" },
-      (error, stdout) => {
-        settle();
-        if (error !== null) {
-          reject(error);
-          return;
-        }
-        resolve({ stdout });
-      },
-    );
+    const child = execFile(file, [...args], { ...options, encoding: "utf8" }, (error, stdout) => {
+      settle();
+      if (error !== null) {
+        reject(error);
+        return;
+      }
+      resolve({ stdout });
+    });
     deadline = setTimeout(() => {
       deadline = undefined;
       child.kill();

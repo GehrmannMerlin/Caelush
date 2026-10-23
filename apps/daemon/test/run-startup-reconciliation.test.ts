@@ -1,4 +1,9 @@
-import { createRunId, createTimestampMs, createWorkspaceId, type AgentRun } from "@caelush/protocol";
+import {
+  createRunId,
+  createTimestampMs,
+  createWorkspaceId,
+  type AgentRun,
+} from "@caelush/protocol";
 import { createSessionId } from "@caelush/protocol";
 import type { RunRepository } from "@caelush/storage";
 import { describe, expect, it, vi } from "vitest";
@@ -37,9 +42,7 @@ interface Harness {
 
 function harness(options: {
   readonly stale: readonly AgentRun[];
-  readonly disposition?: (
-    run: AgentRun,
-  ) => RunExecutionSupervisorResult["disposition"] | "THROW";
+  readonly disposition?: (run: AgentRun) => RunExecutionSupervisorResult["disposition"] | "THROW";
   readonly seenLimit?: (limit: number | undefined) => void;
 }): Harness {
   const recovered: string[] = [];
@@ -163,9 +166,7 @@ describe("reconcileStaleRuns", () => {
     expect(summary.failed).toEqual([broken.id]);
     expect(summary.scheduled).toEqual([healthy.id]);
     expect(h.recovered).toEqual([healthy.id]);
-    expect(errors).toEqual([
-      { error: expect.any(Error), runId: broken.id },
-    ]);
+    expect(errors).toEqual([{ error: expect.any(Error), runId: broken.id }]);
   });
 
   it("survives a logger that throws, because logging must not become a startup failure", async () => {

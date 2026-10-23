@@ -43,29 +43,22 @@ function chunk(delta: Record<string, unknown>, finishReason: string | null = nul
   })}\n\n`;
 }
 
-function sse(
-  calls: readonly { readonly id: string; readonly arguments: string }[],
-): Response {
+function sse(calls: readonly { readonly id: string; readonly arguments: string }[]): Response {
   const toolCalls = calls.map((call, index) => ({
     index,
     id: call.id,
     type: "function",
     function: { name: "read_file", arguments: call.arguments },
   }));
-  const body =
-    chunk({ tool_calls: toolCalls }) +
-    chunk({}, "tool_calls") +
-    "data: [DONE]\n\n";
+  const body = chunk({ tool_calls: toolCalls }) + chunk({}, "tool_calls") + "data: [DONE]\n\n";
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
 function sseText(text: string): Response {
-  return new Response(
-    chunk({ content: text }) +
-      chunk({}, "stop") +
-      "data: [DONE]\n\n",
-    { status: 200, headers: { "content-type": "text/event-stream" } },
-  );
+  return new Response(chunk({ content: text }) + chunk({}, "stop") + "data: [DONE]\n\n", {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
 }
 
 /**
@@ -79,9 +72,7 @@ function sseText(text: string): Response {
  * The second turn's response is decided by the *request it received*, so the assertion is about what
  * the production path actually built rather than about a scripted sequence.
  */
-async function runMixedBatch(options: {
-  readonly correctInTurnTwo: boolean;
-}): Promise<Scenario> {
+async function runMixedBatch(options: { readonly correctInTurnTwo: boolean }): Promise<Scenario> {
   const wire: WireRequest[] = [];
   let requests = 0;
   const adapter = {
@@ -121,8 +112,11 @@ async function runMixedBatch(options: {
                 messages:
                   bodyText.length === 0
                     ? []
-                    : ((JSON.parse(bodyText) as { readonly messages?: readonly Record<string, unknown>[] })
-                        .messages ?? []),
+                    : ((
+                        JSON.parse(bodyText) as {
+                          readonly messages?: readonly Record<string, unknown>[];
+                        }
+                      ).messages ?? []),
               } as WireRequest);
               return respond();
             },
@@ -141,18 +135,24 @@ async function runMixedBatch(options: {
     const outcome = await fixture.composition.controller.start(fixture.run.id);
     const db = new DatabaseSync(fixture.databasePath, { readOnly: true });
     const invocations = (
-      db.prepare("SELECT count(*) AS n FROM tool_invocations WHERE run_id=?").get(fixture.run.id) as {
+      db
+        .prepare("SELECT count(*) AS n FROM tool_invocations WHERE run_id=?")
+        .get(fixture.run.id) as {
         n: number;
       }
     ).n;
     const toolResults = (
       db
-        .prepare("SELECT count(*) AS n FROM agent_messages WHERE run_id=? AND message_type='TOOL_RESULT'")
+        .prepare(
+          "SELECT count(*) AS n FROM agent_messages WHERE run_id=? AND message_type='TOOL_RESULT'",
+        )
         .get(fixture.run.id) as { n: number }
     ).n;
     const timeline = (
       db
-        .prepare("SELECT event_type, data_json FROM agent_events WHERE run_id=? ORDER BY aggregate_sequence")
+        .prepare(
+          "SELECT event_type, data_json FROM agent_events WHERE run_id=? ORDER BY aggregate_sequence",
+        )
         .all(fixture.run.id) as { event_type: string; data_json: string }[]
     ).map((row) =>
       row.event_type === "llm.failed"
@@ -268,9 +268,9 @@ describe("rejected request persistence", () => {
       expect(withRejection).toBeDefined();
       expect(rows.some((row) => row.schema_version === 4)).toBe(true);
 
-      const rejectedPart = (
-        withRejection!["content"] as readonly Record<string, unknown>[]
-      ).find((part) => part["type"] === "TOOL_CALL_REJECTED")!;
+      const rejectedPart = (withRejection!["content"] as readonly Record<string, unknown>[]).find(
+        (part) => part["type"] === "TOOL_CALL_REJECTED",
+      )!;
       expect(rejectedPart).toMatchObject({
         toolCallId: "call-bad",
         toolName: "read_file",

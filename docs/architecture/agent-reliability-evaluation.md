@@ -1,16 +1,16 @@
 # Agent reliability evaluation
 
-This document describes the three *separate* layers that answer "can the Agent finish a long task?".
+This document describes the three _separate_ layers that answer "can the Agent finish a long task?".
 They never substitute for one another, and no layer may be reported as if it were a different one.
 
-| Layer | Entry point | What it can prove | What it cannot prove |
-| --- | --- | --- | --- |
-| Engineering regression | `pnpm test`, the `reliability` CI job | The production chain accepts, rejects, recovers and records correctly | That a model chooses the right action |
-| Feedback-driven behaviour | `apps/daemon/test/reliability-feedback-e2e.test.ts` | A scripted model drives the real daemon through correction, repair, compaction and failed history | Anything about a real model's judgement |
-| Real-model evaluation | `pnpm test:reliability:real` (explicit only) | One model, one configuration, one scenario, observed on disk | A general success rate, a different provider, or a different workspace |
+| Layer                     | Entry point                                         | What it can prove                                                                                 | What it cannot prove                                                   |
+| ------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Engineering regression    | `pnpm test`, the `reliability` CI job               | The production chain accepts, rejects, recovers and records correctly                             | That a model chooses the right action                                  |
+| Feedback-driven behaviour | `apps/daemon/test/reliability-feedback-e2e.test.ts` | A scripted model drives the real daemon through correction, repair, compaction and failed history | Anything about a real model's judgement                                |
+| Real-model evaluation     | `pnpm test:reliability:real` (explicit only)        | One model, one configuration, one scenario, observed on disk                                      | A general success rate, a different provider, or a different workspace |
 
 The scripted scenarios in `apps/daemon/test/support/feedback-driven-adapter.ts` and the 250-step
-long-run test only exercise *capacity*: they show the infrastructure keeps ordered results, budgets
+long-run test only exercise _capacity_: they show the infrastructure keeps ordered results, budgets
 and checkpoints under load. They are named `INFRASTRUCTURE_CAPACITY` in their own metrics for that
 reason. `scripts/long-run-reliability-offline.mjs` prints `REAL_MODEL_ADAPTATION  NOT MEASURED` on
 every run.
@@ -58,7 +58,7 @@ non-successful Run.
 3. an exhausted budget (`MAX_STEPS_REACHED`, `BUDGET_EXCEEDED`, `TIMEOUT`) fails the scenario;
 4. any other non-successful Run fails the scenario;
 5. a check that could not be concluded blocks it;
-6. `PASS` requires every check to pass *and* every Run to reach `COMPLETED`.
+6. `PASS` requires every check to pass _and_ every Run to reach `COMPLETED`.
 
 `COMPLETED` is never functional acceptance. The low-code-platform scenario reports its interactive
 items (`editor-drag-drop`, `property-panel`, `undo-redo`, `schema-save-load`, `live-preview`,
@@ -86,6 +86,6 @@ characters. A single `PASS` covers only that model, that configuration and that 
 exhaustion, a missing model, an unresolved approval, a dispatch failure, a `COMPLETED` Run without an
 artifact, and redaction/scoping all have to produce a non-`PASS` verdict.
 
-`scripts/reliability-eval-scenarios.test.mjs` executes each scenario's *real* checks against a
+`scripts/reliability-eval-scenarios.test.mjs` executes each scenario's _real_ checks against a
 simulated workspace: every check must fail before the accepted artifact exists and pass afterwards,
 otherwise the check is decoration rather than evidence.

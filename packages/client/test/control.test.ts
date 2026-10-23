@@ -38,10 +38,7 @@ describe("shared interactive control", () => {
       summary: "Read a source file",
     });
     expect(JSON.stringify(view)).not.toContain("SECRET");
-    expect(approvalOptions("ONCE").map((item) => item.kind)).toEqual([
-      "APPROVE_ONCE",
-      "REJECT",
-    ]);
+    expect(approvalOptions("ONCE").map((item) => item.kind)).toEqual(["APPROVE_ONCE", "REJECT"]);
     expect(approvalOptions("ONCE").map((item) => item.label)).toEqual(["Approve once", "Reject"]);
     expect(approvalOptions("RUN").map((item) => item.kind)).toEqual([
       "APPROVE_ONCE",

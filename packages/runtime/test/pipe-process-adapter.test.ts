@@ -14,7 +14,8 @@ function waitForExit(
 
 async function lineCount(file: string): Promise<number> {
   try {
-    return (await readFile(file, "utf8")).split("\n").filter((line) => line.trim().length > 0).length;
+    return (await readFile(file, "utf8")).split("\n").filter((line) => line.trim().length > 0)
+      .length;
   } catch {
     return 0;
   }
@@ -86,7 +87,7 @@ describe("PipeProcessAdapter", () => {
           "let tick = 0;",
           "setInterval(() => {",
           "  tick += 1;",
-          '  fs.appendFileSync(process.env.CAELUSH_TREE_TEST_MARKER, `tick ${tick}\\n`);',
+          "  fs.appendFileSync(process.env.CAELUSH_TREE_TEST_MARKER, `tick ${tick}\\n`);",
           "}, 100);",
           "",
         ].join("\n"),

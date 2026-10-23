@@ -638,7 +638,11 @@ function decodeRejectedIssue(value: unknown): {
 } {
   if (!isJsonObject(value)) throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
   const keys = Object.keys(value);
-  if (keys.length !== 2 || !Object.hasOwn(value, "code") || !Object.hasOwn(value, "argumentBytes")) {
+  if (
+    keys.length !== 2 ||
+    !Object.hasOwn(value, "code") ||
+    !Object.hasOwn(value, "argumentBytes")
+  ) {
     throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
   }
   const code = value["code"];

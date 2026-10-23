@@ -15,10 +15,7 @@ import {
 } from "../types/errors.js";
 import type { ToolFailureFeedback } from "../types/tool-feedback.js";
 import type { ToolSchemaIssue } from "../schema/schema-runtime.js";
-import {
-  normalizeInstancePath,
-  renderToolSchemaFeedback,
-} from "./schema-feedback-renderer.js";
+import { normalizeInstancePath, renderToolSchemaFeedback } from "./schema-feedback-renderer.js";
 import type {
   PreparedToolCall,
   ToolCallPreparationOutcome,

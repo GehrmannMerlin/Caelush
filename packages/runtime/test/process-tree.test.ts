@@ -15,7 +15,9 @@ describe("terminateProcessTree", () => {
     const target = new FakeProcess(4242);
     const runTaskkill = vi.fn(async () => true);
 
-    await expect(terminateProcessTree(target, { platform: "win32", runTaskkill })).resolves.toBe("TREE");
+    await expect(terminateProcessTree(target, { platform: "win32", runTaskkill })).resolves.toBe(
+      "TREE",
+    );
 
     expect(runTaskkill).toHaveBeenCalledWith(4242);
     expect(target.killed).toBe(false);
@@ -25,7 +27,9 @@ describe("terminateProcessTree", () => {
     const target = new FakeProcess(4242);
     const runTaskkill = vi.fn(async () => false);
 
-    await expect(terminateProcessTree(target, { platform: "win32", runTaskkill })).resolves.toBe("SINGLE");
+    await expect(terminateProcessTree(target, { platform: "win32", runTaskkill })).resolves.toBe(
+      "SINGLE",
+    );
 
     expect(target.killed).toBe(true);
   });
@@ -59,8 +63,12 @@ describe("terminateProcessTree", () => {
     const runTaskkill = vi.fn(async () => true);
     const signalGroup = vi.fn(() => true);
 
-    await expect(terminateProcessTree(target, { platform: "win32", runTaskkill })).resolves.toBe("SINGLE");
-    await expect(terminateProcessTree(target, { platform: "linux", signalGroup })).resolves.toBe("SINGLE");
+    await expect(terminateProcessTree(target, { platform: "win32", runTaskkill })).resolves.toBe(
+      "SINGLE",
+    );
+    await expect(terminateProcessTree(target, { platform: "linux", signalGroup })).resolves.toBe(
+      "SINGLE",
+    );
 
     expect(runTaskkill).not.toHaveBeenCalled();
     expect(signalGroup).not.toHaveBeenCalled();

@@ -149,7 +149,7 @@ function fixtureManifest() {
       "daemon/node_modules/node-pty/prebuilds/win32-x64/conpty.node",
       "native-addon",
       "NATIVE_ADDON",
-      "node-pty-1.1.0-win32-x64-napi-10",
+      "node-pty-1.2.0-beta.14-win32-x64-napi-10",
     ),
     file(
       "sandbox-runner/caelush-sandbox-runner.exe",
@@ -177,7 +177,7 @@ function fixtureManifest() {
     nativeModules: [
       {
         name: "node-pty",
-        version: "1.1.0",
+        version: "1.2.0-beta.14",
         platform: "win32",
         architecture: "x64",
         nodeAbi: "137",

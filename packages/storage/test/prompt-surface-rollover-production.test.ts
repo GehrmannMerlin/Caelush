@@ -9,11 +9,7 @@ import {
   type PromptSurfaceRecord,
   type PromptSurfaceSectionState,
 } from "@caelush/agent";
-import {
-  StorageError,
-  openCaelushStorage,
-  type CaelushStorage,
-} from "@caelush/storage";
+import { StorageError, openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { createTimestampMs, type RunId } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeRun, makeSession } from "./support/fixtures.js";
@@ -165,7 +161,12 @@ describe("Prompt Surface capacity rollover against SQLite", () => {
         candidate,
         targetSectionStates: targetStates,
       }),
-    ).toEqual({ kind: "ROLLOVER_REQUIRED", dimension: "VISIBLE_RECORDS", observed: 129, limit: 128 });
+    ).toEqual({
+      kind: "ROLLOVER_REQUIRED",
+      dimension: "VISIBLE_RECORDS",
+      observed: 129,
+      limit: 128,
+    });
 
     const outcome = await rolloverPromptSurface({
       store: storage.promptSurface,
@@ -233,7 +234,10 @@ describe("Prompt Surface capacity rollover against SQLite", () => {
 
     expect(new Set(epochIds).size).toBe(4);
     for (const [index, epochId] of epochIds.entries()) {
-      const stored = await storage.promptSurface.readEpoch(runId, createPromptSurfaceEpochId(epochId));
+      const stored = await storage.promptSurface.readEpoch(
+        runId,
+        createPromptSurfaceEpochId(epochId),
+      );
       expect(stored?.records?.length).toBe(index === 0 ? 128 : 1);
     }
     const resolved = await storage.promptSurface.getCurrent(runId);

@@ -51,10 +51,7 @@ interface BootedDaemon {
 async function boot(options: {
   readonly databasePath: string;
   readonly contextBudgetPolicyVersion?:
-    | "LEGACY_FULL_OUTPUT_V1"
-    | "ADAPTIVE_V1"
-    | "WORKING_SET_V2"
-    | "TURN_BUDGET_V3";
+    "LEGACY_FULL_OUTPUT_V1" | "ADAPTIVE_V1" | "WORKING_SET_V2" | "TURN_BUDGET_V3";
   readonly limits?: { readonly contextWindowTokens: number; readonly maxOutputTokens: number };
 }): Promise<BootedDaemon> {
   const daemon = await startDaemon({
@@ -131,9 +128,9 @@ describe("Context budget policy default", () => {
       databasePath: join(directory, "working-set.db"),
       contextBudgetPolicyVersion: "WORKING_SET_V2",
     });
-    expect((await createRun(workingSet.client, workingSet.session)).contextBudgetPolicy.version).toBe(
-      "WORKING_SET_V2",
-    );
+    expect(
+      (await createRun(workingSet.client, workingSet.session)).contextBudgetPolicy.version,
+    ).toBe("WORKING_SET_V2");
   }, 30_000);
 
   it("never rewrites the policy a historical Run was frozen with", async () => {

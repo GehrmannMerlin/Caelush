@@ -121,9 +121,7 @@ describe("public projection of a Context preparation failure", () => {
   });
 
   it("keeps publishing Tool reason codes unchanged", () => {
-    const details = projectedDetails(
-      makeErrorEvent({ reasonCode: "TOOL_PREPARATION_FAILED" }),
-    );
+    const details = projectedDetails(makeErrorEvent({ reasonCode: "TOOL_PREPARATION_FAILED" }));
 
     expect(details).toStrictEqual({ reasonCode: "TOOL_PREPARATION_FAILED" });
   });

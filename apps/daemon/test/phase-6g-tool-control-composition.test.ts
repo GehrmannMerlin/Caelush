@@ -353,10 +353,9 @@ describe("Phase 6G daemon Tool control composition", () => {
     }
 
     const invocations = await storage.toolInvocations.listByRun(run.id);
-    expect(
-      status,
-      JSON.stringify({ run: await client.getRun(run.id), invocations }),
-    ).toBe("WAITING_APPROVAL");
+    expect(status, JSON.stringify({ run: await client.getRun(run.id), invocations })).toBe(
+      "WAITING_APPROVAL",
+    );
     expect(provider.calls).toBe(1);
     expect(invocations.map((invocation) => invocation.externalCallId)).toEqual(["read_call_1"]);
   }, 20_000);

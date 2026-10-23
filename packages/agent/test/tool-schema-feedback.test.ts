@@ -59,9 +59,9 @@ describe("model-visible Tool schema feedback", () => {
     const feedback = reject(CLOSED_PATCH_SCHEMA, { input: "*** Begin Patch" });
 
     expect(feedback.code).toBe("TOOL_ARGUMENT_ERROR");
-    expect(feedback.content).toContain("missing required field \"patch\"");
-    expect(feedback.content).toContain("unsupported field \"input\"");
-    expect(feedback.content).toContain("declared fields are \"patch\"");
+    expect(feedback.content).toContain('missing required field "patch"');
+    expect(feedback.content).toContain('unsupported field "input"');
+    expect(feedback.content).toContain('declared fields are "patch"');
     expect(feedback.content).toContain("Nothing was executed");
     // The patch body is never echoed back, and neither is any raw argument JSON.
     expect(feedback.content).not.toContain("*** Begin Patch");
@@ -70,12 +70,16 @@ describe("model-visible Tool schema feedback", () => {
 
   it("keeps a preparation rejection a NO_OBSERVATION: nothing executes", async () => {
     let executions = 0;
-    const feedback = reject(CLOSED_PATCH_SCHEMA, { input: "x" }, {
-      execute: async () => {
-        executions += 1;
-        return { content: "ok", details: {}, isError: false };
+    const feedback = reject(
+      CLOSED_PATCH_SCHEMA,
+      { input: "x" },
+      {
+        execute: async () => {
+          executions += 1;
+          return { content: "ok", details: {}, isError: false };
+        },
       },
-    });
+    );
     await Promise.resolve();
     expect(executions).toBe(0);
     expect(feedback.disposition).toBe("SAFE_FAILURE");

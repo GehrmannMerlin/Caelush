@@ -220,7 +220,9 @@ describe("AIGateway preflight", () => {
       }),
     );
 
-    await expect(gateway.stream(request(), { transportId: "not-configured" } as never)).rejects.toMatchObject({
+    await expect(
+      gateway.stream(request(), { transportId: "not-configured" } as never),
+    ).rejects.toMatchObject({
       code: "AI_INVALID_REQUEST",
     });
 

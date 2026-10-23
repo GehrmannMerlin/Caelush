@@ -66,7 +66,7 @@ describe("daemon error mapping", () => {
    */
   it.each([
     [
-      'FST_ERR_CTP_EMPTY_JSON_BODY (400)',
+      "FST_ERR_CTP_EMPTY_JSON_BODY (400)",
       {
         code: "FST_ERR_CTP_EMPTY_JSON_BODY",
         statusCode: 400,
@@ -124,7 +124,11 @@ describe("daemon error mapping", () => {
       // The supported shapes for a bodyless action stay successful: no content type at all, and an
       // explicit empty object. The defect was the classification, not the route.
       for (const request of [
-        { method: "POST" as const, url: "/api/v1/runs/run_x/recover", headers: { accept: "application/json" } },
+        {
+          method: "POST" as const,
+          url: "/api/v1/runs/run_x/recover",
+          headers: { accept: "application/json" },
+        },
         { method: "POST" as const, url: "/api/v1/runs/run_x/recover", payload: {} },
       ]) {
         const accepted = await app.inject(request);

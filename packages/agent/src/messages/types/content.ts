@@ -120,9 +120,7 @@ export type AgentUserContentPart = AgentTextPart | AgentAttachmentRefPart;
 
 /** What an assistant message may contain. */
 export type AgentAssistantContentPart =
-  | AgentAssistantTextPart
-  | AgentAssistantToolCallPart
-  | AgentAssistantRejectedToolCallPart;
+  AgentAssistantTextPart | AgentAssistantToolCallPart | AgentAssistantRejectedToolCallPart;
 
 /** Every part type the Message Domain knows. */
 export const AGENT_CONTENT_PART_TYPES = [
@@ -454,7 +452,11 @@ function assertRejectedIssue(value: unknown): void {
   }
   const issue = value as Record<string, unknown>;
   const keys = Object.keys(issue);
-  if (keys.length !== 2 || !Object.hasOwn(issue, "code") || !Object.hasOwn(issue, "argumentBytes")) {
+  if (
+    keys.length !== 2 ||
+    !Object.hasOwn(issue, "code") ||
+    !Object.hasOwn(issue, "argumentBytes")
+  ) {
     throw new TypeError("Agent assistant rejected tool call part issue has an unexpected shape.");
   }
   if (

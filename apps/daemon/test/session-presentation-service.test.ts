@@ -620,10 +620,7 @@ describe("SessionPresentationService", () => {
         "CONTEXT_WINDOW_EXHAUSTED",
         "整理任务上下文时失败：压缩后仍无法容纳在模型上下文窗口内，Run 状态为失败。",
       ],
-      [
-        "CONTEXT_PREPARATION_FAILED",
-        "整理任务上下文时失败，无法确定具体阶段，Run 状态为失败。",
-      ],
+      ["CONTEXT_PREPARATION_FAILED", "整理任务上下文时失败，无法确定具体阶段，Run 状态为失败。"],
     ] as const) {
       const summary = failureSummaryOf(
         await presentFailure({

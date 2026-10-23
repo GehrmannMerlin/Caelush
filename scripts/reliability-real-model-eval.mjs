@@ -19,7 +19,11 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { CaelushClient } from "@caelush/client";
-import { REAL_MODEL_SCENARIOS, findScenario, listScenarioIds } from "./reliability-eval-scenarios.mjs";
+import {
+  REAL_MODEL_SCENARIOS,
+  findScenario,
+  listScenarioIds,
+} from "./reliability-eval-scenarios.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -397,7 +401,10 @@ async function preflight(client, options) {
   } catch (error) {
     return { error: `DAEMON_INFO_FAILED:${sanitizeText(error?.message ?? error, 200)}` };
   }
-  if (!Array.isArray(info?.configuredProviders) || !info.configuredProviders.includes(options.provider)) {
+  if (
+    !Array.isArray(info?.configuredProviders) ||
+    !info.configuredProviders.includes(options.provider)
+  ) {
     return { error: "PROVIDER_NOT_CONFIGURED" };
   }
   try {
@@ -411,7 +418,8 @@ async function preflight(client, options) {
   try {
     const directory = await client.getAIModelDirectory(options.provider);
     const models = Array.isArray(directory?.models) ? directory.models : [];
-    if (!models.some((model) => model.id === options.model)) return { error: "MODEL_NOT_AVAILABLE" };
+    if (!models.some((model) => model.id === options.model))
+      return { error: "MODEL_NOT_AVAILABLE" };
   } catch (error) {
     return { error: `MODEL_LOOKUP_FAILED:${sanitizeText(error?.message ?? error, 200)}` };
   }
@@ -531,7 +539,10 @@ async function evaluateScenario({ client, options, scenario, requirementText, wa
 
   const runtime = preflightResult.info?.defaultRunConfiguration?.runtime;
   if (runtime === undefined) {
-    return { ...blockedScenario(scenario, options, "RUNTIME_REF_MISSING"), workspaceId: workspace.id };
+    return {
+      ...blockedScenario(scenario, options, "RUNTIME_REF_MISSING"),
+      workspaceId: workspace.id,
+    };
   }
 
   let session;
@@ -569,10 +580,7 @@ async function evaluateScenario({ client, options, scenario, requirementText, wa
         options,
         runDefinition: {
           ...runDefinition,
-          prompt:
-            scenario.requiresRequirement === true
-              ? requirementText
-              : runDefinition.prompt,
+          prompt: scenario.requiresRequirement === true ? requirementText : runDefinition.prompt,
           limits: scenario.limits,
         },
         waitingGraceMs,
@@ -600,7 +608,11 @@ async function evaluateScenario({ client, options, scenario, requirementText, wa
 
   let checks = [];
   if (blockedReason === undefined) {
-    const context = createCheckContext({ workspaceRoot: scenarioRoot, runs: Object.fromEntries(runs), contextUsage });
+    const context = createCheckContext({
+      workspaceRoot: scenarioRoot,
+      runs: Object.fromEntries(runs),
+      contextUsage,
+    });
     try {
       checks = await scenario.checks(context);
     } catch (error) {
@@ -634,7 +646,9 @@ async function evaluateScenario({ client, options, scenario, requirementText, wa
     ...(blockedReason === undefined ? {} : { blockedReason }),
   });
   const unmet = [
-    ...normalizedChecks.filter((check) => check.status !== "PASS").map((check) => `check:${check.name}`),
+    ...normalizedChecks
+      .filter((check) => check.status !== "PASS")
+      .map((check) => `check:${check.name}`),
     ...runRecords
       .filter((record) => !SUCCESSFUL_RUN_STATUSES.has(record.status))
       .filter((record) => !(tolerated[record.name] ?? []).includes(record.status))
@@ -710,7 +724,8 @@ async function readSourceHead() {
 export async function runEvaluation(input) {
   const options = input.options;
   const scenarios = input.scenarios ?? options.scenarios.map((id) => findScenario(id));
-  const createClient = input.createClient ?? ((config) => new CaelushClient({ baseUrl: config.baseUrl }));
+  const createClient =
+    input.createClient ?? ((config) => new CaelushClient({ baseUrl: config.baseUrl }));
   const waitingGraceMs = input.waitingGraceMs ?? DEFAULT_WAITING_GRACE_MS;
   const now = input.now ?? (() => new Date());
   const requirementText =
@@ -828,11 +843,16 @@ async function main(argv) {
   const report = await runEvaluation({ options });
   const { reportPath, summaryPath } = await writeReport({ report, outputDir: options.outputDir });
   process.stdout.write(summarizeReport(report));
-  process.stdout.write(`RELIABILITY_EVAL_REPORT=${reportPath}\nRELIABILITY_EVAL_SUMMARY=${summaryPath}\n`);
+  process.stdout.write(
+    `RELIABILITY_EVAL_REPORT=${reportPath}\nRELIABILITY_EVAL_SUMMARY=${summaryPath}\n`,
+  );
   return EXIT_CODES[report.status] ?? 1;
 }
 
-if (process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
   const code = await main(process.argv.slice(2));
   process.exitCode = code;
 }

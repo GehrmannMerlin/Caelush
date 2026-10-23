@@ -62,12 +62,13 @@ describe("legacy model invocation is closed", () => {
   const productionFiles = workspaceFiles("src");
 
   it("allows no production file to import the retired LLM package", () => {
-    const violations = productionFiles
-      .flatMap((path) =>
-        moduleSpecifiers(readFileSync(path, "utf8"))
-          .filter((specifier) => specifier === "@caelush/llm" || specifier.startsWith("@caelush/llm/"))
-          .map((specifier) => `${relative(root, path).replaceAll("\\", "/")} -> ${specifier}`),
-      );
+    const violations = productionFiles.flatMap((path) =>
+      moduleSpecifiers(readFileSync(path, "utf8"))
+        .filter(
+          (specifier) => specifier === "@caelush/llm" || specifier.startsWith("@caelush/llm/"),
+        )
+        .map((specifier) => `${relative(root, path).replaceAll("\\", "/")} -> ${specifier}`),
+    );
 
     expect(violations).toEqual([]);
   });

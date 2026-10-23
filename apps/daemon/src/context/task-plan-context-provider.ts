@@ -41,7 +41,9 @@ const SOURCE_VERSION = "task-plan-v4";
  * on the whole Run.
  */
 const MAX_BLOCK_BYTES =
-  TASK_PLAN_BLOCK_BUDGETS.current + TASK_PLAN_BLOCK_BUDGETS.evidence + TASK_PLAN_BLOCK_BUDGETS.notice;
+  TASK_PLAN_BLOCK_BUDGETS.current +
+  TASK_PLAN_BLOCK_BUDGETS.evidence +
+  TASK_PLAN_BLOCK_BUDGETS.notice;
 
 /**
  * Publish the Run's current plan and working record as context.
@@ -131,8 +133,18 @@ export function createTaskPlanContextProvider(
           payload: { kind: "TEXT", text },
         });
       const items = [
-        item("current", rendered.current, "HIGH", `accepted update_plan snapshot v${String(snapshot.planVersion)}`),
-        item("evidence", rendered.evidence, "NORMAL", "independent evidence for the references the plan cited"),
+        item(
+          "current",
+          rendered.current,
+          "HIGH",
+          `accepted update_plan snapshot v${String(snapshot.planVersion)}`,
+        ),
+        item(
+          "evidence",
+          rendered.evidence,
+          "NORMAL",
+          "independent evidence for the references the plan cited",
+        ),
         item("notice", rendered.notice, "LOW", "accepted plan bookkeeping; changes every Step"),
       ].filter((entry) => (entry.payload as { text?: string }).text !== "");
       return {

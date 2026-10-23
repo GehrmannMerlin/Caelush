@@ -1,7 +1,4 @@
-import {
-  CODING_TOOL_EFFECTS_EXTENSION_KIND,
-  type ToolSettlementExtension,
-} from "@caelush/agent";
+import { CODING_TOOL_EFFECTS_EXTENSION_KIND, type ToolSettlementExtension } from "@caelush/agent";
 import type { AgentState, JsonObject, TimestampMs } from "@caelush/protocol";
 
 import type { ToolEffect } from "../effects/effects.js";

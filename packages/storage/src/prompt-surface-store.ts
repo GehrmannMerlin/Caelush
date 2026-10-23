@@ -378,15 +378,16 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
     }
   }
 
-  async rolloverEpoch(
-    command: PromptSurfaceRolloverCommand,
-  ): Promise<PromptSurfaceRolloverResult> {
+  async rolloverEpoch(command: PromptSurfaceRolloverCommand): Promise<PromptSurfaceRolloverResult> {
     try {
       assertPromptSurfaceEpoch(command.expectedCurrentEpoch);
       assertPromptSurfaceEpoch(command.newEpoch);
       assertPromptSurfaceRecord(command.baseline);
       assertPromptSurfaceSectionStates(command.expectedSectionStates);
-      if (!Number.isSafeInteger(command.expectedRecordOrdinal) || command.expectedRecordOrdinal < 0) {
+      if (
+        !Number.isSafeInteger(command.expectedRecordOrdinal) ||
+        command.expectedRecordOrdinal < 0
+      ) {
         throw new TypeError("Prompt Surface expected record ordinal is invalid.");
       }
       if (
@@ -453,9 +454,7 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
           sourceRecords.length !== command.expectedRecordOrdinal ||
           (sourceRecords.at(-1)?.decisionFingerprint ?? null) !==
             command.expectedDecisionFingerprint ||
-          sourceRecords.some(
-            (record) => record.sourceStepSequence >= baseline.sourceStepSequence,
-          )
+          sourceRecords.some((record) => record.sourceStepSequence >= baseline.sourceStepSequence)
         ) {
           throw new PromptSurfaceRolloverConflictError(
             "Prompt Surface rollover compare-and-swap did not hold.",
@@ -473,11 +472,7 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
 
         // The baseline must reproduce the complete target view exactly; anything else would make
         // the new epoch a different projection than the one the caller is about to use.
-        const appliedStates = applyPromptSurfaceSectionUpdates(
-          [],
-          "BASELINE",
-          baseline.updates,
-        );
+        const appliedStates = applyPromptSurfaceSectionUpdates([], "BASELINE", baseline.updates);
         if (stableJson(appliedStates) !== stableJson(command.expectedSectionStates)) {
           throw new StorageDecodeError(
             "PromptSurfaceSectionState",

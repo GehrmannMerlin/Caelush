@@ -28,11 +28,7 @@ function isHttpDate(value: string): boolean {
   const month = "(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)";
   return (
     new RegExp(`^${day}, \\d{2} ${month} \\d{4} \\d{2}:\\d{2}:\\d{2} GMT$`, "u").test(value) ||
-    new RegExp(`^${longDay}, \\d{2}-${month}-\\d{2} \\d{2}:\\d{2}:\\d{2} GMT$`, "u").test(
-      value,
-    ) ||
-    new RegExp(`^${day} ${month} {1,2}\\d{1,2} \\d{2}:\\d{2}:\\d{2} \\d{4}$`, "u").test(
-      value,
-    )
+    new RegExp(`^${longDay}, \\d{2}-${month}-\\d{2} \\d{2}:\\d{2}:\\d{2} GMT$`, "u").test(value) ||
+    new RegExp(`^${day} ${month} {1,2}\\d{1,2} \\d{2}:\\d{2}:\\d{2} \\d{4}$`, "u").test(value)
   );
 }

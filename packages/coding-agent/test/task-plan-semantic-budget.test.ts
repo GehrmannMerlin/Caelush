@@ -110,7 +110,8 @@ describe("task plan semantic budget", () => {
     expect(result.omittedCounts.remaining).toBeGreaterThan(0);
   });
 
-  it("bounds each evidence description to 80 UTF-8 bytes without splitting a character", () => {    const description = "汉".repeat(60);
+  it("bounds each evidence description to 80 UTF-8 bytes without splitting a character", () => {
+    const description = "汉".repeat(60);
     const result = renderBoundedTaskPlan(
       {
         revision: "plan-description",

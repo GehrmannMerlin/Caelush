@@ -197,13 +197,11 @@ function tokenize(command: string, platform: CommandPlatform): TokenizedCommand 
  * differs from the body shell. `wrapperPlatform` still decides which grammar the body is parsed
  * with, so widening recognition does not widen interpretation.
  */
-function isShellWrapper(
-  executable: string,
-  tokens: readonly string[],
-): boolean {
+function isShellWrapper(executable: string, tokens: readonly string[]): boolean {
   const name = executable.toLowerCase();
   const flags = tokens.map((token) => token.toLowerCase());
-  if (["sh", "bash", "zsh"].includes(name)) return flags.some((flag) => ["-c", "-lc"].includes(flag));
+  if (["sh", "bash", "zsh"].includes(name))
+    return flags.some((flag) => ["-c", "-lc"].includes(flag));
   if (["powershell", "pwsh"].includes(name))
     return flags.some((flag) => ["-command", "-c"].includes(flag));
   return ["cmd", "cmd.exe"].includes(name) && flags.includes("/c");

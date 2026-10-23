@@ -229,7 +229,9 @@ describe("Caelush Tool execution Gate — host-process termination", () => {
       });
 
       expect(decision.reasonCode, command).not.toBe("SYSTEM_DESTRUCTIVE_COMMAND_DENIED");
-      expect(JSON.stringify(decision.safeAction ?? {}), command).not.toContain("SYSTEM_DESTRUCTIVE");
+      expect(JSON.stringify(decision.safeAction ?? {}), command).not.toContain(
+        "SYSTEM_DESTRUCTIVE",
+      );
     }
   });
 });

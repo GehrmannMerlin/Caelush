@@ -16,6 +16,6 @@
   "dependencies": {
     "@caelush/protocol": "workspace:*",
     "fast-glob": "3.3.3",
-    "node-pty": "1.1.0"
+    "node-pty": "1.2.0-beta.14"
   }
 }

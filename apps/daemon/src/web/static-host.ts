@@ -51,15 +51,21 @@ function prepareStaticHost(options: WebStaticHostOptions): PreparedStaticHost {
   return {
     root,
     indexHtml,
-    ...(options.workspace === undefined ? {} : { workspace: WorkspaceRefSchema.parse(options.workspace) }),
-    ...(options.initialWorkspaceId === undefined ? {} : { initialWorkspaceId: options.initialWorkspaceId }),
+    ...(options.workspace === undefined
+      ? {}
+      : { workspace: WorkspaceRefSchema.parse(options.workspace) }),
+    ...(options.initialWorkspaceId === undefined
+      ? {}
+      : { initialWorkspaceId: options.initialWorkspaceId }),
   };
 }
 
 function sendIndex(reply: FastifyReply, host: PreparedStaticHost): FastifyReply {
   const launchContext = escapeJsonForHtml(
     JSON.stringify({
-      ...(host.initialWorkspaceId === undefined ? {} : { initialWorkspaceId: host.initialWorkspaceId }),
+      ...(host.initialWorkspaceId === undefined
+        ? {}
+        : { initialWorkspaceId: host.initialWorkspaceId }),
       ...(host.workspace === undefined ? {} : { workspace: host.workspace }),
     }),
   );

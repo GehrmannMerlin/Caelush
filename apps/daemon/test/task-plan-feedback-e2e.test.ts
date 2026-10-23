@@ -121,7 +121,9 @@ describe("plan rejection feedback through the daemon", () => {
 describe("plan reminders derived from durable messages", () => {
   const RUN = createRunId();
 
-  function sourceInput(messages: readonly { readonly message: unknown; readonly sequence: number }[]) {
+  function sourceInput(
+    messages: readonly { readonly message: unknown; readonly sequence: number }[],
+  ) {
     return {
       identity: { runId: RUN, sessionId: "ses_test", stepId: "stp_test", goal: "goal" },
       conversation: { turns: [{ messages }] },
@@ -209,7 +211,9 @@ describe("plan reminders derived from durable messages", () => {
     }));
   }
 
-  async function noticeOf(messages: readonly { readonly message: unknown; readonly sequence: number }[]) {
+  async function noticeOf(
+    messages: readonly { readonly message: unknown; readonly sequence: number }[],
+  ) {
     const provider = createTaskPlanContextProvider();
     const result = (await provider.collect(sourceInput(messages))) as never as {
       items: readonly { id: string; payload: { text: string } }[];

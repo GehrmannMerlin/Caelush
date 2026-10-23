@@ -10,16 +10,16 @@ import {
   type PromptSurfaceEpochWithSnapshots,
   type PromptSurfaceRecord,
 } from "./prompt-surface.js";
-import { hashPromptSurfaceContent, PromptSurfaceIntegrityError } from "./prompt-surface-integrity.js";
+import {
+  hashPromptSurfaceContent,
+  PromptSurfaceIntegrityError,
+} from "./prompt-surface-integrity.js";
 import { promptSurfaceEpochIdentity } from "./prompt-surface-identity.js";
 import {
   PromptSurfaceRolloverConflictError,
   type PromptSurfaceStorePort,
 } from "./prompt-surface-store.js";
-import {
-  diffPromptSurfaceSections,
-  type PromptSurfaceSectionState,
-} from "./prompt-surface-v3.js";
+import { diffPromptSurfaceSections, type PromptSurfaceSectionState } from "./prompt-surface-v3.js";
 
 /**
  * How many times one rollover may re-read and re-decide after a concurrent writer moved the
@@ -122,7 +122,10 @@ export async function rolloverPromptSurface(
       const committed = await readCommittedEpoch(input.store, newEpoch.epochId, baseline);
       return Object.freeze({ status, epoch: committed, operationId });
     } catch (error) {
-      if (error instanceof PromptSurfaceRolloverConflictError && attempt + 1 < MAX_ROLLOVER_ATTEMPTS) {
+      if (
+        error instanceof PromptSurfaceRolloverConflictError &&
+        attempt + 1 < MAX_ROLLOVER_ATTEMPTS
+      ) {
         const refreshed = await input.store.readEpoch(input.epoch.runId, input.epoch.epochId);
         if (refreshed === undefined) {
           throw capacityFailure("EPOCH_ROLLOVER_CONFLICT", "surface_capacity", error);

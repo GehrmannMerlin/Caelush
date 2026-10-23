@@ -16,8 +16,8 @@ describe("CaelushClient Workspace Session API", () => {
     });
 
     await expect(client.listWorkspaceSessions(workspaceId)).resolves.toEqual({ items: [] });
-    expect(requests.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
-      `GET /api/v1/workspaces/${workspaceId}/sessions`,
-    ]);
+    expect(requests.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual(
+      [`GET /api/v1/workspaces/${workspaceId}/sessions`],
+    );
   });
 });

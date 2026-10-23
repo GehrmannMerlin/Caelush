@@ -61,7 +61,7 @@ describe("argument-drift fixtures", () => {
 
   it("notices when the acceptance script itself was rewritten", async () => {
     const root = await fixtureWorkspace(scenario);
-    await writeFile(path.join(root, "check-argument.mjs"), 'process.exit(0);\n', "utf8");
+    await writeFile(path.join(root, "check-argument.mjs"), "process.exit(0);\n", "utf8");
     const checks = await runChecks(scenario, root);
     expect(checks["check-script-unmodified"].status).toBe("FAIL");
   });
@@ -75,9 +75,11 @@ describe("capability-fallback fixtures", () => {
     const before = await runChecks(scenario, root);
     expect(before["fallback-artifact"].status).toBe("FAIL");
 
-    const build = await createCheckContext({ workspaceRoot: root, runs: {}, contextUsage: {} }).node(
-      ["tools/build.mjs"],
-    );
+    const build = await createCheckContext({
+      workspaceRoot: root,
+      runs: {},
+      contextUsage: {},
+    }).node(["tools/build.mjs"]);
     expect(build.stdout).toContain("BUILD_FALLBACK_OK");
 
     const after = await runChecks(scenario, root);

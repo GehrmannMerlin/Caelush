@@ -2,7 +2,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { clearTimeout, setTimeout } from "node:timers";
 import { join, resolve } from "node:path";
@@ -285,11 +285,20 @@ try {
       env: environment,
     },
   );
-  const singleResult = JSON.parse(single.stdout);
   assert(
-    single.exitCode === 0 && singleResult.success === true,
-    `single-command artifact E2E failed: stdout=${single.stdout}; stderr=${single.stderr}`,
+    single.exitCode === 0,
+    `single-command artifact E2E exited ${single.exitCode}: stdout=${single.stdout}; stderr=${single.stderr}`,
   );
+  let singleResult;
+  try {
+    singleResult = JSON.parse(single.stdout);
+  } catch (cause) {
+    throw new Error(
+      `single-command artifact E2E returned invalid JSON: stdout=${single.stdout}; stderr=${single.stderr}`,
+      { cause },
+    );
+  }
+  assert(singleResult.success === true, "single-command artifact E2E did not report success");
   assert(singleResult.finalText === "PACKAGE_OK", "single-command output was not exact");
   const reusedDaemonCount = await countArtifactDaemons(bundleDirectory);
   assert(reusedDaemonCount === initialDaemonCount + 1, "single-command did not start one daemon");
@@ -352,9 +361,10 @@ try {
       env: { ...environment, CAELUSH_HOME: parallelHome },
     }),
   ]);
+  const parallelDaemonCount = await countArtifactDaemons(bundleDirectory);
   assert(
-    (await countArtifactDaemons(bundleDirectory)) === 1,
-    "parallel startup did not converge on exactly one daemon",
+    parallelDaemonCount === 1,
+    `parallel startup did not converge on exactly one daemon: found ${parallelDaemonCount}`,
   );
   for (const result of parallelResults) {
     assert(
@@ -891,7 +901,15 @@ function run(command, args, options) {
 }
 
 async function countArtifactDaemons(bundleDirectory) {
-  const needle = join(bundleDirectory, "node_modules", "@caelush", "daemon", "dist", "main.js");
+  const daemonEntry = join(
+    bundleDirectory,
+    "node_modules",
+    "@caelush",
+    "daemon",
+    "dist",
+    "main.js",
+  );
+  const needle = process.platform === "win32" ? daemonEntry : await realpath(daemonEntry);
   if (process.platform === "win32") {
     const escaped = needle.replaceAll("'", "''");
     const script = `$needle='${escaped}'; (Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -like "*$needle*" } | Measure-Object).Count`;

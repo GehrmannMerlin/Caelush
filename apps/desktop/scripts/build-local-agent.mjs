@@ -80,7 +80,7 @@ async function stageWindowsDaemonRuntime() {
   const stagedPtyPackage = JSON.parse(
     await readFile(path.join(terminalPackageDestination, "package.json"), "utf8"),
   );
-  if (stagedPtyPackage.name !== "node-pty" || stagedPtyPackage.version !== "1.1.0") {
+  if (stagedPtyPackage.name !== "node-pty" || stagedPtyPackage.version !== "1.2.0-beta.14") {
     throw new Error("The staged USER_TERMINAL PTY package did not match the pinned version.");
   }
   await access(path.join(terminalPackageDestination, "prebuilds", "win32-x64", "conpty.node"));
@@ -88,7 +88,7 @@ async function stageWindowsDaemonRuntime() {
   secureRuntimePath(path.join(stageDirectory, "node_modules"), currentUserSid, true);
   secureRuntimePath(terminalHelperDestination, currentUserSid, false);
   process.stdout.write(
-    `Staged D0-C Node 24.18.0 and node-pty 1.1.0 for USER_TERMINAL with current-user ACL at ${path.relative(repoRoot, nodeDestination)} (${actualHash}).\n`,
+    `Staged D0-C Node 24.18.0 and node-pty 1.2.0-beta.14 for USER_TERMINAL with current-user ACL at ${path.relative(repoRoot, nodeDestination)} (${actualHash}).\n`,
   );
 }
 

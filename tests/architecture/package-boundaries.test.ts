@@ -159,7 +159,7 @@ describe("package boundaries", () => {
     const dependencies = dependencyEntries(manifest);
     expect(dependencies[protocolPackageName]).toBe("workspace:*");
     expect(dependencies["fast-glob"]).toBe("3.3.3");
-    expect(dependencies["node-pty"]).toBe("1.1.0");
+    expect(dependencies["node-pty"]).toBe("1.2.0-beta.14");
     expect(Object.keys(dependencies).sort()).toEqual([
       "@caelush/protocol",
       "fast-glob",

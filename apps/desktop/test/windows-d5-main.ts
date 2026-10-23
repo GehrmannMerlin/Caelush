@@ -269,6 +269,15 @@ app.whenReady().then(async () => {
     mainWindow.webContents.on("render-process-gone", (_event, details) => {
       process.stderr.write(`D5_RENDERER_PROCESS_GONE=${details.reason}:${details.exitCode}\n`);
     });
+    const editorEnvironment = { ...process.env };
+    const pathKey = Object.keys(editorEnvironment).find((name) => name.toLowerCase() === "path");
+    editorEnvironment[pathKey ?? "PATH"] = path.win32.join(
+      process.env.SystemRoot ?? "C:\\Windows",
+      "System32",
+    );
+    editorEnvironment.LOCALAPPDATA = localAppDataRoot;
+    editorEnvironment.ProgramFiles = path.join(testRoot, "program-files");
+    editorEnvironment["ProgramFiles(x86)"] = path.join(testRoot, "program-files-x86");
     panels = new DesktopWorkspacePanelController({
       window: mainWindow,
       supervisor,
@@ -277,6 +286,7 @@ app.whenReady().then(async () => {
         appPath: desktopRoot,
         resourcesPath: packagedResourceRoot ?? process.resourcesPath,
       },
+      editorEnvironment,
       onTerminalOutput: (ownerId, output) => {
         if (output.data !== undefined) {
           terminalOutputText.set(
@@ -482,33 +492,22 @@ app.whenReady().then(async () => {
       mainWindow.webContents,
       `window.caelushDesktop.workspace.listEditors({workspaceId:${JSON.stringify(workspaceA.id)}})`,
     );
-    assert.ok(
-      Array.isArray(editors) &&
-        editors.every(
-          (editor) => isRecord(editor) && ["vscode", "cursor"].includes(String(editor["id"])),
-        ),
+    assert.deepEqual(
+      editors,
+      [],
+      "The isolated workbench smoke must not discover or launch host-installed editors.",
     );
     const injectedEditorInput = await rendererCall(
       mainWindow.webContents,
       `(async()=>{try{await window.caelushDesktop.workspace.openInEditor({editorId:'vscode',workspaceId:${JSON.stringify(workspaceA.id)},executablePath:'cmd.exe',command:'whoami'});return 'unexpected'}catch(error){return error.message}})()`,
     );
     assert.equal(injectedEditorInput, "The desktop request did not match the supported input.");
-    const installedEditor = Array.isArray(editors) ? editors.find(isSupportedEditor) : undefined;
-    if (installedEditor !== undefined) {
-      const opened = await rendererCall(
-        mainWindow.webContents,
-        `window.caelushDesktop.workspace.openInEditor({editorId:${JSON.stringify(installedEditor.id)},workspaceId:${JSON.stringify(workspaceA.id)},relativeFilePath:'src/hello.ts'})`,
-      );
-      assert.deepEqual(opened, { opened: true, editorId: installedEditor.id });
-      recordMarker(`IDE_OPEN=PASS:${installedEditor.id}`);
-    } else {
-      const unavailable = await rendererCall(
-        mainWindow.webContents,
-        `(async()=>{try{await window.caelushDesktop.workspace.openInEditor({editorId:'vscode',workspaceId:${JSON.stringify(workspaceA.id)}});return 'unexpected'}catch(error){return error.message}})()`,
-      );
-      assert.equal(unavailable, "This editor is not installed.");
-      recordMarker("IDE_OPEN=UNAVAILABLE:no-supported-editor-installed");
-    }
+    const unavailable = await rendererCall(
+      mainWindow.webContents,
+      `(async()=>{try{await window.caelushDesktop.workspace.openInEditor({editorId:'vscode',workspaceId:${JSON.stringify(workspaceA.id)}});return 'unexpected'}catch(error){return error.message}})()`,
+    );
+    assert.equal(unavailable, "This editor is not installed.");
+    recordMarker("IDE_OPEN=UNAVAILABLE:isolated-test-profile");
 
     setFailureStage("AGENT_RUN_SSE");
     const fullAccessOption = await execute(
@@ -995,6 +994,18 @@ app.whenReady().then(async () => {
       true,
       `Account B daemon presentation omitted its persisted final answer: ${JSON.stringify(compactPresentationDiagnostic(accountBPresentation.value))}`,
     );
+    const accountBFullPresentation = await localApi(
+      proxy,
+      `/api/v1/sessions/${encodeURIComponent(runRef.sessionId)}/presentation?limit=100`,
+    );
+    assert.equal(
+      presentationIncludesText(
+        accountBFullPresentation.value,
+        "The local D5 Electron fixture run completed.",
+      ),
+      true,
+      `Account B full-session presentation omitted its persisted final answer: ${JSON.stringify(compactPresentationDiagnostic(accountBFullPresentation.value))}`,
+    );
     try {
       await waitForRenderer(
         mainWindow.webContents,
@@ -1005,10 +1016,10 @@ app.whenReady().then(async () => {
     } catch (error) {
       const rendererSnapshot = await execute(
         mainWindow.webContents,
-        `(()=>({runs:[...document.querySelectorAll('.turn-presentation-turn')].map(turn=>({runId:turn.getAttribute('data-run-id'),status:turn.getAttribute('data-run-status'),textLength:turn.innerText.length})),selectedWorkspace:document.querySelector('.workspace-list-item--selected')?.innerText??null}))()`,
+        `(()=>({url:location.href,workspace:document.querySelector('.workspace-list-item--selected')?.innerText??null,sessionTitle:document.querySelector('.session-workspace-header h1')?.innerText??null,turns:[...document.querySelectorAll('.turn-presentation-turn')].map(turn=>({runId:turn.getAttribute('data-run-id'),status:turn.getAttribute('data-run-status'),text:turn.innerText.slice(0,800),content:turn.textContent?.slice(0,800),html:turn.innerHTML.slice(0,1200)})),userItems:[...document.querySelectorAll('.turn-presentation-item--user')].map(item=>item.innerText.slice(0,300)),assistantItems:[...document.querySelectorAll('.turn-presentation-item--assistant')].map(item=>item.innerText.slice(0,300)),sessionItems:[...document.querySelectorAll('[class*=session-list] [aria-selected=true],[class*=session-item][aria-selected=true]')].map(item=>item.innerText),body:document.body.innerText.slice(-1600)}))()`,
       ).catch((diagnosticError: unknown) => ({ error: String(diagnosticError) }));
       throw new Error(
-        `${error instanceof Error ? error.message : "Account B Run did not complete."} (providerRequests=${chatCalls.length}, runStatuses=${JSON.stringify(readRunStatusCounts(workspaceBProfile.databasePath))}, renderer=${JSON.stringify(rendererSnapshot)}, apiPresentation=${JSON.stringify(compactPresentationDiagnostic(accountBPresentation.value))})`,
+        `${error instanceof Error ? error.message : "Account B Run did not complete."} (providerRequests=${chatCalls.length}, run=${JSON.stringify(runRef)}, runStatuses=${JSON.stringify(readRunStatusCounts(workspaceBProfile.databasePath))}, renderer=${JSON.stringify(rendererSnapshot)}, targetedApi=${JSON.stringify(compactPresentationDiagnostic(accountBPresentation.value))}, fullApi=${JSON.stringify(compactPresentationDiagnostic(accountBFullPresentation.value))})`,
         { cause: error },
       );
     }
@@ -1396,11 +1407,6 @@ function parseJsonObject(text: string): JsonObject {
   const value: unknown = JSON.parse(text);
   if (!isRecord(value)) throw new Error("protected local response was invalid");
   return value;
-}
-
-function isSupportedEditor(value: unknown): value is { readonly id: "vscode" | "cursor" } {
-  if (!isRecord(value)) return false;
-  return value["id"] === "vscode" || value["id"] === "cursor";
 }
 
 function provider(payload: unknown, id: string): JsonObject {

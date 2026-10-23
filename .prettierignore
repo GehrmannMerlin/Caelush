@@ -2,5 +2,6 @@ node_modules
 dist
 coverage
 release-artifacts
+.workbuddy/**
 pnpm-lock.yaml
 Caelush V1 技术架构设计文档.md

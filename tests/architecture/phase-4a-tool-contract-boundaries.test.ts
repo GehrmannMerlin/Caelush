@@ -342,10 +342,7 @@ describe("Phase 4A Agent Tool package boundaries", () => {
       /executionMode\s*(?:===|!==)\s*"PARALLEL_SAFE"/.test(executable(file)),
     );
     expect(schedulers.sort()).toEqual(
-      [
-        "packages/agent/src/tools/batch/batch-coordinator.ts",
-        schedulerPath,
-      ].sort(),
+      ["packages/agent/src/tools/batch/batch-coordinator.ts", schedulerPath].sort(),
     );
   });
 

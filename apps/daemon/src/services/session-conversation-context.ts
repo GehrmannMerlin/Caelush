@@ -42,7 +42,9 @@ export class SessionConversationContextProvider {
       .sort(compareRuns)
       .slice(-this.maxRuns);
 
-    return eligible.flatMap((run) => projectCompletedRun(recordsByRun.get(run.id) ?? [], this.options));
+    return eligible.flatMap((run) =>
+      projectCompletedRun(recordsByRun.get(run.id) ?? [], this.options),
+    );
   }
 }
 
@@ -74,8 +76,7 @@ function projectCompletedRun(
         entry.message.type === "ASSISTANT" &&
         project(entry, options.projectors).some(
           (message) =>
-            message.role === "assistant" &&
-            message.content.some((part) => part.type === "text"),
+            message.role === "assistant" && message.content.some((part) => part.type === "text"),
         ),
     );
   if (user === undefined || assistant === undefined) return [];

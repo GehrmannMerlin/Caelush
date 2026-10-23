@@ -1,5 +1,10 @@
 import { CaelushClientProtocolError } from "@caelush/client";
-import type { PublicRunEvent, ClientAgentRun, DaemonInfo, RunActionResponse } from "@caelush/protocol";
+import type {
+  PublicRunEvent,
+  ClientAgentRun,
+  DaemonInfo,
+  RunActionResponse,
+} from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { type CliDaemonClient } from "../src/application/cli-controller.js";
 import { main } from "../src/main.js";

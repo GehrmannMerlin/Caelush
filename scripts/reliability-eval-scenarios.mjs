@@ -423,9 +423,13 @@ export const REAL_MODEL_SCENARIOS = Object.freeze([
       return [
         {
           name: "history-was-unsuccessful",
-          status: ["CANCELLED", "FAILED", "TIMEOUT", "MAX_STEPS_REACHED", "BUDGET_EXCEEDED"].includes(
-            historyStatus,
-          )
+          status: [
+            "CANCELLED",
+            "FAILED",
+            "TIMEOUT",
+            "MAX_STEPS_REACHED",
+            "BUDGET_EXCEEDED",
+          ].includes(historyStatus)
             ? "PASS"
             : "BLOCKED",
           detail: `history status=${historyStatus}`,

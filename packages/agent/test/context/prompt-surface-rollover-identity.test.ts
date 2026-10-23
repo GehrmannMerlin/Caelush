@@ -164,7 +164,9 @@ describe("rolloverPromptSurface identity boundary", () => {
     });
 
     expect(outcome.status).toBe("COMMITTED");
-    expect(Object.keys(store.commands[0]!.expectedCurrentEpoch).sort()).toEqual(EPOCH_IDENTITY_KEYS);
+    expect(Object.keys(store.commands[0]!.expectedCurrentEpoch).sort()).toEqual(
+      EPOCH_IDENTITY_KEYS,
+    );
     expect(store.commands[0]!.expectedCurrentEpoch).not.toHaveProperty("snapshots");
     expect(store.commands[0]!.expectedCurrentEpoch).not.toHaveProperty("records");
     expect(store.commands[0]!.expectedCurrentEpoch).not.toHaveProperty("sectionStates");

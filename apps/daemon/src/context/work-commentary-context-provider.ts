@@ -225,9 +225,7 @@ function renderWorkCommentaryState(input: {
       `Durable verification plan: ${String(counts.PASSED)} passed; ${String(counts.PENDING + counts.RUNNING)} pending or running; ${String(counts.FAILED + counts.ERROR)} failed or errored; ${String(counts.SKIPPED + counts.CANCELLED)} skipped or cancelled. Only PASSED checks count as verified.`,
     );
   }
-  lines.push(
-    "An observation is not verification. Do not show opaque IDs to the user.",
-  );
+  lines.push("An observation is not verification. Do not show opaque IDs to the user.");
   return lines.join("\n");
 }
 

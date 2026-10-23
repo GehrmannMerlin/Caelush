@@ -25,6 +25,8 @@ export interface DesktopWorkspacePanelControllerOptions {
   readonly window: BrowserWindow;
   readonly supervisor: DesktopDaemonSupervisor;
   readonly resourceLayout: DesktopResourceLayout;
+  /** Optional host environment for deterministic editor discovery in isolated Electron fixtures. */
+  readonly editorEnvironment?: NodeJS.ProcessEnv;
   readonly onTerminalOutput: (ownerId: number, output: DesktopTerminalOutput) => void;
   readonly onBrowserState: (ownerId: number, state: BrowserGuestState) => void;
 }
@@ -44,7 +46,12 @@ export class DesktopWorkspacePanelController {
     this.files = new DesktopWorkspaceFileService({
       acquireLease: (signal) => options.supervisor.acquireProxyLease(signal),
     });
-    this.editors = new DesktopEditorResolver({ workspaceFiles: this.files });
+    this.editors = new DesktopEditorResolver({
+      workspaceFiles: this.files,
+      ...(options.editorEnvironment === undefined
+        ? {}
+        : { environment: options.editorEnvironment }),
+    });
     this.browser = new BrowserGuestManager({
       window: options.window,
       getCurrentIdentity: () => options.supervisor.getActiveProfileIdentity(),

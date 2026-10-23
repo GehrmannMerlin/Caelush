@@ -491,7 +491,8 @@ function decodeTurnBudget(value: unknown): TurnBudgetDecision {
   });
 }
 
-function decodeRecoveryStages(value: string | null): readonly string[] {  if (value === null || value === undefined) return Object.freeze([]);
+function decodeRecoveryStages(value: string | null): readonly string[] {
+  if (value === null || value === undefined) return Object.freeze([]);
   const parsed = JSON.parse(value) as unknown;
   if (
     !Array.isArray(parsed) ||
