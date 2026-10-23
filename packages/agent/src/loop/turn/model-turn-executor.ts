@@ -172,6 +172,12 @@ export function createModelTurnExecutor(
         // for a stream that never finished.
         const result = assembler.result();
         const privateCompletion = stream.takePrivateCompletion?.();
+        // LENGTH is settled but unusable: preserve its finish reason for the classifier
+        // while releasing any private sideband without transferring ownership.
+        if (result.finishReason === "LENGTH") {
+          if (privateCompletion?.completeness === "COMPLETE") privateCompletion.payload.fill(0);
+          return { kind: "COMPLETED", result };
+        }
         if (
           input.model !== undefined &&
           requiresReasoningReplayWithTools(input.model) &&

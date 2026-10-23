@@ -113,10 +113,12 @@ function gateway(
   requests(): readonly AIModelRequest[];
   signals(): readonly AbortSignal[];
   options(): readonly Parameters<AIGateway["stream"]>[1][];
+  privateCompletionTakes(): readonly (AIPrivateCompletion | undefined)[];
 } {
   const requests: AIModelRequest[] = [];
   const signals: AbortSignal[] = [];
   const streamOptions: Parameters<AIGateway["stream"]>[1][] = [];
+  const privateCompletionTakes: (AIPrivateCompletion | undefined)[] = [];
   let calls = 0;
 
   const stub: AIGateway = {
@@ -137,6 +139,7 @@ function gateway(
         takePrivateCompletion: () => {
           const current = completion;
           completion = undefined;
+          privateCompletionTakes.push(current);
           return current;
         },
       });
@@ -152,6 +155,7 @@ function gateway(
     requests: () => requests,
     signals: () => signals,
     options: () => streamOptions,
+    privateCompletionTakes: () => privateCompletionTakes,
   };
 }
 
@@ -161,6 +165,18 @@ function textTurn(text: string): readonly AIStreamEvent[] {
     { type: "text.delta", payload: { text } },
     { type: "stream.finish", payload: { finishReason: "STOP" } },
   ];
+}
+
+function replayStart(): AIStreamEvent {
+  return {
+    type: "stream.start",
+    payload: {
+      callId: CALL_ID as never,
+      providerId: REPLAY_MODEL.ref.provider,
+      model: REPLAY_MODEL.ref,
+      resolution: RESOLUTION as never,
+    },
+  };
 }
 
 function input(
@@ -309,6 +325,133 @@ describe("ModelTurnExecutor frozen result contract", () => {
       expect(fake.callCount()).toBe(1);
     },
   );
+
+  it("preserves a reasoning-only LENGTH turn when required replay is incomplete", async () => {
+    const usage = { inputTokens: 127, outputTokens: 53, totalTokens: 180, reasoningTokens: 43 };
+    const fake = gateway(
+      [
+        replayStart(),
+        { type: "usage", payload: usage },
+        { type: "stream.finish", payload: { finishReason: "LENGTH" } },
+      ],
+      {
+        callId: CALL_ID as never,
+        providerId: REPLAY_MODEL.ref.provider,
+        model: REPLAY_MODEL.ref,
+        api: REPLAY_MODEL.api,
+        completeness: "INCOMPLETE",
+      },
+    );
+    const sink = vi.fn();
+    const executor = createModelTurnExecutor({
+      gateway: fake.gateway,
+      privateReplayResolverFactory: async () => ({
+        resolver: { resolve: async () => undefined },
+        dispose: () => undefined,
+      }),
+    });
+
+    const result = await executor.execute(
+      input({ request: REPLAY_REQUEST, model: REPLAY_MODEL, privateCompletionSink: sink }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "COMPLETED",
+      result: {
+        callId: CALL_ID,
+        finishReason: "LENGTH",
+        usage,
+        text: "",
+        toolCalls: [],
+      },
+    });
+    expect(sink).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_REASONING_SENTINEL");
+  });
+
+  it("returns parsed tool calls on LENGTH for the classifier to reject", async () => {
+    const fake = gateway(
+      [
+        replayStart(),
+        {
+          type: "tool_call.start",
+          payload: { toolCallId: "call_truncated", toolName: "read_file" },
+        },
+        {
+          type: "tool_call.completed",
+          payload: {
+            id: "call_truncated",
+            name: "read_file",
+            input: { path: "README.md" },
+          },
+        },
+        { type: "stream.finish", payload: { finishReason: "LENGTH" } },
+      ],
+      {
+        callId: CALL_ID as never,
+        providerId: REPLAY_MODEL.ref.provider,
+        model: REPLAY_MODEL.ref,
+        api: REPLAY_MODEL.api,
+        completeness: "INCOMPLETE",
+      },
+    );
+    const executor = createModelTurnExecutor({
+      gateway: fake.gateway,
+      privateReplayResolverFactory: async () => ({
+        resolver: { resolve: async () => undefined },
+        dispose: () => undefined,
+      }),
+    });
+
+    const result = await executor.execute(input({ request: REPLAY_REQUEST, model: REPLAY_MODEL }));
+
+    expect(result).toMatchObject({
+      kind: "COMPLETED",
+      result: {
+        callId: CALL_ID,
+        finishReason: "LENGTH",
+        toolCalls: [{ id: "call_truncated", name: "read_file", input: { path: "README.md" } }],
+      },
+    });
+  });
+
+  it("does not transfer complete private replay from a LENGTH turn and wipes its bytes", async () => {
+    const payload = new TextEncoder().encode("PRIVATE_REASONING_SENTINEL");
+    const completion: AIPrivateCompletion = {
+      callId: CALL_ID as never,
+      providerId: REPLAY_MODEL.ref.provider,
+      model: REPLAY_MODEL.ref,
+      api: REPLAY_MODEL.api,
+      completeness: "COMPLETE",
+      payload,
+    };
+    const fake = gateway(
+      [
+        replayStart(),
+        { type: "usage", payload: { inputTokens: 100, outputTokens: 40, totalTokens: 140 } },
+        { type: "stream.finish", payload: { finishReason: "LENGTH" } },
+      ],
+      completion,
+    );
+    const sink = vi.fn();
+    const executor = createModelTurnExecutor({
+      gateway: fake.gateway,
+      privateReplayResolverFactory: async () => ({
+        resolver: { resolve: async () => undefined },
+        dispose: () => undefined,
+      }),
+    });
+
+    const result = await executor.execute(
+      input({ request: REPLAY_REQUEST, model: REPLAY_MODEL, privateCompletionSink: sink }),
+    );
+
+    expect(result).toMatchObject({ kind: "COMPLETED", result: { finishReason: "LENGTH" } });
+    expect(sink).not.toHaveBeenCalled();
+    expect(payload.every((byte) => byte === 0)).toBe(true);
+    expect(fake.privateCompletionTakes().map((take) => take === undefined)).toEqual([false, true]);
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_REASONING_SENTINEL");
+  });
 
   it("clears private completion bytes when the private sink rejects ownership", async () => {
     const payload = new TextEncoder().encode("private completion bytes");

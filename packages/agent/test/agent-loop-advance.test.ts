@@ -121,6 +121,7 @@ function turnResult(partial: Partial<AIModelTurnResult> = {}): AIModelTurnResult
     providerId: "test",
     model: MODEL.ref,
     text: "",
+    toolRequests: [],
     toolCalls: [],
     finishReason: "STOP",
     resolution: RESOLUTION as never,
@@ -405,6 +406,38 @@ describe("AgentLoop.advance() failure classification", () => {
       expect(result.turn).toEqual(TURN);
     },
   );
+
+  it("rejects LENGTH tool calls before a loop decision and keeps call accounting", async () => {
+    const callId = "llm_0195f3a0-0000-7000-8000-000000000111" as AIModelTurnResult["callId"];
+    const usage = { inputTokens: 127, outputTokens: 53, totalTokens: 180, reasoningTokens: 43 };
+    const turns = modelTurns([
+      {
+        kind: "COMPLETED",
+        result: turnResult({
+          callId,
+          finishReason: "LENGTH",
+          toolCalls: [{ id: "call_truncated", name: "read_file", input: { path: "secret.ts" } }],
+          usage,
+        }),
+      },
+    ]);
+
+    const result = await loopWith({ turns }).advance(
+      advanceInput({ tools: [{ name: "read_file", description: "Read a file", inputSchema: {} }] }),
+    );
+
+    expect(result.kind).toBe("FAILED");
+    if (result.kind !== "FAILED") throw new Error("expected a truncated-turn failure");
+    expect(result.error).toMatchObject({
+      code: "MODEL_ERROR",
+      retryable: false,
+      details: { modelOutputFailure: "OUTPUT_TRUNCATED" },
+    });
+    expect(result.modelTurn?.callId).toBe(callId);
+    expect(result.usage).toEqual(usage);
+    expect(result.messagesToAppend).toEqual([]);
+    expect(turns.callCount()).toBe(1);
+  });
 
   it("projects a provider failure onto the canonical error with retry metadata", async () => {
     const turns = modelTurns([
