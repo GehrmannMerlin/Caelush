@@ -863,8 +863,7 @@ describe("RunController output recovery exits and provenance", () => {
 
   it("lets a deadline reached during recovery admission win before Provider I/O", async () => {
     let now = createTimestampMs(20);
-    let harness: ReturnType<typeof createHarness>;
-    harness = createHarness({
+    const harness = createHarness({
       timeoutMs: 1_000,
       now: () => now,
       onRecoveryAdmission: () => {
@@ -915,8 +914,7 @@ describe("RunController output recovery exits and provenance", () => {
   });
 
   it("fails closed on an open-boundary CAS conflict without entering Provider I/O", async () => {
-    let harness: ReturnType<typeof createHarness>;
-    harness = createHarness({
+    const harness = createHarness({
       onRecoveryAdmission: () => {
         if (harness.executor.callCount() !== 1) return;
         const nextRevision = (harness.store.stateRevision ?? 0) + 1;
