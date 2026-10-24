@@ -7,6 +7,8 @@ import {
   createContextContributionPipeline,
   createConversationTurn,
   createStandardAgentMessageProjectorRegistry,
+  diffPromptSurfaceSections,
+  renderPromptSurfaceRecord,
   type PromptSurfaceEpoch,
   type PromptSurfaceRecord,
   type PromptSurfaceSectionState,
@@ -226,7 +228,7 @@ async function openHarness(options: { readonly targetTokens: number }): Promise<
           },
         } as never,
         messageProjectors: createStandardAgentMessageProjectorRegistry(),
-        notifier: { notifyCommitted: () => undefined },
+        notifier: { notifyCommitted: () => undefined, emitTransient: () => undefined },
         contributionPipeline: createContextContributionPipeline(),
         clock: { now: () => createTimestampMs(10_000) },
         activeToolNames: [],
@@ -235,7 +237,7 @@ async function openHarness(options: { readonly targetTokens: number }): Promise<
         identity: { runId: run.id, sessionId: run.sessionId, goal: run.goal },
         turn: { stepId: createStepId(), sequence: stepSequence },
         conversation,
-        input: { kind: "CONTINUATION", reason: "TOOL_RESULT" },
+        input: { kind: "CONTINUATION", reason: "STEERING" },
         model: MODEL,
         tools: [],
         mode: "NORMAL",
@@ -249,6 +251,17 @@ interface SurfaceView {
   readonly epoch: PromptSurfaceEpoch;
   readonly records: readonly PromptSurfaceRecord[];
   readonly sectionStates: readonly PromptSurfaceSectionState[];
+}
+
+function replayOverheadBytes(surface: SurfaceView): number {
+  const baseline = renderPromptSurfaceRecord(
+    "BASELINE",
+    diffPromptSurfaceSections([], surface.sectionStates, true).updates,
+  );
+  return (
+    surface.records.reduce((bytes, record) => bytes + record.byteLength, 0) -
+    Buffer.byteLength(baseline, "utf8")
+  );
 }
 
 async function readSurface(runId: Harness["runId"]): Promise<SurfaceView> {
@@ -376,6 +389,39 @@ function conversationAfter(
 }
 
 describe("Prompt Surface churn from dynamic Sections", () => {
+  it("preserves the submitted Tool-result prefix when a later source Step arrives", async () => {
+    const harness = await openHarness({ targetTokens: 96_000 });
+    const turnId = turnIdFor(String(harness.runId));
+    const scope = { runId: String(harness.runId), sessionId: harness.sessionId };
+    const firstStepId = createStepId();
+    const secondStepId = createStepId();
+    const largeOutput = `file start\n${"source line\n".repeat(1_000)}file end`;
+    const messages = conversationAfter(2, turnId, scope).map((record, index) => ({
+      ...record,
+      message: {
+        ...record.message,
+        ...(record.message.type === "USER"
+          ? {}
+          : { sourceStepId: index < 5 ? firstStepId : secondStepId }),
+        ...(record.message.type === "TOOL_RESULT" && index === 4
+          ? { projectedContent: largeOutput }
+          : {}),
+      },
+    }));
+    const durable = structuredClone(messages);
+
+    const first = await harness.prepare(messages.slice(0, 5), 2);
+    const firstSurface = await readSurface(harness.runId);
+    const next = await harness.prepare(messages, 3);
+    const nextSurface = await readSurface(harness.runId);
+
+    expect(first.messages.some((message) => message.content === largeOutput)).toBe(true);
+    expect(nextSurface.epoch.epochId).toBe(firstSurface.epoch.epochId);
+    expect(next.messages.slice(0, first.messages.length)).toEqual(first.messages);
+    expect(next.report.preflight?.matchesSentProjection).toBe(true);
+    expect(messages).toEqual(durable);
+  });
+
   /**
    * A hundred accepted Tool results, and what each one costs the request.
    *
@@ -440,8 +486,8 @@ describe("Prompt Surface churn from dynamic Sections", () => {
         }
         expect(preflight?.replayTokens ?? 0).toBeGreaterThan(previousReplay);
       }
-      // 4. The replay budget is enforced: a Step never reports more than the 24 000-token cap.
-      expect(preflight?.replayTokens ?? 0).toBeLessThanOrEqual(24_000);
+      // 4. The replay budget bounds redundant history above the unavoidable current baseline.
+      expect(replayOverheadBytes(surface)).toBeLessThanOrEqual(24_000 * 3);
       previousReplay = preflight?.replayTokens ?? 0;
     }
 
@@ -502,8 +548,7 @@ describe("Prompt Surface churn from dynamic Sections", () => {
       const tokens = prepared.report.preflight?.replayTokens ?? 0;
       replay.push(tokens);
       epochs.push(surface.epoch.epochId);
-      // One Step may cross the budget; it may not cross it by more than one Step's growth.
-      expect(tokens).toBeLessThanOrEqual(softBudgetTokens + 200);
+      expect(replayOverheadBytes(surface)).toBeLessThanOrEqual(softBudgetTokens * 3);
       expect(prepared.report.preflight?.compacted).toBe(false);
       expect(prepared.report.preflight?.matchesSentProjection).toBe(true);
     }
@@ -523,7 +568,7 @@ describe("Prompt Surface churn from dynamic Sections", () => {
     }
     expect(rollovers).toBeGreaterThanOrEqual(1);
     // A rollover re-baselines; it does not replay the whole history it replaced.
-    expect(replay.at(-1)!).toBeLessThan(softBudgetTokens);
+    expect(replayOverheadBytes(settled)).toBeLessThanOrEqual(softBudgetTokens * 3);
   }, 180_000);
 
   /** A restart replays the same projection: same Sections, same request, one new decision. */

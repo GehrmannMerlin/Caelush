@@ -21,8 +21,10 @@ import {
   decidePromptSurfaceCapacity,
   hashPromptSurfaceContent,
   promptSurfaceReplaySoftBudgetBytes,
+  renderPromptSurfaceRecord,
   type ContextCheckpointRepositoryPort,
   type ContextSourceProvider,
+  type ContextSourceInput,
   type ContextSourceResult,
   type ContextUsageStorePort,
   type PromptSurfaceSectionState,
@@ -66,13 +68,47 @@ function sectionState(body: string): PromptSurfaceSectionState {
 }
 
 const SECTION: PromptSurfaceSectionState = sectionState("progress");
+const BASELINE_BYTES = Buffer.byteLength(
+  renderPromptSurfaceRecord("BASELINE", [{ op: "SET", ...SECTION }]),
+  "utf8",
+);
 
 function record(kind: "BASELINE" | "DELTA", byteLength: number) {
   return { kind, byteLength };
 }
 
 describe("Prompt Surface replay budget", () => {
-  it("rotates early only when the replay is over budget and the baseline is smaller", () => {
+  it("preserves a near-budget baseline when only a small delta accumulated", () => {
+    const baseline = sectionState("x".repeat(68_000));
+    const decision = decidePromptSurfaceCapacity({
+      epoch: {
+        records: [record("BASELINE", 70_000), record("DELTA", 1_000)],
+        sectionStates: [baseline],
+      },
+      candidate: record("DELTA", 2_000),
+      targetSectionStates: [baseline],
+      replaySoftBudgetBytes: 72_000,
+    });
+
+    expect(decision.kind).toBe("APPEND");
+  });
+
+  it("does not discard a near-budget cached prefix for a NOOP", () => {
+    const baseline = sectionState("x".repeat(68_000));
+    const decision = decidePromptSurfaceCapacity({
+      epoch: {
+        records: [record("BASELINE", 70_000), record("DELTA", 3_000)],
+        sectionStates: [baseline],
+      },
+      candidate: { kind: "NOOP", byteLength: 0 },
+      targetSectionStates: [baseline],
+      replaySoftBudgetBytes: 72_000,
+    });
+
+    expect(decision.kind).toBe("APPEND");
+  });
+
+  it("rotates early when redundant replay exceeds the soft budget", () => {
     const replay = Array.from({ length: 20 }, () => record("DELTA", 1_000));
     const candidate = record("DELTA", 1_000);
 
@@ -83,7 +119,30 @@ describe("Prompt Surface replay budget", () => {
       replaySoftBudgetBytes: 4_000,
     });
     expect(decision.kind).toBe("ROLLOVER_SOFT");
-    expect(decision).toMatchObject({ observed: 21_000, limit: 4_000 });
+    expect(decision).toMatchObject({ limit: 4_000 });
+    if (decision.kind !== "ROLLOVER_SOFT") throw new Error("Expected a soft rollover.");
+    expect(decision.observed).toBe(21_000 - BASELINE_BYTES);
+  });
+
+  it.each([
+    [0, "APPEND"],
+    [1, "ROLLOVER_SOFT"],
+  ] as const)("allows exactly the redundant replay budget, offset %i", (extraBytes, kind) => {
+    const decision = decidePromptSurfaceCapacity({
+      epoch: {
+        records: [record("BASELINE", BASELINE_BYTES), record("DELTA", 4_000)],
+        sectionStates: [SECTION],
+      },
+      candidate: record("DELTA", extraBytes),
+      targetSectionStates: [SECTION],
+      replaySoftBudgetBytes: 4_000,
+    });
+
+    expect(decision.kind).toBe(kind);
+    if (decision.kind === "ROLLOVER_SOFT") {
+      expect(decision.observed).toBe(4_001);
+      expect(decision.limit).toBe(4_000);
+    }
   });
 
   it("appends when the replay is inside the soft budget", () => {
@@ -187,7 +246,7 @@ const PROGRESS_SOURCE = "agent.replay-progress";
 function progressProvider(): ContextSourceProvider {
   return Object.freeze({
     id: PROGRESS_SOURCE as never,
-    async collect(input): Promise<ContextSourceResult> {
+    async collect(input: ContextSourceInput): Promise<ContextSourceResult> {
       // A Section that changes every Step: without it no DELTA is recorded and nothing is replayed.
       const text = `step ${String(input.turn.sequence)} ` + "progress ".repeat(60);
       return Object.freeze({
@@ -356,22 +415,28 @@ describe("Prompt Surface early rollover", () => {
     const first = await store.getCurrent(runId);
     expect(first?.resetReason).toBe("INITIAL");
 
-    // A working-set target of 7000 tokens puts the soft budget at 1750 tokens (5250 UTF-8 bytes). The
-    // first two records are appended — one record has nothing to fold — and the third pushes the replay
-    // (a ~3.7 KiB baseline plus two ~1.2 KiB deltas) past the budget while the baseline itself is
-    // smaller and inside it, so that Step rotates instead of replaying.
+    // A 7000-token target allows 5250 redundant UTF-8 bytes above the baseline. A couple of small
+    // deltas must preserve the cached prefix; a genuinely long delta chain must still rotate.
     await prepareAt(2, 2);
     expect((await store.getCurrent(runId))?.epochId).toBe(first?.epochId);
     await prepareAt(3, 3);
-    const second = await store.getCurrent(runId);
+    expect((await store.getCurrent(runId))?.epochId).toBe(first?.epochId);
+    let second = await store.getCurrent(runId);
+    let step = 4;
+    for (; step <= 12; step += 1) {
+      await prepareAt(step, step);
+      second = await store.getCurrent(runId);
+      if (second?.epochId !== first?.epochId) break;
+    }
     expect(second?.resetReason).toBe("CAPACITY_ROLLOVER");
     expect(second?.epochId).not.toBe(first?.epochId);
-    expect(second?.createdStepSequence).toBe(3);
+    expect(second?.createdStepSequence).toBe(step);
+    expect(step).toBeLessThan(12);
 
     const surface = second === undefined ? undefined : await store.readEpoch(runId, second.epochId);
     expect(surface?.records?.map((entry) => entry.kind)).toEqual(["BASELINE"]);
 
-    const prepared = await prepareAt(4, 4);
+    const prepared = await prepareAt(step + 1, step + 1);
     const preflight = prepared.report.preflight;
     expect(preflight?.replayTokens).toBeGreaterThan(0);
     expect(preflight?.compacted).toBe(false);

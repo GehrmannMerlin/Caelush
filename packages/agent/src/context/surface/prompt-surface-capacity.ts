@@ -40,8 +40,8 @@ export type PromptSurfaceCapacityDecision =
       readonly limit: number;
     }
   /**
-   * The epoch still has room, but replaying it costs more than the soft budget and a baseline of the
-   * same Section view is cheaper.
+   * The epoch still has room, but its redundant replay bytes exceed the soft budget compared with a
+   * baseline of the same Section view.
    *
    * This is an *early* rollover, not a capacity boundary: nothing was full. It exists because a
    * Prompt Surface Epoch is re-sent on every request, so an epoch that is comfortable for storage can
@@ -49,7 +49,7 @@ export type PromptSurfaceCapacityDecision =
    */
   | {
       readonly kind: "ROLLOVER_SOFT";
-      /** Replay cost of the epoch plus this candidate, in UTF-8 bytes. */
+      /** Redundant replay bytes above the equivalent current baseline, in UTF-8 bytes. */
       readonly observed: number;
       /** The soft budget it exceeded, in UTF-8 bytes. */
       readonly limit: number;
@@ -81,7 +81,7 @@ export interface PromptSurfaceCapacityInput {
   /** The complete Section view this Step must leave in effect. */
   readonly targetSectionStates: readonly PromptSurfaceSectionState[];
   /**
-   * The replay cost this epoch may reach before an early rollover becomes worthwhile, in UTF-8 bytes.
+   * The redundant replay bytes above a current baseline allowed before an early rollover, in UTF-8.
    *
    * Omitted means "no soft budget": the decision then only reacts to the hard epoch bounds, which is
    * the behaviour every historical caller had.
@@ -154,7 +154,7 @@ export function decidePromptSurfaceCapacity(
 }
 
 /**
- * The token budget above which a replay is worth rotating early.
+ * The redundant replay token budget above which an epoch is worth rotating early.
  *
  * A constant, not a ratio: the reason to rotate is that a request is becoming expensive, and
  * "expensive" is a property of the request rather than of the window it sits in. Both the bounded
@@ -198,8 +198,7 @@ interface CapacityBound {
  * Rotate early only when rotating actually makes the request cheaper.
  *
  * ```text
- * replay over the soft budget   the cost this decision is about
- * baseline smaller than replay  rotating must gain, or it is churn
+ * overhead over the soft budget rotating must remove a budget's worth of redundant bytes
  * baseline inside the budget    a baseline that is itself over budget cannot be the answer;
  *                               the full pressure/compaction decision owns that case
  * ```
@@ -223,7 +222,11 @@ function earlyRollover(
   // genuinely accumulating.
   if (records.length < 2) return Object.freeze({ kind: "APPEND" });
   const baselineBytes = promptSurfaceBaselineByteLength(input.targetSectionStates);
-  if (baselineBytes >= replayBytes) return Object.freeze({ kind: "APPEND" });
+  // A baseline near the soft limit is unavoidable input. Charging it again would leave only a tiny
+  // delta allowance and discard the cached prefix every few Steps. Bound the redundant replay
+  // instead, so each soft rollover earns back at least one full budget of bytes.
+  const redundantBytes = replayBytes - baselineBytes;
+  if (redundantBytes <= softBudget) return Object.freeze({ kind: "APPEND" });
   if (baselineBytes > softBudget) {
     // Rotating would replace a large replay with a large baseline. The budget decision belongs to
     // the pressure/compaction path, which can summarize history; a rollover cannot.
@@ -231,7 +234,7 @@ function earlyRollover(
   }
   return Object.freeze({
     kind: "ROLLOVER_SOFT" as const,
-    observed: replayBytes,
+    observed: redundantBytes,
     limit: softBudget,
   });
 }

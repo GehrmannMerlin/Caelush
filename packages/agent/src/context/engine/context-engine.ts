@@ -925,7 +925,8 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       const preflight: ContextPreflightReport = Object.freeze({
         estimatedInputTokens,
         // REPLAY_TOKENS: what re-sending the Surface records costs on its own, before the stable
-        // head and the conversation. It is the number the replay soft budget is about.
+        // head and the conversation. This total includes the current baseline; the soft budget
+        // governs only redundant replay bytes above an equivalent baseline.
         replayTokens: initialProjection.promptSurface.receipt.snapshotTokens,
         projectionFingerprint: preflightFingerprint,
         sentFingerprint,
