@@ -221,7 +221,7 @@ describe("ContextUsageRing", () => {
     expect(html).toContain('aria-label="运行中"');
   });
 
-  it("explains the exact per-turn input and output headroom decision", () => {
+  it("keeps internal turn-budget details out of the capacity popover", () => {
     const markup = renderToStaticMarkup(
       <ContextInspector
         usage={{
@@ -244,12 +244,12 @@ describe("ContextUsageRing", () => {
         }}
       />,
     );
-    expect(markup).toContain("HEADROOM_V1");
-    expect(markup).toContain("输入 P 80,000");
-    expect(markup).toContain("输出 O 16,384");
-    expect(markup).toContain("安全余量 S 4,096");
-    expect(markup).toContain("下轮增长预估 G 8,192");
-    expect(markup).toContain("保留当前历史");
+    expect(markup).not.toContain("本轮上下文预算明细");
+    expect(markup).not.toContain("本轮请求预算");
+    expect(markup).not.toContain("HEADROOM_V1");
+    expect(markup).not.toContain("预算判断");
+    expect(markup).toContain("500 / 1,200 tokens");
+    expect(markup).toContain("缓存命中率");
   });
 
   it("shows a degraded continuation with a readable, scoped source reference", () => {

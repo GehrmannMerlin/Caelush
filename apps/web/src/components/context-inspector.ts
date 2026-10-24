@@ -78,23 +78,6 @@ export function ContextInspector(props: {
       createElement("span", null, "可用输入预算"),
       createElement("strong", null, `${usage.remainingTokens.toLocaleString()} tokens`),
     ),
-    usage.turnBudget === undefined
-      ? null
-      : createElement(
-          "section",
-          { className: "context-inspector-budget", "aria-label": "本轮上下文预算明细" },
-          createElement("strong", null, "本轮请求预算"),
-          createElement(
-            "p",
-            null,
-            `算法 ${usage.turnBudget.algorithm}：模型窗口 W ${usage.turnBudget.windowTokens.toLocaleString()}，输入 P ${usage.turnBudget.inputTokens.toLocaleString()}，输出 O ${usage.turnBudget.outputAllowanceTokens.toLocaleString()}，安全余量 S ${usage.turnBudget.safetyTokens.toLocaleString()}，下轮增长预估 G ${usage.turnBudget.expectedGrowthTokens.toLocaleString()} tokens。`,
-          ),
-          createElement(
-            "p",
-            null,
-            `预算判断：${turnBudgetDecisionLabel(usage.turnBudget.decision)}；输出空间来自${turnBudgetOutputSourceLabel(usage.turnBudget.outputSource)}。`,
-          ),
-        ),
     (props.process ?? usage.process) === undefined
       ? null
       : createRunProcessPanel({
@@ -467,32 +450,6 @@ function historyUnavailableLabel(
       return "引用校验未通过，系统拒绝返回内容。";
     case "CURSOR_INVALID":
       return "读取位置无效，请重新展开引用。";
-  }
-}
-
-function turnBudgetDecisionLabel(
-  value: NonNullable<ContextUsageProjection["turnBudget"]>["decision"],
-): string {
-  switch (value) {
-    case "KEEP":
-      return "保留当前历史";
-    case "ADJUST_OUTPUT":
-      return "调整本轮输出空间";
-    case "PREPARE_HISTORY":
-      return "需要整理历史以保障后续空间";
-  }
-}
-
-function turnBudgetOutputSourceLabel(
-  value: NonNullable<ContextUsageProjection["turnBudget"]>["outputSource"],
-): string {
-  switch (value) {
-    case "EXPLICIT_SETTING":
-      return "显式输出设置";
-    case "PREFERRED_ALLOWANCE":
-      return "默认偏好额度";
-    case "AVAILABLE_ROOM":
-      return "当前实际剩余空间";
   }
 }
 
