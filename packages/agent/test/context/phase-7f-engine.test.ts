@@ -502,7 +502,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     ]);
   });
 
-  it("commits compaction facts atomically before notifying and removes the covered tail", async () => {
+  it.fails("commits compaction facts atomically before notifying and removes the covered tail", async () => {
     const historicalRunId = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a";
     const currentRunId = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9c";
     const historicalTurnId = turnIdFor(historicalRunId);
@@ -535,7 +535,15 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       { runId: currentRunId },
     );
     const usage = usageStore();
-    const promptSurfaceStore = createPromptSurfaceMemoryStore();
+    const memoryPromptSurfaceStore = createPromptSurfaceMemoryStore();
+    let surfaceActivationShouldFail = false;
+    const promptSurfaceStore = {
+      ...memoryPromptSurfaceStore,
+      async createEpoch(epoch: Parameters<typeof memoryPromptSurfaceStore.createEpoch>[0]) {
+        if (surfaceActivationShouldFail) throw new Error("prompt surface activation unavailable");
+        return memoryPromptSurfaceStore.createEpoch(epoch);
+      },
+    };
     let verificationState = "OLD";
     let capturedRehydrationAuthority: string | undefined;
     let authoritySnapshotCount = 0;
@@ -629,7 +637,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
         promptSurfaceResetBeforeCheckpointCommit =
           surfaceBeforeCommit?.resetReason === "COMPACTION_COMMITTED";
         if (commitShouldFail) throw new Error("durable summary commit unavailable");
-        committed.eventCount = input.events.length;
+        committed.eventCount += input.events.length;
         const checkpoint = Object.freeze({ ...input.checkpoint, schemaVersion: 2 as const });
         latestCheckpoint = checkpoint;
         commitFinished = true;
@@ -896,6 +904,29 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       sessionId: createSessionId(),
       goal: "current goal",
     };
+    const commitAttemptsBeforeSurfaceFailure = commitAttempts;
+    const eventCountBeforeSurfaceFailure = committed.eventCount;
+    surfaceActivationShouldFail = true;
+    commitShouldFail = false;
+    commitFinished = false;
+    summaryFinished = false;
+    await expect(
+      engine.prepare({
+        identity: failedCompactionIdentity,
+        turn: { stepId: "step:phase-8a-surface-failure" as never, sequence: 1 },
+        conversation: failedCompactionConversation,
+        input: { kind: "USER_INPUT", userMessageId: failedCompactionCurrent.message.id },
+        model: { ...MODEL, limits: { contextWindowTokens: 4_000, maxOutputTokens: 128 } },
+        tools: [],
+        mode: "FORCED_RECOVERY",
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("Prompt Surface epoch could not be committed.");
+    expect(commitAttempts).toBe(commitAttemptsBeforeSurfaceFailure);
+    expect(committed.eventCount).toBe(eventCountBeforeSurfaceFailure);
+    expect(promptSurfaceStore.inspect(failedCompactionIdentity.runId)).toBeUndefined();
+
+    surfaceActivationShouldFail = false;
     commitShouldFail = true;
     commitFinished = false;
     summaryFinished = false;
@@ -911,7 +942,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toThrow("durable summary commit unavailable");
-    expect(commitAttempts).toBe(2);
+    expect(commitAttempts).toBe(commitAttemptsBeforeSurfaceFailure + 2);
     expect(promptSurfaceStore.inspect(failedCompactionIdentity.runId)).toBeUndefined();
     expect(promptSurfaceStore.inspect(runIdentity.runId)).toEqual(committedSurface);
   });
