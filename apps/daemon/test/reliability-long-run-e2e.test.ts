@@ -5,7 +5,11 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { answer, finish, toolCall } from "./support/ai-fixture.js";
-import { createReliabilityFixture, FIXTURE_API } from "./support/reliability-fixture.js";
+import {
+  createReliabilityFixture,
+  FIXTURE_API,
+  listRunContextCheckpoints,
+} from "./support/reliability-fixture.js";
 
 const fixtures: Array<() => Promise<void>> = [];
 
@@ -26,18 +30,6 @@ const RESOURCE_POLICY = {
   },
   hardLimits: {},
   inactivity: {},
-} as const;
-
-const WORKING_SET = {
-  version: "WORKING_SET_V2",
-  requestBudget: { version: "LEGACY_FULL_OUTPUT_V1" },
-  workingSet: {
-    targetTokens: 12_000,
-    triggerRatio: 0.75,
-    postCompactionRatio: 0.5,
-    allowCurrentTurnPrefix: true,
-    cooldownTurns: 5,
-  },
 } as const;
 
 function summaryText(criticalReferences: readonly string[] = []): string {
@@ -406,9 +398,12 @@ describe("daemon long-run reliability acceptance (infrastructure capacity)", () 
       goal: "Complete the synthetic reliability workload.",
       limits: { maxSteps: 270, maxToolCalls: 430, timeoutMs: 600_000 },
       resourcePolicy: RESOURCE_POLICY,
-      contextBudgetPolicy: WORKING_SET,
+      modelLimits: { contextWindowTokens: 64_000, maxOutputTokens: 8_192 },
+      contextBudgetPolicy: "DAEMON_DEFAULT",
+      contextBudgetPolicyVersion: "TURN_BUDGET_V4",
     });
     fixtures.push(() => fixture.dispose());
+    expect(fixture.run.contextBudgetPolicy?.version).toBe("TURN_BUDGET_V4");
     await writeFile(join(fixture.workspacePath, "evidence.txt"), makeEvidence(), "utf8");
 
     const startedAt = performance.now();
@@ -417,7 +412,7 @@ describe("daemon long-run reliability acceptance (infrastructure capacity)", () 
     const records = await fixture.storage.messageRecords.listByRun(fixture.run.id);
     const invocations = await fixture.storage.toolInvocations.listByRun(fixture.run.id);
     const observations = await fixture.storage.observations.listByRun(fixture.run.id);
-    const checkpoints = await fixture.storage.contextCheckpointsV2.listByRun(fixture.run.id);
+    const checkpoints = await listRunContextCheckpoints(fixture);
     const progress = await fixture.storage.resourceGovernance.get(fixture.run.id);
     const contextUsage = await fixture.storage.contextUsage.getByRun(fixture.run.id);
     const toolResults = records.filter((record) => record.messageType === "TOOL_RESULT");
@@ -453,8 +448,18 @@ describe("daemon long-run reliability acceptance (infrastructure capacity)", () 
         contextDiagnostics,
         checkpointCount: checkpoints.length,
         checkpointRanges: checkpoints.map((checkpoint) => ({
-          firstSequence: checkpoint.sourceRange.firstSequence,
-          lastSequence: checkpoint.sourceRange.lastSequence,
+          sourceSegments:
+            checkpoint.schemaVersion === 3
+              ? checkpoint.coverage.segments.map((segment) => ({
+                  firstSequence: segment.firstSequence,
+                  lastSequence: segment.lastSequence,
+                }))
+              : [
+                  {
+                    firstSequence: checkpoint.sourceRange.firstSequence,
+                    lastSequence: checkpoint.sourceRange.lastSequence,
+                  },
+                ],
           tokensBefore: checkpoint.tokensBefore,
           tokensAfter: checkpoint.tokensAfter,
           hasPreviousCheckpoint: checkpoint.previousCheckpointId !== undefined,

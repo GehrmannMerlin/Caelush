@@ -114,7 +114,6 @@ export class FeedbackDrivenAdapter implements ApiAdapter {
     }
     yield* answer(
       JSON.stringify({
-        goal: "Continue the reliability scenario from its accepted feedback.",
         constraints: ["Preserve the accepted plan and the newest failure facts."],
         completedWork: ["Earlier closed Tool batches were summarized."],
         inProgress: ["Continue from the newest accepted plan revision."],

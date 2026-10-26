@@ -20,6 +20,7 @@ import {
   type ContextPolicy,
 } from "../policy/context-policy.js";
 import type { ContextSourceResult } from "../source/context-source.js";
+import { estimateAIMessages } from "../token/materialized-message-estimator.js";
 import type {
   ContextCompactionReceipt,
   ContextBuildReceipt,
@@ -91,7 +92,7 @@ export function createContextReceiptBuilder(
           : { checkpoint: { checkpointId: input.checkpoint.checkpointId } }),
         ...(input.input === undefined ? {} : { input: input.input }),
       });
-      const materializedTokens = estimateMessages(
+      const materializedTokens = estimateAIMessages(
         input.materializedMessages,
         input.model,
         tokenEstimator,
@@ -256,29 +257,6 @@ function policyFingerprint(policy: ContextPolicy): string {
     rendererVersion: "policy",
     materializerVersion: "policy",
   });
-}
-
-function estimateMessages(
-  messages: readonly AIMessage[],
-  model: ModelDescriptor,
-  estimator: ContextTokenEstimatorPort,
-): number {
-  const text = stableJson(messages);
-  const estimate = estimator.estimateText(text, model);
-  if (!Number.isSafeInteger(estimate) || estimate < 0)
-    throw new TypeError("Materialized token estimate is invalid.");
-  return estimate;
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => compareStrings(left, right))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function assertBuildFacts(input: ContextReceiptBuilderInput): void {

@@ -11,6 +11,7 @@ import { validateAIModelRequestShape } from "@caelush/ai";
 import { createRunId, createSessionId } from "@caelush/protocol";
 import {
   createContextMessageRange,
+  createPrivateReplayReference,
   createContextSummaryReplayPrefixFingerprint,
   type AgentExecutionIdentity,
   type ContextSummarizationInput,
@@ -68,7 +69,6 @@ const input: ContextSummarizationInput = {
 };
 
 const semantic = {
-  goal: "Summarize safely.",
   constraints: [],
   completedWork: ["source was read"],
   inProgress: [],
@@ -112,11 +112,11 @@ function fakeGateway(result: AIModelTurnResult): {
 }
 
 describe("Phase 8C Daemon semantic summarizer adapter", () => {
-  it("ignores a cache-eligible prefix and sends an independent tools-disabled summary request", async () => {
+  it("reuses the verified main prefix, preserves data-only Tools, and disables execution", async () => {
     const messages: readonly AIMessage[] = [
       { role: "system", content: "Stable host context." },
       { role: "user", content: "Earlier durable input." },
-      { role: "assistant", content: [{ type: "TEXT", text: "Earlier answer." }] },
+      { role: "assistant", content: [{ type: "text", text: "Earlier answer." }] },
     ];
     const tools: readonly AIToolSpec[] = [
       { name: "read_file", description: "Read one file", inputSchema: { type: "object" } },
@@ -125,6 +125,16 @@ describe("Phase 8C Daemon semantic summarizer adapter", () => {
       modelRef: input.model.ref,
       api: input.model.api,
       surfaceFingerprint: `sha256:${"b".repeat(64)}`,
+      messageRefs: [
+        {
+          messageId: String(input.sourceRange.firstMessageId),
+          runId: String(input.sourceRange.runId),
+          conversationTurnId: String(input.sourceRange.conversationTurnId),
+          sequence: input.sourceRange.firstSequence,
+          schemaVersion: 1,
+          modelProjectionVersion: 1,
+        },
+      ],
       messages,
       tools,
     };
@@ -142,8 +152,9 @@ describe("Phase 8C Daemon semantic summarizer adapter", () => {
     });
 
     const request = fixture.requests[0]!;
-    expect(request.messages).toHaveLength(1);
-    expect(request.tools).toEqual([]);
+    expect(request.messages).toHaveLength(messages.length + 1);
+    expect(request.messages.slice(0, messages.length)).toEqual(messages);
+    expect(request.tools).toEqual(tools);
     expect(request.toolChoice).toEqual({ type: "NONE" });
     expect(() => validateAIModelRequestShape(request)).not.toThrow();
     expect(request.messages.at(-1)).toMatchObject({
@@ -155,6 +166,83 @@ describe("Phase 8C Daemon semantic summarizer adapter", () => {
     expect(request.messages.at(-1)?.content).not.toContain("Earlier durable input.");
     expect(request.messages.at(-1)?.content).not.toContain("Earlier answer.");
     expect(tools).toHaveLength(1);
+  });
+
+  it("scopes and disposes private native replay for a verified summary prefix", async () => {
+    const messageId = String(input.sourceRange.firstMessageId);
+    const providerState = createPrivateReplayReference({
+      sessionId: String(identity.sessionId),
+      runId: String(identity.runId),
+      messageId,
+      callId: "call_summary_replay",
+      providerId: MODEL.ref.provider,
+      model: MODEL.ref.model,
+      api: MODEL.api,
+      replayVersion: 1,
+    });
+    const replayPrefix = {
+      modelRef: MODEL.ref,
+      api: MODEL.api,
+      surfaceFingerprint: `sha256:${"d".repeat(64)}`,
+      messageRefs: [
+        {
+          messageId,
+          runId: String(identity.runId),
+          conversationTurnId: String(input.sourceRange.conversationTurnId),
+          sequence: input.sourceRange.firstSequence,
+          schemaVersion: 1,
+          modelProjectionVersion: 1,
+        },
+      ],
+      messages: [
+        { role: "system" as const, content: "Stable host context." },
+        {
+          role: "assistant" as const,
+          content: [{ type: "text" as const, text: "Prior answer." }],
+          providerState,
+        },
+      ],
+      tools: [],
+    };
+    const replayInput: ContextSummarizationInput = {
+      ...input,
+      cacheEligibility: "CACHE_REUSE_ELIGIBLE",
+      replayPrefix,
+      replayPrefixFingerprint: createContextSummaryReplayPrefixFingerprint(replayPrefix),
+    };
+    const resolver = {
+      async resolve() {
+        return new Uint8Array([1, 2, 3]);
+      },
+    };
+    let observedResolver: unknown;
+    let disposed = false;
+    const gateway = {
+      async complete(
+        _request: Parameters<AIGateway["complete"]>[0],
+        options?: Parameters<AIGateway["complete"]>[1],
+      ) {
+        observedResolver = options?.privateReplayResolver;
+        return gatewayResult();
+      },
+      async stream() {
+        throw new Error("stream is not used by semantic summary");
+      },
+    } as AIGateway;
+
+    await createAIContextSummarizerAdapter(gateway, {
+      async createPrivateReplayExecution() {
+        return {
+          resolver,
+          dispose() {
+            disposed = true;
+          },
+        };
+      },
+    }).summarize(replayInput, { signal: new AbortController().signal });
+
+    expect(observedResolver).toBe(resolver);
+    expect(disposed).toBe(true);
   });
 
   it("uses the current model, disables tools, asks for semantic JSON, and forwards resolved metadata", async () => {
@@ -174,11 +262,12 @@ describe("Phase 8C Daemon semantic summarizer adapter", () => {
       content: expect.stringContaining("SemanticCheckpointDraft"),
     });
     expect(request.messages[0]?.content).toContain("verificationState");
+    expect(request.messages[0]?.content).not.toContain(identity.goal);
     expect(request.messages[0]?.content).toContain("UNTRUSTED_DATA");
     expect(result.semantic).toEqual(semantic);
     expect(result.modelRef).toEqual({ provider: "test", model: "resolved-phase-8c" });
     expect(result.finishReason).toBe("STOP");
-    expect(result.summaryPromptVersion).toBe(3);
+    expect(result.summaryPromptVersion).toBe(4);
   });
 
   it.each(["LENGTH", "CONTENT_FILTER", "TOOL_CALLS", "OTHER"] as const)(

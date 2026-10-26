@@ -22,7 +22,7 @@ describe("deep compaction regression fixtures", () => {
     expect(fixture.runIds[1]).not.toBe(fixture.runIds[2]);
   });
 
-  it.fails("covers_multiple_runs_in_one_operation", () => {
+  it("covers_multiple_runs_in_one_operation", () => {
     const fixture = createMultiRunCompactionFixture();
     const plan = createContextCompactionPlanner().plan({
       history: fixture.history,
@@ -33,6 +33,9 @@ describe("deep compaction regression fixtures", () => {
     expect(plan).not.toBeNull();
     expect(plan?.selectedUnitIds).toEqual(fixture.expectedOldUnitIds);
     expect(plan?.selectedUnitIds).not.toContain(fixture.currentUnitId);
+    expect(plan?.sourceCoverageDelta?.map((range) => String(range.runId))).toEqual(
+      fixture.runIds.slice(0, 2).map(String),
+    );
   });
 
   it("provides 100 closed Tool batches followed by one open batch", () => {

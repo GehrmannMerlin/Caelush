@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { createReliabilityFixture } from "./support/reliability-fixture.js";
+import {
+  createReliabilityFixture,
+  listRunContextCheckpoints,
+} from "./support/reliability-fixture.js";
 
 const API = "openai-compatible-chat";
 const SOURCE_SENTINEL = "M4_SOURCE_SENTINEL_42A9";
@@ -70,6 +73,7 @@ describe("M4 — failed semantic summary through the pinned SDK and durable daem
       api: API,
       useBuiltinAdapter: true,
       contextBudgetPolicy: "DAEMON_DEFAULT",
+      contextBudgetPolicyVersion: "TURN_BUDGET_V4",
       modelLimits: { contextWindowTokens: 32_768, maxOutputTokens: 2_048 },
       limits: { maxSteps: 48, maxToolCalls: 64, timeoutMs: 120_000 },
       resourcePolicy: {
@@ -96,7 +100,11 @@ describe("M4 — failed semantic summary through the pinned SDK and durable daem
             const messages = messagesOf(wire);
             const serialized = JSON.stringify(messages);
 
-            if (serialized.includes("Compaction semantic source JSON (untrusted data)")) {
+            if (
+              serialized.includes(
+                "Return exactly one plain JSON object matching SemanticCheckpointDraft only.",
+              )
+            ) {
               summaryWires.push(wire);
               // A syntactically truncated response exercises the production parser, validator,
               // checkpoint fallback, durable commit and subsequent source lookup.
@@ -169,22 +177,7 @@ describe("M4 — failed semantic summary through the pinned SDK and durable daem
       }
 
       const result = await fixture.composition.controller.start(fixture.run.id);
-      const events = await fixture.storage.eventReader.replay(fixture.run.id, { afterSequence: 0 });
-      const diagnostics = events
-        .filter((event) => /failed|error|waiting|compaction|resource|budget/iu.test(event.type))
-        .slice(-8)
-        .map((event) => ({ sequence: event.sequence, type: event.type, payload: event.payload }));
-      expect(
-        result.run.status,
-        JSON.stringify({
-          status: result.run.status,
-          diagnostics,
-          summaryCalls: summaryWires.length,
-          requestCount: wires.length,
-          nextFile,
-          historyLookupCount,
-        }),
-      ).toBe("COMPLETED");
+      expect(result.run.status).toBe("COMPLETED");
       expect(
         summaryWires.length,
         JSON.stringify({
@@ -200,12 +193,13 @@ describe("M4 — failed semantic summary through the pinned SDK and durable daem
 
       for (const wire of summaryWires) {
         const tools = wire["tools"];
-        // The provider adapter omits an empty internal tool catalog on the wire; the adapter
-        // contract test verifies the AI request itself contains `tools: []` before translation.
-        expect(tools === undefined || (Array.isArray(tools) && tools.length === 0)).toBe(true);
+        // A verified native replay keeps its original data-only Tool declarations for cache hits;
+        // the explicit none choice still prevents a summary response from requesting execution.
+        expect(tools === undefined || Array.isArray(tools)).toBe(true);
+        expect(wire["tool_choice"]).toBe("none");
       }
 
-      const checkpoints = await fixture.storage.contextCheckpointsV2.listByRun(fixture.run.id);
+      const checkpoints = await listRunContextCheckpoints(fixture);
       const degraded = checkpoints.find((checkpoint) => checkpoint.degraded);
       expect(degraded).toBeDefined();
       if (degraded === undefined) throw new Error("expected a committed degraded checkpoint");
@@ -220,9 +214,6 @@ describe("M4 — failed semantic summary through the pinned SDK and durable daem
       expect(sourceRef).toMatch(/^history:v1:/u);
       await waitFor(() => progressStages.some(({ stage }) => stage === "FINISHED"));
       expect(progressStages.map(({ stage }) => stage)).toEqual([
-        "PREPARING",
-        "SUMMARIZING",
-        "FINISHED",
         "PREPARING",
         "SUMMARIZING",
         "REBUILDING",

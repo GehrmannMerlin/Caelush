@@ -148,4 +148,40 @@ describe("Run context budget policy snapshot", () => {
       }).success,
     ).toBe(true);
   });
+
+  it("decodes V4 deep-compaction retention as explicit frozen fields", () => {
+    const snapshot = {
+      version: "TURN_BUDGET_V4",
+      algorithm: "HEADROOM_V1",
+      minOutputTokens: 2_048,
+      preferredOutputTokens: 16_384,
+      safetyTokens: 4_096,
+      expectedGrowthTokens: 16_384,
+      deepCompaction: {
+        version: "DEEP_COMPACTION_V1",
+        triggerRatio: 0.9,
+        recentTokens: 20_000,
+        checkpointMaxTokens: 8_192,
+        boundaryTokens: 4_000,
+      },
+    } as const;
+    expect(
+      CurrentAgentRunSchema.safeParse({ ...baseRun, contextBudgetPolicy: snapshot }).success,
+    ).toBe(true);
+    expect(
+      CurrentAgentRunSchema.safeParse({
+        ...baseRun,
+        contextBudgetPolicy: {
+          ...snapshot,
+          deepCompaction: { ...snapshot.deepCompaction, triggerRatio: 1 },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      CurrentAgentRunSchema.safeParse({
+        ...baseRun,
+        contextBudgetPolicy: { ...snapshot, postCompactionRatio: 0.8 },
+      }).success,
+    ).toBe(false);
+  });
 });

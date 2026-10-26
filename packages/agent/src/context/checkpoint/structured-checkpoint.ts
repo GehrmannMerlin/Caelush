@@ -1,3 +1,5 @@
+import { assertContextSourceCoverage } from "../compaction/context-source-coverage.js";
+
 /**
  * The source range carried by the V1 StructuredCheckpoint payload.
  *
@@ -29,6 +31,15 @@ export interface StructuredCheckpoint {
   readonly criticalReferences: readonly string[];
   readonly nextIntent: string;
   readonly sourceRange: CheckpointSourceRange;
+}
+
+/** The canonical payload for a V3 checkpoint with Session-scoped multi-range coverage. */
+export interface StructuredCheckpointV2 extends Omit<
+  StructuredCheckpoint,
+  "version" | "sourceRange"
+> {
+  readonly version: 2;
+  readonly sourceCoverage: ContextSourceCoverage;
 }
 
 const STRUCTURED_CHECKPOINT_KEYS = [
@@ -109,6 +120,51 @@ export function createStructuredCheckpoint(input: StructuredCheckpoint): Structu
   });
 }
 
+/** Validate a V3 structured payload without changing any V1 durable payload semantics. */
+export function assertStructuredCheckpointV2(
+  value: unknown,
+): asserts value is StructuredCheckpointV2 {
+  if (!isRecord(value)) throw new TypeError("StructuredCheckpointV2 must be an object.");
+  const expected = STRUCTURED_CHECKPOINT_KEYS.filter((key) => key !== "sourceRange");
+  const keys = new Set([...expected, "sourceCoverage"]);
+  if (Object.keys(value).length !== keys.size || Object.keys(value).some((key) => !keys.has(key))) {
+    throw new TypeError("StructuredCheckpointV2 has an invalid shape.");
+  }
+  if (value.version !== 2) throw new TypeError("StructuredCheckpointV2 version must be 2.");
+  const semanticFields = Object.fromEntries(
+    Object.entries(value).filter(([key]) => key !== "sourceCoverage"),
+  );
+  const semantic = { ...semanticFields, version: 1, sourceRange: { from: 1, to: 1 } };
+  assertStructuredCheckpoint(semantic);
+  assertContextSourceCoverage(value.sourceCoverage);
+}
+
+/** Clone and deeply freeze a canonical V2 payload. */
+export function createStructuredCheckpointV2(
+  input: StructuredCheckpointV2,
+): StructuredCheckpointV2 {
+  assertStructuredCheckpointV2(input);
+  return deepFreeze({
+    ...input,
+    constraints: [...input.constraints],
+    completedWork: [...input.completedWork],
+    inProgress: [...input.inProgress],
+    blocked: [...input.blocked],
+    importantDiscoveries: [...input.importantDiscoveries],
+    keyDecisions: [...input.keyDecisions],
+    changedFiles: [...input.changedFiles],
+    readFiles: [...input.readFiles],
+    recentErrors: [...input.recentErrors],
+    activeProcesses: [...input.activeProcesses],
+    pendingApprovals: [...input.pendingApprovals],
+    criticalReferences: [...input.criticalReferences],
+    sourceCoverage: {
+      ...input.sourceCoverage,
+      segments: input.sourceCoverage.segments.map((segment) => ({ ...segment })),
+    },
+  });
+}
+
 function assertString(value: unknown, label: string): asserts value is string {
   if (typeof value !== "string") throw new TypeError(`${label} must be a string.`);
 }
@@ -146,3 +202,4 @@ function deepFreeze<T>(value: T): T {
   }
   return value;
 }
+import type { ContextSourceCoverage } from "../compaction/context-source-coverage.js";

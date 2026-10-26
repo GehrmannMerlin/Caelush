@@ -13,11 +13,13 @@ import {
   createWorkspaceId,
   type ContextBudgetPolicySnapshot,
   type CompletionRequirement,
+  type AgentRun,
   type RunLimits,
 } from "@caelush/protocol";
 import { createInjectedReplayKeyProvider, expandPermissionPreset } from "@caelush/security";
 import { createReplayProtection } from "@caelush/security";
 import { openCaelushStorage, toHostToolEffectsPort, type CaelushStorage } from "@caelush/storage";
+import type { ContextCheckpointRecordV3 } from "@caelush/agent";
 import {
   applyToolEffectsToAgentState,
   createCodingToolSettlementExtensionDecoder,
@@ -44,6 +46,21 @@ import {
  */
 export type FixtureContextBudgetPolicy = ContextBudgetPolicySnapshot | "DAEMON_DEFAULT";
 
+export async function listRunContextCheckpoints(input: {
+  readonly storage: CaelushStorage;
+  readonly run: Pick<AgentRun, "id" | "sessionId">;
+}): Promise<readonly ContextCheckpointRecordV3[]> {
+  const candidates = await input.storage.contextCheckpointsV3.listCandidatesBySession({
+    sessionId: input.run.sessionId,
+    throughRunId: input.run.id,
+    limit: 100,
+  });
+  return candidates.records.filter(
+    (record): record is ContextCheckpointRecordV3 =>
+      record.schemaVersion === 3 && String(record.ownerRunId) === String(input.run.id),
+  );
+}
+
 export interface ReliabilityFixtureOptions {
   /**
    * The scripted dialect adapter, appended to the built-in adapter set.
@@ -67,6 +84,8 @@ export interface ReliabilityFixtureOptions {
   readonly permissionPreset?: "VIEW_ONLY" | "WORKSPACE_WRITE" | "FULL_ACCESS";
   readonly resourceCorrectionRecoveryPolicy?: ResourceCorrectionRecoveryPolicy | null;
   readonly contextBudgetPolicy?: FixtureContextBudgetPolicy;
+  readonly contextBudgetPolicyVersion?: ContextBudgetPolicySnapshot["version"];
+  readonly contextBudgetPolicyVersion?: ContextBudgetPolicySnapshot["version"];
   /** Model limits for scenarios that must reproduce a large-window provider. */
   readonly modelLimits?: { readonly contextWindowTokens: number; readonly maxOutputTokens: number };
   /** Adapter capability metadata, e.g. the DeepSeek native-replay requirement. */
@@ -136,6 +155,9 @@ export async function createReliabilityFixture(
             ? []
             : [options.adapter],
         defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
+        ...(options.contextBudgetPolicyVersion === undefined
+          ? {}
+          : { contextBudgetPolicyVersion: options.contextBudgetPolicyVersion }),
         ...(recoveryPolicy === undefined
           ? {}
           : { resourceCorrectionRecoveryPolicy: recoveryPolicy }),

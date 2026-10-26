@@ -1,7 +1,13 @@
 import type { AgentMessage, StoredAgentMessage } from "../../messages/index.js";
-import type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
+import type {
+  StructuredCheckpoint,
+  StructuredCheckpointV2,
+} from "../checkpoint/structured-checkpoint.js";
 
-export type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
+export type {
+  StructuredCheckpoint,
+  StructuredCheckpointV2,
+} from "../checkpoint/structured-checkpoint.js";
 
 declare const ContextItemIdBrand: unique symbol;
 declare const ContextSourceIdBrand: unique symbol;
@@ -43,7 +49,10 @@ export interface ContextItemSource {
 export type ContextItemPayload =
   | { readonly kind: "TEXT"; readonly text: string }
   | { readonly kind: "AGENT_MESSAGE"; readonly message: StoredAgentMessage }
-  | { readonly kind: "CHECKPOINT"; readonly checkpoint: StructuredCheckpoint }
+  | {
+      readonly kind: "CHECKPOINT";
+      readonly checkpoint: StructuredCheckpoint | StructuredCheckpointV2;
+    }
   | {
       readonly kind: "ARTIFACT_REFERENCE";
       readonly artifactId: ContextArtifactId;

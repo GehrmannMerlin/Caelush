@@ -344,7 +344,7 @@ export interface DaemonCompositionOptions {
   readonly eventQueuePolicy?: SubscriberQueuePolicy;
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
-  /** ADAPTIVE_V1 and WORKING_SET_V2 are explicit opt-ins; working-set keeps the legacy request reserve. */
+  /** Non-default policy opt-ins; TURN_BUDGET_V4 remains gated on measured cache acceptance. */
   readonly contextBudgetPolicyVersion?: ContextBudgetPolicySnapshot["version"];
   /** Finite Gateway watchdog overrides; omitted values use production defaults. */
   readonly providerStreamPolicy?: Partial<ProviderStreamPolicy>;
@@ -1106,12 +1106,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   /**
    * The budget policy a *new* Run is frozen against.
    *
-   * `TURN_BUDGET_V3` is the production default: it stores the `HEADROOM_V1` algorithm and its
-   * parameters, and decides the output allowance per turn from the input that is actually prepared.
-   * A Run is frozen once, at creation, so a Run started before this default keeps the policy it was
-   * created with — `WORKING_SET_V2` (a 96 000-token target and a 75% trigger) and
-   * `LEGACY_FULL_OUTPUT_V1` stay selectable for reproducing an older behaviour, but neither is
-   * applied to a new Run.
+   * `TURN_BUDGET_V4` is available for explicit opt-in while its real-provider cache acceptance
+   * gate is incomplete. The stable default remains V3 until that evidence is collected. Historical
+   * Runs retain their original frozen policy.
    */
   const requestedContextBudgetPolicy = options.contextBudgetPolicyVersion ?? "TURN_BUDGET_V3";
   const contextBudgetPolicyResolver: RunContextBudgetPolicyResolver = {
@@ -1128,6 +1125,37 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
         });
         return Object.freeze({
           ...turnBudgetPolicy,
+          outputRecovery: Object.freeze({
+            version: "OUTPUT_RECOVERY_V1" as const,
+            maxRecoveryTurns: 1 as const,
+            outputMultiplier: 2 as const,
+          }),
+        });
+      }
+      if (requestedContextBudgetPolicy === "TURN_BUDGET_V4") {
+        const model = ai.models.resolve(run.model);
+        const config = await executionConfigResolver.resolve(run);
+        const headroom = resolveTurnBudgetPolicy({
+          contextWindowTokens: model.limits.contextWindowTokens,
+          maxOutputTokens: model.limits.maxOutputTokens,
+          ...(config.modelSettings?.maxOutputTokens === undefined
+            ? {}
+            : { configuredOutputCeiling: config.modelSettings.maxOutputTokens }),
+        });
+        return Object.freeze({
+          version: "TURN_BUDGET_V4" as const,
+          algorithm: headroom.algorithm,
+          minOutputTokens: headroom.minOutputTokens,
+          preferredOutputTokens: headroom.preferredOutputTokens,
+          safetyTokens: headroom.safetyTokens,
+          expectedGrowthTokens: headroom.expectedGrowthTokens,
+          deepCompaction: Object.freeze({
+            version: "DEEP_COMPACTION_V1" as const,
+            triggerRatio: 0.9,
+            recentTokens: 20_000,
+            checkpointMaxTokens: 8_192,
+            boundaryTokens: 4_096,
+          }),
           outputRecovery: Object.freeze({
             version: "OUTPUT_RECOVERY_V1" as const,
             maxRecoveryTurns: 1 as const,
@@ -1443,6 +1471,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           invocationEntries,
           executionSnapshot,
           checkpoints,
+          ownerRun,
         ] = await Promise.all([
           options.storage.messageRecords.listByRun(typedRunId),
           options.storage.promptSurface.getCurrent(typedRunId),
@@ -1450,18 +1479,23 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           options.storage.providerInvocationUsage.listByRun(typedRunId),
           options.storage.execution.load(typedRunId),
           options.storage.contextCheckpointsV2.listByRun(typedRunId),
+          options.storage.runs.get(typedRunId),
         ]);
+        const latestCheckpointV3 =
+          ownerRun === undefined || ownerRun === null
+            ? undefined
+            : await latestActivatedContextCheckpointV3(options.storage, ownerRun);
         const currentSurface =
           currentEpoch === undefined
             ? undefined
             : await options.storage.promptSurface.readEpoch(typedRunId, currentEpoch.epochId);
         const projectedContextUsage = projectV2ContextUsage(usage);
-        const latestCheckpoint = [...checkpoints]
-          .reverse()
-          .find((checkpoint) => checkpoint.schemaVersion === 2);
+        const latestCheckpoint =
+          latestCheckpointV3 ??
+          [...checkpoints].reverse().find((checkpoint) => checkpoint.schemaVersion === 2);
         return {
           ...projectedContextUsage,
-          ...(latestCheckpoint === undefined || latestCheckpoint.schemaVersion !== 2
+          ...(latestCheckpoint === undefined
             ? {}
             : {
                 lastCompaction: {
@@ -1469,6 +1503,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
                   quality: latestCheckpoint.degraded
                     ? ("DEGRADED" as const)
                     : ("SEMANTIC" as const),
+                  tokensBefore: latestCheckpoint.tokensBefore,
+                  tokensAfter: latestCheckpoint.tokensAfter,
+                  finishedAt: latestCheckpoint.createdAt,
                 },
               }),
           ...(executionSnapshot === undefined
@@ -1585,6 +1622,42 @@ function projectContextRunProcess(
       return { kind: "DEGRADED_CONTINUATION", sourceRefs: sourceRefs.slice(-8) };
     }
   }
+  return undefined;
+}
+
+async function latestActivatedContextCheckpointV3(
+  storage: CaelushStorage,
+  run: AgentRun,
+): Promise<
+  | Extract<
+      Awaited<
+        ReturnType<CaelushStorage["contextCheckpointsV3"]["listCandidatesBySession"]>
+      >["records"][number],
+      { readonly schemaVersion: 3 }
+    >
+  | undefined
+> {
+  let cursor: string | undefined;
+  do {
+    const page = await storage.contextCheckpointsV3.listCandidatesBySession({
+      sessionId: run.sessionId,
+      throughRunId: run.id,
+      ...(cursor === undefined ? {} : { cursor }),
+      limit: 100,
+    });
+    for (const checkpoint of page.records) {
+      if (checkpoint.schemaVersion !== 3 || checkpoint.ownerRunId !== run.id) continue;
+      if (
+        await storage.contextCheckpointActivationReader.isActivated({
+          checkpoint,
+          sessionId: run.sessionId,
+        })
+      ) {
+        return checkpoint;
+      }
+    }
+    cursor = page.nextCursor;
+  } while (cursor !== undefined);
   return undefined;
 }
 

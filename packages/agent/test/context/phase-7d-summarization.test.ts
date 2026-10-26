@@ -59,7 +59,6 @@ const sourceRange = createContextMessageRange({
 
 function semantic(overrides: Partial<Parameters<typeof createSemanticCheckpointDraft>[0]> = {}) {
   return createSemanticCheckpointDraft({
-    goal: identity.goal,
     constraints: [],
     completedWork: [],
     inProgress: ["semantic compaction"],
@@ -98,7 +97,7 @@ function successfulSummarizer(): ContextSummarizerPort {
         semantic: semantic({ nextIntent: "Continue with verification." }),
         modelRef: MODEL.ref,
         finishReason: "STOP",
-        summaryPromptVersion: 3,
+        summaryPromptVersion: 4,
         sourceDigest: "ignored-by-runner",
         semanticDigest: "ignored-by-runner",
       };
@@ -163,11 +162,11 @@ describe("Phase 7D semantic summarization", () => {
       kind: "FALLBACK_REQUIRED",
       degraded: true,
       outcome: "FAILED",
-      summaryPromptVersion: 3,
+      summaryPromptVersion: 4,
     });
   });
 
-  it("rejects a summary that drops a protected decision from the previous checkpoint", async () => {
+  it("allows resolved semantic memory to be pruned while preserving user constraints", async () => {
     const previousCheckpoint = {
       version: 1 as const,
       goal: identity.goal,
@@ -202,7 +201,7 @@ describe("Phase 7D semantic summarization", () => {
             }),
             modelRef: MODEL.ref,
             finishReason: "STOP",
-            summaryPromptVersion: 3,
+            summaryPromptVersion: 4,
             sourceDigest: "ignored",
             semanticDigest: "ignored",
           };
@@ -215,7 +214,7 @@ describe("Phase 7D semantic summarization", () => {
       { signal: new AbortController().signal },
     );
 
-    expect(result).toMatchObject({ kind: "FALLBACK_REQUIRED", outcome: "MALFORMED" });
+    expect(result.kind).toBe("ACCEPTED");
   });
 
   it("propagates cancellation and never creates a fallback checkpoint", async () => {

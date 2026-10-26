@@ -1,6 +1,5 @@
 import type { ModelDescriptor } from "@caelush/ai";
 import {
-  createContextCheckpointEnricher,
   createContextCompactionCoordinator,
   createContextHistoryIndexer,
   createContextMessageRange,
@@ -44,10 +43,10 @@ export const DEEP_COMPACTION_MODEL = {
   source: "CONFIGURATION",
 } satisfies ModelDescriptor;
 
-const SESSION_ID = createSessionId("ses_0192f5b1-4d3a-7c2e-8a91-00000000d001");
-const RUN_A = createRunId("run_0192f5b1-4d3a-7c2e-8a91-00000000d001");
-const RUN_B = createRunId("run_0192f5b1-4d3a-7c2e-8a91-00000000d002");
-const RUN_C = createRunId("run_0192f5b1-4d3a-7c2e-8a91-00000000d003");
+const SESSION_ID = createSessionId();
+const RUN_A = createRunId();
+const RUN_B = createRunId();
+const RUN_C = createRunId();
 
 export interface MultiRunCompactionFixture {
   readonly sessionId: ReturnType<typeof createSessionId>;
@@ -89,7 +88,7 @@ export function createMultiRunCompactionFixture(): MultiRunCompactionFixture {
 
   return Object.freeze({
     sessionId: SESSION_ID,
-    runIds: [RUN_A, RUN_B, RUN_C],
+    runIds: [RUN_A, RUN_B, RUN_C] as const,
     conversation,
     history,
     expectedOldUnitIds: Object.freeze([
@@ -108,8 +107,8 @@ export interface LongOpenTurnFixture {
 }
 
 export function createLongOpenTurnFixture(): LongOpenTurnFixture {
-  const runId = createRunId("run_0192f5b1-4d3a-7c2e-8a91-00000000d004");
-  const sessionId = createSessionId("ses_0192f5b1-4d3a-7c2e-8a91-00000000d004");
+  const runId = createRunId();
+  const sessionId = createSessionId();
   const messages: StoredAgentMessage[] = [
     userMessage({ runId, sessionId, sequence: 1, text: "Keep this current request." }),
   ];
@@ -162,8 +161,8 @@ export function createCompactionCandidate(input: { readonly estimatedInputTokens
   readonly coordinator: ReturnType<typeof createContextCompactionCoordinator>;
   readonly request: ContextCompactionRequest;
 } {
-  const runId = createRunId("run_0192f5b1-4d3a-7c2e-8a91-00000000d005");
-  const sessionId = createSessionId("ses_0192f5b1-4d3a-7c2e-8a91-00000000d005");
+  const runId = createRunId();
+  const sessionId = createSessionId();
   const range = createContextMessageRange({
     runId,
     conversationTurnId: conversationTurnId("cturn_deep_budget"),
@@ -204,13 +203,13 @@ export function createCompactionCandidate(input: { readonly estimatedInputTokens
     semantic,
     modelRef: DEEP_COMPACTION_MODEL.ref,
     finishReason: "STOP" as const,
-    summaryPromptVersion: 3,
+    summaryPromptVersion: 4,
     sourceDigest: "fixture-source-digest",
     semanticDigest: "fixture-semantic-digest",
   };
   const structuredCheckpoint = createStructuredCheckpoint({
     version: 1,
-    goal: semantic.goal,
+    goal: "current goal",
     constraints: [],
     completedWork: ["old work"],
     inProgress: [],
@@ -298,6 +297,8 @@ export function createCompactionCandidate(input: { readonly estimatedInputTokens
     } as ContextPolicy,
     model: DEEP_COMPACTION_MODEL,
     estimatedInputTokensBefore: 930_000,
+    fixedInputTokens: 12_000,
+    boundaryTokens: 4_000,
     reason: "PROACTIVE_PRESSURE",
     signal: new AbortController().signal,
   } satisfies ContextCompactionRequest;

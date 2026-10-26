@@ -18,6 +18,7 @@ import {
   type ContextCompactionCommitPort,
   type ContextMaterializer,
   type ContextPrepareInput,
+  type ContextUsageSnapshot,
   type ContextSummarizationResult,
   type DeterministicCompactionFactsProvider,
 } from "@caelush/agent";
@@ -46,7 +47,6 @@ const MODEL: ModelDescriptor = {
 function acceptedResult(): ContextSummarizationResult {
   return {
     semantic: {
-      goal: "current goal",
       constraints: [],
       completedWork: ["semantic work"],
       inProgress: [],
@@ -58,7 +58,7 @@ function acceptedResult(): ContextSummarizationResult {
     },
     modelRef: MODEL.ref,
     finishReason: "STOP",
-    summaryPromptVersion: 3,
+    summaryPromptVersion: 4,
     sourceDigest: "semantic-source",
     semanticDigest: "semantic",
   };
@@ -149,10 +149,12 @@ function fixture(
   let usageCalls = 0;
   let authorityCalls = 0;
   let lastCheckpoint: Parameters<ContextCompactionCommitPort["commit"]>[0]["checkpoint"];
+  let committedUsage: ContextUsageSnapshot | undefined;
   const compactionCommit: ContextCompactionCommitPort = {
     async commit(input) {
       commitCalls += 1;
       lastCheckpoint = input.checkpoint;
+      committedUsage = input.activation?.usage;
       return {
         checkpoint: Object.freeze({ ...input.checkpoint, schemaVersion: 2 as const }),
         events: [],
@@ -220,7 +222,7 @@ function fixture(
       },
     },
     deterministicFactsProvider: factsProvider(),
-    checkpointBudgetResolver: { resolve: () => ({ targetTokens: 7, maxTokens: 10 }) },
+    checkpointBudgetResolver: { resolve: () => ({ targetTokens: 7, maxTokens: 8_192 }) },
     compactionGainEvaluator: {
       evaluate: () => ({
         selectedTokens: 100,
@@ -234,7 +236,7 @@ function fixture(
     materializer: options.materializer ?? {
       async materialize({ prepared }) {
         const conversation = prepared.conversationMessages
-          .map(({ message }) => JSON.stringify(message.content))
+          .map(({ message }) => ("content" in message ? JSON.stringify(message.content) : ""))
           .join("|");
         return [
           {
@@ -282,6 +284,9 @@ function fixture(
     get lastCheckpoint() {
       return lastCheckpoint;
     },
+    get committedUsage() {
+      return committedUsage;
+    },
   };
 }
 
@@ -293,10 +298,14 @@ describe("Phase 8D tentative rebuild and durable fit", () => {
     const result = await fixtureState.engine.prepare(fixtureState.input);
 
     expect(fixtureState.commitCalls).toBe(1);
-    expect(fixtureState.authorityCalls).toBe(3);
+    expect(fixtureState.authorityCalls).toBe(2);
     expect(fixtureState.lastCheckpoint?.tokensAfter).toBe(result.report.estimatedInputTokens);
     expect(fixtureState.lastCheckpoint?.tokensAfter).not.toBe(0);
-    expect(fixtureState.usageCalls).toBe(1);
+    expect(fixtureState.usageCalls).toBe(0);
+    expect(fixtureState.committedUsage?.estimatedInputTokens).toBe(
+      result.report.estimatedInputTokens,
+    );
+    expect(fixtureState.committedUsage?.compactionCount).toBe(1);
   });
 
   it("does not commit a candidate whose production rebuild is over the effective limit", async () => {
@@ -313,13 +322,13 @@ describe("Phase 8D tentative rebuild and durable fit", () => {
     expect(fixtureState.usageCalls).toBe(0);
   });
 
-  it("uses a fresh post-commit authority snapshot after tentative authority", async () => {
+  it("uses the authority snapshot captured during the prepared activation", async () => {
     const documents: string[] = [];
     const materializer: ContextMaterializer = {
       async materialize({ prepared }) {
         documents.push(prepared.document.sections.map((section) => section.text).join("|"));
         const conversation = prepared.conversationMessages
-          .map(({ message }) => JSON.stringify(message.content))
+          .map(({ message }) => ("content" in message ? JSON.stringify(message.content) : ""))
           .join("|");
         return [{ role: "system", content: `stable|${conversation}` }];
       },
@@ -334,11 +343,11 @@ describe("Phase 8D tentative rebuild and durable fit", () => {
 
     await fixtureState.engine.prepare(fixtureState.input);
 
-    expect(fixtureState.authorityCalls).toBe(3);
+    expect(fixtureState.authorityCalls).toBe(2);
     expect(documents[0]).toContain("authority-A");
     expect(documents[1]).toContain("authority-A");
     expect(documents[2]).toContain("authority-B");
-    expect(documents.at(-1)).toContain("authority-C");
+    expect(documents).toHaveLength(3);
   });
 
   it("uses the same selected durable conversation IDs for tentative and final builds", async () => {
@@ -347,7 +356,7 @@ describe("Phase 8D tentative rebuild and durable fit", () => {
       async materialize({ prepared }) {
         selections.push(prepared.conversationMessages.map((message) => String(message.message.id)));
         const conversation = prepared.conversationMessages
-          .map(({ message }) => JSON.stringify(message.content))
+          .map(({ message }) => ("content" in message ? JSON.stringify(message.content) : ""))
           .join("|");
         return [{ role: "system", content: `stable|${conversation}` }];
       },
@@ -359,9 +368,15 @@ describe("Phase 8D tentative rebuild and durable fit", () => {
 
     await fixtureState.engine.prepare(fixtureState.input);
 
-    expect(selections).toHaveLength(4);
+    expect(selections).toHaveLength(3);
     expect(selections[0]).toEqual(selections[1]);
-    expect(selections[2]).toEqual(selections[3]);
+    expect(selections[2]).toContain(
+      String(
+        fixtureState.input.input.kind === "USER_INPUT"
+          ? fixtureState.input.input.userMessageId
+          : "",
+      ),
+    );
     const userMessageId =
       fixtureState.input.input.kind === "USER_INPUT"
         ? fixtureState.input.input.userMessageId

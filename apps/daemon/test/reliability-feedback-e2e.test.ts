@@ -34,6 +34,7 @@ import {
 } from "./support/feedback-driven-adapter.js";
 import {
   createReliabilityFixture,
+  listRunContextCheckpoints,
   type ReliabilityFixture,
 } from "./support/reliability-fixture.js";
 
@@ -171,12 +172,21 @@ describe("feedback-driven reliability scenarios", () => {
         },
       },
     });
+    const compactionStages: string[] = [];
+    const compactionSubscription = fixture.composition.eventHub?.subscribe(
+      { runId: fixture.run.id, includeDurable: false },
+      (event) => {
+        if (event.type === "context.compaction.progress")
+          compactionStages.push(event.payload.stage);
+      },
+    );
     await writeFile(join(fixture.workspacePath, "failing-check.mjs"), FAILING_SCRIPT, "utf8");
     for (const name of PADDING_READS) {
       await writeFile(join(fixture.workspacePath, name), PADDING, "utf8");
     }
 
     const result = await fixture.composition.controller.start(fixture.run.id);
+    compactionSubscription?.close();
 
     expect(
       result.run.status,
@@ -187,14 +197,20 @@ describe("feedback-driven reliability scenarios", () => {
         consumptions: adapter.consumptions,
         mainRequestCount: adapter.mainRequests.length,
         finalMessageCount: adapter.mainRequests.at(-1)?.request.messages.length,
-        checkpoints: (await fixture.storage.contextCheckpointsV2.listByRun(fixture.run.id)).length,
+        checkpoints: (await listRunContextCheckpoints(fixture)).length,
+        compactionStages,
         usage: await fixture.composition.contextUsage.getContextUsage(String(fixture.run.id)),
       }),
     ).toBe("COMPLETED");
     // Compaction really ran; otherwise nothing about surviving it was proven.
     expect(adapter.summaryCalls).toBeGreaterThan(0);
     expect(
-      (await fixture.storage.contextCheckpointsV2.listByRun(fixture.run.id)).length,
+      (await listRunContextCheckpoints(fixture)).length,
+      JSON.stringify({
+        summaryCalls: adapter.summaryCalls,
+        compactionStages,
+        usage: await fixture.composition.contextUsage.getContextUsage(String(fixture.run.id)),
+      }),
     ).toBeGreaterThan(0);
     // The failure token reaches the request the model reads after compaction.
     expect(JSON.stringify(adapter.mainRequests.at(-1)?.request.messages)).toContain(
@@ -240,7 +256,7 @@ describe("feedback-driven reliability scenarios", () => {
       JSON.stringify({ run: result.run, failure: adapter.contractFailure }),
     ).toBe("COMPLETED");
     expect(adapter.summaryCalls).toBeGreaterThan(0);
-    const checkpoints = await fixture.storage.contextCheckpointsV2.listByRun(fixture.run.id);
+    const checkpoints = await listRunContextCheckpoints(fixture);
     expect(checkpoints).toHaveLength(0);
     expect(JSON.stringify(adapter.mainRequests.at(-1)?.request.messages)).toContain(
       CHECK_FAILED_TOKEN,

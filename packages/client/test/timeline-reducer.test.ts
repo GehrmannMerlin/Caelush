@@ -1207,6 +1207,59 @@ describe("shared Timeline reducer", () => {
     }
     expect(state.settled[0]).toMatchObject({ id: "timeline:omitted", status: "SKIPPED" });
   });
+
+  it("settles one verifiable line when a Context checkpoint compacted history", () => {
+    const next = reduceTimelineEvent(
+      createInitialTimelineState(runId),
+      eventOf("context.compaction.completed", 7, {
+        checkpointId: "ctx_00000000-0000-7000-8000-000000000000",
+        reason: "PROACTIVE_PRESSURE",
+        sourceSequenceFrom: 2,
+        sourceSequenceTo: 133,
+        tokensBefore: 75_352,
+        tokensAfter: 34_865,
+        degraded: false,
+      }),
+    );
+
+    expect(next.settled).toHaveLength(1);
+    expect(next.settled[0]).toMatchObject({
+      kind: "SYSTEM",
+      title: "上下文已压缩",
+      status: "COMPLETED",
+      text: "75,352 → 34,865 tokens（−54%）",
+    });
+    expect(next.settled[0]?.detail).toContain("覆盖 seq 2–133");
+    expect(next.settled[0]?.detail).toContain("语义摘要已校验");
+  });
+
+  it("shows multi-range V2 coverage and whether the deep retention target was reached", () => {
+    const next = reduceTimelineEvent(
+      createInitialTimelineState(runId),
+      eventOf(
+        "context.compaction.completed",
+        7,
+        {
+          checkpointId: "ctx_00000000-0000-7000-8000-000000000001",
+          operationId: "operation:deep",
+          epochId: "epoch:deep",
+          reason: "PROACTIVE_PRESSURE",
+          sourceRangeCount: 3,
+          sourceMessageCount: 24,
+          tokensBefore: 900_000,
+          tokensAfter: 44_192,
+          freedTokens: 855_808,
+          degraded: false,
+          targetStatus: "DEEP",
+        },
+        { schemaVersion: 2 },
+      ),
+    );
+
+    expect(next.settled[0]?.text).toBe("900,000 → 44,192 tokens（−95%）");
+    expect(next.settled[0]?.detail).toContain("覆盖 24 条消息（3 段）");
+    expect(next.settled[0]?.detail).toContain("达到深度压缩目标");
+  });
 });
 
 function toolForShell() {

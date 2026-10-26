@@ -9,6 +9,7 @@ import {
   ContextSummarizationInfrastructureError,
   digestJsonValue,
   type ContextSummarizerPort,
+  type ContextSummarizationInput,
 } from "@caelush/agent";
 import type { AgentRun, TimestampMs } from "@caelush/protocol";
 import {
@@ -17,6 +18,7 @@ import {
   type RunBudgetSettlement,
 } from "@caelush/core";
 import { createAIContextSummarizerAdapter } from "./ai-context-summarizer-adapter.js";
+import type { ContextSummaryPrivateReplayExecution } from "./ai-context-summarizer-adapter.js";
 
 export interface ContextCompactionBudgetPort {
   admitContextCompactionLLM(input: {
@@ -47,6 +49,10 @@ export interface BudgetedContextSummarizerOptions {
   readonly run: AgentRun;
   readonly clock: { now(): TimestampMs };
   readonly invocationObserver?: AIInvocationAccountingObserver;
+  readonly createPrivateReplayExecution?: (
+    input: ContextSummarizationInput,
+    signal: AbortSignal,
+  ) => Promise<ContextSummaryPrivateReplayExecution | undefined>;
 }
 
 export class ContextCompactionBudgetDeniedError extends Error {
@@ -138,7 +144,11 @@ export function createBudgetedContextSummarizer(
       return result;
     },
   };
-  return createAIContextSummarizerAdapter(gateway);
+  return createAIContextSummarizerAdapter(gateway, {
+    ...(options.createPrivateReplayExecution === undefined
+      ? {}
+      : { createPrivateReplayExecution: options.createPrivateReplayExecution }),
+  });
 }
 
 function contextCompactionOwnerId(run: AgentRun, request: AIModelRequest): string {

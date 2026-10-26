@@ -2918,6 +2918,23 @@ body {
   flex: 0 0 24px;
 }
 
+/*
+ * The fallback process panel shares the ring's 24px box, so without its own popover shell it is
+ * squeezed to one character per line and the status reads as a vertical strip. `ContextInspector`
+ * already anchors itself; this gives the no-usage fallback the same geometry.
+ */
+.context-usage-control > .context-inspector-process {
+  position: absolute;
+  z-index: 5;
+  left: 50%;
+  bottom: 36px;
+  width: min(320px, calc(100vw - 32px));
+  box-sizing: border-box;
+  margin-top: 0;
+  transform: translateX(-50%);
+  box-shadow: 0 12px 30px rgb(70 96 126 / 16%);
+}
+
 .context-usage-ring-button {
   display: inline-flex;
   width: 24px;
@@ -2970,6 +2987,31 @@ body {
 
 .context-usage-ring-progress--EMERGENCY {
   stroke: #1d4ed8;
+}
+
+/* Compaction is a process, not a different size: the control keeps its 24x30 box and only the arc
+   changes shape, so nothing on the composer footer moves. */
+.context-usage-ring-button--compacting {
+  background: #faeeda;
+}
+
+.context-usage-ring-progress--compacting {
+  stroke: #b45309;
+  stroke-dasharray: 0.28 0.72;
+  animation: context-usage-ring-spin 1.6s linear infinite;
+  transform-origin: 9px 9px;
+}
+
+@keyframes context-usage-ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .context-usage-ring-progress--compacting {
+    animation: none;
+  }
 }
 
 .context-inspector {

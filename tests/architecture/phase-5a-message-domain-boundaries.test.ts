@@ -425,6 +425,9 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
       "packages/agent/src/context/compaction/context-compaction-contracts.ts",
       "packages/agent/src/context/compaction/context-compaction-cut.ts",
       "packages/agent/src/context/compaction/context-compaction-rebuilder.ts",
+      "packages/agent/src/context/compaction/applicable-checkpoint-resolver.ts",
+      "packages/agent/src/context/compaction/context-source-coverage.ts",
+      "packages/agent/src/context/source/checkpoint-provider.ts",
       "packages/agent/src/context/compaction/incremental-compaction-resolver.ts",
       "packages/agent/src/context/materializer/context-materializer.ts",
       // Phase 7G keeps the attachment-context mapping on the Core side, where it reads a bounded

@@ -10,7 +10,7 @@ import { createReliabilityFixture } from "./support/reliability-fixture.js";
  * M2 / B13–B14: the production turn budget.
  *
  * ```text
- * a new Run            TURN_BUDGET_V3, HEADROOM_V1, no working set, no 96 000/72 000 pair
+ * explicit deep opt-in TURN_BUDGET_V4, HEADROOM_V1, a 90% trigger and explicit retention budget
  * the wire             maxOutputTokens === the allowance the Context budgeted
  * a 1M window at 8%    no history reorganization, remaining room far above the growth
  * ```
@@ -100,22 +100,36 @@ describe("M2 — production turn budget under HEADROOM_V1", () => {
       modelLimits: { contextWindowTokens: MEGA_WINDOW, maxOutputTokens: MODEL_MAX_OUTPUT },
       // The daemon's own resolver, not a hand-written object: this is the authority `createRun` uses.
       contextBudgetPolicy: "DAEMON_DEFAULT",
+      contextBudgetPolicyVersion: "TURN_BUDGET_V4",
       limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 60_000 },
     });
     try {
       // A new Run must not be frozen against the retired fixed working set.
-      expect(fixture.run.contextBudgetPolicy?.version).toBe("TURN_BUDGET_V3");
+      expect(fixture.run.contextBudgetPolicy?.version).toBe("TURN_BUDGET_V4");
       const policy = fixture.run.contextBudgetPolicy as {
         readonly algorithm: string;
         readonly preferredOutputTokens: number;
         readonly minOutputTokens: number;
         readonly expectedGrowthTokens: number;
+        readonly deepCompaction: {
+          readonly triggerRatio: number;
+          readonly recentTokens: number;
+          readonly checkpointMaxTokens: number;
+          readonly boundaryTokens: number;
+        };
         readonly workingSet?: unknown;
       };
       expect(policy.algorithm).toBe("HEADROOM_V1");
       expect(policy.workingSet).toBeUndefined();
       expect(policy.preferredOutputTokens).toBe(16_384);
       expect(policy.minOutputTokens).toBe(2_048);
+      expect(policy.deepCompaction).toEqual({
+        version: "DEEP_COMPACTION_V1",
+        triggerRatio: 0.9,
+        recentTokens: 20_000,
+        checkpointMaxTokens: 8_192,
+        boundaryTokens: 4_096,
+      });
 
       const end = await fixture.composition.controller.start(fixture.run.id);
       expect(end.run.status).toBe("COMPLETED");

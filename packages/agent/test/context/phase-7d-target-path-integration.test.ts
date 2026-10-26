@@ -120,7 +120,6 @@ describe("Phase 7D target path integration", () => {
       async summarize(input) {
         return {
           semantic: {
-            goal: input.identity.goal,
             constraints: [],
             completedWork: ["old request"],
             inProgress: [],
@@ -132,7 +131,7 @@ describe("Phase 7D target path integration", () => {
           },
           modelRef: input.model.ref,
           finishReason: "STOP",
-          summaryPromptVersion: 3,
+          summaryPromptVersion: 4,
           sourceDigest: "ignored",
           semanticDigest: "ignored",
         };
@@ -155,6 +154,7 @@ describe("Phase 7D target path integration", () => {
     expect(summary.degraded).toBe(false);
     if (summary.kind !== "ACCEPTED") throw new Error("expected accepted semantic summary");
     const checkpoint = createContextCheckpointEnricher().enrich({
+      identity: { goal: "current request" },
       semantic: summary.result.semantic,
       facts: createDeterministicCompactionFacts({
         readFiles: [],

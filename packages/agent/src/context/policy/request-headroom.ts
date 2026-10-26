@@ -28,8 +28,16 @@ import { ContextPressureAccountingError } from "./context-policy.js";
 export const TURN_BUDGET_ALGORITHM = "HEADROOM_V1" as const;
 export type TurnBudgetAlgorithm = typeof TURN_BUDGET_ALGORITHM;
 
+export interface DeepCompactionPolicy {
+  readonly version: "DEEP_COMPACTION_V1";
+  readonly triggerRatio: number;
+  readonly recentTokens: number;
+  readonly checkpointMaxTokens: number;
+  readonly boundaryTokens: number;
+}
+
 /** Versioned, Run-frozen parameters of the headroom algorithm. */
-export interface TurnBudgetPolicy {
+export interface TurnBudgetPolicyV3 {
   readonly version: "TURN_BUDGET_V3";
   readonly algorithm: TurnBudgetAlgorithm;
   /** A turn never asks for less than this while the window can still carry it. */
@@ -42,7 +50,29 @@ export interface TurnBudgetPolicy {
   readonly expectedGrowthTokens: number;
   /** How much of the input budget a reorganization tries to keep. */
   readonly postCompactionRatio: number;
+  /**
+   * Fraction of the usable input budget at which history is reorganized proactively.
+   *
+   * Absent on Runs frozen before this field existed: they keep the historical rule, which waits
+   * until the remaining room can no longer absorb the next turn's growth (about 97% of the usable
+   * budget on a 1M window). New Runs freeze the ratio so a long session is tidied while there is
+   * still room, the way Codex (90%) and DeepSeek Harness (80%) do.
+   */
+  readonly proactiveRatio?: number | undefined;
 }
+
+/** V4 replaces the fixed post-compaction ratio with explicit retained-content budgets. */
+export interface TurnBudgetPolicyV4 {
+  readonly version: "TURN_BUDGET_V4";
+  readonly algorithm: TurnBudgetAlgorithm;
+  readonly minOutputTokens: number;
+  readonly preferredOutputTokens: number;
+  readonly safetyTokens: number;
+  readonly expectedGrowthTokens: number;
+  readonly deepCompaction: DeepCompactionPolicy;
+}
+
+export type TurnBudgetPolicy = TurnBudgetPolicyV3 | TurnBudgetPolicyV4;
 
 export interface TurnBudgetPolicyInput {
   readonly contextWindowTokens: number;
@@ -80,9 +110,10 @@ export const HEADROOM_V1_DEFAULTS = Object.freeze({
   expectedGrowthTokensCeiling: 16_384,
   expectedGrowthRatio: 0.02,
   postCompactionRatio: 0.8,
+  proactiveRatio: 0.9,
 } as const);
 
-export function resolveTurnBudgetPolicy(input: TurnBudgetPolicyInput): TurnBudgetPolicy {
+export function resolveTurnBudgetPolicy(input: TurnBudgetPolicyInput): TurnBudgetPolicyV3 {
   assertPositiveSafeInteger(input.contextWindowTokens, "contextWindowTokens");
   assertPositiveSafeInteger(input.maxOutputTokens, "maxOutputTokens");
   if (input.configuredOutputCeiling !== undefined) {
@@ -141,6 +172,7 @@ export function resolveTurnBudgetPolicy(input: TurnBudgetPolicyInput): TurnBudge
     safetyTokens,
     expectedGrowthTokens,
     postCompactionRatio: HEADROOM_V1_DEFAULTS.postCompactionRatio,
+    proactiveRatio: HEADROOM_V1_DEFAULTS.proactiveRatio,
   });
 }
 
@@ -153,8 +185,19 @@ export interface OutputAllowanceInput {
   readonly configuredOutputCeiling?: number;
 }
 
+export interface OutputAllowance {
+  readonly tokens: number;
+  /**
+   * The window could not carry even the minimum allowance next to this input.
+   *
+   * A limited turn still runs at the floor, but the caller must treat the history as the thing that
+   * has to change: compacting it is the only way the next turn can ask for a real output budget.
+   */
+  readonly limited: boolean;
+}
+
 /**
- * Resolve this turn's output allowance.
+ * Resolve this turn's output allowance and say whether the window forced the floor.
  *
  * ```text
  * room         = W - S - G - P
@@ -166,7 +209,7 @@ export interface OutputAllowanceInput {
  * touched, which is the ordering Q07 asked for. A window that cannot even carry `O_min` still
  * returns `O_min`; the caller's hard check then decides whether the input has to be reorganized.
  */
-export function resolveOutputAllowance(input: OutputAllowanceInput): number {
+export function planOutputAllowance(input: OutputAllowanceInput): OutputAllowance {
   assertPositiveSafeInteger(input.contextWindowTokens, "contextWindowTokens");
   assertPositiveSafeInteger(input.maxOutputTokens, "maxOutputTokens");
   assertNonNegativeSafeInteger(input.fullInputTokens, "fullInputTokens");
@@ -184,8 +227,12 @@ export function resolveOutputAllowance(input: OutputAllowanceInput): number {
     input.policy.safetyTokens -
     input.policy.expectedGrowthTokens -
     input.fullInputTokens;
-  if (room < floor) return floor;
-  return Math.min(ceiling, room);
+  if (room < floor) return Object.freeze({ tokens: floor, limited: true });
+  return Object.freeze({ tokens: Math.min(ceiling, room), limited: false });
+}
+
+export function resolveOutputAllowance(input: OutputAllowanceInput): number {
+  return planOutputAllowance(input).tokens;
 }
 
 export interface RequestHeadroomInput {

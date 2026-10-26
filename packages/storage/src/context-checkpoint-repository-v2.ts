@@ -72,7 +72,9 @@ export class SqliteContextCheckpointRepositoryV2 implements ContextCheckpointRep
     runId: RunId,
   ): Promise<ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1 | undefined> {
     const row = this.database.client
-      .prepare(`${SELECT} WHERE run_id = ? ORDER BY source_sequence_to DESC, id DESC LIMIT 1`)
+      .prepare(
+        `${SELECT} WHERE run_id = ? AND summary_version IN (1, 2) ORDER BY source_sequence_to DESC, id DESC LIMIT 1`,
+      )
       .get(runId) as CheckpointRow | undefined;
     return row === undefined ? undefined : this.decodeMixed(row);
   }
@@ -80,8 +82,9 @@ export class SqliteContextCheckpointRepositoryV2 implements ContextCheckpointRep
   async getById(
     checkpointId: string,
   ): Promise<ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1 | undefined> {
-    const row = this.database.client.prepare(`${SELECT} WHERE id = ?`).get(checkpointId) as
-      CheckpointRow | undefined;
+    const row = this.database.client
+      .prepare(`${SELECT} WHERE id = ? AND summary_version IN (1, 2)`)
+      .get(checkpointId) as CheckpointRow | undefined;
     return row === undefined ? undefined : this.decodeMixed(row);
   }
 
@@ -89,7 +92,9 @@ export class SqliteContextCheckpointRepositoryV2 implements ContextCheckpointRep
     runId: RunId,
   ): Promise<readonly (ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1)[]> {
     const rows = this.database.client
-      .prepare(`${SELECT} WHERE run_id = ? ORDER BY source_sequence_to ASC, id ASC`)
+      .prepare(
+        `${SELECT} WHERE run_id = ? AND summary_version IN (1, 2) ORDER BY source_sequence_to ASC, id ASC`,
+      )
       .all(runId) as unknown as CheckpointRow[];
     const records: (ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1)[] = [];
     for (const row of rows) records.push(await this.decodeMixed(row));
@@ -121,6 +126,11 @@ export function writeContextCheckpointV2InTransaction(
 ): ContextCheckpointV2WriteResult {
   assertCreateInput(input);
   assertSourceRangeRunScope(client, input);
+  const owner = client
+    .prepare("SELECT session_id FROM agent_runs WHERE id = ?")
+    .get(input.runId) as { readonly session_id: string } | undefined;
+  if (owner === undefined)
+    throw new StorageError("Context Checkpoint V2 owner Run is unavailable.");
   const existing = client.prepare(`${SELECT} WHERE id = ?`).get(input.checkpointId) as
     CheckpointRow | undefined;
   if (existing !== undefined) {
@@ -151,14 +161,15 @@ export function writeContextCheckpointV2InTransaction(
     client
       .prepare(
         `INSERT INTO context_checkpoints
-         (id, run_id, previous_checkpoint_id, source_sequence_from, source_sequence_to,
+         (id, run_id, session_id, previous_checkpoint_id, source_sequence_from, source_sequence_to,
           tokens_before, tokens_after, summary_version, model_ref_json, created_at_ms,
           data_json, read_file_refs_json, changed_file_refs_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.checkpointId,
         input.runId,
+        owner.session_id,
         input.previousCheckpointId ?? null,
         input.sourceRange.firstSequence,
         input.sourceRange.lastSequence,

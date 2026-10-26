@@ -2,15 +2,22 @@ import type { ModelDescriptor } from "@caelush/ai";
 
 import type { AgentConversationSnapshot } from "../../messages/conversation/conversation-snapshot.js";
 import type { AgentMessageId } from "../../messages/types/ids.js";
-import type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
+import type {
+  StructuredCheckpoint,
+  StructuredCheckpointV2,
+} from "../checkpoint/structured-checkpoint.js";
 import type { ContextPolicy } from "../policy/context-policy.js";
 import type { ContextMessageRange } from "./context-compaction-contracts.js";
+import type { PromptSurfaceCompactionActivationCommand } from "../surface/prompt-surface-store.js";
+import type { ContextUsageSnapshot } from "../receipts/context-usage.js";
+import type { ContextSourceCoverage } from "./context-source-coverage.js";
 
 /** The frozen, provider-neutral input for a tentative compaction rebuild. */
 export interface ContextCompactionRebuildInput {
   readonly conversation: AgentConversationSnapshot;
-  readonly checkpoint: StructuredCheckpoint;
+  readonly checkpoint: StructuredCheckpoint | StructuredCheckpointV2;
   readonly sourceRange: ContextMessageRange;
+  readonly sourceCoverage?: ContextSourceCoverage;
   readonly policy: ContextPolicy;
   readonly model: ModelDescriptor;
 }
@@ -19,6 +26,11 @@ export interface ContextCompactionRebuildInput {
 export interface ContextCompactionRebuildResult {
   readonly estimatedInputTokens: number;
   readonly retainedMessageIds: readonly AgentMessageId[];
+  /** Prepared durable side effects that must commit with the checkpoint and completion fact. */
+  readonly activation?: {
+    readonly promptSurface: PromptSurfaceCompactionActivationCommand;
+    readonly usage: ContextUsageSnapshot;
+  };
 }
 
 export interface ContextCompactionRebuilder {
@@ -49,6 +61,9 @@ export function createContextCompactionRebuilder(
       return Object.freeze({
         estimatedInputTokens: result.estimatedInputTokens,
         retainedMessageIds: Object.freeze([...result.retainedMessageIds]),
+        ...(result.activation === undefined
+          ? {}
+          : { activation: Object.freeze(result.activation) }),
       });
     },
   });

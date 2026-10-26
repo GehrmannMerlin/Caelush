@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import type {
   ContextArtifact,
   ContextArtifactCreateInput,
+  ContextArtifactClaimResult,
+  ContextArtifactMetadataPage,
   ContextArtifactMetadata,
   ContextArtifactStorePort,
 } from "@caelush/agent";
@@ -25,6 +27,8 @@ interface ArtifactRow {
 }
 
 const SENSITIVITIES = new Set(["PUBLIC", "INTERNAL", "SENSITIVE"]);
+const DEFAULT_SOURCE_PAGE_SIZE = 20;
+const MAX_SOURCE_PAGE_SIZE = 100;
 
 /** V2 Artifact port adapter. It shares the legacy table but never the legacy identity algorithm. */
 export class SqliteContextArtifactStore implements ContextArtifactStorePort {
@@ -78,6 +82,89 @@ export class SqliteContextArtifactStore implements ContextArtifactStorePort {
     return decodeArtifact(saved);
   }
 
+  async claim(input: ContextArtifactCreateInput): Promise<ContextArtifactClaimResult> {
+    assertCreateInput(input);
+    const contentHash = hashContent(input.content);
+    const artifactId = input.artifactId ?? createRunScopedArtifactId(input, contentHash);
+    let inserted: boolean;
+    try {
+      const result = this.database.client
+        .prepare(
+          `INSERT OR IGNORE INTO context_artifacts
+           (id, run_id, kind, source_ref, content_hash, byte_length, mime_type, sensitivity,
+            created_sequence, created_at_ms, content)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          artifactId,
+          input.runId,
+          input.kind,
+          input.sourceRef,
+          contentHash,
+          Buffer.byteLength(input.content, "utf8"),
+          input.mimeType,
+          input.sensitivity,
+          input.createdSequence,
+          input.createdAt,
+          input.content,
+        );
+      inserted = Number(result.changes) === 1;
+    } catch (error) {
+      throw new StorageError("Unable to atomically claim Context Artifact V2.", { cause: error });
+    }
+    const row = this.readRow(artifactId);
+    if (row === undefined) throw new StorageError("Claimed Context Artifact V2 is unavailable.");
+    if (
+      (row.run_id !== input.runId && !isCrossRunCompactionClaim(input)) ||
+      !sameClaimedArtifact(row, input, contentHash)
+    ) {
+      throw new StorageConflictError("Context artifact claim identity is bound to different data.");
+    }
+    return Object.freeze({
+      kind: inserted ? "CREATED" : "EXISTING",
+      artifact: decodeArtifact(row),
+    });
+  }
+
+  async listBySourceRef(input: {
+    readonly kind: string;
+    readonly sourceRef: string;
+    readonly cursor?: string;
+    readonly limit?: number;
+  }): Promise<ContextArtifactMetadataPage> {
+    if (input.kind.trim().length === 0 || input.sourceRef.trim().length === 0) {
+      throw new RangeError("Artifact source query identity is invalid.");
+    }
+    const limit = input.limit ?? DEFAULT_SOURCE_PAGE_SIZE;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_SOURCE_PAGE_SIZE) {
+      throw new RangeError(
+        `Artifact source page size must be between 1 and ${MAX_SOURCE_PAGE_SIZE}.`,
+      );
+    }
+    if (input.cursor !== undefined && input.cursor.trim().length === 0) {
+      throw new RangeError("Artifact source cursor is invalid.");
+    }
+    const rows = this.database.client
+      .prepare(
+        `SELECT * FROM context_artifacts
+         WHERE kind = ? AND source_ref = ? AND (? IS NULL OR id > ?)
+         ORDER BY id ASC LIMIT ?`,
+      )
+      .all(
+        input.kind,
+        input.sourceRef,
+        input.cursor ?? null,
+        input.cursor ?? null,
+        limit + 1,
+      ) as unknown as ArtifactRow[];
+    const page = (rows ?? []).slice(0, limit).map((row) => toMetadata(decodeArtifact(row)));
+    const next = (rows ?? []).length > limit ? page.at(-1)?.artifactId : undefined;
+    return Object.freeze({
+      records: Object.freeze(page),
+      ...(next === undefined ? {} : { nextCursor: String(next) }),
+    });
+  }
+
   async getMetadata(
     artifactId: ContextArtifactMetadata["artifactId"],
   ): Promise<ContextArtifactMetadata | undefined> {
@@ -110,6 +197,61 @@ export class SqliteContextArtifactStore implements ContextArtifactStorePort {
       .prepare("SELECT * FROM context_artifacts WHERE id = ?")
       .get(artifactId) as ArtifactRow | undefined;
   }
+}
+
+/** Insert or verify one deterministic Artifact while a caller-owned transaction is open. */
+export function writeContextArtifactInTransaction(
+  database: CaelushDatabase,
+  input: ContextArtifactCreateInput,
+): ContextArtifact {
+  assertCreateInput(input);
+  const contentHash = hashContent(input.content);
+  const artifactId = input.artifactId ?? createRunScopedArtifactId(input, contentHash);
+  const existing = database.client
+    .prepare("SELECT * FROM context_artifacts WHERE id = ?")
+    .get(artifactId) as ArtifactRow | undefined;
+  if (existing !== undefined) {
+    if (existing.run_id !== input.runId && !isCrossRunCompactionClaim(input)) {
+      throw new StorageConflictError("Context Artifact transaction ownership conflicts.");
+    }
+    if (!sameClaimedArtifact(existing, input, contentHash)) {
+      throw new StorageConflictError("Context Artifact transaction identity conflicts.");
+    }
+    return decodeArtifact(existing);
+  }
+  try {
+    database.client
+      .prepare(
+        `INSERT INTO context_artifacts
+         (id, run_id, kind, source_ref, content_hash, byte_length, mime_type, sensitivity,
+          created_sequence, created_at_ms, content)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        artifactId,
+        input.runId,
+        input.kind,
+        input.sourceRef,
+        contentHash,
+        Buffer.byteLength(input.content, "utf8"),
+        input.mimeType,
+        input.sensitivity,
+        input.createdSequence,
+        input.createdAt,
+        input.content,
+      );
+  } catch (error) {
+    throw new StorageError("Unable to persist Context Artifact in the authority transaction.", {
+      cause: error,
+    });
+  }
+  const saved = database.client
+    .prepare("SELECT * FROM context_artifacts WHERE id = ?")
+    .get(artifactId) as ArtifactRow | undefined;
+  if (saved === undefined) {
+    throw new StorageError("Context Artifact transaction write was not visible.");
+  }
+  return decodeArtifact(saved);
 }
 
 function assertCreateInput(input: ContextArtifactCreateInput): void {
@@ -156,6 +298,66 @@ function sameSemanticArtifact(
     row.sensitivity === input.sensitivity &&
     row.created_sequence === input.createdSequence &&
     row.created_at_ms === input.createdAt &&
+    row.content === input.content
+  );
+}
+
+function isCrossRunCompactionClaim(input: ContextArtifactCreateInput): boolean {
+  if (
+    (input.kind !== "context-compaction-attempt" &&
+      input.kind !== "context-compaction-subcall" &&
+      input.kind !== "context-compaction-failure-baseline") ||
+    input.sensitivity !== "INTERNAL" ||
+    !input.sourceRef.startsWith("compaction-attempt:") ||
+    Buffer.byteLength(input.content, "utf8") > 4_096
+  ) {
+    return false;
+  }
+  try {
+    const value = JSON.parse(input.content) as unknown;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+    const record = value as Record<string, unknown>;
+    const allowed = new Set([
+      "version",
+      "recordType",
+      "attemptId",
+      "state",
+      "callOrdinal",
+      "requestFingerprint",
+      "outcome",
+      "sourceCoverageDigest",
+      "sourceTokens",
+      "minimumGrowthTokens",
+      "failureFamily",
+      "retryGeneration",
+      "checkpointId",
+      "activationOperationId",
+    ]);
+    return (
+      record.version === 1 &&
+      typeof record.recordType === "string" &&
+      typeof record.attemptId === "string" &&
+      Object.keys(record).every((key) => allowed.has(key))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Claim replay preserves the first timestamp while requiring every operation fact to match. */
+function sameClaimedArtifact(
+  row: ArtifactRow,
+  input: ContextArtifactCreateInput,
+  contentHash: string,
+): boolean {
+  return (
+    row.kind === input.kind &&
+    row.source_ref === input.sourceRef &&
+    row.content_hash === contentHash &&
+    row.byte_length === Buffer.byteLength(input.content, "utf8") &&
+    row.mime_type === input.mimeType &&
+    row.sensitivity === input.sensitivity &&
+    row.created_sequence === input.createdSequence &&
     row.content === input.content
   );
 }

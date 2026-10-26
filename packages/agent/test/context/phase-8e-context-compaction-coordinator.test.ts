@@ -32,9 +32,16 @@ const request = {
   },
   conversation: {} as never,
   history: {} as never,
-  policy: { effectiveInputLimitTokens: 100, outputReserveTokens: 20 } as never,
+  policy: {
+    effectiveInputLimitTokens: 100,
+    outputReserveTokens: 20,
+    targetRecentTailTokens: 10,
+    minRecentTailTokens: 5,
+  } as never,
   model: { ref: { provider: "test", model: "phase-8e" } } as never,
   estimatedInputTokensBefore: 80,
+  fixedInputTokens: 20,
+  boundaryTokens: 4,
   reason: "PROACTIVE_PRESSURE",
   signal: new AbortController().signal,
 } satisfies ContextCompactionRequest;
@@ -89,7 +96,6 @@ const structuredCheckpoint = createStructuredCheckpoint({
 
 const summary: ContextSummarizationResult = {
   semantic: {
-    goal: "goal",
     constraints: [],
     completedWork: ["done"],
     inProgress: [],
@@ -101,7 +107,7 @@ const summary: ContextSummarizationResult = {
   },
   modelRef: { provider: "test", model: "phase-8e" },
   finishReason: "STOP",
-  summaryPromptVersion: 3,
+  summaryPromptVersion: 4,
   sourceDigest: "semantic-source",
   semanticDigest: "semantic",
 };
@@ -120,7 +126,7 @@ function dependencies(
         newSourceRange: range,
       }),
     },
-    checkpointBudget: { resolve: () => ({ targetTokens: 5, maxTokens: 8 }) },
+    checkpointBudget: { resolve: () => ({ targetTokens: 5, maxTokens: 8_192 }) },
     gainEvaluator: {
       evaluate: () => ({
         selectedTokens: 60,
@@ -236,7 +242,7 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
     expect(commitCalls).toBe(1);
   });
 
-  it("keeps the legal original history when semantic summarization fails", async () => {
+  it("keeps the legal original history when a proactive summarization fails", async () => {
     let commitCalls = 0;
     const coordinator = createContextCompactionCoordinator({
       dependencies: dependencies(
@@ -264,7 +270,7 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
     await expect(
       coordinator.compact({
         ...request,
-        reason: "FORCED_PROVIDER_OVERFLOW",
+        reason: "PROACTIVE_PRESSURE",
       }),
     ).resolves.toEqual({
       kind: "KEEP_ORIGINAL",
@@ -272,6 +278,42 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
       summaryOutcome: "FAILED",
     });
     expect(commitCalls).toBe(0);
+  });
+
+  it("never keeps the original after the provider already rejected it", async () => {
+    let committed: import("@caelush/agent").ContextCheckpointRecordV2 | undefined;
+    const coordinator = createContextCompactionCoordinator({
+      dependencies: dependencies(
+        { plan: () => plan },
+        {
+          summarizer: {
+            summarize: async () => {
+              throw new Error("summary provider unavailable");
+            },
+          },
+          deterministicFallback: createDeterministicCheckpointBuilder(),
+          commit: {
+            commit: async ({ checkpoint, events }) => {
+              committed = { ...checkpoint, schemaVersion: 2 as const };
+              return { checkpoint: committed, events: events as never };
+            },
+          },
+        },
+      ),
+      latest: { kind: "NONE" },
+    });
+
+    // The estimate still says "fits" (80 <= the effective limit), but a forced overflow means the
+    // provider already rejected this exact request. Keeping the original here is a guaranteed
+    // second rejection, so the degraded checkpoint must land instead.
+    const result = await coordinator.compact({
+      ...request,
+      estimatedInputTokensBefore: 80,
+      reason: "FORCED_PROVIDER_OVERFLOW",
+    });
+
+    expect(result.kind).toBe("COMPACTED");
+    expect(committed?.degraded).toBe(true);
   });
 
   it("commits a degraded checkpoint with a real source reference after forced overflow", async () => {
@@ -455,7 +497,11 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
       expect(result.checkpoint.structuredCheckpoint.completedWork).toEqual(
         Array.from({ length: summaryCalls }, (_, index) => `segment-${String(index + 1)}`),
       );
-      expect(result.checkpoint.sourceRange.lastSequence).toBe(last.sequence);
+      if (result.checkpoint.schemaVersion === 3) {
+        expect(result.checkpoint.coverage.segments.at(-1)?.lastSequence).toBe(last.sequence);
+      } else {
+        expect(result.checkpoint.sourceRange.lastSequence).toBe(last.sequence);
+      }
     }
   });
 
@@ -489,14 +535,14 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
     expect(commitCalls).toBe(0);
   });
 
-  it("requires the fitted candidate to meet the soft target or free the output reserve", async () => {
+  it("rejects a fitted candidate that exceeds the explicit retention target", async () => {
     let commitCalls = 0;
     const coordinator = createContextCompactionCoordinator({
       dependencies: dependencies(
         { plan: () => plan },
         {
           tentativeRebuilder: {
-            rebuild: async () => ({ estimatedInputTokens: 90, retainedMessageIds: [] }),
+            rebuild: async () => ({ estimatedInputTokens: 500, retainedMessageIds: [] }),
           },
           commit: {
             commit: async ({ checkpoint, events }) => {
@@ -513,7 +559,20 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
     });
 
     await expect(
-      coordinator.compact({ ...request, estimatedInputTokensBefore: 100 }),
+      coordinator.compact({
+        ...request,
+        policy: {
+          ...((request.policy ?? {}) as object),
+          deepCompaction: {
+            version: "DEEP_COMPACTION_V1",
+            triggerRatio: 0.9,
+            recentTokens: 10,
+            checkpointMaxTokens: 320,
+            boundaryTokens: 4,
+          },
+        } as never,
+        estimatedInputTokensBefore: 1_000,
+      }),
     ).resolves.toEqual({
       kind: "NOT_APPLICABLE",
       reason: "INSUFFICIENT_GAIN",
@@ -521,13 +580,13 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
     expect(commitCalls).toBe(0);
   });
 
-  it("records actual freed tokens and accepts reserve-sized gain above the soft target", async () => {
+  it("records actual freed tokens when the fitted candidate meets the retention target", async () => {
     const coordinator = createContextCompactionCoordinator({
       dependencies: dependencies(
         { plan: () => plan },
         {
           tentativeRebuilder: {
-            rebuild: async () => ({ estimatedInputTokens: 90, retainedMessageIds: [] }),
+            rebuild: async () => ({ estimatedInputTokens: 42, retainedMessageIds: [] }),
           },
         },
       ),
@@ -538,8 +597,8 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
 
     expect(result).toMatchObject({
       kind: "COMPACTED",
-      checkpoint: { tokensBefore: 120, tokensAfter: 90 },
-      receipt: { tokensBefore: 120, tokensAfter: 90, actualFreedTokens: 30 },
+      checkpoint: { tokensBefore: 120, tokensAfter: 42 },
+      receipt: { tokensBefore: 120, tokensAfter: 42, actualFreedTokens: 78 },
     });
   });
 

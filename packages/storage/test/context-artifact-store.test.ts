@@ -31,6 +31,62 @@ async function addRun(storage: CaelushStorage) {
 }
 
 describe("SqliteContextArtifactStore", () => {
+  it("atomically claims an operation once and pages source records in stable ID order", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    stores.push(storage);
+    const run = await addRun(storage);
+    const base = {
+      runId: run.id,
+      kind: "context-compaction-attempt",
+      sourceRef: "compaction-attempt:source-1",
+      mimeType: "application/json",
+      sensitivity: "INTERNAL" as const,
+      createdSequence: 1,
+      createdAt: createTimestampMs(3),
+    };
+    const claims = await Promise.all([
+      storage.contextArtifactsV2.claim({ ...base, content: "START:0" }),
+      storage.contextArtifactsV2.claim({
+        ...base,
+        createdAt: createTimestampMs(4),
+        content: "START:0",
+      }),
+    ]);
+    expect(claims.map((claim) => claim.kind).sort()).toEqual(["CREATED", "EXISTING"]);
+    expect(claims[0]?.artifact.artifactId).toBe(claims[1]?.artifact.artifactId);
+    expect(claims[0]?.artifact.createdAt).toBe(createTimestampMs(3));
+    expect(claims[1]?.artifact.createdAt).toBe(createTimestampMs(3));
+
+    await Promise.all(
+      ["START:1", "RESULT:0", "RESULT:1"].map((content) =>
+        storage.contextArtifactsV2.claim({ ...base, content }),
+      ),
+    );
+    await storage.contextArtifactsV2.claim({
+      ...base,
+      sourceRef: "compaction-attempt:other",
+      content: "different source",
+    });
+    const first = await storage.contextArtifactsV2.listBySourceRef({
+      kind: base.kind,
+      sourceRef: base.sourceRef,
+      limit: 2,
+    });
+    expect(first.records).toHaveLength(2);
+    expect(first.nextCursor).toBeDefined();
+    const second = await storage.contextArtifactsV2.listBySourceRef({
+      kind: base.kind,
+      sourceRef: base.sourceRef,
+      ...(first.nextCursor === undefined ? {} : { cursor: first.nextCursor }),
+      limit: 2,
+    });
+    expect(second.records).toHaveLength(2);
+    expect(second.nextCursor).toBeUndefined();
+    expect(new Set([...first.records, ...second.records].map((item) => item.sourceRef))).toEqual(
+      new Set([base.sourceRef]),
+    );
+  });
+
   it("uses run-scoped ids, rejects cross-run ownership, and reads legacy ids", async () => {
     const storage = await openCaelushStorage({ path: ":memory:" });
     stores.push(storage);

@@ -92,7 +92,13 @@ export const RUN_EVENT_TYPE_CATALOG: readonly RunEventTypeDefinition[] = Object.
   durable("conversation.message.committed"),
   durable("run.input.accepted"),
   durable("run.input.assigned"),
-  durable("context.compaction.completed", "SYSTEM"),
+  /*
+   * The user has to be able to explain why their context shrank. The payload is metadata-only
+   * (reason, covered range, before/after token counts, degraded flag) and never carries summary
+   * text, so this durable fact is safe to show in the conversation.
+   */
+  durable("context.compaction.completed"),
+  durable("context.compaction.completed", "USER_VISIBLE", 2),
   transient("context.compaction.progress", 1, "COALESCIBLE"),
   transient("tool.output", 2, "ORDERED"),
   transient("shell.output", 2, "ORDERED"),

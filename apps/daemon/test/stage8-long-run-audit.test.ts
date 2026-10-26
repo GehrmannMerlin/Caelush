@@ -4,9 +4,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   STAGE8_LIMITS,
+  DEEP_COMPACTION_CACHE_95_PROFILE,
   Stage8PreflightSchema,
   createStage8AttemptCheckpoint,
   evaluateStage8ExitGate,
+  evaluateDeepCompactionCache95Evidence,
   appendStage8LivenessSample,
   projectSafeProviderStatus,
   recordStage8ProviderSample,
@@ -35,6 +37,100 @@ const usage = (overrides: Record<string, unknown> = {}) => ({
   prefixFingerprint: "b".repeat(64),
   ...overrides,
 });
+
+function deepCompactionEvidence() {
+  return {
+    schemaVersion: 1,
+    profile: "DEEP_COMPACTION_CACHE_95",
+    frozen: {
+      taskDigest: "a".repeat(64),
+      modelFingerprint: "b".repeat(64),
+      maxProviderCalls: 44,
+      maxMainCalls: 36,
+      maxToolInvocations: 120,
+      maxElapsedMs: 7_200_000,
+      maxInputTokens: 100_000,
+      maxCostNanoUsd: 1_000_000,
+    },
+    control: {
+      taskDigest: "a".repeat(64),
+      modelFingerprint: "b".repeat(64),
+      terminalState: "COMPLETED",
+      costStatus: "RECONCILED",
+      providerCallCount: 20,
+      mainCallCount: 18,
+      toolInvocationCount: 4,
+      elapsedMs: 60_000,
+      inputTokens: 20_000,
+      costNanoUsd: 1_000,
+    },
+    observed: {
+      taskDigest: "a".repeat(64),
+      modelFingerprint: "b".repeat(64),
+      terminalState: "COMPLETED",
+      costStatus: "RECONCILED",
+      qualityAssessment: "EQUIVALENT_OR_BETTER",
+      qualityEvidenceDigest: "c".repeat(64),
+      providerCallCount: 20,
+      mainCallCount: 18,
+      toolInvocationCount: 4,
+      elapsedMs: 60_000,
+      inputTokens: 20_000,
+      costNanoUsd: 1_000,
+      unexpectedResetCount: 0,
+      duplicateSummaryCount: 0,
+      scenarioChecks: {
+        largeToolResult: true,
+        newRunContinuation: true,
+        boundedRecovery: true,
+      },
+      compactions: [
+        {
+          operationId: "compact-1",
+          summaryCallId: "deep-call-05",
+          completionEventSequence: 6,
+          reason: "PROACTIVE_PRESSURE",
+          tokensBefore: 910,
+          effectiveInputLimitTokens: 1_000,
+        },
+        {
+          operationId: "compact-2",
+          summaryCallId: "deep-call-11",
+          completionEventSequence: 13,
+          reason: "SELECTION_PRESSURE",
+          tokensBefore: 930,
+          effectiveInputLimitTokens: 1_000,
+        },
+      ],
+      prefixEfficiencySamples: Array.from({ length: 9 }, () => 0.99),
+      samples: [
+        ...Array.from({ length: 4 }, (_, index) => ({
+          callId: `deep-call-${String(index + 1).padStart(2, "0")}`,
+          eventSequence: index + 1,
+          purpose: "MAIN_AGENT",
+        })),
+        { callId: "deep-call-05", eventSequence: 5, purpose: "COMPACTION" },
+        ...Array.from({ length: 5 }, (_, index) => ({
+          callId: `deep-call-${String(index + 6).padStart(2, "0")}`,
+          eventSequence: index + 7,
+          purpose: "MAIN_AGENT",
+        })),
+        { callId: "deep-call-11", eventSequence: 12, purpose: "COMPACTION" },
+        ...Array.from({ length: 9 }, (_, index) => ({
+          callId: `deep-call-${String(index + 12).padStart(2, "0")}`,
+          eventSequence: index + 14,
+          purpose: "MAIN_AGENT",
+        })),
+      ].map((sample, index) => ({
+        ...sample,
+        inputTokens: 1_000,
+        hitTokens: index === 0 ? 0 : 1_000,
+        missTokens: index === 0 ? 1_000 : 0,
+        usageComplete: true,
+      })),
+    },
+  };
+}
 
 describe("Stage 8 long-run audit local fixtures", () => {
   it("accepts daemon LOCAL credential status without accepting or serializing secrets", () => {
@@ -107,6 +203,65 @@ describe("Stage 8 long-run audit local fixtures", () => {
       minimumSegmentSamples: 3,
       minimumBillingHitRateExclusive: 0.9,
       minimumReusablePrefixEfficiency: 0.99,
+    });
+  });
+
+  it("keeps the explicit deep-compaction profile separate from Stage 8 and counts every purpose", () => {
+    expect(DEEP_COMPACTION_CACHE_95_PROFILE).toMatchObject({
+      id: "DEEP_COMPACTION_CACHE_95",
+      minimumCompactions: 2,
+      minimumPostCompactionMainCalls: 3,
+      minimumAllPurposeHitRate: 0.95,
+      minimumReusablePrefixEfficiency: 0.99,
+    });
+    expect(STAGE8_LIMITS.minimumBillingHitRateExclusive).toBe(0.9);
+
+    const report = evaluateDeepCompactionCache95Evidence(deepCompactionEvidence());
+    expect(report).toMatchObject({ status: "PASS", allPurposeHitRate: 0.95 });
+  });
+
+  it("does not turn incomplete Provider usage into a passing cache rate", () => {
+    const evidence = deepCompactionEvidence();
+    evidence.observed.samples[0]!.usageComplete = false;
+    evidence.observed.samples[0]!.hitTokens = null;
+    evidence.observed.samples[0]!.missTokens = null;
+
+    expect(evaluateDeepCompactionCache95Evidence(evidence)).toMatchObject({
+      status: "INCONCLUSIVE",
+      reasons: expect.arrayContaining(["PROVIDER_USAGE_INCOMPLETE"]),
+    });
+  });
+
+  it("fails a completed deep run below 95 percent across all Provider purposes", () => {
+    const evidence = deepCompactionEvidence();
+    evidence.observed.samples[0]!.hitTokens = 0;
+    evidence.observed.samples[0]!.missTokens = 1_000;
+    evidence.observed.samples[1]!.hitTokens = 900;
+    evidence.observed.samples[1]!.missTokens = 100;
+
+    expect(evaluateDeepCompactionCache95Evidence(evidence)).toMatchObject({
+      status: "FAIL",
+      reasons: expect.arrayContaining(["ALL_PURPOSE_HIT_RATE_BELOW_TARGET"]),
+    });
+  });
+
+  it("does not pass without the large-result, cross-Run, and bounded-recovery scenarios", () => {
+    const evidence = deepCompactionEvidence();
+    evidence.observed.scenarioChecks.newRunContinuation = false;
+
+    expect(evaluateDeepCompactionCache95Evidence(evidence)).toMatchObject({
+      status: "FAIL",
+      reasons: expect.arrayContaining(["REQUIRED_SCENARIO_NOT_COVERED"]),
+    });
+  });
+
+  it("keeps an unpaired candidate run inconclusive instead of treating it as a release pass", () => {
+    const evidence = deepCompactionEvidence();
+    delete evidence.control;
+
+    expect(evaluateDeepCompactionCache95Evidence(evidence)).toMatchObject({
+      status: "INCONCLUSIVE",
+      reasons: expect.arrayContaining(["CONTROL_COMPARISON_MISSING"]),
     });
   });
 

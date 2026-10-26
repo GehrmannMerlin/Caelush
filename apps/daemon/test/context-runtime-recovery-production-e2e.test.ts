@@ -156,6 +156,7 @@ describe("Context Runtime production recovery E2E", () => {
         "DEFER_LOW_RETRIEVABLE",
         "REDUCE_OPTIONAL_SOURCES",
         "TIGHTEN_RECENT_TAIL",
+        "COMPACTION_SKIP_NO_CLOSED_TURN",
       ],
     });
     expect(provider.calls).toBe(3);

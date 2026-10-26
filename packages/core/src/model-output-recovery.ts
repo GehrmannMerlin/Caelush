@@ -43,7 +43,7 @@ export function planModelOutputRecovery(
     return { kind: "STOP", reason: "POLICY_MISSING" };
   }
 
-  if (input.policy.version !== "TURN_BUDGET_V3") {
+  if (input.policy.version !== "TURN_BUDGET_V3" && input.policy.version !== "TURN_BUDGET_V4") {
     return { kind: "STOP", reason: "POLICY_UNSUPPORTED" };
   }
 

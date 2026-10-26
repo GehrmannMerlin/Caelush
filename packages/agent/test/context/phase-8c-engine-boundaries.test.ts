@@ -49,7 +49,6 @@ const MODEL: ModelDescriptor = {
 function acceptedResult(): ContextSummarizationResult {
   return {
     semantic: {
-      goal: "current goal",
       constraints: [],
       completedWork: ["semantic work"],
       inProgress: [],
@@ -61,7 +60,7 @@ function acceptedResult(): ContextSummarizationResult {
     },
     modelRef: MODEL.ref,
     finishReason: "STOP",
-    summaryPromptVersion: 3,
+    summaryPromptVersion: 4,
     sourceDigest: "source",
     semanticDigest: "semantic",
   };
@@ -181,7 +180,7 @@ function compactionFixture(options: {
     deterministicFactsProvider: options.factsProvider,
     checkpointBudgetResolver: {
       resolve() {
-        return { targetTokens: 7, maxTokens: 10 };
+        return { targetTokens: 7, maxTokens: 8_192 };
       },
     },
     compactionGainEvaluator: {
@@ -278,7 +277,7 @@ describe("Phase 8C Context Engine failure boundaries", () => {
     expect(fixture.commitCalls).toBe(0);
   });
 
-  it("keeps the original projection when semantic summary fails but the input still fits", async () => {
+  it("commits a degraded checkpoint after a forced overflow even when the estimate says it fits", async () => {
     const fixture = compactionFixture({
       summarizer: {
         async summarize() {
@@ -293,9 +292,11 @@ describe("Phase 8C Context Engine failure boundaries", () => {
 
     const prepared = await fixture.engine.prepare(fixture.input);
 
-    expect(fixture.commitCalls).toBe(0);
-    expect(prepared.report.compactionCount).toBe(0);
-    expect(fixture.lastCheckpoint).toBeUndefined();
+    // The provider already rejected this request, so "still fits" is disproved: the deterministic
+    // fallback must land a degraded checkpoint instead of replaying the same oversized input.
+    expect(fixture.commitCalls).toBe(1);
+    expect(prepared.report.compactionCount).toBe(1);
+    expect(fixture.lastCheckpoint).toBeDefined();
   });
 
   it("stops after semantic output is cancelled and never collects facts or commits", async () => {

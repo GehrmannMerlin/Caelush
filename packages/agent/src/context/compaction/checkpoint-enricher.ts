@@ -8,6 +8,7 @@ import type { SemanticCheckpointDraft } from "./semantic-checkpoint-draft.js";
 
 export interface ContextCheckpointEnricher {
   enrich(input: {
+    readonly identity: { readonly goal: string };
     readonly semantic: SemanticCheckpointDraft;
     readonly facts: DeterministicCompactionFacts;
     readonly sourceRange: ContextMessageRange;
@@ -19,7 +20,7 @@ export function createContextCheckpointEnricher(): ContextCheckpointEnricher {
     enrich(input: Parameters<ContextCheckpointEnricher["enrich"]>[0]) {
       return createStructuredCheckpoint({
         version: 1,
-        goal: input.semantic.goal,
+        goal: input.identity.goal,
         constraints: input.semantic.constraints,
         completedWork: input.semantic.completedWork,
         inProgress: input.semantic.inProgress,

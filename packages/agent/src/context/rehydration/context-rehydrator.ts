@@ -1,6 +1,8 @@
 import {
   createStructuredCheckpoint,
+  createStructuredCheckpointV2,
   type StructuredCheckpoint,
+  type StructuredCheckpointV2,
 } from "../checkpoint/structured-checkpoint.js";
 import type {
   ContextAuthoritySnapshot,
@@ -12,11 +14,15 @@ import type {
 export function createContextRehydrator(): ContextRehydratorPort {
   return Object.freeze({
     async rehydrate(input: {
-      readonly checkpoint?: StructuredCheckpoint;
+      readonly checkpoint?: StructuredCheckpoint | StructuredCheckpointV2;
       readonly authorities: ContextAuthoritySnapshot;
     }): Promise<RehydratedContextState> {
       const checkpoint =
-        input.checkpoint === undefined ? undefined : createStructuredCheckpoint(input.checkpoint);
+        input.checkpoint === undefined
+          ? undefined
+          : input.checkpoint.version === 1
+            ? createStructuredCheckpoint(input.checkpoint)
+            : createStructuredCheckpointV2(input.checkpoint);
       return Object.freeze({
         goal: input.authorities.goal ?? checkpoint?.goal ?? "",
         changedFiles: freezeList(input.authorities.changedFiles ?? checkpoint?.changedFiles ?? []),

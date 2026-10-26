@@ -95,6 +95,37 @@ export const TurnBudgetPolicySnapshotSchema = z
     safetyTokens: z.number().int().safe().nonnegative(),
     expectedGrowthTokens: z.number().int().safe().positive(),
     postCompactionRatio: z.number().finite().gt(0).lt(1),
+    /**
+     * Proactive reorganization threshold, as a fraction of the usable input budget.
+     *
+     * Optional so a Run frozen before this parameter existed keeps the historical rule.
+     */
+    proactiveRatio: z.number().finite().gt(0).lt(1).optional(),
+    outputRecovery: OutputRecoveryPolicySchema.optional(),
+  })
+  .strict();
+
+/** Explicit source-retention contract for Runs created with the deep-compaction budget. */
+export const DeepCompactionPolicyV1Schema = z
+  .object({
+    version: z.literal("DEEP_COMPACTION_V1"),
+    triggerRatio: z.number().finite().gt(0).lt(1),
+    recentTokens: z.number().int().safe().positive(),
+    checkpointMaxTokens: z.number().int().safe().positive(),
+    boundaryTokens: z.number().int().safe().nonnegative(),
+  })
+  .strict();
+
+/** Run-frozen V4 policy: output headroom plus explicit post-compaction retention inputs. */
+export const TurnBudgetPolicyV4SnapshotSchema = z
+  .object({
+    version: z.literal("TURN_BUDGET_V4"),
+    algorithm: z.literal("HEADROOM_V1"),
+    minOutputTokens: z.number().int().safe().positive(),
+    preferredOutputTokens: z.number().int().safe().positive(),
+    safetyTokens: z.number().int().safe().nonnegative(),
+    expectedGrowthTokens: z.number().int().safe().positive(),
+    deepCompaction: DeepCompactionPolicyV1Schema,
     outputRecovery: OutputRecoveryPolicySchema.optional(),
   })
   .strict();
@@ -107,11 +138,15 @@ export const ContextBudgetPolicySnapshotSchema = ContextRequestBudgetSnapshotSch
       workingSet: WorkingSetPolicyV2Schema,
     })
     .strict(),
-).or(TurnBudgetPolicySnapshotSchema);
+)
+  .or(TurnBudgetPolicySnapshotSchema)
+  .or(TurnBudgetPolicyV4SnapshotSchema);
 export type ContextBudgetPolicySnapshot = z.infer<typeof ContextBudgetPolicySnapshotSchema>;
 export type ContextRequestBudgetSnapshot = z.infer<typeof ContextRequestBudgetSnapshotSchema>;
 export type WorkingSetPolicyV2 = z.infer<typeof WorkingSetPolicyV2Schema>;
 export type TurnBudgetPolicySnapshot = z.infer<typeof TurnBudgetPolicySnapshotSchema>;
+export type DeepCompactionPolicyV1 = z.infer<typeof DeepCompactionPolicyV1Schema>;
+export type TurnBudgetPolicyV4Snapshot = z.infer<typeof TurnBudgetPolicyV4SnapshotSchema>;
 
 /**
  * A normal execution result. It records the exact final text and the model Step that produced it;
@@ -164,6 +199,8 @@ export const AgentRunSchema = z
     finalResult: JsonValueSchema.optional(),
     /** Absent on historical Runs, which retain their verification completion contract. */
     completionContract: RunCompletionContractSchema.optional(),
+    /** User-authorized compaction retry reference; absent from model and Tool contracts. */
+    contextCompactionRetryOf: z.string().min(1).max(200).optional(),
     completionDisposition: CompletionDispositionSchema.optional(),
   })
   .strict();

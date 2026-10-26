@@ -8,12 +8,18 @@ import {
   createContextHistoryIndexer,
   createContextPolicy,
   createContextContributionPipeline,
+  createCompactionSourceCoverageDigest,
   createConversationTurn,
+  deriveCompactionAttemptIdentity,
+  createStandardAgentMessageCodecRegistry,
   createStandardAgentMessageProjectorRegistry,
+  type AgentMessage,
+  type AgentMessageRecordDraft,
   type StoredAgentMessage,
 } from "@caelush/agent";
 import type { RunAgentContextEngineInput } from "@caelush/core";
 import {
+  AgentStepSchema,
   AgentRunSchema,
   AgentSessionSchema,
   createRunId,
@@ -56,6 +62,27 @@ const MODEL: ModelDescriptor = {
 let directory: string | undefined;
 let storage: Awaited<ReturnType<typeof openCaelushStorage>> | undefined;
 let runtime: LocalRuntime | undefined;
+
+function toMessageRecordDraft(
+  message: AgentMessage,
+  codecs: ReturnType<typeof createStandardAgentMessageCodecRegistry>,
+): AgentMessageRecordDraft {
+  const encoded = codecs.encode(message);
+  return {
+    messageId: message.id,
+    sessionId: message.sessionId,
+    conversationTurnId: message.conversationTurnId,
+    messageType: message.type,
+    schemaVersion: encoded.schemaVersion,
+    ...(encoded.modelProjectionVersion === undefined
+      ? {}
+      : { modelProjectionVersion: encoded.modelProjectionVersion }),
+    createdAt: message.createdAt,
+    source: message.source,
+    audience: message.audience,
+    data: encoded.data,
+  };
+}
 
 afterEach(async () => {
   await runtime?.dispose();
@@ -116,9 +143,18 @@ describe("daemon WORKING_SET_V2 current-turn integration", () => {
       limits: { maxSteps: 20, maxToolCalls: 20, timeoutMs: 60_000 },
       createdAt: createTimestampMs(1),
     });
+    const contextStepId = createStepId();
     await storage.sessions.insert(session);
     await storage.runs.insert(run);
-    const contextStepId = createStepId();
+    await storage.steps.insert(
+      AgentStepSchema.parse({
+        id: contextStepId,
+        runId: run.id,
+        sequence: 1,
+        status: "RUNNING",
+        startedAt: createTimestampMs(2),
+      }),
+    );
     await storage.resourceGovernance.createOrGet(run.id, {
       policyVersion: "adaptive-resource-governance.v1",
       mode: resourcePolicy.mode,
@@ -177,6 +213,14 @@ describe("daemon WORKING_SET_V2 current-turn integration", () => {
       }),
     );
     const originalMessages = structuredClone(messages);
+    const messageProjectors = createStandardAgentMessageProjectorRegistry();
+    const messageCodecs = createStandardAgentMessageCodecRegistry((type) =>
+      messageProjectors.currentVersion(type),
+    );
+    await storage.messageRecords.append(
+      run.id,
+      messages.map((stored) => toMessageRecordDraft(stored.message, messageCodecs)),
+    );
     const turn = createConversationTurn({
       id: turnId,
       sessionId: session.id,
@@ -221,7 +265,6 @@ describe("daemon WORKING_SET_V2 current-turn integration", () => {
           providerId: "fixture" as never,
           model: MODEL.ref,
           text: JSON.stringify({
-            goal: run.goal,
             constraints: ["Preserve the user's current plan and next action."],
             completedWork: ["Earlier Tool batches were compacted."],
             inProgress: ["Continue from the newest retained batch."],
@@ -272,8 +315,11 @@ describe("daemon WORKING_SET_V2 current-turn integration", () => {
     const first = await prepare();
     expect(summaryCalls).toBe(1);
     expect(first.report.compactionCount).toBe(1);
-    const checkpoints = await storage.contextCheckpointsV2.listByRun(run.id);
-    expect(checkpoints).toHaveLength(1);
+    const candidates = await storage.contextCheckpointsV3.listCandidatesBySession({
+      sessionId: run.sessionId,
+      throughRunId: run.id,
+    });
+    expect(candidates.records).toHaveLength(1);
     const latestEventSequence = await storage.eventReader.latestSequence(run.id);
     const committedEvents = await storage.eventReader.replay(run.id, {
       afterSequence: 0,
@@ -284,17 +330,73 @@ describe("daemon WORKING_SET_V2 current-turn integration", () => {
       (event) => event.type === "context.compaction.completed",
     );
     expect(compactionEvents).toHaveLength(1);
+    expect(compactionEvents[0]?.schemaVersion).toBe(2);
     expect(compactionEvents[0]?.stepId).toBeUndefined();
-    const checkpoint = checkpoints[0];
-    if (checkpoint === undefined || checkpoint.schemaVersion !== 2) {
-      throw new Error("A V2 current-turn checkpoint was not committed.");
+    const checkpoint = candidates.records[0];
+    if (checkpoint === undefined || checkpoint.schemaVersion !== 3) {
+      throw new Error("A V3 current-turn checkpoint was not committed.");
     }
-    expect(checkpoint.sourceRange).toMatchObject({
+    const attemptSourceRefs = new Map<
+      string,
+      { runId: string; conversationTurnId: string; messageId: string; sequence: number }
+    >();
+    for (const unit of debugHistory.units) {
+      if (unit.status !== "CLOSED" || !unit.compactionEligible) continue;
+      for (const ref of unit.messages) {
+        const messageId = String(ref.messageId);
+        attemptSourceRefs.set(messageId, {
+          runId: String(ref.runId),
+          conversationTurnId: String(ref.conversationTurnId),
+          messageId,
+          sequence: ref.sequence,
+        });
+      }
+    }
+    const attemptSourceDigest = createCompactionSourceCoverageDigest({
+      messageRefs: [...attemptSourceRefs.values()].sort(
+        (left, right) => left.sequence - right.sequence,
+      ),
+    });
+    const attemptId = deriveCompactionAttemptIdentity({
+      sessionId: run.sessionId,
+      sourceKey: attemptSourceDigest,
+      retryGeneration: 0,
+      failureFamily: "AUTOMATIC_ATTEMPT",
+    }).attemptId;
+    const attemptArtifacts = await storage.contextArtifactsV2.listBySourceRef({
+      kind: "context-compaction-attempt",
+      sourceRef: attemptId,
+      limit: 10,
+    });
+    const attemptRecords = await Promise.all(
+      attemptArtifacts.records.map(async (artifact) => {
+        const persisted = await storage!.contextArtifactsV2.readInternal(artifact.artifactId);
+        if (persisted === undefined) throw new Error("A compaction attempt artifact disappeared.");
+        return JSON.parse(persisted.content) as { recordType: string; state?: string };
+      }),
+    );
+    const subcallArtifacts = await storage.contextArtifactsV2.listBySourceRef({
+      kind: "context-compaction-subcall",
+      sourceRef: `${attemptId}:subcall:00`,
+      limit: 10,
+    });
+    const subcallRecords = await Promise.all(
+      subcallArtifacts.records.map(async (artifact) => {
+        const persisted = await storage!.contextArtifactsV2.readInternal(artifact.artifactId);
+        if (persisted === undefined) throw new Error("A compaction subcall artifact disappeared.");
+        return JSON.parse(persisted.content) as { recordType: string; state?: string };
+      }),
+    );
+    expect(attemptRecords.map(({ state }) => state).sort()).toEqual(["RESULT", "START"]);
+    expect(subcallRecords).toHaveLength(2);
+    expect(subcallRecords.map(({ state }) => state).sort()).toEqual(["RESULT", "START"]);
+    expect(subcallRecords.every(({ recordType }) => recordType === "SUBCALL")).toBe(true);
+    expect(checkpoint.coverage.segments[0]).toMatchObject({
       runId: run.id,
       conversationTurnId: turn.id,
       firstSequence: 2,
     });
-    expect(checkpoint.sourceRange.lastSequence).toBeLessThan(12);
+    expect(checkpoint.coverage.segments[0]?.lastSequence).toBeLessThan(12);
     expect(first.selectedMessageIds).not.toContain(messages[2]?.message.id);
     expect(first.selectedMessageIds).toContain(messages[11]?.message.id);
     expect(first.selectedMessageIds).toContain(messages[13]?.message.id);
@@ -311,7 +413,11 @@ describe("daemon WORKING_SET_V2 current-turn integration", () => {
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
     const recovered = await prepare();
     expect(recovered.selectedMessageIds).toEqual(first.selectedMessageIds);
-    expect(await storage.contextCheckpointsV2.listByRun(run.id)).toHaveLength(1);
+    const recoveredCandidates = await storage.contextCheckpointsV3.listCandidatesBySession({
+      sessionId: run.sessionId,
+      throughRunId: run.id,
+    });
+    expect(recoveredCandidates.records).toHaveLength(1);
     expect(
       recovered.messages.some((message) =>
         message.content.includes("Current goal: finish the page"),

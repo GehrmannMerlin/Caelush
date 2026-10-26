@@ -37,11 +37,14 @@ export type {
 } from "./item/context-item.js";
 export {
   assertStructuredCheckpoint,
+  assertStructuredCheckpointV2,
   createStructuredCheckpoint,
+  createStructuredCheckpointV2,
 } from "./checkpoint/structured-checkpoint.js";
 export type {
   CheckpointSourceRange,
   StructuredCheckpoint,
+  StructuredCheckpointV2,
 } from "./checkpoint/structured-checkpoint.js";
 
 export {
@@ -55,17 +58,58 @@ export { createContextPressureEvaluator } from "./compaction/context-pressure-ev
 export { createContextCutPointSelector } from "./compaction/context-cut-point-selector.js";
 export { createContextCompactionPlanner } from "./compaction/context-compaction-planner.js";
 export {
+  acceptCompactionCandidate,
+  resolveCompactionRetentionBudget,
+} from "./compaction/compaction-retention-budget.js";
+export { maxNewTokensForTarget } from "./compaction/cache-growth-budget.js";
+export type {
+  CompactionRetentionBudget,
+  CompactionRetentionBudgetInput,
+} from "./compaction/compaction-retention-budget.js";
+export {
   createContextCompactionCoverage,
   createContextCompactionCoverageForRange,
+  projectContextCoverage,
   prepareContextCompactionCandidates,
 } from "./compaction/context-compaction-coverage.js";
-export { createContextIncrementalCompactionResolver } from "./compaction/incremental-compaction-resolver.js";
+export {
+  assertContextSourceCoverage,
+  createContextSourceCoverage,
+  extendContextSourceCoverage,
+} from "./compaction/context-source-coverage.js";
+export type {
+  ContextSourceCoverage,
+  ContextSourceCoverageInput,
+} from "./compaction/context-source-coverage.js";
+export type {
+  CompactionTargetStatus,
+  ContextCheckpointCreateInputV3,
+  ContextCheckpointRecordV3,
+  ContextCheckpointSessionCandidates,
+  ContextCheckpointV3RepositoryPort,
+} from "./compaction/context-checkpoint-v3.js";
+export { assertContextCheckpointRecordV3 } from "./compaction/context-checkpoint-v3.js";
+export {
+  createContextIncrementalCompactionResolver,
+  createContextIncrementalCoverageResolverV3,
+} from "./compaction/incremental-compaction-resolver.js";
 export { createIncrementalCheckpointResolver } from "./compaction/incremental-checkpoint-resolver.js";
-export { createContextCheckpointBudgetResolver } from "./compaction/checkpoint-budget.js";
+export { resolveApplicableCheckpoint } from "./compaction/applicable-checkpoint-resolver.js";
+export type {
+  ApplicableContextCheckpoint,
+  ContextCheckpointActivationReaderPort,
+  ContextSessionCheckpointResolverPort,
+} from "./compaction/applicable-checkpoint-resolver.js";
+export {
+  createContextCheckpointBudgetResolver,
+  fitStructuredCheckpointToBudget,
+  ContextCheckpointExceedsBudgetError,
+} from "./compaction/checkpoint-budget.js";
 export { createContextCompactionGainEvaluator } from "./compaction/compaction-gain.js";
 export {
   createContextSummarizationRunner,
   createContextSummaryReplayPrefixFingerprint,
+  isContextSummaryReplayPrefixEligible,
   serializeContextSummarySource,
 } from "./compaction/context-summary.js";
 export { createContextCompactionCoordinator } from "./compaction/context-compaction-coordinator.js";
@@ -90,7 +134,9 @@ export { createDeterministicCompactionFacts } from "./compaction/deterministic-c
 export { createDeterministicCheckpointBuilder } from "./compaction/deterministic-checkpoint-builder.js";
 export {
   CONTEXT_COMPACTION_DIGEST_VERSION,
+  CONTEXT_COMPACTION_DIGEST_V3_VERSION,
   createContextCompactionDigestBuilder,
+  createContextCompactionDigestBuilderV3,
 } from "./compaction/context-compaction-digest.js";
 export { createContextCompactionRebuilder } from "./compaction/context-compaction-rebuilder.js";
 export { createContextCheckpointEnricher } from "./compaction/checkpoint-enricher.js";
@@ -141,7 +187,10 @@ export type {
 } from "./compaction/deterministic-compaction-facts.js";
 export type { DeterministicCheckpointBuilder } from "./compaction/deterministic-checkpoint-builder.js";
 export type { ContextCheckpointEnricher } from "./compaction/checkpoint-enricher.js";
-export type { ContextCompactionDigestBuilder } from "./compaction/context-compaction-digest.js";
+export type {
+  ContextCompactionDigestBuilder,
+  ContextCompactionDigestBuilderV3,
+} from "./compaction/context-compaction-digest.js";
 export type {
   ContextCompactionRebuildInput,
   ContextCompactionRebuildResult,
@@ -151,6 +200,8 @@ export type {
 export type {
   ContextIncrementalCompactionInput,
   ContextIncrementalCompactionResolver,
+  ContextIncrementalCoverageResolutionV3,
+  ContextIncrementalCoverageResolverV3,
 } from "./compaction/incremental-compaction-resolver.js";
 export type {
   IncrementalCheckpointResolver,
@@ -225,8 +276,10 @@ export type {
 export type {
   ArtifactSensitivity,
   ContextArtifact,
+  ContextArtifactClaimResult,
   ContextArtifactCreateInput,
   ContextArtifactMetadata,
+  ContextArtifactMetadataPage,
   ContextArtifactStorePort,
 } from "./artifacts/context-artifact.js";
 export type {
@@ -314,6 +367,7 @@ export { promptSurfaceEpochIdentity } from "./surface/prompt-surface-identity.js
 export type {
   PromptSurfaceAppendResult,
   PromptSurfaceRolloverCommand,
+  PromptSurfaceCompactionActivationCommand,
   PromptSurfaceRolloverResult,
   PromptSurfaceStorePort,
 } from "./surface/prompt-surface-store.js";
@@ -404,6 +458,7 @@ export {
   computeRequestHeadroom,
   decideTurnBudget,
   HEADROOM_V1_DEFAULTS,
+  planOutputAllowance,
   resolveOutputAllowance,
   resolveTurnBudgetPolicy,
   TURN_BUDGET_ALGORITHM,
@@ -417,7 +472,10 @@ export type {
   TurnBudgetDecision,
   TurnBudgetDecisionInput,
   TurnBudgetDecisionKind,
+  DeepCompactionPolicy,
   TurnBudgetPolicy,
+  TurnBudgetPolicyV3,
+  TurnBudgetPolicyV4,
   TurnBudgetPolicyInput,
 } from "./policy/request-headroom.js";
 
@@ -441,6 +499,13 @@ export {
   UTF8_BYTES_PER_TOKEN,
 } from "./token/context-token-estimator.js";
 export type { ContextTokenEstimatorPort } from "./token/context-token-estimator.js";
+export {
+  /**
+   * The one price of a provider-shaped message sequence. The Context report and the pre-selection
+   * candidate estimate must use it so the output allowance and the request draw from one number.
+   */
+  estimateAIMessages,
+} from "./token/materialized-message-estimator.js";
 
 export { assertContextSourceResult } from "./source/context-source.js";
 export {

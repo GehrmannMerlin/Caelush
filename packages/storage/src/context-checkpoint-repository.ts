@@ -246,6 +246,10 @@ export class SqliteContextCheckpointRepository implements ContextCheckpointRepos
   constructor(private readonly database: CaelushDatabase) {}
 
   async create(input: ContextCheckpointCreateInput): Promise<ContextCheckpointRecord> {
+    const owner = this.database.client
+      .prepare("SELECT session_id FROM agent_runs WHERE id = ?")
+      .get(input.runId) as { readonly session_id: string } | undefined;
+    if (owner === undefined) throw new StorageError("Context checkpoint owner Run is unavailable.");
     const existing = this.database.client
       .prepare(
         `${SELECT} WHERE run_id = ? AND source_sequence_from = ? AND source_sequence_to = ?
@@ -286,14 +290,15 @@ export class SqliteContextCheckpointRepository implements ContextCheckpointRepos
       this.database.client
         .prepare(
           `INSERT INTO context_checkpoints
-           (id, run_id, previous_checkpoint_id, source_sequence_from, source_sequence_to,
+            (id, run_id, session_id, previous_checkpoint_id, source_sequence_from, source_sequence_to,
             tokens_before, tokens_after, summary_version, model_ref_json, created_at_ms,
             data_json, read_file_refs_json, changed_file_refs_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.checkpointId,
           input.runId,
+          owner.session_id,
           input.previousCheckpointId ?? null,
           input.sourceSequenceFrom,
           input.sourceSequenceTo,

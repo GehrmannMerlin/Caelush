@@ -5890,14 +5890,15 @@ function isReservedOutputRecoveryAttempt(snapshot: RunExecutionSnapshot): boolea
     recovery.phase === "RESERVED" &&
     recovery.sourceStepId === continuation.failedStepId &&
     recovery.targetOutputTokens > recovery.previousOutputTokens &&
-    policy?.version === "TURN_BUDGET_V3" &&
+    (policy?.version === "TURN_BUDGET_V3" || policy?.version === "TURN_BUDGET_V4") &&
     policy.outputRecovery?.version === "OUTPUT_RECOVERY_V1"
   );
 }
 
 function hasOutputRecoveryPolicy(run: AgentRun): boolean {
   return (
-    run.contextBudgetPolicy?.version === "TURN_BUDGET_V3" &&
+    (run.contextBudgetPolicy?.version === "TURN_BUDGET_V3" ||
+      run.contextBudgetPolicy?.version === "TURN_BUDGET_V4") &&
     run.contextBudgetPolicy.outputRecovery?.version === "OUTPUT_RECOVERY_V1"
   );
 }

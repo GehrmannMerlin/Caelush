@@ -6,6 +6,7 @@ import { BudgetExceededEventSchema } from "./budget.js";
 import { ConversationMessageCommittedEventSchema } from "./conversation.js";
 import {
   ContextCompactionCompletedEventSchema,
+  ContextCompactionCompletedEventV2Schema,
   ContextCompactionProgressEventSchema,
 } from "./context.js";
 import { RunInputAcceptedEventSchema, RunInputAssignedEventSchema } from "./run-input.js";
@@ -152,6 +153,7 @@ const registeredSchemas: ReadonlyMap<string, RegisteredSchema> = new Map<string,
   ["run.input.accepted\u00001", RunInputAcceptedEventSchema],
   ["run.input.assigned\u00001", RunInputAssignedEventSchema],
   ["context.compaction.completed\u00001", ContextCompactionCompletedEventSchema],
+  ["context.compaction.completed\u00002", ContextCompactionCompletedEventV2Schema],
   ["context.compaction.progress\u00001", ContextCompactionProgressEventSchema],
   ["model.text.delta\u00001", ModelTextDeltaEventSchema],
   ["model.text.delta\u00002", ModelTextDeltaEventV2Schema],

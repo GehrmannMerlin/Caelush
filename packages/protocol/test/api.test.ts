@@ -41,16 +41,34 @@ describe("Protocol API contracts", () => {
   });
 
   it("accepts only client-owned run fields", () => {
+    const validRunRequest = {
+      goal: "Do work",
+      workspace,
+      model,
+      runtime,
+      preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+      limits,
+    };
     expect(
       CreateRunRequestSchema.parse({
-        goal: "Do work",
-        workspace,
-        model,
-        runtime,
-        preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+        ...validRunRequest,
         limits: RunLimitsSchema.parse(limits),
       }),
     ).toMatchObject({ goal: "Do work", workspace, model, runtime, limits });
+
+    expect(
+      CreateRunRequestSchema.safeParse({
+        ...validRunRequest,
+        contextCompactionRetryOf: "compaction-attempt:failed",
+      }).success,
+    ).toBe(false);
+    expect(
+      CreateRunRequestSchema.safeParse({
+        ...validRunRequest,
+        submissionId: "af8a1e79-bdd8-47e1-9ff2-ac4ab1fa21d0",
+        contextCompactionRetryOf: "compaction-attempt:failed",
+      }).success,
+    ).toBe(true);
 
     expect(CreateRunRequestSchema.safeParse({ ...limits, status: "RUNNING" }).success).toBe(false);
     expect(CreateRunRequestSchema.safeParse({ goal: "Do work", id: "run-client" }).success).toBe(

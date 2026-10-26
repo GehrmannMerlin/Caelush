@@ -142,14 +142,15 @@ describe("SqliteContextCheckpointRepository", () => {
     database.client
       .prepare(
         `INSERT INTO context_checkpoints
-         (id, run_id, previous_checkpoint_id, source_sequence_from, source_sequence_to,
+         (id, run_id, session_id, previous_checkpoint_id, source_sequence_from, source_sequence_to,
           tokens_before, tokens_after, summary_version, model_ref_json, created_at_ms,
           data_json, read_file_refs_json, changed_file_refs_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         "checkpoint:invalid",
         "run-invalid",
+        "session-invalid",
         null,
         1,
         2,

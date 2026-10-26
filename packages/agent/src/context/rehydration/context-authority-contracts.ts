@@ -1,5 +1,8 @@
 import type { AgentExecutionIdentity } from "../../loop/types.js";
-import type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
+import type {
+  StructuredCheckpoint,
+  StructuredCheckpointV2,
+} from "../checkpoint/structured-checkpoint.js";
 
 export interface ContextAuthoritySnapshot {
   readonly goal?: string;
@@ -26,12 +29,12 @@ export interface RehydratedContextState {
   readonly verificationState: string;
   readonly resourceGovernance: string;
   readonly projectFacts: readonly string[];
-  readonly checkpoint?: StructuredCheckpoint;
+  readonly checkpoint?: StructuredCheckpoint | StructuredCheckpointV2;
 }
 
 export interface ContextRehydratorPort {
   rehydrate(input: {
-    readonly checkpoint?: StructuredCheckpoint;
+    readonly checkpoint?: StructuredCheckpoint | StructuredCheckpointV2;
     readonly authorities: ContextAuthoritySnapshot;
   }): Promise<RehydratedContextState>;
 }

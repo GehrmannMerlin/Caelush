@@ -7,6 +7,7 @@ import {
   type ContextRequestOverhead,
 } from "../token/request-overhead-estimator.js";
 import type { ContextItem, ContextItemId } from "../item/context-item.js";
+import type { DeepCompactionPolicy } from "./request-headroom.js";
 
 export interface ContextPolicyOptions {
   readonly outputReserveTokens?: number;
@@ -23,19 +24,12 @@ export interface ContextPolicyOptions {
   readonly maxObservationBatchRatio?: number;
   readonly conversationCapTokens?: number;
   readonly sourceLimits?: Readonly<Record<string, number>>;
-  /**
-   * Whether a `PROACTIVE` pressure reading may actually start a compaction.
-   *
-   * Defaults to enabled: the whole point of having a 75% band is to act inside it. A host that needs
-   * the historical behaviour (label only, compact at the limit) sets this to false.
-   */
+  /** Whether crossing the configured trigger starts a compaction attempt. */
   readonly proactiveCompactionEnabled?: boolean;
-  /** Fall back below this ratio before another ordinary attempt is allowed. */
-  readonly proactiveCompactionRearmRatio?: number;
-  /** Minimum new model turns between ordinary attempts. */
-  readonly proactiveCompactionCooldownTurns?: number;
   /** Run-frozen V2 working-set thresholds; absent retains the historical Context policy. */
   readonly workingSet?: ContextWorkingSetPolicy;
+  /** Explicit source retention and trigger policy used only by TURN_BUDGET_V4 Runs. */
+  readonly deepCompaction?: DeepCompactionPolicy;
   /**
    * Run-frozen headroom thresholds.
    *
@@ -54,7 +48,9 @@ export interface ContextPolicyOptions {
 
 export interface ContextRequestHeadroomPolicy {
   readonly expectedGrowthTokens: number;
-  readonly postCompactionRatio: number;
+  readonly postCompactionRatio?: number;
+  /** Optional proactive reorganization threshold as a fraction of the usable input budget. */
+  readonly proactiveRatio?: number;
 }
 
 export interface ContextWorkingSetPolicy {
@@ -145,17 +141,14 @@ export interface ContextPolicy {
   readonly targetPostCompactionTokens?: number;
   readonly allowCurrentTurnPrefix?: boolean;
   readonly workingSet?: ContextWorkingSetPolicy;
+  readonly deepCompaction?: DeepCompactionPolicy;
   readonly requestHeadroom?: ContextRequestHeadroomPolicy;
   readonly observationPolicy: ToolObservationPolicySnapshot;
   readonly conversationCapTokens: number;
   readonly sourceLimits: Readonly<Record<string, number>>;
   readonly elasticPoolTokens: number;
-  /** Frozen pacing of elective compaction for this policy. */
-  readonly proactiveCompaction: {
-    readonly enabled: boolean;
-    readonly rearmRatio: number;
-    readonly cooldownTurns: number;
-  };
+  /** Whether crossing the frozen proactive trigger starts a compaction attempt. */
+  readonly proactiveCompaction: { readonly enabled: boolean };
 }
 
 const DEFAULTS = {
@@ -298,10 +291,20 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
   );
   const workingSet = options.workingSet;
   const requestHeadroom = options.requestHeadroom;
+  const deepCompaction = options.deepCompaction;
   if (workingSet !== undefined && requestHeadroom !== undefined) {
     throw new RangeError(
       "A Context policy cannot be frozen against both a working set and headroom.",
     );
+  }
+  if (deepCompaction !== undefined) {
+    assertRatio(deepCompaction.triggerRatio, "deepCompaction.triggerRatio");
+    assertPositiveSafeInteger(deepCompaction.recentTokens, "deepCompaction.recentTokens");
+    assertPositiveSafeInteger(
+      deepCompaction.checkpointMaxTokens,
+      "deepCompaction.checkpointMaxTokens",
+    );
+    assertNonNegativeSafeInteger(deepCompaction.boundaryTokens, "deepCompaction.boundaryTokens");
   }
   if (workingSet !== undefined) assertWorkingSet(workingSet, effectiveInputLimitTokens);
   if (requestHeadroom !== undefined) {
@@ -309,17 +312,29 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
       requestHeadroom.expectedGrowthTokens,
       "requestHeadroom.expectedGrowthTokens",
     );
-    assertRatio(requestHeadroom.postCompactionRatio, "requestHeadroom.postCompactionRatio");
+    if (requestHeadroom.postCompactionRatio !== undefined) {
+      assertRatio(requestHeadroom.postCompactionRatio, "requestHeadroom.postCompactionRatio");
+    }
     if (requestHeadroom.expectedGrowthTokens >= effectiveInputLimitTokens) {
       throw new RangeError("Expected growth must leave a positive input budget.");
     }
   }
   const targetPostCompactionTokens =
-    requestHeadroom !== undefined
-      ? Math.max(1, Math.floor(effectiveInputLimitTokens * requestHeadroom.postCompactionRatio))
-      : workingSet === undefined
-        ? Math.floor(effectiveInputLimitTokens * 0.8)
-        : Math.max(1, Math.floor(workingSet.targetTokens * workingSet.postCompactionRatio));
+    deepCompaction !== undefined
+      ? Math.min(
+          effectiveInputLimitTokens,
+          deepCompaction.recentTokens +
+            deepCompaction.checkpointMaxTokens +
+            deepCompaction.boundaryTokens,
+        )
+      : requestHeadroom !== undefined
+        ? Math.max(
+            1,
+            Math.floor(effectiveInputLimitTokens * (requestHeadroom.postCompactionRatio ?? 0.8)),
+          )
+        : workingSet === undefined
+          ? Math.floor(effectiveInputLimitTokens * 0.8)
+          : Math.max(1, Math.floor(workingSet.targetTokens * workingSet.postCompactionRatio));
   const boundedTargetRecentTailTokens = Math.min(
     targetRecentTailTokens,
     targetPostCompactionTokens,
@@ -334,12 +349,45 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
       : Math.floor(effectiveInputLimitTokens * emergencyCompactionRatio);
   const proactiveCompactionTokens =
     requestHeadroom !== undefined
-      ? Math.max(1, effectiveInputLimitTokens - requestHeadroom.expectedGrowthTokens)
+      ? Math.max(
+          1,
+          Math.min(
+            effectiveInputLimitTokens - requestHeadroom.expectedGrowthTokens,
+            // A ratio band tidies the history while there is still room, instead of waiting until
+            // the next turn cannot fit. Absent means the historical "last possible moment" rule.
+            deepCompaction !== undefined
+              ? Math.floor(effectiveInputLimitTokens * deepCompaction.triggerRatio)
+              : requestHeadroom.proactiveRatio === undefined
+                ? Number.MAX_SAFE_INTEGER
+                : Math.floor(effectiveInputLimitTokens * requestHeadroom.proactiveRatio),
+          ),
+        )
       : workingSet === undefined
         ? Math.floor(effectiveInputLimitTokens * proactiveCompactionRatio)
         : Math.max(1, Math.floor(workingSet.targetTokens * workingSet.triggerRatio));
   if (proactiveCompactionTokens >= emergencyCompactionTokens) {
     throw new RangeError("Proactive compaction threshold must remain below emergency pressure.");
+  }
+  /*
+   * A compaction that keeps more than half of the trigger band frees less than the summary costs.
+   *
+   * `proactive` is "compact when the estimate reaches here" and the recent tail is "what stays
+   * verbatim afterwards", so `2 × tail ≥ proactive` describes a policy whose whole purpose is
+   * defeated before it runs: the largest legal fold would still retain most of the input. Catching
+   * it at construction keeps a misconfigured Run from spending a summarisation call and a full
+   * prefix re-read to learn the same thing at runtime.
+   *
+   * Only the headroom band is checked. A working set or a legacy policy can carry a tail larger
+   * than its trigger for reasons of its own, and those paths keep their historical behaviour.
+   */
+  if (
+    requestHeadroom !== undefined &&
+    proactiveCompactionTokens > targetRecentTailTokens &&
+    targetRecentTailTokens * 2 >= proactiveCompactionTokens
+  ) {
+    throw new RangeError(
+      "Recent tail must be below half of the proactive compaction threshold; compaction would have no gain.",
+    );
   }
   const maxSingleObservationTokens = boundedRatioCap(
     effectiveInputLimitTokens,
@@ -382,6 +430,9 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
     // boundary rule; only the explicit headroom policy opts into the already-validated split.
     allowCurrentTurnPrefix: workingSet?.allowCurrentTurnPrefix ?? requestHeadroom !== undefined,
     ...(workingSet === undefined ? {} : { workingSet: Object.freeze({ ...workingSet }) }),
+    ...(deepCompaction === undefined
+      ? {}
+      : { deepCompaction: Object.freeze({ ...deepCompaction }) }),
     ...(requestHeadroom === undefined
       ? {}
       : { requestHeadroom: Object.freeze({ ...requestHeadroom }) }),
@@ -391,8 +442,6 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
     elasticPoolTokens: Math.max(0, effectiveInputLimitTokens - boundedTargetRecentTailTokens),
     proactiveCompaction: Object.freeze({
       enabled: options.proactiveCompactionEnabled ?? true,
-      rearmRatio: options.proactiveCompactionRearmRatio ?? 0.65,
-      cooldownTurns: workingSet?.cooldownTurns ?? options.proactiveCompactionCooldownTurns ?? 4,
     }),
   });
 }

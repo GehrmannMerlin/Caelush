@@ -6,7 +6,6 @@
  * checkpoint enricher.
  */
 export interface SemanticCheckpointDraft {
-  readonly goal: string;
   readonly constraints: readonly string[];
   readonly completedWork: readonly string[];
   readonly inProgress: readonly string[];
@@ -18,7 +17,6 @@ export interface SemanticCheckpointDraft {
 }
 
 const SEMANTIC_KEYS = [
-  "goal",
   "constraints",
   "completedWork",
   "inProgress",
@@ -38,7 +36,6 @@ const MAX_SEMANTIC_UTF8_BYTES = 24_000;
 export function createSemanticCheckpointDraft(value: unknown): SemanticCheckpointDraft {
   assertSemanticCheckpointDraft(value);
   const draft = {
-    goal: value.goal,
     constraints: [...value.constraints],
     completedWork: [...value.completedWork],
     inProgress: [...value.inProgress],
@@ -66,7 +63,6 @@ export function assertSemanticCheckpointDraft(
     "keyDecisions",
     "criticalReferences",
   ] as const;
-  assertBoundedString(value.goal, "goal");
   assertBoundedString(value.nextIntent, "nextIntent");
   for (const field of listFields) assertBoundedStringArray(value[field], field);
 

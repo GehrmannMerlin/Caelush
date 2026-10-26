@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ModelDescriptor, ModelDescriptorSourcePort } from "@caelush/ai";
 import {
   agentAssistantTextPart,
@@ -282,6 +282,11 @@ async function prepareVueViteWorkspace(): Promise<{
 }> {
   directory = await mkdtemp(join(tmpdir(), "caelush-post-c5-vue-vite-"));
   const workspacePath = join(directory, "workspace");
+  const viteCliPath = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../apps/web/node_modules/vite/bin/vite.js",
+  );
+  const viteCli = `"${viteCliPath}"`;
   await mkdir(join(workspacePath, "src"), { recursive: true });
   const html = (title: string) =>
     `<!doctype html>\n<html><head><meta charset="UTF-8"><title>${title}</title></head><body><main id="app"></main><script type="module" src="/src/main.js"></script></body></html>\n`;
@@ -292,7 +297,11 @@ async function prepareVueViteWorkspace(): Promise<{
         private: true,
         type: "module",
         packageManager: "pnpm@10.10.0",
-        scripts: { dev: "vite", build: "vite build", preview: "vite preview" },
+        scripts: {
+          dev: `node ${viteCli}`,
+          build: `node ${viteCli} build`,
+          preview: `node ${viteCli} preview`,
+        },
         dependencies: { vue: "3.5.22" },
         devDependencies: { vite: "8.2.2" },
       },
@@ -1829,9 +1838,9 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
     expect(compactionUsage?.fullRequestInputEstimateTokens).toBeLessThanOrEqual(
       compactionUsage?.effectiveInputLimitTokens ?? 0,
     );
-    expect(compactionEpoch?.resetReason).toBe("INITIAL");
+    expect(compactionEpoch?.resetReason).toBe("COMPACTION_COMMITTED");
     expect(compactionSurface.records?.map(({ kind }) => kind)).toEqual(["BASELINE"]);
-    expect(compactionUsage?.compactionCount).toBe(0);
+    expect(compactionUsage?.compactionCount).toBe(1);
     const compactionProviderRecords = await storage.providerInvocationUsage.listByRun(
       compactionRun.id,
     );
@@ -1849,8 +1858,15 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
       crossRunVerificationCalls: crossRunUsage.filter(
         ({ purpose }) => purpose === "VERIFICATION_LLM",
       ).length,
-      checkpoints:
-        (await storage.contextCheckpointsV2.getLatestByRun(compactionRun.id)) === undefined ? 0 : 1,
+      checkpoints: (
+        await storage.contextCheckpointsV3.listCandidatesBySession({
+          sessionId: compactionRun.sessionId,
+          throughRunId: compactionRun.id,
+        })
+      ).records.filter(
+        (checkpoint) =>
+          checkpoint.schemaVersion === 3 && checkpoint.ownerRunId === compactionRun.id,
+      ).length,
       resetReason: compactionEpoch?.resetReason,
     };
     expect(compactionSegments).toMatchObject({
@@ -1860,8 +1876,8 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
       postCompactionVerificationCalls: 0,
       crossRunMainCalls: 1,
       crossRunVerificationCalls: 1,
-      checkpoints: 0,
-      resetReason: "INITIAL",
+      checkpoints: 1,
+      resetReason: "COMPACTION_COMMITTED",
     });
     const safePublicJson = JSON.stringify({
       publicEvents,

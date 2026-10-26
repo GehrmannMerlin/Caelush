@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createCompactionCandidate } from "./support/deep-compaction-fixtures.js";
 
 describe("deep compaction retention budget", () => {
-  it.fails("uses_full_retention_budget_instead_of_soft_80_percent", async () => {
+  it("uses_full_retention_budget_instead_of_soft_80_percent", async () => {
     const candidates = [
       { inputTokens: 44_192, accepted: true },
       { inputTokens: 800_000, accepted: false },

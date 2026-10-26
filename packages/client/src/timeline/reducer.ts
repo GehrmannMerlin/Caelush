@@ -387,6 +387,15 @@ function reduceRegisteredEvent(state: TimelineState, event: PublicRunEvent): Tim
         text: `Budget exceeded: ${event.payload.dimension}.`,
         status: "FAILED",
       });
+    case "context.compaction.completed":
+      return appendSettled(state, {
+        id: event.eventId,
+        kind: "SYSTEM",
+        title: "上下文已压缩",
+        text: compactionReductionText(event.payload),
+        detail: compactionDetail(event.payload),
+        status: "COMPLETED",
+      });
     case "resource.guard":
       return {
         ...state,
@@ -839,6 +848,51 @@ function upsertExhaustedRetry(
     retries: upsert(state.retries, retry, state.limits.maxActiveEntries),
   };
 }
+const COMPACTION_REASON_LABEL = {
+  PROACTIVE_PRESSURE: "主动压力",
+  SELECTION_PRESSURE: "选择压力",
+  FORCED_PROVIDER_OVERFLOW: "窗口溢出",
+} as const;
+
+/** One line the user can verify without opening anything. */
+function compactionReductionText(payload: {
+  readonly tokensBefore: number;
+  readonly tokensAfter: number;
+}): string {
+  const before = Math.max(0, Math.round(payload.tokensBefore));
+  const after = Math.max(0, Math.round(payload.tokensAfter));
+  const saved = before === 0 ? 0 : Math.round((1 - after / before) * 100);
+  return `${formatTokens(before)} → ${formatTokens(after)} tokens（−${saved}%）`;
+}
+
+/** What was replaced and how trustworthy the replacement is. */
+function compactionDetail(payload: {
+  readonly reason: keyof typeof COMPACTION_REASON_LABEL;
+  readonly sourceSequenceFrom?: number;
+  readonly sourceSequenceTo?: number;
+  readonly sourceRangeCount?: number;
+  readonly sourceMessageCount?: number;
+  readonly degraded: boolean;
+  readonly targetStatus?: "DEEP" | "FLOOR_LIMITED";
+}): string {
+  const coverage =
+    payload.sourceSequenceFrom !== undefined && payload.sourceSequenceTo !== undefined
+      ? `覆盖 seq ${payload.sourceSequenceFrom}–${payload.sourceSequenceTo}`
+      : `覆盖 ${String(payload.sourceMessageCount ?? 0)} 条消息（${String(payload.sourceRangeCount ?? 0)} 段）`;
+  return [
+    COMPACTION_REASON_LABEL[payload.reason],
+    coverage,
+    payload.degraded ? "降级摘要" : "语义摘要已校验",
+    ...(payload.targetStatus === undefined
+      ? []
+      : [payload.targetStatus === "FLOOR_LIMITED" ? "受必要内容下限限制" : "达到深度压缩目标"]),
+  ].join(" · ");
+}
+
+function formatTokens(value: number): string {
+  return value.toLocaleString("en-US");
+}
+
 function appendSettled(state: TimelineState, entry: TimelineEntry): TimelineState {
   let settled = [
     ...state.settled,

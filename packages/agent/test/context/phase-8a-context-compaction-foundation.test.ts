@@ -381,7 +381,7 @@ describe("Phase 8A pressure evaluator", () => {
 });
 
 describe("Phase 8A deterministic safe cut selector", () => {
-  it("compacts multiple turns and retains the newest tail", () => {
+  it("folds the closed prefix and keeps the budgeted recent Turns", () => {
     const turns = [
       closedTurn("multi_1", 1, 1, "turn one"),
       closedTurn("multi_2", 2, 3, "turn two"),
@@ -580,7 +580,7 @@ describe("Phase 8A deterministic safe cut selector", () => {
 });
 
 describe("Phase 8A planner integration", () => {
-  it("fails closed when a V2 compaction range would span multiple ConversationTurns", () => {
+  it("represents the complete closed prefix as independent source ranges", () => {
     const units = [
       manualTurnUnit("turn-a", "a", 1, 2, 40),
       manualTurnUnit("turn-b", "b", 1, 2, 40),
@@ -603,6 +603,13 @@ describe("Phase 8A planner integration", () => {
       reason: "SELECTION_PRESSURE",
     });
 
-    expect(plan).toBeNull();
+    expect(plan).not.toBeNull();
+    expect(plan?.selectedUnitIds).toEqual(["turn-a", "turn-b"]);
+    expect(plan?.sourceCoverageDelta).toHaveLength(2);
+    expect(plan?.sourceRange.conversationTurnId).toBe(
+      conversationTurnId("cturn_phase_8a_manual_a"),
+    );
+    expect(plan?.sourceRange.firstSequence).toBe(1);
+    expect(plan?.sourceRange.lastSequence).toBe(2);
   });
 });

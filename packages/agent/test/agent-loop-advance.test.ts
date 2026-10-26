@@ -538,7 +538,7 @@ describe("AgentLoop.advance() failure classification", () => {
     if (result.kind !== "FAILED") throw new Error("expected output recovery stop");
     expect(result.error).toEqual({
       code: "MODEL_ERROR",
-      message: "恢复请求没有获得更大的输出上限",
+      message: "上下文剩余空间不足，无法提高输出上限",
       retryable: false,
       phase: "LLM",
       details: { modelOutputFailure: "OUTPUT_TRUNCATED" },

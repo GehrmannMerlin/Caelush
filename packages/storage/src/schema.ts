@@ -413,9 +413,15 @@ export const contextCheckpoints = sqliteTable(
     runId: text("run_id")
       .notNull()
       .references(() => agentRuns.id),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => agentSessions.id),
     previousCheckpointId: text("previous_checkpoint_id"),
-    sourceSequenceFrom: integer("source_sequence_from").notNull(),
-    sourceSequenceTo: integer("source_sequence_to").notNull(),
+    ownerStepSequence: integer("owner_step_sequence"),
+    activationOperationId: text("activation_operation_id"),
+    coverageDigest: text("coverage_digest"),
+    sourceSequenceFrom: integer("source_sequence_from"),
+    sourceSequenceTo: integer("source_sequence_to"),
     tokensBefore: integer("tokens_before").notNull(),
     tokensAfter: integer("tokens_after").notNull(),
     summaryVersion: integer("summary_version").notNull(),
@@ -427,6 +433,43 @@ export const contextCheckpoints = sqliteTable(
   },
   (table) => [
     index("context_checkpoints_run_sequence_idx").on(table.runId, table.sourceSequenceTo),
+    index("context_checkpoints_session_owner_idx").on(
+      table.sessionId,
+      table.runId,
+      table.ownerStepSequence,
+    ),
+    check(
+      "context_checkpoints_schema_coverage_check",
+      sql`(${table.summaryVersion} IN (1, 2) AND ${table.sourceSequenceFrom} IS NOT NULL AND ${table.sourceSequenceTo} IS NOT NULL AND ${table.ownerStepSequence} IS NULL AND ${table.activationOperationId} IS NULL AND ${table.coverageDigest} IS NULL) OR (${table.summaryVersion} = 3 AND ${table.sourceSequenceFrom} IS NULL AND ${table.sourceSequenceTo} IS NULL AND ${table.ownerStepSequence} > 0 AND ${table.activationOperationId} IS NOT NULL AND ${table.coverageDigest} IS NOT NULL)`,
+    ),
+  ],
+);
+
+/** Durable proof that a V3 checkpoint, its Prompt Surface baseline, usage and event committed. */
+export const contextCompactionActivations = sqliteTable(
+  "context_compaction_activations",
+  {
+    operationId: text("operation_id").primaryKey(),
+    checkpointId: text("checkpoint_id")
+      .notNull()
+      .unique()
+      .references(() => contextCheckpoints.id),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => agentSessions.id),
+    ownerRunId: text("owner_run_id")
+      .notNull()
+      .references(() => agentRuns.id),
+    ownerStepSequence: integer("owner_step_sequence").notNull(),
+    epochId: text("epoch_id").notNull(),
+    baselineFingerprint: text("baseline_fingerprint").notNull(),
+  },
+  (table) => [
+    check("context_compaction_activations_owner_step_check", sql`${table.ownerStepSequence} > 0`),
+    check(
+      "context_compaction_activations_baseline_fingerprint_check",
+      sql`substr(${table.baselineFingerprint}, 1, 7) = 'sha256:' AND length(${table.baselineFingerprint}) = 71 AND substr(${table.baselineFingerprint}, 8) NOT GLOB '*[^0-9a-f]*'`,
+    ),
   ],
 );
 

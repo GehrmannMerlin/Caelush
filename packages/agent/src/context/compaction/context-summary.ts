@@ -1,6 +1,7 @@
 import type { JsonObject } from "@caelush/ai";
 
 import { canonicalJsonText, digestJsonValue } from "../../messages/canonical-json.js";
+import { PRIVATE_REPLAY_REFERENCE_KIND } from "../../messages/private-replay.js";
 import {
   CONTEXT_SUMMARY_PROMPT_VERSION,
   type ContextSummaryReplayPrefix,
@@ -51,6 +52,7 @@ export function createContextSummaryReplayPrefixFingerprint(
         modelRef: prefix.modelRef,
         api: prefix.api,
         surfaceFingerprint: prefix.surfaceFingerprint,
+        messageRefs: prefix.messageRefs,
         messages: prefix.messages,
         tools: prefix.tools,
       } as never),
@@ -97,7 +99,6 @@ export function createContextSummarizationRunner(options: {
           });
         }
         const protectedFactFailure = validateProtectedSummaryFacts({
-          identityGoal: input.identity.goal,
           ...(input.previousCheckpoint === undefined
             ? {}
             : { previousCheckpoint: input.previousCheckpoint }),
@@ -135,44 +136,114 @@ export function createContextSummarizationRunner(options: {
 }
 
 /**
- * A semantic summary may reorganize history, but it cannot silently discard
- * durable task facts already present in the previous checkpoint. Exact
- * membership is deliberate: paraphrase matching would make this safety check
- * another model judgment.
+ * User constraints remain exact safety requirements. Progress, completed work, discoveries, and
+ * decisions are compactable semantic memory and may be merged or retired after resolution.
  */
 function validateProtectedSummaryFacts(input: {
-  readonly identityGoal: string;
   readonly previousCheckpoint?: import("../checkpoint/structured-checkpoint.js").StructuredCheckpoint;
   readonly semantic: ContextSummarizationResult["semantic"];
 }): string | undefined {
-  if (input.semantic.goal !== input.identityGoal) {
-    return "Semantic summary changed the authoritative Run goal.";
-  }
   const previous = input.previousCheckpoint;
   if (previous === undefined) return undefined;
-  const protectedLists = [
-    ["constraints", previous.constraints, input.semantic.constraints],
-    ["completedWork", previous.completedWork, input.semantic.completedWork],
-    ["inProgress", previous.inProgress, input.semantic.inProgress],
-    ["blocked", previous.blocked, input.semantic.blocked],
-    ["importantDiscoveries", previous.importantDiscoveries, input.semantic.importantDiscoveries],
-    ["keyDecisions", previous.keyDecisions, input.semantic.keyDecisions],
-    ["criticalReferences", previous.criticalReferences, input.semantic.criticalReferences],
-  ] as const;
-  for (const [field, required, returned] of protectedLists) {
-    const returnedValues = new Set(returned);
-    if (required.some((fact) => !returnedValues.has(fact))) {
-      return `Semantic summary omitted protected ${field} from the previous checkpoint.`;
-    }
+  const returnedConstraints = new Set(input.semantic.constraints);
+  if (previous.constraints.some((constraint) => !returnedConstraints.has(constraint))) {
+    return "Semantic summary omitted a protected user constraint.";
   }
   return undefined;
 }
 
 function normalizeSummaryReplayInput(input: ContextSummarizationInput): ContextSummarizationInput {
-  // Semantic compaction is an independent source-data request. Until the Gateway owns a complete
-  // cache-prefix resolver and proves the prefix identity/lifecycle for this request, forwarding a
-  // valid main-turn prefix would be misleading and could replay unrelated provider state.
-  return withoutReplayPrefix(input);
+  if (!isContextSummaryReplayPrefixEligible(input)) {
+    return withoutReplayPrefix(input);
+  }
+  return Object.freeze({
+    ...input,
+    purpose: "COMPACTION",
+    cacheEligibility: "CACHE_REUSE_ELIGIBLE",
+  });
+}
+
+/** Validate the full provider-neutral identity before a host adapter may replay a main prefix. */
+export function isContextSummaryReplayPrefixEligible(input: ContextSummarizationInput): boolean {
+  const prefix = input.replayPrefix;
+  return (
+    input.cacheEligibility === "CACHE_REUSE_ELIGIBLE" &&
+    prefix !== undefined &&
+    input.replayPrefixFingerprint === createContextSummaryReplayPrefixFingerprint(prefix) &&
+    prefix.modelRef.provider === input.model.ref.provider &&
+    prefix.modelRef.model === input.model.ref.model &&
+    prefix.api === input.model.api &&
+    /^sha256:[0-9a-f]{64}$/.test(prefix.surfaceFingerprint) &&
+    hasCompleteReplayPrefix(input)
+  );
+}
+
+function hasCompleteReplayPrefix(input: ContextSummarizationInput): boolean {
+  const prefix = input.replayPrefix;
+  if (prefix === undefined || prefix.messageRefs.length === 0) return false;
+  const refs = new Map<string, (typeof prefix.messageRefs)[number]>();
+  for (const ref of prefix.messageRefs) {
+    if (
+      ref.messageId.trim().length === 0 ||
+      ref.runId.trim().length === 0 ||
+      ref.conversationTurnId.trim().length === 0 ||
+      !Number.isSafeInteger(ref.sequence) ||
+      ref.sequence < 1 ||
+      !Number.isSafeInteger(ref.schemaVersion) ||
+      ref.schemaVersion < 1 ||
+      (ref.modelProjectionVersion !== null &&
+        (!Number.isSafeInteger(ref.modelProjectionVersion) || ref.modelProjectionVersion < 1)) ||
+      refs.has(ref.messageId)
+    ) {
+      return false;
+    }
+    refs.set(ref.messageId, ref);
+  }
+  for (const source of input.sourceMessages) {
+    if (!refs.has(String(source.message.id))) return false;
+  }
+  for (const message of prefix.messages) {
+    if (message.role !== "assistant" || message.providerState === undefined) continue;
+    const payload = message.providerState.payload;
+    if (
+      message.providerState.version !== 1 ||
+      message.providerState.providerId !== prefix.modelRef.provider ||
+      message.providerState.api !== prefix.api ||
+      !isBoundPrivateReplayPayload(payload, {
+        sessionId: String(input.identity.sessionId),
+        model: prefix.modelRef.model,
+        messageRefs: refs,
+      })
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isBoundPrivateReplayPayload(
+  value: Readonly<Record<string, unknown>>,
+  expected: {
+    readonly sessionId: string;
+    readonly model: string;
+    readonly messageRefs: ReadonlyMap<string, unknown>;
+  },
+): boolean {
+  const keys = ["kind", "replayId", "sessionId", "runId", "callId", "model", "replayVersion"];
+  return (
+    Object.keys(value).length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key)) &&
+    value.kind === PRIVATE_REPLAY_REFERENCE_KIND &&
+    typeof value.replayId === "string" &&
+    expected.messageRefs.has(value.replayId) &&
+    value.sessionId === expected.sessionId &&
+    typeof value.runId === "string" &&
+    value.runId.length > 0 &&
+    typeof value.callId === "string" &&
+    value.callId.length > 0 &&
+    value.model === expected.model &&
+    value.replayVersion === 1
+  );
 }
 
 function withoutReplayPrefix(input: ContextSummarizationInput): ContextSummarizationInput {

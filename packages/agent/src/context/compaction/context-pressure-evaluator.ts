@@ -24,21 +24,8 @@ export interface ContextPressureInput {
   readonly hasCompressibleHistory: boolean;
   /** A protocol-safe prefix cut can reduce the otherwise mandatory open-turn working set. */
   readonly canCompactMandatoryOverflow?: boolean;
-  /**
-   * Elective-compaction pacing.
-   *
-   * Absent means "this Run keeps the legacy rule": the `PROACTIVE` label changes the reported state
-   * but never starts a summarisation on its own. Present means the frozen policy opted in, and the
-   * schedule decides whether this turn may act.
-   */
-  readonly proactive?:
-    | {
-        readonly enabled: boolean;
-        readonly armed: boolean;
-        readonly cooldownTurnsRemaining: number;
-        readonly emergency: boolean;
-      }
-    | undefined;
+  /** A configured trigger makes pressure actionable immediately; there is no turn-count lockout. */
+  readonly proactive?: { readonly enabled: boolean } | undefined;
 }
 
 export interface ContextPressureEvaluation {
@@ -63,14 +50,8 @@ export function createContextPressureEvaluator(): ContextPressureEvaluator {
       assertPressureInput(input);
       const state = classifyState(input.estimatedInputTokens, input);
       const trigger = classifyTrigger(state, input);
-      // Both bands are elective-compaction territory: `PROACTIVE` acts early, `EMERGENCY` acts now
-      // without waiting out the cooldown, because the window is already failing.
       const proactiveDue =
-        state !== "NORMAL" &&
-        input.proactive !== undefined &&
-        input.proactive.enabled &&
-        (input.proactive.emergency ||
-          (input.proactive.armed && input.proactive.cooldownTurnsRemaining === 0));
+        state !== "NORMAL" && input.proactive !== undefined && input.proactive.enabled;
       const shouldCompact =
         input.mode === "FORCED_RECOVERY" ||
         input.estimatedInputTokens >= input.effectiveInputLimitTokens ||
@@ -166,16 +147,6 @@ function assertPressureInput(input: ContextPressureInput): void {
     if (typeof input.proactive.enabled !== "boolean") {
       throw new TypeError("proactive.enabled must be boolean.");
     }
-    if (typeof input.proactive.armed !== "boolean") {
-      throw new TypeError("proactive.armed must be boolean.");
-    }
-    if (typeof input.proactive.emergency !== "boolean") {
-      throw new TypeError("proactive.emergency must be boolean.");
-    }
-    assertNonNegativeSafeInteger(
-      input.proactive.cooldownTurnsRemaining,
-      "proactive.cooldownTurnsRemaining",
-    );
   }
 }
 

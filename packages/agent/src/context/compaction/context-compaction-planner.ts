@@ -7,9 +7,11 @@ import type {
 } from "./context-compaction-contracts.js";
 import { createContextMessageRange } from "./context-compaction-contracts.js";
 import { createContextCutPointSelector } from "./context-cut-point-selector.js";
+import { selectProtocolSafeSplitCandidate } from "./context-cut-point-selector.js";
 import type { ContextCompactionCutCandidate } from "./context-compaction-cut.js";
 import {
   orderContextHistoryUnits,
+  type ContextMessageRef,
   type ContextHistoryUnit,
 } from "../history/semantic-history-unit.js";
 import type { ContextPolicy } from "../policy/context-policy.js";
@@ -35,21 +37,50 @@ function planCompaction(
   reason: ContextCompactionReason,
   selector: ReturnType<typeof createContextCutPointSelector>,
 ): ContextCompactionPlan | null {
-  const candidate = selector.select({
+  const cutInput = {
     history,
     targetRecentTailTokens: policy.targetRecentTailTokens,
     minRecentTailTokens: policy.minRecentTailTokens,
     allowCurrentTurnPrefix: policy.allowCurrentTurnPrefix === true,
-  });
+  };
+  const candidate = selector.select(cutInput);
   if (candidate === null) return null;
 
-  const sourceRange = createRange(history.units, candidate);
-  if (sourceRange === null) return null;
+  const sourceCoverageDelta = createRanges(history.units, candidate);
+  if (sourceCoverageDelta.length > 0) {
+    return buildPlan(history, policy, reason, candidate, sourceCoverageDelta);
+  }
 
+  /*
+   * The best candidate turned out unrepresentable, which must not become "nothing to compact".
+   *
+   * A cut is only durable if it can be written as one `ContextMessageRange` — a single Run and a
+   * single Conversation Turn. The selector is supposed to respect that (`selectFullTurnBoundary`
+   * stops at the first foreign Turn), so reaching this branch means a future selector rule slipped
+   * past it. Falling back to the in-Turn protocol-safe cut keeps a whole Run from losing compaction
+   * because its *preferred* cut was inexpressible: a narrower fold tonight beats no fold at all.
+   */
+  const split = selectProtocolSafeSplitCandidate(cutInput);
+  const splitRanges = split === null ? [] : createRanges(history.units, split);
+  if (split === null || splitRanges.length === 0) return null;
+  return buildPlan(history, policy, reason, split, splitRanges);
+}
+
+function buildPlan(
+  history: ContextHistoryIndex,
+  policy: ContextPolicy,
+  reason: ContextCompactionReason,
+  candidate: ContextCompactionCutCandidate,
+  sourceCoverageDelta: readonly ContextMessageRange[],
+): ContextCompactionPlan {
+  const sourceRange = sourceCoverageDelta[0];
+  if (sourceRange === undefined)
+    throw new TypeError("Compaction source coverage must not be empty.");
   return Object.freeze({
     reason,
     cut: candidate.cut,
     sourceRange,
+    sourceCoverageDelta: Object.freeze([...sourceCoverageDelta]),
     selectedUnitIds: candidate.compactedUnitIds,
     retainedUnitIds: candidate.retainedUnitIds,
     estimatedTokensBefore: history.estimatedTokens,
@@ -79,10 +110,10 @@ function canonicalUnits(units: readonly ContextHistoryUnit[]): readonly ContextH
   return result;
 }
 
-function createRange(
+function createRanges(
   units: readonly ContextHistoryUnit[],
   candidate: ContextCompactionCutCandidate,
-): ContextMessageRange | null {
+): readonly ContextMessageRange[] {
   const selectedIds = new Set(candidate.compactedUnitIds);
   const cut = candidate.cut;
   const primaryTurns = canonicalUnits(units).filter((unit) => unit.kind === "CONVERSATION_TURN");
@@ -131,22 +162,32 @@ function createRange(
             return unit.messages.filter((message) => message.sequence < cut.firstKeptSequence);
           });
         })();
-  const first = refs[0];
-  const last = refs[refs.length - 1];
-  if (first === undefined || last === undefined) return null;
-  if (
-    refs.some(
-      (ref) => ref.runId !== first.runId || ref.conversationTurnId !== first.conversationTurnId,
-    )
-  ) {
-    return null;
+  if (refs.length === 0) return [];
+  const grouped: ContextMessageRef[][] = [];
+  for (const ref of refs) {
+    const priorGroup = grouped.at(-1);
+    const prior = priorGroup?.at(-1);
+    if (
+      prior !== undefined &&
+      String(prior.runId) === String(ref.runId) &&
+      String(prior.conversationTurnId) === String(ref.conversationTurnId)
+    ) {
+      if (ref.sequence !== prior.sequence + 1) return [];
+      priorGroup!.push(ref);
+    } else {
+      grouped.push([ref]);
+    }
   }
-  return createContextMessageRange({
-    runId: first.runId,
-    conversationTurnId: first.conversationTurnId,
-    firstMessageId: first.messageId,
-    lastMessageId: last.messageId,
-    firstSequence: first.sequence,
-    lastSequence: last.sequence,
+  return grouped.map((group) => {
+    const first = group[0]!;
+    const last = group.at(-1)!;
+    return createContextMessageRange({
+      runId: first.runId,
+      conversationTurnId: first.conversationTurnId,
+      firstMessageId: first.messageId,
+      lastMessageId: last.messageId,
+      firstSequence: first.sequence,
+      lastSequence: last.sequence,
+    });
   });
 }

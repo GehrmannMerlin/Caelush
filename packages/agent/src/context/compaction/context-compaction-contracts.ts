@@ -1,5 +1,5 @@
 import type { AIMessage, AIFinishReason, AIToolSpec, ModelDescriptor, ModelRef } from "@caelush/ai";
-import type { RunId, TimestampMs } from "@caelush/protocol";
+import type { RunId, SessionId, TimestampMs } from "@caelush/protocol";
 
 import type { AgentExecutionIdentity } from "../../loop/types.js";
 import type { StoredAgentMessage } from "../../messages/persistence/record.js";
@@ -20,6 +20,7 @@ import type { ContextTokenEstimatorPort } from "../token/context-token-estimator
 import type { ContextCompactionRebuilder } from "./context-compaction-rebuilder.js";
 import type { ContextCompactionRebuildResult } from "./context-compaction-rebuilder.js";
 import type { ContextCompactionCommitPort } from "../ports/context-compaction-commit-port.js";
+import type { ContextArtifactStorePort } from "../artifacts/context-artifact.js";
 import type { ContextIncrementalCompactionResolver } from "./incremental-compaction-resolver.js";
 import type { IncrementalCheckpointState } from "./incremental-checkpoint-resolver.js";
 import type { ContextCheckpointBudgetResolver } from "./checkpoint-budget.js";
@@ -63,7 +64,9 @@ export function createContextMessageRange(input: ContextMessageRange): ContextMe
 export interface ContextCompactionPlan {
   readonly reason: ContextCompactionReason;
   readonly cut: ContextCompactionCut;
+  /** Compatibility view for V1/V2 writers; V3 coverage is the complete source authority. */
   readonly sourceRange: ContextMessageRange;
+  readonly sourceCoverageDelta?: readonly ContextMessageRange[];
   readonly selectedUnitIds: readonly string[];
   readonly retainedUnitIds: readonly string[];
   readonly estimatedTokensBefore: number;
@@ -84,10 +87,19 @@ export interface ContextCompactionPlanner {
 
 export type ContextSummaryPromptVersion = number;
 
-export const CONTEXT_SUMMARY_PROMPT_VERSION = 3 as ContextSummaryPromptVersion;
+export const CONTEXT_SUMMARY_PROMPT_VERSION = 4 as ContextSummaryPromptVersion;
 
 export type ContextSummaryPurpose = "COMPACTION";
 export type ContextSummaryCacheEligibility = "CACHE_REUSE_ELIGIBLE" | "NOT_ELIGIBLE";
+
+export interface ContextSummaryReplayMessageRef {
+  readonly messageId: string;
+  readonly runId: string;
+  readonly conversationTurnId: string;
+  readonly sequence: number;
+  readonly schemaVersion: number;
+  readonly modelProjectionVersion: number | null;
+}
 
 /** The exact provider-neutral request prefix used by the most recent main model request. */
 export interface ContextSummaryReplayPrefix {
@@ -95,6 +107,8 @@ export interface ContextSummaryReplayPrefix {
   readonly api: string;
   /** Prompt Surface identity digest; contains no prompt text or provider endpoint. */
   readonly surfaceFingerprint: string;
+  /** Durable identities and projection versions for every message represented in `messages`. */
+  readonly messageRefs: readonly ContextSummaryReplayMessageRef[];
   readonly messages: readonly AIMessage[];
   readonly tools: readonly AIToolSpec[];
 }
@@ -146,12 +160,19 @@ export function createContextCheckpointId(value: string): ContextCheckpointId {
   return value as ContextCheckpointId;
 }
 
-export interface ContextCheckpointRef {
-  readonly checkpointId: ContextCheckpointId;
-  readonly schemaVersion: 2;
-  readonly sourceRange: ContextMessageRange;
-  readonly degraded: boolean;
-}
+export type ContextCheckpointRef =
+  | {
+      readonly checkpointId: ContextCheckpointId;
+      readonly schemaVersion: 2;
+      readonly sourceRange: ContextMessageRange;
+      readonly degraded: boolean;
+    }
+  | {
+      readonly checkpointId: ContextCheckpointId;
+      readonly schemaVersion: 3;
+      readonly sourceCoverage: import("./context-source-coverage.js").ContextSourceCoverage;
+      readonly degraded: boolean;
+    };
 
 export interface ContextCheckpointRecordV2 {
   readonly checkpointId: ContextCheckpointId;
@@ -210,14 +231,29 @@ export interface ContextCheckpointIdFactory {
 export interface ContextCompactionRequest {
   readonly identity: AgentExecutionIdentity;
   readonly conversation: AgentConversationSnapshot;
+  /** Owning Step boundary used by the Session-scoped V3 checkpoint envelope. */
+  readonly ownerStepSequence?: number;
   readonly history: ContextHistoryIndex;
   readonly policy: ContextPolicy;
   readonly model: ModelDescriptor;
   /** Full materialized input estimate immediately before tentative compaction. */
   readonly estimatedInputTokensBefore: number;
+  /** Materialized, non-history content that must remain after the checkpoint is activated. */
+  readonly fixedInputTokens?: number;
+  /** Bounded token allowance for protocol-safe cut boundaries. */
+  readonly boundaryTokens?: number;
   /** Present only when the current Context can prove a complete compatible replay prefix. */
   readonly replayPrefix?: ContextSummaryReplayPrefix;
   readonly replayPrefixFingerprint?: string;
+  /** Durable claim for this compaction operation; V3 terminal settlement joins activation. */
+  readonly persistedAttempt?: {
+    readonly attemptId: string;
+    readonly runId: RunId;
+    readonly sessionId: SessionId;
+    readonly sourceCoverageDigest: string;
+    readonly sourceTokens: number;
+    readonly retryGeneration: number;
+  };
   readonly reason: ContextCompactionReason;
   readonly signal: AbortSignal;
 }
@@ -225,7 +261,8 @@ export interface ContextCompactionRequest {
 export type ContextCompactionOutcome =
   | {
       readonly kind: "COMPACTED";
-      readonly checkpoint: ContextCheckpointRecordV2;
+      readonly checkpoint:
+        ContextCheckpointRecordV2 | import("./context-checkpoint-v3.js").ContextCheckpointRecordV3;
       readonly receipt: ContextCompactionReceipt;
     }
   | {
@@ -260,6 +297,8 @@ export interface ContextCompactionDependencies {
   readonly rehydrator: ContextRehydratorPort;
   readonly tentativeRebuilder: ContextCompactionRebuilder;
   readonly commit: ContextCompactionCommitPort;
+  /** Existing Artifact authority for durable attempt and per-Gateway-call claims. */
+  readonly attemptStore?: ContextArtifactStorePort;
   readonly clock: ClockPort;
   readonly checkpointIdFactory: ContextCheckpointIdFactory;
   /** Uses the prepared Context's tokenizer while bounding independent summary requests. */
@@ -273,15 +312,27 @@ export interface ContextCompactionEventFactoryInput {
   readonly degraded: boolean;
 }
 
+export interface ContextCompactionV3EventFactoryInput {
+  readonly request: ContextCompactionRequest;
+  readonly checkpoint: import("./context-checkpoint-v3.js").ContextCheckpointCreateInputV3;
+  readonly epochId: string;
+  readonly freedTokens: number;
+}
+
 export interface ContextCompactionCoordinatorOptions {
   readonly dependencies: ContextCompactionDependencies;
   readonly latest: IncrementalCheckpointState;
+  readonly latestSessionCheckpoint?:
+    ContextCheckpointRecordV2 | import("./context-checkpoint-v3.js").ContextCheckpointRecordV3;
   readonly onProgress?: (
     stage: "PREPARING" | "SUMMARIZING" | "REBUILDING",
     reason: ContextCompactionReason,
   ) => void;
   readonly createEvents?: (
     input: ContextCompactionEventFactoryInput,
+  ) => readonly DurableRunEventDraft[];
+  readonly createEventsV3?: (
+    input: ContextCompactionV3EventFactoryInput,
   ) => readonly DurableRunEventDraft[];
   readonly notifyCommitted?: (events: readonly DurableRunEvent[]) => void;
   readonly tentativeRebuild?: (

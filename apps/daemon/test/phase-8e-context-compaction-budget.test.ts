@@ -84,7 +84,6 @@ const result: AIModelTurnResult = {
   providerId: "test" as AIModelTurnResult["providerId"],
   model: model.ref,
   text: JSON.stringify({
-    goal: "Budget the summary.",
     constraints: [],
     completedWork: [],
     inProgress: [],
@@ -197,7 +196,7 @@ describe("Phase 8E budgeted Context summarizer", () => {
     expect(budget.calls.settle).toBe(0);
   });
 
-  it("budgets summaries from durable source without replaying provider-specific prefixes", async () => {
+  it("budgets summaries and distinguishes different replay prefixes", async () => {
     const fixture = gatewayThat(async () => result);
     const budget = budgetFixture();
     const summarizer = createBudgetedContextSummarizer({
@@ -215,6 +214,16 @@ describe("Phase 8E budgeted Context summarizer", () => {
         modelRef: model.ref,
         api: model.api,
         surfaceFingerprint: `sha256:${"c".repeat(64)}`,
+        messageRefs: [
+          {
+            messageId: String(input.sourceRange.firstMessageId),
+            runId: String(run.id),
+            conversationTurnId: String(input.sourceRange.conversationTurnId),
+            sequence: input.sourceRange.firstSequence,
+            schemaVersion: 1,
+            modelProjectionVersion: 1,
+          },
+        ],
         messages,
         tools: [],
       };
@@ -238,6 +247,6 @@ describe("Phase 8E budgeted Context summarizer", () => {
 
     expect(budget.owners).toHaveLength(3);
     expect(budget.owners[0]).toBe(budget.owners[1]);
-    expect(budget.owners[2]).toBe(budget.owners[0]);
+    expect(budget.owners[2]).not.toBe(budget.owners[0]);
   });
 });

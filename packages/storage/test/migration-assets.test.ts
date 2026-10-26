@@ -25,5 +25,8 @@ describe("production migration assets", () => {
     expect(existsSync(path.join(folder, "20261008100000_prompt_surface_v3", "migration.sql"))).toBe(
       true,
     );
+    expect(
+      existsSync(path.join(folder, "20261025120000_context_checkpoint_v3", "migration.sql")),
+    ).toBe(true);
   });
 });

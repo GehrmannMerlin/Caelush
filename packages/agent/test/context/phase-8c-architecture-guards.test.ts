@@ -20,7 +20,7 @@ describe("Phase 8C architecture guards", () => {
     );
   });
 
-  it("keeps the Daemon semantic adapter on the direct gateway boundary", () => {
+  it("keeps the Daemon semantic adapter on the scoped private-replay gateway boundary", () => {
     const adapter = source("../../../../apps/daemon/src/context/ai-context-summarizer-adapter.ts");
 
     expect(adapter).not.toMatch(
@@ -28,7 +28,9 @@ describe("Phase 8C architecture guards", () => {
     );
     expect(adapter).toContain('toolChoice: { type: "NONE" }');
     expect(adapter).toContain("countReceivedToolRequests(result)");
-    expect(adapter).not.toContain("replayPrefix");
+    expect(adapter).toContain("isContextSummaryReplayPrefixEligible");
+    expect(adapter).toContain("privateReplayResolver: replayExecution.resolver");
+    expect(adapter).toContain("await replayExecution?.dispose()");
     expect(adapter).toContain("gateway.complete");
   });
 

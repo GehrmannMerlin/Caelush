@@ -52,7 +52,6 @@ const sourceRange = createContextMessageRange({
 });
 
 const semantic = createSemanticCheckpointDraft({
-  goal: identity.goal,
   constraints: ["Keep Tool protocol intact."],
   completedWork: ["Separated semantic memory from durable facts."],
   inProgress: ["Implementing Phase 8C."],
@@ -87,7 +86,7 @@ function result(overrides: Partial<ContextSummarizationResult> = {}): ContextSum
     semantic,
     modelRef: MODEL.ref,
     finishReason: "STOP",
-    summaryPromptVersion: 3,
+    summaryPromptVersion: 4,
     sourceDigest: "ignored-source-digest",
     semanticDigest: "ignored-semantic-digest",
     ...overrides,
@@ -95,6 +94,13 @@ function result(overrides: Partial<ContextSummarizationResult> = {}): ContextSum
 }
 
 describe("Phase 8C semantic summary contracts", () => {
+  it("keeps the authoritative goal outside the model-authored draft", () => {
+    expect(semantic).not.toHaveProperty("goal");
+    expect(() => createSemanticCheckpointDraft({ ...semantic, goal: identity.goal })).toThrow(
+      /unknown/i,
+    );
+  });
+
   it("accepts the exact semantic draft shape and deeply freezes it", () => {
     expect(Object.isFrozen(semantic)).toBe(true);
     expect(Object.isFrozen(semantic.constraints)).toBe(true);
@@ -162,7 +168,7 @@ describe("Phase 8C semantic summary contracts", () => {
       kind: "FALLBACK_REQUIRED",
       outcome: "FAILED",
       degraded: true,
-      summaryPromptVersion: 3,
+      summaryPromptVersion: 4,
     });
     expect(execution).not.toHaveProperty("result");
     if (execution.kind !== "FALLBACK_REQUIRED") throw new Error("expected fallback");
@@ -200,14 +206,41 @@ describe("Phase 8C semantic summary contracts", () => {
     expect(observedFingerprint).toBeUndefined();
   });
 
-  it("never offers main-turn replay prefixes to the independent summary request", async () => {
+  it("reuses only a complete, source-bound main-turn replay prefix", async () => {
     const validPrefix = {
       modelRef: MODEL.ref,
       api: MODEL.api,
       surfaceFingerprint: `sha256:${"a".repeat(64)}`,
+      messageRefs: [
+        {
+          messageId: String(sourceRange.firstMessageId),
+          runId: String(sourceRange.runId),
+          conversationTurnId: String(sourceRange.conversationTurnId),
+          sequence: 1,
+          schemaVersion: 1,
+          modelProjectionVersion: 1,
+        },
+      ],
       messages: [{ role: "system" as const, content: "Stable host context." }],
       tools: [],
     };
+    const changedReferences = {
+      ...validPrefix,
+      messageRefs: [
+        ...validPrefix.messageRefs,
+        {
+          messageId: "message:extra",
+          runId: String(sourceRange.runId),
+          conversationTurnId: String(sourceRange.conversationTurnId),
+          sequence: 2,
+          schemaVersion: 1,
+          modelProjectionVersion: 1,
+        },
+      ],
+    };
+    expect(createContextSummaryReplayPrefixFingerprint(changedReferences)).not.toBe(
+      createContextSummaryReplayPrefixFingerprint(validPrefix),
+    );
     const valid = {
       ...input(),
       cacheEligibility: "CACHE_REUSE_ELIGIBLE",
@@ -218,6 +251,7 @@ describe("Phase 8C semantic summary contracts", () => {
       modelRef: { ...MODEL.ref, model: "different-model" },
       api: MODEL.api,
       surfaceFingerprint: `sha256:${"b".repeat(64)}`,
+      messageRefs: validPrefix.messageRefs,
       messages: [{ role: "system" as const, content: "Stable host context." }],
       tools: [],
     };
@@ -235,6 +269,7 @@ describe("Phase 8C semantic summary contracts", () => {
         modelRef: MODEL.ref,
         api: MODEL.api,
         surfaceFingerprint: `sha256:${"b".repeat(64)}`,
+        messageRefs: validPrefix.messageRefs,
         tools: [],
       },
     } as unknown as ContextSummarizationInput;
@@ -269,7 +304,11 @@ describe("Phase 8C semantic summary contracts", () => {
     expect(changedModelResult.kind).toBe("ACCEPTED");
     expect(malformedResult.kind).toBe("ACCEPTED");
     expect(observed).toEqual([
-      { eligibility: "NOT_ELIGIBLE", fingerprint: undefined, hasPrefix: false },
+      {
+        eligibility: "CACHE_REUSE_ELIGIBLE",
+        fingerprint: createContextSummaryReplayPrefixFingerprint(validPrefix),
+        hasPrefix: true,
+      },
       { eligibility: "NOT_ELIGIBLE", fingerprint: undefined, hasPrefix: false },
       { eligibility: "NOT_ELIGIBLE", fingerprint: undefined, hasPrefix: false },
     ]);
@@ -309,7 +348,7 @@ describe("Phase 8C semantic summary contracts", () => {
     ).rejects.toMatchObject({ name: "AbortError" });
   });
 
-  it("rejects valid JSON that drops a protected prior plan decision", async () => {
+  it("allows resolved semantic entries to be merged while preserving exact user constraints", async () => {
     const previousCheckpoint = createStructuredCheckpoint({
       version: 1,
       goal: identity.goal,
@@ -351,10 +390,6 @@ describe("Phase 8C semantic summary contracts", () => {
       },
     }).summarize({ ...input(), previousCheckpoint }, { signal: new AbortController().signal });
 
-    expect(execution).toMatchObject({
-      kind: "FALLBACK_REQUIRED",
-      outcome: "MALFORMED",
-      reason: expect.stringContaining("protected keyDecisions"),
-    });
+    expect(execution.kind).toBe("ACCEPTED");
   });
 });

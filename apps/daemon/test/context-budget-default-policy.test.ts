@@ -12,7 +12,8 @@ import { FIXTURE_API, fixtureBinding, fixtureModelSource } from "./support/ai-fi
  * The Context budget policy a new Run is frozen against.
  *
  * ```text
- * daemon default                     → TURN_BUDGET_V3 (HEADROOM_V1)
+ * daemon default                     → TURN_BUDGET_V3 (stable policy while cache gate is pending)
+ * explicit deep-compaction opt-in    → TURN_BUDGET_V4 (HEADROOM_V1 + 90%/retention budgets)
  * explicit LEGACY_FULL_OUTPUT_V1     → LEGACY_FULL_OUTPUT_V1
  * explicit WORKING_SET_V2            → WORKING_SET_V2, for reproducing the old behaviour
  * a Run created before the default   → whatever it was frozen with
@@ -51,7 +52,11 @@ interface BootedDaemon {
 async function boot(options: {
   readonly databasePath: string;
   readonly contextBudgetPolicyVersion?:
-    "LEGACY_FULL_OUTPUT_V1" | "ADAPTIVE_V1" | "WORKING_SET_V2" | "TURN_BUDGET_V3";
+    | "LEGACY_FULL_OUTPUT_V1"
+    | "ADAPTIVE_V1"
+    | "WORKING_SET_V2"
+    | "TURN_BUDGET_V3"
+    | "TURN_BUDGET_V4";
   readonly limits?: { readonly contextWindowTokens: number; readonly maxOutputTokens: number };
 }): Promise<BootedDaemon> {
   const daemon = await startDaemon({
@@ -96,20 +101,19 @@ async function createRun(
 }
 
 describe("Context budget policy default", () => {
-  it("freezes a new Run against TURN_BUDGET_V3 when the daemon sets no version", async () => {
+  it("keeps the stable TURN_BUDGET_V3 default until deep-compaction cache acceptance", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-context-budget-default-"));
     const { client, session } = await boot({ databasePath: join(directory, "caelush.db") });
     const run = await createRun(client, session);
 
-    expect(run.contextBudgetPolicy).toEqual({
+    expect(run.contextBudgetPolicy).toMatchObject({
       version: "TURN_BUDGET_V3",
       algorithm: "HEADROOM_V1",
-      // The fixed working set is gone: no 96 000-token target and no 75% trigger survive into a new
-      // Run. The allowance is derived per turn from the input that is actually prepared.
       minOutputTokens: 2_048,
       preferredOutputTokens: 8_192,
       safetyTokens: 640,
       expectedGrowthTokens: 2_560,
+      proactiveRatio: 0.9,
       postCompactionRatio: 0.8,
       outputRecovery: {
         version: "OUTPUT_RECOVERY_V1",
@@ -117,6 +121,7 @@ describe("Context budget policy default", () => {
         outputMultiplier: 2,
       },
     });
+    expect(run.contextBudgetPolicy).not.toHaveProperty("deepCompaction");
   }, 20_000);
 
   it("keeps an explicit version selectable", async () => {
@@ -137,6 +142,14 @@ describe("Context budget policy default", () => {
     expect(workingSetRun.contextBudgetPolicy.version).toBe("WORKING_SET_V2");
     expect(workingSetRun.contextBudgetPolicy).not.toHaveProperty("outputRecovery");
 
+    const headroom = await boot({
+      databasePath: join(directory, "headroom-v3.db"),
+      contextBudgetPolicyVersion: "TURN_BUDGET_V3",
+    });
+    expect((await createRun(headroom.client, headroom.session)).contextBudgetPolicy.version).toBe(
+      "TURN_BUDGET_V3",
+    );
+
     const adaptive = await boot({
       databasePath: join(directory, "adaptive.db"),
       contextBudgetPolicyVersion: "ADAPTIVE_V1",
@@ -144,6 +157,22 @@ describe("Context budget policy default", () => {
     const adaptiveRun = await createRun(adaptive.client, adaptive.session);
     expect(adaptiveRun.contextBudgetPolicy.version).toBe("ADAPTIVE_V1");
     expect(adaptiveRun.contextBudgetPolicy).not.toHaveProperty("outputRecovery");
+
+    const deep = await boot({
+      databasePath: join(directory, "deep-compaction.db"),
+      contextBudgetPolicyVersion: "TURN_BUDGET_V4",
+    });
+    const deepRun = await createRun(deep.client, deep.session);
+    expect(deepRun.contextBudgetPolicy).toMatchObject({
+      version: "TURN_BUDGET_V4",
+      deepCompaction: {
+        version: "DEEP_COMPACTION_V1",
+        triggerRatio: 0.9,
+        recentTokens: 20_000,
+        checkpointMaxTokens: 8_192,
+        boundaryTokens: 4_096,
+      },
+    });
   }, 30_000);
 
   it("never rewrites the policy a historical Run was frozen with", async () => {

@@ -180,6 +180,29 @@ describe("HEADROOM_V1 Context policy thresholds", () => {
     expect(eightPercent).toBeLessThan(policy.proactiveCompactionTokens);
     expect(policy.proactiveCompactionTokens).toBeGreaterThan(900_000);
   });
+
+  it("uses the V4 90% trigger and explicit small retention budget instead of an 80% target", () => {
+    const policy = createContextPolicy({
+      model: modelDescriptor,
+      options: {
+        outputReserveTokens: 16_384,
+        safetyReserveTokens: 4_096,
+        requestHeadroom: { expectedGrowthTokens: 16_384 },
+        deepCompaction: {
+          version: "DEEP_COMPACTION_V1",
+          triggerRatio: 0.9,
+          recentTokens: 20_000,
+          checkpointMaxTokens: 8_192,
+          boundaryTokens: 4_096,
+        },
+      },
+    });
+    expect(policy.proactiveCompactionTokens).toBe(
+      Math.floor(policy.effectiveInputLimitTokens * 0.9),
+    );
+    expect(policy.targetRecentTailTokens).toBe(20_000);
+    expect(policy.targetPostCompactionTokens).toBe(32_288);
+  });
 });
 
 describe("TURN_BUDGET_DECISION_V1", () => {
@@ -236,5 +259,61 @@ describe("TURN_BUDGET_DECISION_V1", () => {
     });
     expect(decision.decision).toBe("PREPARE_HISTORY");
     expect(decision.remainingTokens).toBeLessThan(policy.expectedGrowthTokens);
+  });
+});
+
+describe("headroom proactive trigger at 90% of the input allowance", () => {
+  const modelDescriptor = model(MEGA_WINDOW, 65_536);
+
+  it("freezes the 0.9 ratio into the Run budget policy", () => {
+    const policy = resolveTurnBudgetPolicy({
+      contextWindowTokens: MEGA_WINDOW,
+      maxOutputTokens: 65_536,
+    });
+    expect(policy.proactiveRatio).toBe(0.9);
+  });
+
+  it("places the trigger at 90% of the effective input limit when the ratio is frozen", () => {
+    const policy = createContextPolicy({
+      model: modelDescriptor,
+      options: {
+        outputReserveTokens: 16_384,
+        safetyReserveTokens: 4_096,
+        requestHeadroom: {
+          expectedGrowthTokens: 16_384,
+          postCompactionRatio: 0.8,
+          proactiveRatio: 0.9,
+        },
+      },
+    });
+    const expected = Math.min(
+      policy.effectiveInputLimitTokens - 16_384,
+      Math.floor(policy.effectiveInputLimitTokens * 0.9),
+    );
+    expect(policy.proactiveCompactionTokens).toBe(expected);
+    // 该夹具没有 tools，requestOverhead = 0，所以 effective = 1,028,096、触发点 925,286。
+    // 真实 Run（overhead 3,691，effective 1,024,405）的触发点是 921,965。
+    expect(policy.proactiveCompactionTokens).toBe(925_286);
+    expect(policy.emergencyCompactionTokens).toBe(policy.effectiveInputLimitTokens);
+    expect(policy.proactiveCompactionTokens).toBeLessThan(policy.emergencyCompactionTokens);
+  });
+
+  it("refuses a recent tail that reaches half of the trigger", () => {
+    expect(() =>
+      createContextPolicy({
+        model: modelDescriptor,
+        options: {
+          outputReserveTokens: 16_384,
+          safetyReserveTokens: 4_096,
+          targetRecentTailRatio: 0.5,
+          targetRecentTailTokensCap: 600_000,
+          requestHeadroom: {
+            expectedGrowthTokens: 16_384,
+            postCompactionRatio: 0.8,
+            proactiveRatio: 0.9,
+          },
+        },
+      }),
+    ).toThrow(/Recent tail must be below half of the proactive compaction threshold/);
   });
 });

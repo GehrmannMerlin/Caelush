@@ -57,6 +57,22 @@ export interface PromptSurfaceRolloverCommand {
   readonly expectedSectionStates: readonly PromptSurfaceSectionState[];
 }
 
+/** A compaction atomically replaces the active epoch and installs the already prepared baseline. */
+export interface PromptSurfaceCompactionActivationCommand {
+  readonly expectedCurrent:
+    | { readonly kind: "ABSENT" }
+    | {
+        readonly kind: "CURRENT";
+        readonly epoch: PromptSurfaceEpoch;
+        readonly recordOrdinal: number;
+        readonly decisionFingerprint: string | null;
+      };
+  readonly operationId: string;
+  readonly newEpoch: PromptSurfaceEpoch;
+  readonly baseline: PromptSurfaceRecord;
+  readonly expectedSectionStates: readonly PromptSurfaceSectionState[];
+}
+
 /** Durable host port for the run-scoped model-input projection. */
 export interface PromptSurfaceStorePort {
   getCurrent(runId: RunId): Promise<PromptSurfaceEpoch | undefined>;

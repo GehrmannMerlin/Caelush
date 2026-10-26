@@ -23,6 +23,8 @@ export const CreateRunRequestSchema = z
     userText: z.string().max(200_000).optional(),
     attachmentIds: AttachmentIdsSchema.optional(),
     submissionId: SubmissionIdSchema.optional(),
+    /** Explicit user request to retry a failed persisted Context compaction operation. */
+    contextCompactionRetryOf: z.string().min(1).max(200).optional(),
     /** Explicit project checks the Run must pass before completion. Their persisted source is USER_EXPLICIT. */
     acceptanceRequirements: z.array(UserCompletionRequirementSchema).min(1).max(8).optional(),
     workspace: WorkspaceRefSchema,
@@ -43,7 +45,11 @@ export const CreateRunRequestSchema = z
       return value.goal === ATTACHMENT_ONLY_RUN_GOAL && (value.attachmentIds?.length ?? 0) > 0;
     }
     return value.goal !== ATTACHMENT_ONLY_RUN_GOAL;
-  }, "attachment-only Runs require their internal goal, empty user text and attachments");
+  }, "attachment-only Runs require their internal goal, empty user text and attachments")
+  .refine(
+    (value) => value.contextCompactionRetryOf === undefined || value.submissionId !== undefined,
+    "explicit Context compaction retries require a persisted submissionId for idempotency",
+  );
 export type CreateRunRequest = z.infer<typeof CreateRunRequestSchema>;
 
 export const RunListQuerySchema = z

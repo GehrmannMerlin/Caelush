@@ -290,13 +290,17 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       model: { ...MODEL, limits: { contextWindowTokens: 20_000, maxOutputTokens: 128 } },
     });
     const effectiveInputLimitTokens = Math.floor(measured.report.estimatedInputTokens / 0.9);
+    const outputReserveTokens =
+      "outputReserveTokens" in measured.requestBudget
+        ? measured.requestBudget.outputReserveTokens
+        : measured.requestBudget.outputAllowanceTokens;
     const warningModel = {
       ...MODEL,
       limits: {
         contextWindowTokens:
           effectiveInputLimitTokens +
           measured.report.requestOverheadTokens +
-          measured.requestBudget.outputReserveTokens +
+          outputReserveTokens +
           measured.requestBudget.safetyReserveTokens,
         maxOutputTokens: 128,
       },
@@ -502,7 +506,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     ]);
   });
 
-  it.fails("commits compaction facts atomically before notifying and removes the covered tail", async () => {
+  it("commits compaction facts atomically before notifying and removes the covered tail", async () => {
     const historicalRunId = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a";
     const currentRunId = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9c";
     const historicalTurnId = turnIdFor(historicalRunId);
@@ -636,7 +640,13 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
         const surfaceBeforeCommit = promptSurfaceStore.inspect(input.checkpoint.runId);
         promptSurfaceResetBeforeCheckpointCommit =
           surfaceBeforeCommit?.resetReason === "COMPACTION_COMMITTED";
+        if (surfaceActivationShouldFail) {
+          throw new Error("Prompt Surface epoch could not be committed.");
+        }
         if (commitShouldFail) throw new Error("durable summary commit unavailable");
+        if (input.activation !== undefined) {
+          memoryPromptSurfaceStore.activateCompaction(input.activation.promptSurface);
+        }
         committed.eventCount += input.events.length;
         const checkpoint = Object.freeze({ ...input.checkpoint, schemaVersion: 2 as const });
         latestCheckpoint = checkpoint;
@@ -710,7 +720,6 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
           summaryFinished = true;
           return {
             semantic: {
-              goal: input.identity.goal,
               constraints: [],
               completedWork: ["historical context compacted"],
               inProgress: [],
@@ -722,7 +731,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
             },
             modelRef: input.model.ref,
             finishReason: "STOP",
-            summaryPromptVersion: 3,
+            summaryPromptVersion: 4,
             sourceDigest: "source",
             semanticDigest: "semantic",
           };
@@ -730,7 +739,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       },
       checkpointBudgetResolver: {
         resolve() {
-          return { targetTokens: 7, maxTokens: 10 };
+          return { targetTokens: 7, maxTokens: 8_192 };
         },
       },
       compactionGainEvaluator: {
@@ -798,9 +807,9 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     });
 
     expect(committed.eventCount).toBe(1);
-    expect(authoritySnapshotCount).toBe(3);
+    expect(authoritySnapshotCount).toBe(2);
     expect(authoritySnapshotPhases).toContain("BEFORE_COMMIT");
-    expect(authoritySnapshotPhases).toContain("AFTER_COMMIT");
+    expect(authoritySnapshotPhases).not.toContain("AFTER_COMMIT");
     expect(summaryCallCount).toBe(1);
     expect(summaryPurpose).toBe("COMPACTION");
     expect(summaryCacheEligibility).toBe("NOT_ELIGIBLE");
@@ -812,26 +821,27 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     expect(summarySourceRange).toMatchObject({ firstSequence: 1, lastSequence: 2 });
     expect(notificationObservedAfterCommit).toBe(true);
     expect(promptSurfaceResetBeforeCheckpointCommit).toBe(false);
-    expect(capturedRehydrationAuthority).toBe("NEW");
+    expect(capturedRehydrationAuthority).toBe("CHANGED BEFORE REPLAY");
     expect(
       prepared.messages.some(
-        (message) => message.role === "user" && message.content.includes("current intent"),
+        (message) =>
+          message.role === "user" && JSON.stringify(message.content).includes("current intent"),
       ),
     ).toBe(true);
     expect(
       prepared.messages.some(
-        (message) => message.role === "user" && message.content.includes("historical intent"),
+        (message) =>
+          message.role === "user" && JSON.stringify(message.content).includes("historical intent"),
       ),
     ).toBe(false);
     expect(prepared.messages[0]).toMatchObject({ role: "system" });
-    expect(prepared.messages[0]?.content).toContain("historical context compacted");
-    expect(prepared.messages[0]?.content).toContain(
+    expect(JSON.stringify(prepared.messages[0]?.content)).toContain("historical context compacted");
+    expect(JSON.stringify(prepared.messages[0]?.content)).toContain(
       "packages/agent/src/context/engine/context-engine.ts",
     );
-    expect(prepared.checkpoint?.schemaVersion).toBe(2);
-    expect(prepared.checkpoint?.sourceRange).toMatchObject({
-      firstSequence: 1,
-      lastSequence: 2,
+    expect(prepared.checkpoint).toMatchObject({
+      schemaVersion: 2,
+      sourceRange: { firstSequence: 1, lastSequence: 2 },
     });
     const surfaces = promptSurfaceStore.inspectEpochs(runIdentity.runId);
     expect(surfaces).toHaveLength(2);
@@ -840,7 +850,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     expect(surfaces[1]?.records?.map((record) => record.kind)).toEqual(["BASELINE"]);
     expect(
       surfaces[1]?.records?.[0]?.updates.some(
-        (update) => update.op === "SET" && update.content.includes("NEW"),
+        (update) => update.op === "SET" && update.content.includes("CHANGED BEFORE REPLAY"),
       ),
     ).toBe(true);
 
@@ -922,7 +932,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toThrow("Prompt Surface epoch could not be committed.");
-    expect(commitAttempts).toBe(commitAttemptsBeforeSurfaceFailure);
+    expect(commitAttempts).toBe(commitAttemptsBeforeSurfaceFailure + 1);
     expect(committed.eventCount).toBe(eventCountBeforeSurfaceFailure);
     expect(promptSurfaceStore.inspect(failedCompactionIdentity.runId)).toBeUndefined();
 

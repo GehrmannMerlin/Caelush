@@ -322,7 +322,10 @@ function buildRequest(
 function outputRecoveryStoppedError() {
   return {
     code: "MODEL_ERROR" as const,
-    message: "恢复请求没有获得更大的输出上限",
+    // The old wording ("the recovery request did not obtain a larger output ceiling") described the
+    // mechanism, not the cause. The cause is always the same: the window has no room left for a
+    // bigger output budget, and the caller has already been told to reorganize history.
+    message: "上下文剩余空间不足，无法提高输出上限",
     retryable: false,
     phase: "LLM" as const,
     details: { modelOutputFailure: "OUTPUT_TRUNCATED" as const },

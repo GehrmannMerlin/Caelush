@@ -7,6 +7,13 @@ import {
   createContextMessageRange,
   createContextSummaryPromptVersion,
   createStructuredCheckpoint,
+  createPromptSurfaceAnchor,
+  createPromptSurfaceEpoch,
+  createPromptSurfaceEpochId,
+  createPromptSurfaceRecord,
+  createPromptSurfaceSectionStates,
+  diffPromptSurfaceSections,
+  type PromptSurfaceCompactionActivationCommand,
   conversationTurnId,
   type ContextCheckpointCreateInputV2,
   type DurableRunEventDraft,
@@ -163,6 +170,83 @@ function completionEvent(
   };
 }
 
+function activation(runId: RunId): PromptSurfaceCompactionActivationCommand {
+  const sectionStates = createPromptSurfaceSectionStates({
+    sections: [
+      {
+        id: "runtime:test",
+        authority: "RUNTIME_FACT",
+        sourceRef: "test@1:runtime",
+        cacheStability: "DYNAMIC",
+        priorityClass: "NORMAL",
+        freshness: "CURRENT",
+        sensitivity: "INTERNAL",
+        text: "prepared runtime facts",
+      },
+    ],
+  });
+  const epoch = createPromptSurfaceEpoch({
+    formatVersion: 3,
+    runId,
+    epochId: createPromptSurfaceEpochId("compaction-test-epoch"),
+    modelRef: { provider: "fixture", model: "fixture" },
+    stableHeadFingerprint: `sha256:${"a".repeat(64)}`,
+    toolSchemaFingerprint: `sha256:${"b".repeat(64)}`,
+    cacheSettingsFingerprint: `sha256:${"c".repeat(64)}`,
+    resetReason: "COMPACTION_COMMITTED",
+    createdStepSequence: 1,
+    createdAt: createTimestampMs(6),
+  });
+  const diff = diffPromptSurfaceSections([], sectionStates, true);
+  const baseline = createPromptSurfaceRecord({
+    runId,
+    epochId: epoch.epochId,
+    ordinal: 1,
+    anchor: createPromptSurfaceAnchor({
+      messageId: "amsg_phase_7e_first" as never,
+      runId,
+      conversationTurnId: conversationTurnId("cturn_phase_7e"),
+      sequence: 1,
+    }),
+    sourceStepSequence: 1,
+    kind: diff.kind,
+    updates: diff.updates,
+    decisionFingerprint: "d".repeat(64),
+    createdAt: createTimestampMs(6),
+  });
+  return {
+    expectedCurrent: { kind: "ABSENT" },
+    operationId: "context-compaction:checkpoint:activation-test",
+    newEpoch: epoch,
+    baseline,
+    expectedSectionStates: sectionStates,
+  };
+}
+
+function usageSnapshot(runId: RunId, epochId: string) {
+  return {
+    runId,
+    modelRef: { provider: "fixture", model: "fixture" },
+    contextWindowTokens: 1_000,
+    effectiveInputLimitTokens: 900,
+    estimatedInputTokens: 30,
+    remainingTokens: 870,
+    pressureState: "NORMAL" as const,
+    compactionCount: 1,
+    breakdown: [],
+    lastBuildStatus: "SUCCESS" as const,
+    promptSurface: {
+      epochId,
+      prefixFingerprint: `sha256:${"e".repeat(64)}`,
+      stableHeadTokens: 1,
+      snapshotTokens: 1,
+      expectedReusablePrefixTokens: 2,
+      resetReason: "COMPACTION_COMMITTED" as const,
+    },
+    updatedAt: createTimestampMs(6),
+  };
+}
+
 describe("SqliteContextCompactionCommitStore", () => {
   it("fails before writing when checkpoint validation fails", async () => {
     const storage = await openCaelushStorage({ path: ":memory:" });
@@ -197,11 +281,21 @@ describe("SqliteContextCompactionCommitStore", () => {
     bad.payload = {};
 
     const input = checkpoint(run.id, "checkpoint:event-fails");
+    const preparedActivation = activation(run.id);
     await expect(
-      storage.contextCompactionCommit.commit({ checkpoint: input, events: [bad as never] }),
+      storage.contextCompactionCommit.commit({
+        checkpoint: input,
+        events: [bad as never],
+        activation: {
+          promptSurface: preparedActivation,
+          usage: usageSnapshot(run.id, String(preparedActivation.newEpoch.epochId)),
+        },
+      }),
     ).rejects.toThrow();
     await expect(storage.contextCheckpointsV2.getById(input.checkpointId)).resolves.toBeUndefined();
     await expect(storage.eventReader.latestSequence(run.id)).resolves.toBe(0);
+    await expect(storage.promptSurface.getCurrent(run.id)).resolves.toBeUndefined();
+    await expect(storage.contextUsage.getByRun(run.id)).resolves.toBeUndefined();
   });
 
   it("rejects cross-run event ownership and commits checkpoint plus assigned event sequence together", async () => {
@@ -220,9 +314,14 @@ describe("SqliteContextCompactionCommitStore", () => {
     await expect(storage.eventReader.latestSequence(run.id)).resolves.toBe(0);
 
     const successInput = checkpoint(run.id, "checkpoint:success");
+    const preparedActivation = activation(run.id);
     const committed = await storage.contextCompactionCommit.commit({
       checkpoint: successInput,
       events: [event(run.id, run.sessionId)],
+      activation: {
+        promptSurface: preparedActivation,
+        usage: usageSnapshot(run.id, String(preparedActivation.newEpoch.epochId)),
+      },
     });
     expect(committed.checkpoint.checkpointId).toBe(successInput.checkpointId);
     expect(committed.events).toHaveLength(1);
@@ -232,6 +331,14 @@ describe("SqliteContextCompactionCommitStore", () => {
     ).resolves.toMatchObject({
       checkpointId: successInput.checkpointId,
     });
+    await expect(storage.promptSurface.getCurrent(run.id)).resolves.toMatchObject({
+      epochId: preparedActivation.newEpoch.epochId,
+      resetReason: "COMPACTION_COMMITTED",
+    });
+    await expect(storage.contextUsage.getByRun(run.id)).resolves.toMatchObject({
+      estimatedInputTokens: 30,
+      compactionCount: 1,
+    });
   });
 
   it("replays an exact checkpoint commit without appending or notifying a second completion event", async () => {
@@ -239,14 +346,21 @@ describe("SqliteContextCompactionCommitStore", () => {
     stores.push(storage);
     const run = await addRun(storage);
     const input = checkpoint(run.id, "checkpoint:replay");
+    const preparedActivation = activation(run.id);
+    const commitActivation = {
+      promptSurface: preparedActivation,
+      usage: usageSnapshot(run.id, String(preparedActivation.newEpoch.epochId)),
+    };
 
     const first = await storage.contextCompactionCommit.commit({
       checkpoint: input,
       events: [completionEvent(run.id, run.sessionId, input)],
+      activation: commitActivation,
     });
     const replay = await storage.contextCompactionCommit.commit({
       checkpoint: input,
       events: [completionEvent(run.id, run.sessionId, input)],
+      activation: commitActivation,
     });
 
     expect(first.events).toHaveLength(1);

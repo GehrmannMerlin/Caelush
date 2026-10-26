@@ -114,6 +114,19 @@ export function ContextInspector(props: {
                 usage.lastCompaction.quality === "DEGRADED" ? "降级摘要" : "语义摘要已通过校验"
               }`,
             ),
+        usage.lastCompaction?.tokensBefore === undefined ||
+          usage.lastCompaction.tokensAfter === undefined
+          ? null
+          : createElement(
+              "small",
+              null,
+              `最近：${formatTokens(usage.lastCompaction.tokensBefore)} → ${formatTokens(
+                usage.lastCompaction.tokensAfter,
+              )}（−${compactionSavedPercent(
+                usage.lastCompaction.tokensBefore,
+                usage.lastCompaction.tokensAfter,
+              )}%）`,
+            ),
       ),
     ),
   );
@@ -261,6 +274,15 @@ export function contextRunProcessShortLabel(process: RunProcessProjection): stri
     default:
       return "任务处理中";
   }
+}
+
+function formatTokens(value: number): string {
+  return Math.round(value).toLocaleString();
+}
+
+function compactionSavedPercent(before: number, after: number): number {
+  if (before <= 0) return 0;
+  return Math.round((1 - after / before) * 100);
 }
 
 function compactionReasonLabel(

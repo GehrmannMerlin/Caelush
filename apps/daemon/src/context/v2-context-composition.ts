@@ -1,4 +1,4 @@
-import type { AIGateway, AIInvocationAccountingObserver } from "@caelush/ai";
+import type { AIGateway, AIInvocationAccountingObserver, ModelDescriptor } from "@caelush/ai";
 import {
   createBranchContextSourceProvider,
   createCheckpointContextSourceProvider,
@@ -16,15 +16,21 @@ import {
   createMemoryContextSourceProvider,
   createToolObservationBatchProjector,
   createV2ContextEngine,
+  resolveApplicableCheckpoint,
   createUtf8HeuristicTokenEstimator,
+  estimateAIMessages,
   type ContextAuthorityProviderPort,
+  type ApplicableContextCheckpoint,
   type ContextCheckpointProjection,
   type ContextContributionPipeline,
   type ContextSourceProvider,
   type ContextSourceRegistration,
+  type ContextSessionCheckpointResolverPort,
+  type ContextSummarizationInput,
   type ContextTokenEstimatorPort,
   type PromptSurfaceStorePort,
   type RunEventNotifierPort,
+  type StoredAgentMessage,
 } from "@caelush/agent";
 import {
   createGitStateContextSourceProvider,
@@ -57,6 +63,7 @@ import { createTaskPlanContextProvider } from "./task-plan-context-provider.js";
 import { createTaskPlanEvidenceResolver } from "./task-plan-evidence-adapter.js";
 import { createResourceGovernanceContextProvider } from "./resource-governance-context-provider.js";
 import { projectModelResourceSummary } from "./resource-governance-context.js";
+import { createDaemonPrivateReplayResolver } from "../replay/private-replay-resolver.js";
 
 export interface DaemonV2ContextCompositionOptions {
   readonly input: RunAgentContextEngineInput;
@@ -81,6 +88,34 @@ export interface DaemonV2ContextCompositionOptions {
 export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionOptions) {
   const { input } = options;
   const tokenEstimator = createUtf8HeuristicTokenEstimator();
+  /**
+   * The output allowance is drawn from the same number the request reports.
+   *
+   * Pricing the durable record charged message ids, observation references and projection
+   * fingerprints that never reach the provider; on a 1M-token window that inflated the candidate
+   * set past the window and pinned every turn's output allowance to its 2,048 floor. Projecting the
+   * candidate through the same registry the materializer uses keeps the two numbers comparable. A
+   * message the projector refuses falls back to the record estimate — the conservative side — so
+   * estimation can never fail a turn.
+   */
+  const candidateMessageEstimator = (
+    messages: readonly StoredAgentMessage[],
+    model: ModelDescriptor,
+  ): number => {
+    let total = 0;
+    for (const stored of messages) {
+      try {
+        total += estimateAIMessages(
+          options.messageProjectors.project(stored).messages,
+          model,
+          tokenEstimator,
+        );
+      } catch {
+        total += tokenEstimator.estimateAgentMessage(stored.message, model);
+      }
+    }
+    return total;
+  };
   const codingPorts = createLocalCodingContextPorts({
     runtime: options.runtime,
     workspace: input.run.workspace,
@@ -108,14 +143,34 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
     budget: options.storage.budget,
     run: input.run,
     clock: options.clock,
+    createPrivateReplayExecution: (summaryInput, signal) =>
+      createContextSummaryPrivateReplayExecution({
+        input: summaryInput,
+        store: options.storage.privateReplay,
+        signal,
+      }),
     ...(options.invocationObserverFactory === undefined
       ? {}
       : { invocationObserver: options.invocationObserverFactory(input.run.id) }),
   });
   const factsProvider = createDeterministicCompactionFactsProvider({ storage: options.storage });
+  const compactionRetryAuthorization =
+    input.run.contextCompactionRetryOf === undefined
+      ? undefined
+      : input.run.submissionId === undefined
+        ? (() => {
+            throw new TypeError(
+              "An explicit compaction retry requires its persisted user submission identity.",
+            );
+          })()
+        : Object.freeze({
+            previousAttemptId: input.run.contextCompactionRetryOf,
+            requestId: String(input.run.submissionId),
+          });
 
   return createV2ContextEngine({
     promptSurfaceStore: options.promptSurfaceStore,
+    candidateMessageEstimator,
     ...(input.modelSettings === undefined ? {} : { modelSettings: input.modelSettings }),
     ...(input.run.contextBudgetPolicy?.version === "ADAPTIVE_V1"
       ? { requestBudget: input.run.contextBudgetPolicy }
@@ -123,7 +178,8 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
           input.run.contextBudgetPolicy.requestBudget.version === "ADAPTIVE_V1"
         ? { requestBudget: input.run.contextBudgetPolicy.requestBudget }
         : {}),
-    ...(input.run.contextBudgetPolicy?.version === "TURN_BUDGET_V3"
+    ...(input.run.contextBudgetPolicy?.version === "TURN_BUDGET_V3" ||
+    input.run.contextBudgetPolicy?.version === "TURN_BUDGET_V4"
       ? { turnBudgetPolicy: input.run.contextBudgetPolicy }
       : {}),
     ...(input.run.contextBudgetPolicy?.version !== "WORKING_SET_V2"
@@ -131,8 +187,11 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
       : { workingSet: input.run.contextBudgetPolicy.workingSet }),
     sourceRegistry: sources,
     checkpointRepository: options.storage.contextCheckpointsV2,
+    sessionCheckpointResolver: createSessionCheckpointResolver(options.storage),
     authorityProvider,
     usageStore: options.storage.contextUsage,
+    ...(compactionRetryAuthorization === undefined ? {} : { compactionRetryAuthorization }),
+    compactionAttemptStore: options.storage.contextArtifactsV2,
     compactionCommit: options.storage.contextCompactionCommit,
     notifier: options.notifier,
     compactionEvents: createContextCompactionEventFactory(),
@@ -217,6 +276,79 @@ function createContextAbortError(): Error {
   return error;
 }
 
+/** Open native replay only for the exact selected message scope proved by the Agent prefix. */
+export function createContextSummaryPrivateReplayExecution(input: {
+  readonly input: ContextSummarizationInput;
+  readonly store: CaelushStorage["privateReplay"];
+  readonly signal: AbortSignal;
+}) {
+  const prefix = input.input.replayPrefix;
+  if (prefix === undefined) return Promise.resolve(undefined);
+  const selectedMessageIds = prefix.messageRefs.map((reference) => reference.messageId);
+  const selectedIds = new Set(selectedMessageIds);
+  const selectedAssistantMessageIds: string[] = [];
+  for (const message of prefix.messages) {
+    if (message.role !== "assistant" || message.providerState === undefined) continue;
+    const payload = message.providerState.payload;
+    if (
+      typeof payload.replayId !== "string" ||
+      !selectedIds.has(payload.replayId) ||
+      selectedAssistantMessageIds.includes(payload.replayId)
+    ) {
+      return Promise.resolve(undefined);
+    }
+    selectedAssistantMessageIds.push(payload.replayId);
+  }
+  return createDaemonPrivateReplayResolver(
+    input.store,
+    {
+      sessionId: String(input.input.identity.sessionId),
+      executionRunId: String(input.input.identity.runId),
+      providerId: prefix.modelRef.provider,
+      model: prefix.modelRef.model,
+      api: prefix.api,
+      selectedMessageIds,
+      ...(selectedAssistantMessageIds.length === 0 ? {} : { selectedAssistantMessageIds }),
+    },
+    { signal: input.signal },
+  );
+}
+
+function createSessionCheckpointResolver(
+  storage: CaelushStorage,
+): ContextSessionCheckpointResolverPort {
+  return Object.freeze({
+    resolve(input: Parameters<ContextSessionCheckpointResolverPort["resolve"]>[0]) {
+      return resolveSessionCheckpoint(storage, input);
+    },
+  });
+}
+
+async function resolveSessionCheckpoint(
+  storage: CaelushStorage,
+  input: Parameters<ContextSessionCheckpointResolverPort["resolve"]>[0],
+): Promise<ApplicableContextCheckpoint | undefined> {
+  const candidates: ApplicableContextCheckpoint[] = [];
+  let cursor: string | undefined;
+  // The page count remains bounded even for a very long-lived Session.
+  for (let pageCount = 0; pageCount < 20; pageCount += 1) {
+    const page = await storage.contextCheckpointsV3.listCandidatesBySession({
+      sessionId: input.conversation.sessionId,
+      throughRunId: input.throughRunId,
+      ...(cursor === undefined ? {} : { cursor }),
+      limit: 100,
+    });
+    candidates.push(...page.records);
+    cursor = page.nextCursor;
+    if (cursor === undefined) break;
+  }
+  return resolveApplicableCheckpoint({
+    conversation: input.conversation,
+    candidates,
+    activationReader: storage.contextCheckpointActivationReader,
+  });
+}
+
 function createSourceRegistry(options: {
   readonly input: RunAgentContextEngineInput;
   readonly codingPorts: LocalCodingContextPorts;
@@ -255,9 +387,10 @@ function createSourceRegistry(options: {
     createCheckpointContextSourceProvider({
       loader: {
         async load(input): Promise<ContextCheckpointProjection | undefined> {
-          const checkpoint = await options.storage.contextCheckpointsV2.getLatestByRun(
-            input.identity.runId,
-          );
+          const checkpoint = await resolveSessionCheckpoint(options.storage, {
+            conversation: input.conversation,
+            throughRunId: input.identity.runId,
+          });
           if (checkpoint === undefined) return undefined;
           return {
             checkpointId: checkpoint.checkpointId,

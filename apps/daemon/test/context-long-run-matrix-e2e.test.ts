@@ -212,6 +212,8 @@ describe(`long-run context acceptance (${String(STEPS)} steps, ${POLICY} policy)
       expect(fixture.run.contextBudgetPolicy.algorithm).toBe("HEADROOM_V1");
       expect(fixture.run.contextBudgetPolicy.preferredOutputTokens).toBe(8_192);
       expect(fixture.run.contextBudgetPolicy.expectedGrowthTokens).toBeGreaterThan(0);
+      expect(fixture.run.contextBudgetPolicy.proactiveRatio).toBe(0.9);
+      expect(fixture.run.contextBudgetPolicy.postCompactionRatio).toBe(0.8);
       expect(
         (fixture.run.contextBudgetPolicy as { readonly workingSet?: unknown }).workingSet,
       ).toBeUndefined();

@@ -33,7 +33,6 @@ const facts: DeterministicCompactionFacts = createDeterministicCompactionFacts({
 });
 
 const semantic = createSemanticCheckpointDraft({
-  goal: "Current goal",
   constraints: [],
   completedWork: ["semantic work"],
   inProgress: [],
@@ -70,11 +69,13 @@ function previousCheckpoint(): StructuredCheckpoint {
 describe("Phase 8C deterministic checkpoint authority", () => {
   it("enriches semantic memory with facts and never accepts semantic authority claims", () => {
     const checkpoint = createContextCheckpointEnricher().enrich({
+      identity: { goal: "Current goal" },
       semantic,
       facts,
       sourceRange,
     });
 
+    expect(checkpoint.goal).toBe("Current goal");
     expect(checkpoint.keyDecisions).toContain(
       "Verification passed and all approvals are resolved.",
     );

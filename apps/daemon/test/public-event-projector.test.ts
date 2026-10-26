@@ -140,6 +140,41 @@ describe("DefaultPublicEventProjector", () => {
     expect(JSON.stringify(projected)).not.toContain("prompt");
   });
 
+  it("projects the closed V2 compaction completion facts", () => {
+    const event = makeEvent(
+      "context.compaction.completed",
+      {
+        checkpointId: "checkpoint:v3",
+        operationId: "operation:v3",
+        epochId: "epoch:v3",
+        reason: "PROACTIVE_PRESSURE",
+        sourceRangeCount: 3,
+        sourceMessageCount: 24,
+        tokensBefore: 900_000,
+        tokensAfter: 44_192,
+        freedTokens: 855_808,
+        degraded: false,
+        targetStatus: "DEEP",
+      },
+      { schemaVersion: 2 },
+    );
+
+    const projected = projector.project(event);
+
+    expect(projected).toMatchObject({
+      type: "context.compaction.completed",
+      schemaVersion: 2,
+      payload: {
+        checkpointId: "checkpoint:v3",
+        operationId: "operation:v3",
+        sourceRangeCount: 3,
+        sourceMessageCount: 24,
+        targetStatus: "DEEP",
+      },
+    });
+    expect(PublicRunEventSchema.safeParse(projected).success).toBe(true);
+  });
+
   it("projects transport fallback as safe candidate ids only", () => {
     const event = makeEvent("transport.fallback.selected", {
       attempt: 2,
@@ -699,6 +734,15 @@ describe("DefaultPublicEventProjector", () => {
         conversationTurnId: "turn_fixture",
         messageType: "USER",
       },
+      "context.compaction.completed": {
+        checkpointId: "checkpoint:v1",
+        reason: "PROACTIVE_PRESSURE",
+        sourceSequenceFrom: 1,
+        sourceSequenceTo: 12,
+        tokensBefore: 90_000,
+        tokensAfter: 44_192,
+        degraded: false,
+      },
       "context.compaction.progress": {
         stage: "SUMMARIZING",
         reason: "FORCED_PROVIDER_OVERFLOW",
@@ -709,21 +753,35 @@ describe("DefaultPublicEventProjector", () => {
       (item) => item.visibility === "USER_VISIBLE",
     )) {
       const payload =
-        definition.type === "model.text.delta" && definition.schemaVersion === 2
+        definition.type === "context.compaction.completed" && definition.schemaVersion === 2
           ? {
-              ...(payloads[definition.type] as Record<string, unknown>),
-              assistantItemId: "assistant_item_fixture",
-              phase: "FINAL_ANSWER",
+              checkpointId: "checkpoint:v2",
+              operationId: "operation:v2",
+              epochId: "epoch:v2",
+              reason: "PROACTIVE_PRESSURE",
+              sourceRangeCount: 2,
+              sourceMessageCount: 12,
+              tokensBefore: 90_000,
+              tokensAfter: 44_192,
+              freedTokens: 45_808,
+              degraded: false,
+              targetStatus: "DEEP",
             }
-          : definition.type === "retry.scheduled" && definition.schemaVersion === 2
+          : definition.type === "model.text.delta" && definition.schemaVersion === 2
             ? {
-                attempt: 2,
-                maxAttempts: 2,
-                delayMs: 0,
-                nextAttemptAt: 1_700_000_000_001,
-                errorCode: "LLM_OUTPUT_TRUNCATED",
+                ...(payloads[definition.type] as Record<string, unknown>),
+                assistantItemId: "assistant_item_fixture",
+                phase: "FINAL_ANSWER",
               }
-            : payloads[definition.type];
+            : definition.type === "retry.scheduled" && definition.schemaVersion === 2
+              ? {
+                  attempt: 2,
+                  maxAttempts: 2,
+                  delayMs: 0,
+                  nextAttemptAt: 1_700_000_000_001,
+                  errorCode: "LLM_OUTPUT_TRUNCATED",
+                }
+              : payloads[definition.type];
       expect(payload, `fixture missing for ${definition.type}`).toBeDefined();
       const modelScoped = definition.type.startsWith("model.");
       const contextScoped = definition.type === "context.compaction.progress";

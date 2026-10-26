@@ -18,27 +18,20 @@ export function createContextCutPointSelector(): ContextCutPointSelector {
     select(
       input: Parameters<ContextCutPointSelector["select"]>[0],
     ): ContextCompactionCutCandidate | null {
-      assertBudget("targetRecentTailTokens", input.targetRecentTailTokens);
-      assertBudget("minRecentTailTokens", input.minRecentTailTokens);
-
-      const history = Object.freeze({
-        ...input.history,
-        units: orderContextHistoryUnits(input.history.units),
-      });
-      const turns = canonicalTurns(history.units);
-      if (turns.length === 0) return null;
+      const prepared = prepareCutInput(input);
+      if (prepared === null) return null;
 
       const fullTurnCandidate = selectFullTurnBoundary(
-        history,
-        turns,
+        prepared.history,
+        prepared.turns,
         input.targetRecentTailTokens,
         input.minRecentTailTokens,
       );
       return (
         fullTurnCandidate ??
         selectProtocolSafeSplit(
-          history,
-          turns,
+          prepared.history,
+          prepared.turns,
           input.targetRecentTailTokens,
           input.minRecentTailTokens,
           input.allowCurrentTurnPrefix === true,
@@ -46,6 +39,41 @@ export function createContextCutPointSelector(): ContextCutPointSelector {
       );
     },
   });
+}
+
+/**
+ * The in-Turn protocol-safe cut only, skipping the whole-turn boundary candidate.
+ *
+ * The planner calls this when its preferred cut cannot be written as one `ContextMessageRange`.
+ * It is deliberately not part of the `ContextCutPointSelector` port: "prefer a turn boundary" is
+ * the policy, and this is only the fallback the planner needs when the preference is inexpressible.
+ */
+export function selectProtocolSafeSplitCandidate(
+  input: Parameters<ContextCutPointSelector["select"]>[0],
+): ContextCompactionCutCandidate | null {
+  const prepared = prepareCutInput(input);
+  if (prepared === null) return null;
+  return selectProtocolSafeSplit(
+    prepared.history,
+    prepared.turns,
+    input.targetRecentTailTokens,
+    input.minRecentTailTokens,
+    input.allowCurrentTurnPrefix === true,
+  );
+}
+
+function prepareCutInput(input: Parameters<ContextCutPointSelector["select"]>[0]): {
+  readonly history: ContextHistoryIndex;
+  readonly turns: readonly ContextHistoryUnit[];
+} | null {
+  assertBudget("targetRecentTailTokens", input.targetRecentTailTokens);
+  assertBudget("minRecentTailTokens", input.minRecentTailTokens);
+  const history = Object.freeze({
+    ...input.history,
+    units: orderContextHistoryUnits(input.history.units),
+  });
+  const turns = canonicalTurns(history.units);
+  return turns.length === 0 ? null : { history, turns };
 }
 
 function selectFullTurnBoundary(
@@ -59,8 +87,8 @@ function selectFullTurnBoundary(
   let compacted: ContextHistoryUnit[] = [];
   let compactedTokens = 0;
   let best: ContextCompactionCutCandidate | null = null;
-
-  // The newest primary Turn is the current Turn and remains protected from ordinary cuts.
+  // Closed prefix Turns may span Runs. Coverage stores each Run-local range independently, so
+  // sequence numbers are never compared across Run boundaries.
   for (let index = 0; index < turns.length - 1; index += 1) {
     const turn = turns[index]!;
     if (turn.status !== "CLOSED" || !turn.compactionEligible) break;

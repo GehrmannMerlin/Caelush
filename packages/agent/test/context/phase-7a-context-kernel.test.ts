@@ -153,7 +153,7 @@ describe("Phase 7A ModelDescriptor-derived policy", () => {
     expect(policy.targetRecentTailTokens).toBeLessThanOrEqual(2_500);
     expect(policy.minRecentTailTokens).toBeLessThanOrEqual(policy.targetRecentTailTokens);
     expect(policy.allowCurrentTurnPrefix).toBe(true);
-    expect(policy.proactiveCompaction.cooldownTurns).toBe(5);
+    expect(policy.proactiveCompaction).toEqual({ enabled: true });
     expect(() =>
       createContextPolicy({
         model: MODEL,

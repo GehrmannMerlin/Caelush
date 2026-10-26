@@ -35,6 +35,31 @@ export const ContextCompactionCompletedEventSchema = createEventSchema(
 
 export type ContextCompactionCompletedEvent = z.infer<typeof ContextCompactionCompletedEventSchema>;
 
+/** Durable V3 compaction activation metadata. Detailed coverage remains in checkpoint storage. */
+export const ContextCompactionCompletedEventV2Schema = createVersionedEventSchema(
+  "context.compaction.completed",
+  2,
+  z
+    .object({
+      checkpointId: z.string().min(1),
+      operationId: z.string().min(1),
+      epochId: z.string().min(1),
+      reason: ContextCompactionReasonSchema,
+      sourceRangeCount: z.number().int().positive().refine(Number.isSafeInteger),
+      sourceMessageCount: z.number().int().positive().refine(Number.isSafeInteger),
+      tokensBefore: z.number().int().nonnegative().refine(Number.isSafeInteger),
+      tokensAfter: z.number().int().nonnegative().refine(Number.isSafeInteger),
+      freedTokens: z.number().int().nonnegative().refine(Number.isSafeInteger),
+      degraded: z.boolean(),
+      targetStatus: z.enum(["DEEP", "FLOOR_LIMITED"]),
+    })
+    .strict(),
+);
+
+export type ContextCompactionCompletedEventV2 = z.infer<
+  typeof ContextCompactionCompletedEventV2Schema
+>;
+
 /** A live-only, bounded stage signal; checkpoint completion remains the durable compaction fact. */
 export const ContextCompactionProgressEventSchema = createVersionedEventSchema(
   "context.compaction.progress",

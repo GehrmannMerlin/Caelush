@@ -4,7 +4,10 @@ import type {
   LegacyContextCheckpointRecordV1,
   ContextMessageRange,
 } from "./context-compaction-contracts.js";
-import type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
+import type {
+  StructuredCheckpoint,
+  StructuredCheckpointV2,
+} from "../checkpoint/structured-checkpoint.js";
 import {
   orderContextHistoryUnits,
   type ContextHistoryUnit,
@@ -13,10 +16,15 @@ import {
 import type { AgentMessageId } from "../../messages/types/ids.js";
 import type { ContextCheckpointId } from "./context-compaction-contracts.js";
 import { ContextPlanningError } from "../planner/context-planning-errors.js";
+import type { ContextCheckpointRecordV3 } from "./context-checkpoint-v3.js";
+import {
+  assertContextSourceCoverage,
+  type ContextSourceCoverage,
+} from "./context-source-coverage.js";
 
 export interface ContextCompactionCandidatePreparation {
   readonly history: ContextHistoryIndex;
-  readonly previousCheckpoint?: StructuredCheckpoint;
+  readonly previousCheckpoint?: StructuredCheckpoint | StructuredCheckpointV2;
   readonly trustedPreviousCheckpointId?: ContextCheckpointId;
 }
 
@@ -36,13 +44,24 @@ export interface ContextCompactionCoverage extends ContextCompactionCandidatePre
  */
 export function createContextCompactionCoverage(input: {
   readonly history: ContextHistoryIndex;
-  readonly latestCheckpoint?: ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1;
+  readonly latestCheckpoint?:
+    ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1 | ContextCheckpointRecordV3;
 }): ContextCompactionCoverage {
   const latest = input.latestCheckpoint;
   if (latest === undefined) {
     return Object.freeze({
       history: input.history,
       coveredMessageIds: new Set<AgentMessageId>(),
+    });
+  }
+
+  if (latest.schemaVersion === 3) {
+    const projected = projectContextCoverage({ history: input.history, coverage: latest.coverage });
+    return Object.freeze({
+      history: projected.history,
+      coveredMessageIds: projected.coveredMessageIds,
+      previousCheckpoint: latest.structuredCheckpoint,
+      trustedPreviousCheckpointId: latest.checkpointId,
     });
   }
 
@@ -58,6 +77,43 @@ export function createContextCompactionCoverage(input: {
     previousCheckpoint: latest.structuredCheckpoint,
     ...(latest.schemaVersion === 2 ? { trustedPreviousCheckpointId: latest.checkpointId } : {}),
   });
+}
+
+/** Project every validated Session segment from a multi-Run V3 checkpoint. */
+export function projectContextCoverage(input: {
+  readonly history: ContextHistoryIndex;
+  readonly coverage: ContextSourceCoverage;
+}): ContextCompactionCoverage {
+  try {
+    assertContextSourceCoverage(input.coverage);
+  } catch {
+    throw new ContextPlanningError("INCONSISTENT_PLAN");
+  }
+  let history = input.history;
+  const coveredMessageIds = new Set<AgentMessageId>();
+  for (const segment of input.coverage.segments) {
+    const projection = projectCoverage({
+      history,
+      range: {
+        runId: String(segment.runId),
+        conversationTurnId: String(segment.conversationTurnId),
+        firstMessageId: segment.firstMessageId,
+        lastMessageId: segment.lastMessageId,
+        firstSequence: segment.firstSequence,
+        lastSequence: segment.lastSequence,
+      },
+      isV2: true,
+    });
+    for (const id of projection.coveredMessageIds) {
+      if (coveredMessageIds.has(id)) throw new ContextPlanningError("INCONSISTENT_PLAN");
+      coveredMessageIds.add(id);
+    }
+    history = projection.history;
+  }
+  if (coveredMessageIds.size !== input.coverage.messageCount) {
+    throw new ContextPlanningError("INCONSISTENT_PLAN");
+  }
+  return Object.freeze({ history, coveredMessageIds });
 }
 
 /**
@@ -93,7 +149,8 @@ export function createContextCompactionCoverageForRange(input: {
  */
 export function prepareContextCompactionCandidates(input: {
   readonly history: ContextHistoryIndex;
-  readonly latestCheckpoint?: ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1;
+  readonly latestCheckpoint?:
+    ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1 | ContextCheckpointRecordV3;
 }): ContextCompactionCandidatePreparation {
   const coverage = createContextCompactionCoverage(input);
   return Object.freeze({

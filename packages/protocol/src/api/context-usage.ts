@@ -503,6 +503,12 @@ const LastCompactionProjectionSchema = z
   .object({
     reason: z.enum(["PROACTIVE_PRESSURE", "SELECTION_PRESSURE", "FORCED_PROVIDER_OVERFLOW"]),
     quality: z.enum(["SEMANTIC", "DEGRADED"]),
+    /** What the covered span cost before the checkpoint replaced it. */
+    tokensBefore: SafeTokenCountSchema.optional(),
+    /** What the same span costs after the replacement; always `<= tokensBefore`. */
+    tokensAfter: SafeTokenCountSchema.optional(),
+    /** When the checkpoint committed, so a surface can date the last reduction. */
+    finishedAt: TimestampMsSchema.optional(),
   })
   .strict();
 

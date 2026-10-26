@@ -122,14 +122,15 @@ describe("daemon production composition E2E", () => {
       preset: { id: "FULL_ACCESS", expectedVersion: 1 },
       limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 10_000 },
     });
-    // A Run created without a policy freezes the per-turn headroom policy at creation.
-    expect(run.contextBudgetPolicy).toEqual({
+    // A Run created without a policy remains on V3 until V4 passes the real-cache acceptance gate.
+    expect(run.contextBudgetPolicy).toMatchObject({
       version: "TURN_BUDGET_V3",
       algorithm: "HEADROOM_V1",
       minOutputTokens: 2_048,
       preferredOutputTokens: 8_192,
       safetyTokens: 640,
       expectedGrowthTokens: 2_560,
+      proactiveRatio: 0.9,
       postCompactionRatio: 0.8,
       outputRecovery: {
         version: "OUTPUT_RECOVERY_V1",
@@ -137,6 +138,7 @@ describe("daemon production composition E2E", () => {
         outputMultiplier: 2,
       },
     });
+    expect(run.contextBudgetPolicy).not.toHaveProperty("deepCompaction");
     await client.startRun(run.id);
 
     let settled = await client.getRun(run.id);

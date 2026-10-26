@@ -148,6 +148,7 @@ describe("committed storage migrations", () => {
         "attachments",
         "context_artifacts",
         "context_checkpoints",
+        "context_compaction_activations",
         "context_runtime_states",
         "event_sequences",
         "memory_extraction_jobs",
@@ -175,7 +176,7 @@ describe("committed storage migrations", () => {
       // Message V2, Workspace Registry, Runtime AI Management, durable archives, and conversation
       // attachment metadata are in the published migration ledger.
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 29,
+        count: 30,
       });
 
       const providerUsageColumns = sqlite
@@ -269,7 +270,8 @@ describe("committed storage migrations", () => {
         entry.name === "20261014170000_provider_invocation_step_identity" ||
         entry.name === "20261016120000_archive_management" ||
         entry.name === "20261018120000_conversation_attachments" ||
-        entry.name === "20261020100000_resource_correction_recovery"
+        entry.name === "20261020100000_resource_correction_recovery" ||
+        entry.name === "20261025120000_context_checkpoint_v3"
       )
         continue;
       await cp(
@@ -279,12 +281,12 @@ describe("committed storage migrations", () => {
       );
     }
 
+    const cacheMigrationSessionId = createSessionId();
     const priorDatabase = await openCaelushDatabase({ path: databasePath });
     try {
       migratePublishedStorage(priorDatabase, priorMigrationsFolder);
       finalizeAgentMessages(priorDatabase, priorMigrationsFolder);
       finalizeRunSecurityPolicies(priorDatabase);
-      const cacheMigrationSessionId = createSessionId();
       const cacheMigrationRun = AgentRunSchema.parse(
         makeRun(cacheMigrationSessionId, { status: "COMPLETED" }),
       );
@@ -298,6 +300,28 @@ describe("committed storage migrations", () => {
           "INSERT INTO agent_runs (id, session_id, protocol_version, status, created_at_ms, data_json) VALUES (?, ?, 1, 'COMPLETED', 1, ?)",
         )
         .run(cacheMigrationRun.id, cacheMigrationSessionId, JSON.stringify(cacheMigrationRun));
+      const legacyCheckpointPayloads = [
+        ["checkpoint-migrate-v1", 1, 1, 2, '{"version":1,"history":"preserve-v1-bytes"}'],
+        ["checkpoint-migrate-v2", 2, 3, 4, '{"version":2,"history":"preserve-v2-bytes"}'],
+      ] as const;
+      const insertCheckpoint = priorDatabase.client.prepare(
+        `INSERT INTO context_checkpoints
+         (id, run_id, previous_checkpoint_id, source_sequence_from, source_sequence_to,
+          tokens_before, tokens_after, summary_version, model_ref_json, created_at_ms,
+          data_json, read_file_refs_json, changed_file_refs_json)
+         VALUES (?, ?, NULL, ?, ?, 20, 10, ?, ?, 5, ?, '[]', '[]')`,
+      );
+      for (const [id, schemaVersion, from, to, payload] of legacyCheckpointPayloads) {
+        insertCheckpoint.run(
+          id,
+          cacheMigrationRun.id,
+          from,
+          to,
+          schemaVersion,
+          '{"providerId":"fixture","modelId":"fixture-model"}',
+          payload,
+        );
+      }
       priorDatabase.client
         .prepare(
           `INSERT INTO run_budget_entries
@@ -346,7 +370,7 @@ describe("committed storage migrations", () => {
         ]),
       );
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 29,
+        count: 30,
       });
       expect(
         sqlite
@@ -362,6 +386,28 @@ describe("committed storage migrations", () => {
         cache_miss_input_tokens: null,
         cache_write_input_tokens: null,
       });
+      expect(
+        sqlite
+          .prepare(
+            "SELECT id, session_id, source_sequence_from, source_sequence_to, data_json FROM context_checkpoints ORDER BY id",
+          )
+          .all(),
+      ).toEqual([
+        {
+          id: "checkpoint-migrate-v1",
+          session_id: cacheMigrationSessionId,
+          source_sequence_from: 1,
+          source_sequence_to: 2,
+          data_json: '{"version":1,"history":"preserve-v1-bytes"}',
+        },
+        {
+          id: "checkpoint-migrate-v2",
+          session_id: cacheMigrationSessionId,
+          source_sequence_from: 3,
+          source_sequence_to: 4,
+          data_json: '{"version":2,"history":"preserve-v2-bytes"}',
+        },
+      ]);
     } finally {
       sqlite.close();
     }

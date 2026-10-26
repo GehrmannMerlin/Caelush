@@ -5,6 +5,7 @@ import {
   assertPromptSurfaceRecord,
   applyPromptSurfaceSectionUpdates,
   PromptSurfaceRolloverConflictError,
+  type PromptSurfaceCompactionActivationCommand,
   type PromptSurfaceEpoch,
   type PromptSurfaceEpochId,
   type PromptSurfaceEpochWithSnapshots,
@@ -13,6 +14,7 @@ import {
 import type { RunId } from "@caelush/protocol";
 
 export interface PromptSurfaceMemoryStore extends PromptSurfaceStorePort {
+  activateCompaction(command: PromptSurfaceCompactionActivationCommand): "COMMITTED" | "IDEMPOTENT";
   inspect(runId: RunId): PromptSurfaceEpochWithSnapshots | undefined;
   inspectEpochs(runId: RunId): readonly PromptSurfaceEpochWithSnapshots[];
   corruptLatestSnapshot(runId: RunId): void;
@@ -22,6 +24,47 @@ export interface PromptSurfaceMemoryStore extends PromptSurfaceStorePort {
 export function createPromptSurfaceMemoryStore(): PromptSurfaceMemoryStore {
   const byRun = new Map<string, PromptSurfaceEpochWithSnapshots[]>();
   return {
+    activateCompaction(command) {
+      assertPromptSurfaceEpoch(command.newEpoch);
+      assertPromptSurfaceRecord(command.baseline);
+      const epochs = byRun.get(command.newEpoch.runId) ?? [];
+      const existing = epochs.find((candidate) => candidate.epochId === command.newEpoch.epochId);
+      if (existing !== undefined) {
+        if (existing.records?.[0]?.contentHash !== command.baseline.contentHash) {
+          throw new PromptSurfaceRolloverConflictError("test compaction activation conflict");
+        }
+        return "IDEMPOTENT";
+      }
+      const current = epochs.at(-1);
+      if (command.expectedCurrent.kind === "ABSENT") {
+        if (current !== undefined) {
+          throw new PromptSurfaceRolloverConflictError("test expected absent current epoch");
+        }
+      } else if (
+        current === undefined ||
+        current.epochId !== command.expectedCurrent.epoch.epochId ||
+        current.records?.length !== command.expectedCurrent.recordOrdinal ||
+        (current.records?.at(-1)?.decisionFingerprint ?? null) !==
+          command.expectedCurrent.decisionFingerprint
+      ) {
+        throw new PromptSurfaceRolloverConflictError("test compaction activation CAS failed");
+      }
+      const sectionStates = applyPromptSurfaceSectionUpdates(
+        [],
+        "BASELINE",
+        command.baseline.updates,
+      );
+      epochs.push(
+        Object.freeze({
+          ...command.newEpoch,
+          snapshots: Object.freeze([]),
+          records: Object.freeze([command.baseline]),
+          sectionStates,
+        }),
+      );
+      byRun.set(command.newEpoch.runId, epochs);
+      return "COMMITTED";
+    },
     inspect(runId) {
       return byRun.get(runId)?.at(-1);
     },

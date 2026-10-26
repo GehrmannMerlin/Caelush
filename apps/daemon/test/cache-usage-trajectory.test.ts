@@ -5,6 +5,7 @@ import type { AIAdapterEvent, ApiAdapter, ApiAdapterStreamInput, ModelUsage } fr
 import {
   createAgentMessageIdFactory,
   createDeterministicConversationTurnIdFactory,
+  createContextSummaryReplayPrefixFingerprint,
   type ContextSummarizationInput,
 } from "@caelush/agent";
 import { createStepId, createTimestampMs } from "@caelush/protocol";
@@ -33,7 +34,6 @@ const USAGES: readonly ModelUsage[] = [
 ];
 
 const SUMMARY = JSON.stringify({
-  goal: "Continue the fixture task.",
   constraints: [],
   completedWork: [],
   inProgress: [],
@@ -195,26 +195,37 @@ describe("C4 fake Provider Usage trajectory", () => {
     const sourceIds = createAgentMessageIdFactory();
     const sourceMessageId = sourceIds.create();
     const turnId = createDeterministicConversationTurnIdFactory().forRun(run.id);
+    const replayPrefix = {
+      modelRef: fixtureDescriptor().ref,
+      api: FIXTURE_API,
+      surfaceFingerprint: `sha256:${"b".repeat(64)}`,
+      messageRefs: [
+        {
+          messageId: String(sourceMessageId),
+          runId: String(run.id),
+          conversationTurnId: String(turnId),
+          sequence: 1,
+          schemaVersion: 1,
+          modelProjectionVersion: 1,
+        },
+      ],
+      messages: [
+        { role: "system" as const, content: "Stable fixture prefix." },
+        { role: "user" as const, content: "Previously selected history." },
+      ],
+      tools: [
+        {
+          name: "read_file",
+          description: "Read a workspace file.",
+          inputSchema: { type: "object", properties: { path: { type: "string" } } },
+        },
+      ],
+    };
     const summaryInput: ContextSummarizationInput = {
       purpose: "COMPACTION",
       cacheEligibility: "CACHE_REUSE_ELIGIBLE",
-      replayPrefixFingerprint: "b".repeat(64),
-      replayPrefix: {
-        modelRef: fixtureDescriptor().ref,
-        api: FIXTURE_API,
-        surfaceFingerprint: "b".repeat(64),
-        messages: [
-          { role: "system", content: "Stable fixture prefix." },
-          { role: "user", content: "Previously selected history." },
-        ],
-        tools: [
-          {
-            name: "read_file",
-            description: "Read a workspace file.",
-            inputSchema: { type: "object", properties: { path: { type: "string" } } },
-          },
-        ],
-      },
+      replayPrefixFingerprint: createContextSummaryReplayPrefixFingerprint(replayPrefix),
+      replayPrefix,
       identity,
       reason: "PROACTIVE_PRESSURE",
       sourceMessages: [],

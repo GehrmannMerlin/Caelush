@@ -47,6 +47,12 @@ describe("Phase 7E Agent-owned contracts", () => {
       async createOrGet() {
         return artifact;
       },
+      async claim() {
+        return { kind: "EXISTING", artifact };
+      },
+      async listBySourceRef() {
+        return { records: [] };
+      },
       async getMetadata() {
         return metadata;
       },

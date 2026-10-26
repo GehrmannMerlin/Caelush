@@ -420,6 +420,32 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
           reason: event.payload.reason,
         };
         break;
+      case "context.compaction.completed":
+        payload =
+          "sourceSequenceFrom" in event.payload
+            ? {
+                checkpointId: event.payload.checkpointId,
+                reason: event.payload.reason,
+                sourceSequenceFrom: event.payload.sourceSequenceFrom,
+                sourceSequenceTo: event.payload.sourceSequenceTo,
+                tokensBefore: event.payload.tokensBefore,
+                tokensAfter: event.payload.tokensAfter,
+                degraded: event.payload.degraded,
+              }
+            : {
+                checkpointId: event.payload.checkpointId,
+                operationId: event.payload.operationId,
+                epochId: event.payload.epochId,
+                reason: event.payload.reason,
+                sourceRangeCount: event.payload.sourceRangeCount,
+                sourceMessageCount: event.payload.sourceMessageCount,
+                tokensBefore: event.payload.tokensBefore,
+                tokensAfter: event.payload.tokensAfter,
+                freedTokens: event.payload.freedTokens,
+                degraded: event.payload.degraded,
+                targetStatus: event.payload.targetStatus,
+              };
+        break;
       default:
         return null;
     }

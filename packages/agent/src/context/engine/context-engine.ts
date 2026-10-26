@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import type { AIMessage, AIModelSettings } from "@caelush/ai";
+import type { AIMessage, AIModelSettings, ModelDescriptor } from "@caelush/ai";
 import type { EventId, StepId, TimestampMs, TransientRunEvent } from "@caelush/protocol";
 
 import type { RunEventNotifierPort } from "../../events/notifier-port.js";
@@ -26,7 +26,10 @@ import type {
   PromptSurfaceRecord,
   PromptSurfaceResetReason,
 } from "../surface/prompt-surface.js";
-import type { PromptSurfaceStorePort } from "../surface/prompt-surface-store.js";
+import type {
+  PromptSurfaceCompactionActivationCommand,
+  PromptSurfaceStorePort,
+} from "../surface/prompt-surface-store.js";
 import {
   decidePromptSurfaceCapacity,
   promptSurfaceBaselineTooLarge,
@@ -56,17 +59,13 @@ import type { PromptSurfaceSectionState } from "../surface/prompt-surface-v3.js"
 import {
   createContextCheckpointId,
   type ContextCompactionReason,
+  type ContextMessageRange,
   type ContextCheckpointRecordV2,
   type ContextCheckpointRepositoryPort,
   type LegacyContextCheckpointRecordV1,
 } from "../compaction/context-compaction-contracts.js";
 import { createContextCompactionPlanner } from "../compaction/context-compaction-planner.js";
 import { createContextPressureEvaluator } from "../compaction/context-pressure-evaluator.js";
-import {
-  advanceContextCompactionSchedule,
-  initialContextCompactionSchedule,
-  type ContextCompactionSchedule,
-} from "../compaction/context-compaction-schedule.js";
 import type { ContextCompactionCommitPort } from "../ports/context-compaction-commit-port.js";
 import {
   createContextCheckpointEnricher,
@@ -81,6 +80,7 @@ import type { DeterministicCompactionFactsProvider } from "../compaction/determi
 import {
   createContextCompactionCoverage,
   createContextCompactionCoverageForRange,
+  projectContextCoverage,
   type ContextCompactionCoverage,
 } from "../compaction/context-compaction-coverage.js";
 import {
@@ -106,6 +106,7 @@ import {
 } from "../document/context-document.js";
 import {
   createContextHistoryIndexer,
+  type ContextHistoryIndex,
   type ContextHistoryIndexer,
 } from "../history/semantic-history-unit.js";
 import type { ContextMaterializer } from "../materializer/context-materializer.js";
@@ -114,12 +115,13 @@ import {
   createContextPolicy,
   resolveAdaptiveContextBudget,
   type ContextPlan,
+  type ContextPolicy,
   type ContextPolicyOptions,
   type ContextWorkingSetPolicy,
 } from "../policy/context-policy.js";
 import {
   decideTurnBudget,
-  resolveOutputAllowance,
+  planOutputAllowance,
   type TurnBudgetDecision,
   type TurnBudgetPolicy,
 } from "../policy/request-headroom.js";
@@ -129,6 +131,7 @@ import {
   type ContextReceiptBuilderResult,
 } from "../receipts/context-receipt-builder.js";
 import type { ContextUsageStorePort } from "../receipts/context-usage.js";
+import type { ContextArtifactStorePort } from "../artifacts/context-artifact.js";
 import { collectContextSources } from "../source/context-source-registry.js";
 import type {
   ContextSourceCollectionResult,
@@ -140,7 +143,10 @@ import type {
   ContextRehydratorPort,
 } from "../rehydration/context-authority-contracts.js";
 import type { ContextAuthoritySnapshot } from "../rehydration/context-authority-contracts.js";
-import type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
+import type {
+  StructuredCheckpoint,
+  StructuredCheckpointV2,
+} from "../checkpoint/structured-checkpoint.js";
 import type { ContextCompactionReceipt } from "../receipts/context-build-receipt.js";
 import { createContextRehydrator } from "../rehydration/context-rehydrator.js";
 import {
@@ -153,7 +159,7 @@ import {
 } from "../token/context-token-estimator.js";
 import { AGENT_CONTEXT_SOURCE_IDS } from "../source/source-ids.js";
 import type { ContextCheckpointRef } from "../compaction/context-compaction-contracts.js";
-import { ContextExhaustedError } from "../planner/context-planning-errors.js";
+import { ContextExhaustedError, ContextPlanningError } from "../planner/context-planning-errors.js";
 import type { AgentExecutionIdentity, ContextRequestBudget } from "../../loop/types.js";
 import { createContextItemId } from "../item/context-item.js";
 import { createSourceResult, estimateContextTokens } from "../source/generic-provider-helpers.js";
@@ -178,6 +184,18 @@ import {
 } from "../compaction/context-recovery-application.js";
 import type { SemanticSummaryValidator } from "../compaction/semantic-summary-validator.js";
 import { createSemanticSummaryValidator } from "../compaction/semantic-summary-validator.js";
+import type {
+  ApplicableContextCheckpoint,
+  ContextSessionCheckpointResolverPort,
+} from "../compaction/applicable-checkpoint-resolver.js";
+import {
+  beginPersistedCompactionAttempt,
+  createCompactionSourceCoverageDigest,
+  finishPersistedCompactionAttempt,
+  recordPersistedCompactionFailureBaseline,
+  type PersistedCompactionAttempt,
+} from "../compaction/persisted-compaction-attempt.js";
+import type { ContextCompactionRetryAuthorization } from "../compaction/compaction-attempt.js";
 
 export interface ContextCompactionEventFactory {
   progress(input: {
@@ -195,6 +213,14 @@ export interface ContextCompactionEventFactory {
     readonly tokensBefore: number;
     readonly tokensAfter: number;
     readonly degraded: boolean;
+    readonly eventId: EventId;
+    readonly timestamp: TimestampMs;
+  }): DurableRunEventDraft;
+  completedV3(input: {
+    readonly identity: AgentExecutionIdentity;
+    readonly checkpoint: import("../compaction/context-checkpoint-v3.js").ContextCheckpointCreateInputV3;
+    readonly epochId: string;
+    readonly freedTokens: number;
     readonly eventId: EventId;
     readonly timestamp: TimestampMs;
   }): DurableRunEventDraft;
@@ -244,6 +270,33 @@ export function createContextCompactionEventFactory(): ContextCompactionEventFac
         },
       };
     },
+    completedV3(
+      input: Parameters<ContextCompactionEventFactory["completedV3"]>[0],
+    ): DurableRunEventDraft {
+      return {
+        eventId: input.eventId,
+        schemaVersion: 2,
+        runId: input.identity.runId,
+        sessionId: input.identity.sessionId,
+        timestamp: input.timestamp,
+        visibility: "USER_VISIBLE",
+        durability: { kind: "DURABLE", version: 1 },
+        type: "context.compaction.completed",
+        payload: {
+          checkpointId: String(input.checkpoint.checkpointId),
+          operationId: input.checkpoint.activationOperationId,
+          epochId: input.epochId,
+          reason: input.checkpoint.reason,
+          sourceRangeCount: input.checkpoint.coverage.segments.length,
+          sourceMessageCount: input.checkpoint.coverage.messageCount,
+          tokensBefore: input.checkpoint.tokensBefore,
+          tokensAfter: input.checkpoint.tokensAfter,
+          freedTokens: input.freedTokens,
+          degraded: input.checkpoint.degraded,
+          targetStatus: input.checkpoint.targetStatus,
+        },
+      };
+    },
   });
 }
 
@@ -267,8 +320,14 @@ export interface V2ContextEngineOptions {
   readonly promptSurfaceEpochIdFactory?: { create(): string };
   readonly sourceRegistry: ContextSourceRegistry;
   readonly checkpointRepository: ContextCheckpointRepositoryPort;
+  /** Activated Session checkpoint lookup; V1/V2/V3 candidates are validated against history. */
+  readonly sessionCheckpointResolver?: ContextSessionCheckpointResolverPort;
   readonly authorityProvider: ContextAuthorityProviderPort;
   readonly usageStore: ContextUsageStorePort;
+  /** Durable Session-scoped START/RESULT receipts prevent retries after Engine recreation. */
+  readonly compactionAttemptStore?: ContextArtifactStorePort;
+  /** Set only from an explicit, idempotent user Run request; never from model output. */
+  readonly compactionRetryAuthorization?: ContextCompactionRetryAuthorization;
   readonly compactionCommit?: ContextCompactionCommitPort;
   readonly notifier?: RunEventNotifierPort;
   readonly compactionEvents?: ContextCompactionEventFactory;
@@ -301,6 +360,16 @@ export interface V2ContextEngineOptions {
   readonly rehydrator?: ContextRehydratorPort;
   readonly documentBuilder?: ContextDocumentBuilder;
   readonly materializer: ContextMaterializer;
+  /**
+   * Prices the candidate message set the way the provider will receive it.
+   *
+   * The default keeps the durable-record estimate so hosts that do not project messages here keep
+   * their historical numbers. A host that owns the message projectors injects the wire-shaped
+   * estimate, which makes the output allowance and the request report draw from one number instead
+   * of two: the record's ids, observation references and projection fingerprints are not sent.
+   */
+  readonly candidateMessageEstimator?:
+    ((messages: readonly StoredAgentMessage[], model: ModelDescriptor) => number) | undefined;
   readonly receiptBuilder?: ContextReceiptBuilder;
 }
 
@@ -320,23 +389,6 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
   const compactionPlanner = options.compactionPlanner ?? createContextCompactionPlanner();
   const recoveryPlanner = options.recoveryPlanner ?? createContextRecoveryPlanner();
   const pressureEvaluator = createContextPressureEvaluator();
-  /**
-   * Per-Run compaction pacing.
-   *
-   * It is bounded and disposable: a missing entry means "start armed", which can cost at most one
-   * extra attempt and never changes what a compaction is allowed to do. Every attempt still passes
-   * through the planner, the semantic validator, the gain gate and the compaction transaction.
-   */
-  const compactionSchedules = new Map<string, ContextCompactionSchedule>();
-  const scheduleFor = (runId: string): ContextCompactionSchedule => {
-    const existing = compactionSchedules.get(runId);
-    if (existing !== undefined) return existing;
-    if (compactionSchedules.size >= 256) {
-      const oldest = compactionSchedules.keys().next();
-      if (!oldest.done) compactionSchedules.delete(oldest.value);
-    }
-    return initialContextCompactionSchedule();
-  };
   const rehydrator = options.rehydrator ?? createContextRehydrator();
   const documentBuilder = options.documentBuilder ?? createContextDocumentBuilder();
   const summarizer: ContextSummarizerPort =
@@ -397,33 +449,53 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           ? { ...options.policy, ...options.forcedObservationPolicy }
           : options.policy;
       /*
-       * The headroom algorithm needs one pre-selection input estimate, because the output allowance
-       * must be known *before* the planner is bounded by it. The estimate deliberately covers every
-       * candidate message rather than a preview of a pre-trimmed selection: `W - O` must be sized
-       * against the history the Run actually has, otherwise a small preview would silently raise
-       * `O` past what the full history needs. It is an over-estimate on purpose (the durable message
-       * estimator charges 3 bytes per token, the materializer 4), so a miscalculation shrinks the
-       * allowance instead of overflowing the window.
+       * Coverage is resolved before the allowance is drawn.
+       *
+       * A message a checkpoint already replaced is not part of the next request, so charging it to
+       * the window made compaction unable to raise the allowance it had just lowered: the covered
+       * prefix stayed in the count forever. The candidate set below is therefore the *uncovered*
+       * history, priced the way the provider will receive it — the durable record carries ids,
+       * observation references and projection fingerprints that never reach the wire.
        */
+      const history = historyIndexer.index({
+        conversation: input.conversation,
+        model: input.model,
+      });
+      const [latestState, sessionCheckpoint] = await Promise.all([
+        incrementalCheckpointResolver.resolve({
+          runId: input.identity.runId,
+          history,
+        }),
+        options.sessionCheckpointResolver?.resolve({
+          conversation: input.conversation,
+          throughRunId: input.identity.runId,
+        }) ?? Promise.resolve(undefined),
+      ]);
+      throwIfAborted(input.signal);
+      const latestCheckpoint = sessionCheckpoint ?? checkpointFromIncrementalState(latestState);
+      const coverage: ContextCompactionCoverage = createContextCompactionCoverage({
+        history,
+        ...(latestCheckpoint === undefined ? {} : { latestCheckpoint }),
+      });
       const headroomPolicy = options.turnBudgetPolicy;
+      const candidateMessages = input.conversation.turns.flatMap((turn) =>
+        turn.messages.filter((stored) => !coverage.coveredMessageIds.has(stored.message.id)),
+      );
       const preSelectionInputTokens =
         headroomPolicy === undefined
           ? undefined
           : requestOverhead.totalTokens +
-            input.conversation.turns.reduce(
-              (total, turn) =>
-                total +
-                turn.messages.reduce(
-                  (turnTotal, stored) =>
-                    turnTotal + tokenEstimator.estimateAgentMessage(stored.message, input.model),
+            (options.candidateMessageEstimator === undefined
+              ? candidateMessages.reduce(
+                  (total, stored) =>
+                    total + tokenEstimator.estimateAgentMessage(stored.message, input.model),
                   0,
-                ),
-              0,
-            );
-      const outputAllowance =
+                )
+              : options.candidateMessageEstimator(candidateMessages, input.model));
+      const outputAllowancePlan =
         headroomPolicy === undefined || preSelectionInputTokens === undefined
           ? undefined
-          : resolveOutputAllowance({
+          : planOutputAllowance({
               policy: headroomPolicy,
               contextWindowTokens: input.model.limits.contextWindowTokens,
               maxOutputTokens: input.model.limits.maxOutputTokens,
@@ -432,8 +504,19 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                 ? {}
                 : { configuredOutputCeiling: options.modelSettings.maxOutputTokens }),
             });
+      const outputAllowance = outputAllowancePlan?.tokens;
+      /**
+       * The window could not carry even the minimum allowance.
+       *
+       * The turn still runs at the floor, but history is now the thing that has to change: a
+       * compaction is forced below so the next turn can ask for a real output budget again.
+       */
+      const outputLimited = outputAllowancePlan?.limited ?? false;
       const policyOptions = {
         ...configuredPolicyOptions,
+        ...(options.turnBudgetPolicy?.version === "TURN_BUDGET_V4"
+          ? { deepCompaction: options.turnBudgetPolicy.deepCompaction }
+          : {}),
         ...(adaptiveBudget === undefined
           ? {}
           : {
@@ -447,7 +530,13 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
               safetyReserveTokens: headroomPolicy.safetyTokens,
               requestHeadroom: {
                 expectedGrowthTokens: headroomPolicy.expectedGrowthTokens,
-                postCompactionRatio: headroomPolicy.postCompactionRatio,
+                ...(headroomPolicy.version === "TURN_BUDGET_V3"
+                  ? { postCompactionRatio: headroomPolicy.postCompactionRatio }
+                  : {}),
+                ...(headroomPolicy.version !== "TURN_BUDGET_V3" ||
+                headroomPolicy.proactiveRatio === undefined
+                  ? {}
+                  : { proactiveRatio: headroomPolicy.proactiveRatio }),
               },
             }),
         ...(options.workingSet === undefined ? {} : { workingSet: options.workingSet }),
@@ -486,20 +575,6 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         policy,
       };
       const collected = await collectContextSources(options.sourceRegistry, sourceInput);
-      const history = historyIndexer.index({
-        conversation: input.conversation,
-        model: input.model,
-      });
-      const latestState = await incrementalCheckpointResolver.resolve({
-        runId: input.identity.runId,
-        history,
-      });
-      throwIfAborted(input.signal);
-      const latestCheckpoint = checkpointFromIncrementalState(latestState);
-      const coverage: ContextCompactionCoverage = createContextCompactionCoverage({
-        history,
-        ...(latestCheckpoint === undefined ? {} : { latestCheckpoint }),
-      });
       const sourceResults = removeCoveredConversationMessages(
         collected,
         coverage.coveredMessageIds,
@@ -508,6 +583,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       let activeCoverage = coverage;
       let activeSources = sourceResults;
       let compactionReceipt: ContextCompactionReceipt | undefined;
+      let committedCompactionProjection: ContextBuildProjection | undefined;
       let compactionCount = 0;
       // Prove a protocol-safe history cut before letting an over-budget pinned/current projection
       // reach pressure evaluation. Without this preflight exception, the planner throws first and
@@ -549,7 +625,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           ? {}
           : {
               activeCheckpoint:
-                latestCheckpoint.schemaVersion === 2
+                latestCheckpoint.schemaVersion === 2 || latestCheckpoint.schemaVersion === 3
                   ? activeCheckpointProjection(latestCheckpoint)
                   : { structuredCheckpoint: latestCheckpoint.structuredCheckpoint },
             }),
@@ -577,17 +653,6 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       const preflightFingerprint = projectionContentFingerprint(
         initialProjection.materializedMessages,
       );
-      const schedulePressureRatio =
-        estimatedInputTokens /
-        (options.workingSet?.targetTokens ?? policy.effectiveInputLimitTokens);
-      const emergency = estimatedInputTokens >= policy.emergencyCompactionTokens;
-      const schedule = advanceContextCompactionSchedule(scheduleFor(String(input.identity.runId)), {
-        pressureRatio: schedulePressureRatio,
-        emergency,
-        forced: input.mode === "FORCED_RECOVERY",
-        compacted: false,
-      });
-      compactionSchedules.set(String(input.identity.runId), schedule);
       // A closed Tool protocol is only potentially compressible: the cut selector also needs a
       // complete protocol batch to retain while compacting an older prefix. If we mark a single
       // closed batch as "compressible", the pressure schedule consumes its cooldown on a no-op
@@ -613,40 +678,54 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         canCompactMandatoryOverflow,
         proactive: {
           enabled: policy.proactiveCompaction.enabled,
-          armed: schedule.armed,
-          cooldownTurnsRemaining: schedule.cooldownTurnsRemaining,
-          emergency,
         },
       });
-      const recoveryPlan = recoveryPlanner.plan({
+      const plannedRecovery = recoveryPlanner.plan({
         mode: input.mode,
         pressure,
         policy,
         hasCompressibleHistory: hasCompactionCandidate,
       });
+      /*
+       * A floored output allowance is its own reason to reorganize.
+       *
+       * Waiting for the input to overflow never fires while the allowance is already pinned to the
+       * floor: the window "fits" but the model cannot answer. Forcing the one compaction the
+       * scheduler would otherwise withhold is what lets the next turn ask for a real allowance.
+       */
+      const recoveryPlan =
+        outputLimited &&
+        hasCompactionCandidate &&
+        input.mode !== "FORCED_RECOVERY" &&
+        !plannedRecovery.actions.includes("COMPACT_HISTORY")
+          ? Object.freeze({
+              ...plannedRecovery,
+              actions: Object.freeze([...plannedRecovery.actions, "COMPACT_HISTORY" as const]),
+            })
+          : plannedRecovery;
+      /*
+       * "Wanted to compact, could not" must leave a trace.
+       *
+       * A Run that crosses the pressure band and then finds no representable cut used to look
+       * exactly like a Run that was never under pressure: `compaction_count` stayed 0 and nothing
+       * recorded why. The reason rides on the existing recovery-stage channel — the same string
+       * array the usage store already persists — so no schema, Protocol or host change is needed
+       * and the diagnosis is one `json_extract` away.
+       */
+      const compactionSkipStages =
+        !hasCompactionCandidate && (input.mode === "FORCED_RECOVERY" || pressure.state !== "NORMAL")
+          ? [compactionSkipStage(activeCoverage.history)]
+          : [];
       const recoveryStages =
         input.mode === "FORCED_RECOVERY"
-          ? recoveryPlan.actions.filter((action) => action !== "EXHAUSTED")
-          : [];
+          ? [
+              ...recoveryPlan.actions.filter((action) => action !== "EXHAUSTED"),
+              ...compactionSkipStages,
+            ]
+          : compactionSkipStages;
       if (recoveryPlan.actions.includes("COMPACT_HISTORY")) {
         // Recorded when the attempt is made, not when it succeeds: a failed or gainless attempt is
         // exactly the case that must not be retried next turn with the same input and strategy.
-        compactionSchedules.set(
-          String(input.identity.runId),
-          advanceContextCompactionSchedule(
-            schedule,
-            {
-              pressureRatio: schedulePressureRatio,
-              emergency,
-              forced: input.mode === "FORCED_RECOVERY",
-              compacted: true,
-            },
-            {
-              rearmRatio: policy.proactiveCompaction.rearmRatio,
-              cooldownTurns: policy.proactiveCompaction.cooldownTurns,
-            },
-          ),
-        );
         const replayProjection = await buildPreparedProjectionWithoutCompaction({
           contextInput: input,
           policy: withRecoveryTailPolicy(policy, recoveryPlan),
@@ -655,7 +734,8 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           ...(activeCheckpoint?.checkpointId === undefined
             ? {}
             : { promptSurfaceCheckpointId: String(activeCheckpoint.checkpointId) }),
-          ...(activeCheckpoint === undefined || activeCheckpoint.schemaVersion !== 2
+          ...(activeCheckpoint === undefined ||
+          (activeCheckpoint.schemaVersion !== 2 && activeCheckpoint.schemaVersion !== 3)
             ? {}
             : { activeCheckpoint: activeCheckpointProjection(activeCheckpoint) }),
           authorities,
@@ -692,7 +772,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                   ? {}
                   : {
                       activeCheckpoint:
-                        activeCheckpoint.schemaVersion === 2
+                        activeCheckpoint.schemaVersion === 2 || activeCheckpoint.schemaVersion === 3
                           ? activeCheckpointProjection(activeCheckpoint)
                           : { structuredCheckpoint: activeCheckpoint.structuredCheckpoint },
                     }),
@@ -719,11 +799,18 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                 compactionCount: 0,
               })
             : initialProjection;
-        const replayProjectionIsComplete = promptProjectionPreservesUncoveredModelMessages({
-          conversationMessages: input.conversation.turns.flatMap((turn) => turn.messages),
-          selectedMessages: replayProjection.selectedMessages,
-          coveredMessageIds: activeCoverage.coveredMessageIds,
-        });
+        const replayProjectionIsComplete =
+          promptProjectionPreservesUncoveredModelMessages({
+            conversationMessages: input.conversation.turns.flatMap((turn) => turn.messages),
+            selectedMessages: replayProjection.selectedMessages,
+            coveredMessageIds: activeCoverage.coveredMessageIds,
+          }) &&
+          compactionCandidate !== null &&
+          replayProjectionIncludesCompactionSource({
+            conversation: input.conversation,
+            selectedMessages: replayProjection.selectedMessages,
+            ranges: compactionCandidate.sourceCoverageDelta ?? [compactionCandidate.sourceRange],
+          });
         const replayPrefix =
           replayProjection.promptSurface.replayEligible && replayProjectionIsComplete
             ? createContextSummaryReplayPrefix({
@@ -731,6 +818,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                 tools: input.tools,
                 promptSurface: replayProjection.promptSurface,
                 messages: replayProjection.materializedMessages,
+                selectedMessages: replayProjection.selectedMessages,
               })
             : undefined;
         const reason: ContextCompactionReason =
@@ -760,10 +848,16 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           recoveryPlan,
           sourceCriticality,
           atomicGroupByItemId,
+          ...(headroomPolicy === undefined ? {} : { headroomPolicy }),
+          ...(outputAllowance === undefined ? {} : { outputAllowanceTokens: outputAllowance }),
+          recoveryStages,
         });
         const coordinator = createContextCompactionCoordinator({
           dependencies: composition.dependencies,
           latest: latestState,
+          ...(isDurableSessionCheckpoint(latestCheckpoint)
+            ? { latestSessionCheckpoint: latestCheckpoint }
+            : {}),
           onProgress: (stage, progressReason) => {
             if (options.compactionEvents === undefined || options.eventIdFactory === undefined) {
               return;
@@ -798,6 +892,20 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                     timestamp: options.clock.now(),
                   }),
                 ],
+          ...(options.compactionEvents === undefined || options.eventIdFactory === undefined
+            ? {}
+            : {
+                createEventsV3: ({ request, checkpoint, epochId, freedTokens }) => [
+                  options.compactionEvents!.completedV3({
+                    identity: request.identity,
+                    checkpoint,
+                    epochId,
+                    freedTokens,
+                    eventId: options.eventIdFactory!.create(),
+                    timestamp: options.clock.now(),
+                  }),
+                ],
+              }),
           notifyCommitted: (events) => {
             if (events.length > 0) options.notifier?.notifyCommitted(events);
           },
@@ -811,46 +919,123 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           beforeCompactionProjection.audit.report.estimatedInputTokens <=
             policy.effectiveInputLimitTokens;
         let outcome: Awaited<ReturnType<typeof coordinator.compact>> | undefined;
-        try {
-          outcome = await coordinator.compact({
-            identity: input.identity,
-            conversation: input.conversation,
+        let attempt: PersistedCompactionAttempt | undefined;
+        let attemptWasBlocked = false;
+        if (options.compactionAttemptStore !== undefined && hasCompactionCandidate) {
+          const candidateSource = compactionAttemptSource({
             history: activeCoverage.history,
-            policy: withRecoveryTailPolicy(policy, recoveryPlan),
+            conversation: input.conversation,
             model: input.model,
-            ...(replayPrefix === undefined
-              ? {}
-              : {
-                  replayPrefix,
-                  replayPrefixFingerprint:
-                    createContextSummaryReplayPrefixFingerprint(replayPrefix),
-                }),
-            reason,
-            estimatedInputTokensBefore:
-              beforeCompactionProjection.audit.report.estimatedInputTokens,
-            signal: input.signal,
+            tokenEstimator,
           });
-        } catch (error) {
-          throwIfAborted(input.signal);
-          if (!elective) throw error;
-          // Bounded, silent fallback: the uncompacted projection is what this turn already had.
-          outcome = undefined;
-        } finally {
-          if (options.compactionEvents !== undefined && options.eventIdFactory !== undefined) {
-            try {
-              options.notifier?.emitTransient(
-                options.compactionEvents.progress({
-                  identity: input.identity,
-                  stepId: input.turn.stepId,
-                  stage: "FINISHED",
-                  reason,
-                  eventId: options.eventIdFactory.create(),
-                  timestamp: options.clock.now(),
-                }),
-              );
-            } catch {
-              // Live progress is diagnostic. A broken observer must not affect checkpoint truth.
+          if (candidateSource.messageRefs.length > 0) {
+            const claim = await beginPersistedCompactionAttempt({
+              store: options.compactionAttemptStore,
+              runId: input.identity.runId,
+              sessionId: input.identity.sessionId,
+              sourceCoverageDigest: createCompactionSourceCoverageDigest({
+                messageRefs: candidateSource.messageRefs,
+              }),
+              sourceTokens: candidateSource.sourceTokens,
+              createdSequence: input.turn.sequence,
+              createdAt: options.clock.now(),
+              ...(options.compactionRetryAuthorization === undefined
+                ? {}
+                : { authorization: options.compactionRetryAuthorization }),
+            });
+            if (claim.kind === "CLAIMED") attempt = claim.attempt;
+            else attemptWasBlocked = true;
+          }
+        }
+
+        let coordinatorThrew = false;
+        if (!attemptWasBlocked) {
+          try {
+            outcome = await coordinator.compact({
+              identity: input.identity,
+              conversation: input.conversation,
+              ownerStepSequence: input.turn.sequence,
+              history: activeCoverage.history,
+              policy: withRecoveryTailPolicy(policy, recoveryPlan),
+              model: input.model,
+              ...(replayPrefix === undefined
+                ? {}
+                : {
+                    replayPrefix,
+                    replayPrefixFingerprint:
+                      createContextSummaryReplayPrefixFingerprint(replayPrefix),
+                  }),
+              ...(attempt === undefined ? {} : { persistedAttempt: attempt }),
+              reason,
+              estimatedInputTokensBefore:
+                beforeCompactionProjection.audit.report.estimatedInputTokens,
+              fixedInputTokens: beforeCompactionProjection.plan.budget.mandatoryTokens,
+              boundaryTokens: Math.min(4_096, policy.minRecentTailTokens),
+              signal: input.signal,
+            });
+          } catch (error) {
+            coordinatorThrew = true;
+            if (attempt !== undefined && options.compactionAttemptStore !== undefined) {
+              // Keep the START open because a thrown Provider/Gateway call may have completed
+              // remotely. Persist its fixed source baseline separately so a new message changing
+              // the source digest cannot bypass the minimum-growth retry rule.
+              await recordPersistedCompactionFailureBaseline({
+                store: options.compactionAttemptStore,
+                attempt,
+                createdSequence: input.turn.sequence,
+                createdAt: options.clock.now(),
+                failureFamily:
+                  input.mode === "FORCED_RECOVERY" ? "PROVIDER_OVERFLOW" : "UNKNOWN_OUTCOME",
+              });
             }
+            throwIfAborted(input.signal);
+            if (!elective) throw error;
+            // Bounded, silent fallback: the uncompacted projection is what this turn already had.
+            outcome = undefined;
+          } finally {
+            if (options.compactionEvents !== undefined && options.eventIdFactory !== undefined) {
+              try {
+                options.notifier?.emitTransient(
+                  options.compactionEvents.progress({
+                    identity: input.identity,
+                    stepId: input.turn.stepId,
+                    stage: "FINISHED",
+                    reason,
+                    eventId: options.eventIdFactory.create(),
+                    timestamp: options.clock.now(),
+                  }),
+                );
+              } catch {
+                // Live progress is diagnostic. A broken observer must not affect checkpoint truth.
+              }
+            }
+          }
+        }
+        // A thrown/aborted coordinator may have reached a provider subcall or a commit boundary.
+        // Keep its durable START without RESULT so Engine recreation cannot resend it blindly.
+        const terminalAttemptWasAtomic =
+          outcome?.kind === "COMPACTED" && outcome.checkpoint.schemaVersion === 3;
+        if (
+          attempt !== undefined &&
+          outcome !== undefined &&
+          !coordinatorThrew &&
+          !terminalAttemptWasAtomic
+        ) {
+          try {
+            await finishPersistedCompactionAttempt({
+              store: options.compactionAttemptStore!,
+              attempt,
+              createdSequence: input.turn.sequence,
+              createdAt: options.clock.now(),
+              outcome: outcome.kind === "COMPACTED" ? "COMPACTED" : "FAILED",
+              ...(outcome.kind === "NOT_APPLICABLE"
+                ? { failureFamily: outcome.reason }
+                : outcome.kind === "KEEP_ORIGINAL"
+                  ? { failureFamily: outcome.summaryOutcome }
+                  : {}),
+            });
+          } catch {
+            // The START already prevents duplicate provider work if persisting RESULT fails.
           }
         }
         if (outcome?.kind === "COMPACTED") {
@@ -865,54 +1050,53 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           );
           compactionCount = 1;
           compactionReceipt = outcome.receipt;
+          committedCompactionProjection = composition.finalizeCommittedProjection(
+            outcome.checkpoint,
+            outcome.receipt,
+          );
         }
       }
       const finalPolicy = withRecoveryTailPolicy(policy, recoveryPlan);
-      const finalAuthorities =
-        compactionCount === 0
-          ? authorities
-          : await options.authorityProvider.snapshot({
-              identity: input.identity,
-              signal: input.signal,
-            });
       if (compactionCount > 0) throwIfAborted(input.signal);
-      const finalProjection = await buildPreparedProjectionWithoutCompaction({
-        contextInput: input,
-        policy: finalPolicy,
-        sourceResults: activeSources,
-        activeCoverage,
-        ...(activeCheckpoint?.checkpointId === undefined
-          ? {}
-          : { promptSurfaceCheckpointId: String(activeCheckpoint.checkpointId) }),
-        ...(activeCheckpoint === undefined
-          ? {}
-          : {
-              activeCheckpoint:
-                activeCheckpoint.schemaVersion === 2
-                  ? activeCheckpointProjection(activeCheckpoint)
-                  : { structuredCheckpoint: activeCheckpoint.structuredCheckpoint },
-            }),
-        authorities: finalAuthorities,
-        planner: compactionAwarePlanner,
-        sourcePriorities: sourcePriorityMap(options.sourceRegistry),
-        rehydrator,
-        documentBuilder,
-        materializer: options.materializer,
-        receiptBuilder,
-        promptSurfaceStore: options.promptSurfaceStore,
-        ...(options.modelSettings === undefined ? {} : { modelSettings: options.modelSettings }),
-        ...(options.promptSurfaceEpochIdFactory === undefined
-          ? {}
-          : { promptSurfaceEpochIdFactory: options.promptSurfaceEpochIdFactory }),
-        tokenEstimator,
-        clock: options.clock,
-        recoveryPlan,
-        sourceCriticality,
-        atomicGroupByItemId,
-        ...(compactionReceipt === undefined ? {} : { compactionReceipt }),
-        compactionCount,
-        ...(compactionCount === 0 ? {} : { lastCompactionAt: options.clock.now() }),
-      });
+      const finalProjection =
+        committedCompactionProjection ??
+        (await buildPreparedProjectionWithoutCompaction({
+          contextInput: input,
+          policy: finalPolicy,
+          sourceResults: activeSources,
+          activeCoverage,
+          ...(activeCheckpoint?.checkpointId === undefined
+            ? {}
+            : { promptSurfaceCheckpointId: String(activeCheckpoint.checkpointId) }),
+          ...(activeCheckpoint === undefined
+            ? {}
+            : {
+                activeCheckpoint:
+                  activeCheckpoint.schemaVersion === 2 || activeCheckpoint.schemaVersion === 3
+                    ? activeCheckpointProjection(activeCheckpoint)
+                    : { structuredCheckpoint: activeCheckpoint.structuredCheckpoint },
+              }),
+          authorities,
+          planner: compactionAwarePlanner,
+          sourcePriorities: sourcePriorityMap(options.sourceRegistry),
+          rehydrator,
+          documentBuilder,
+          materializer: options.materializer,
+          receiptBuilder,
+          promptSurfaceStore: options.promptSurfaceStore,
+          ...(options.modelSettings === undefined ? {} : { modelSettings: options.modelSettings }),
+          ...(options.promptSurfaceEpochIdFactory === undefined
+            ? {}
+            : { promptSurfaceEpochIdFactory: options.promptSurfaceEpochIdFactory }),
+          tokenEstimator,
+          clock: options.clock,
+          recoveryPlan,
+          sourceCriticality,
+          atomicGroupByItemId,
+          ...(compactionReceipt === undefined ? {} : { compactionReceipt }),
+          compactionCount,
+          ...(compactionCount === 0 ? {} : { lastCompactionAt: options.clock.now() }),
+        }));
       if (
         finalProjection.audit.report.estimatedInputTokens > finalPolicy.effectiveInputLimitTokens
       ) {
@@ -960,12 +1144,14 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         preflight,
         ...(turnBudget === undefined ? {} : { turnBudget }),
       });
-      await options.usageStore.upsert({
-        ...(recoveryStages.length === 0
-          ? finalProjection.audit.usage
-          : { ...finalProjection.audit.usage, lastRecoveryStages: recoveryStages }),
-        ...(turnBudget === undefined ? {} : { turnBudget }),
-      });
+      if (compactionCount === 0) {
+        await options.usageStore.upsert({
+          ...(recoveryStages.length === 0
+            ? finalProjection.audit.usage
+            : { ...finalProjection.audit.usage, lastRecoveryStages: recoveryStages }),
+          ...(turnBudget === undefined ? {} : { turnBudget }),
+        });
+      }
       throwIfAborted(input.signal);
       return Object.freeze({
         messages: finalProjection.materializedMessages,
@@ -1005,7 +1191,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         ...checkpointReference(activeCheckpoint),
         contextFingerprint: finalProjection.audit.contextFingerprint,
         contextArtifactId:
-          activeCheckpoint?.schemaVersion === 2
+          activeCheckpoint?.schemaVersion === 2 || activeCheckpoint?.schemaVersion === 3
             ? String(activeCheckpoint.checkpointId)
             : finalProjection.audit.contextFingerprint,
       });
@@ -1015,8 +1201,10 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
 
 interface ActiveCheckpointProjection {
   readonly checkpointId?: import("../compaction/context-compaction-contracts.js").ContextCheckpointId;
-  readonly structuredCheckpoint: StructuredCheckpoint;
+  readonly schemaVersion?: 2 | 3;
+  readonly structuredCheckpoint: StructuredCheckpoint | StructuredCheckpointV2;
   readonly sourceRange?: import("../compaction/context-compaction-contracts.js").ContextMessageRange;
+  readonly sourceCoverage?: import("../compaction/context-source-coverage.js").ContextSourceCoverage;
   readonly degraded?: boolean;
 }
 
@@ -1198,6 +1386,9 @@ interface CompactionCompositionInput {
   readonly recoveryPlan: ContextRecoveryPlan;
   readonly sourceCriticality: Readonly<Record<string, "REQUIRED" | "OPTIONAL">>;
   readonly atomicGroupByItemId: Readonly<Record<string, string>>;
+  readonly headroomPolicy?: TurnBudgetPolicy;
+  readonly outputAllowanceTokens?: number;
+  readonly recoveryStages: readonly string[];
 }
 
 interface CompactionComposition {
@@ -1205,9 +1396,19 @@ interface CompactionComposition {
   readonly tentativeRebuild: (
     input: ContextCompactionRebuildInputWithIdentity,
   ) => Promise<ContextCompactionRebuildResult>;
+  finalizeCommittedProjection(
+    checkpoint:
+      | ContextCheckpointRecordV2
+      | import("../compaction/context-checkpoint-v3.js").ContextCheckpointRecordV3,
+    receipt: ContextCompactionReceipt,
+  ): ContextBuildProjection;
 }
 
 function createCompactionComposition(input: CompactionCompositionInput): CompactionComposition {
+  let preparedProjection: ContextBuildProjection | undefined;
+  let preparedSources: readonly ContextSourceResult[] | undefined;
+  let preparedPolicy: ContextPolicy | undefined;
+  let preparedAt: TimestampMs | undefined;
   const tentativeRebuild = async (
     rebuildInput: ContextCompactionRebuildInputWithIdentity,
   ): Promise<ContextCompactionRebuildResult> => {
@@ -1215,13 +1416,25 @@ function createCompactionComposition(input: CompactionCompositionInput): Compact
     const candidateCheckpoint: ActiveCheckpointProjection = {
       checkpointId: rebuildInput.checkpointId,
       structuredCheckpoint: rebuildInput.input.checkpoint,
+      ...(rebuildInput.input.sourceCoverage === undefined
+        ? {}
+        : {
+            schemaVersion: 3 as const,
+            sourceCoverage: rebuildInput.input.sourceCoverage,
+          }),
       sourceRange: rebuildInput.input.sourceRange,
       degraded: rebuildInput.degraded,
     };
-    const candidateCoverage = createContextCompactionCoverageForRange({
-      history: input.history,
-      sourceRange: rebuildInput.input.sourceRange,
-    });
+    const candidateCoverage =
+      rebuildInput.input.sourceCoverage === undefined
+        ? createContextCompactionCoverageForRange({
+            history: input.history,
+            sourceRange: rebuildInput.input.sourceRange,
+          })
+        : projectContextCoverage({
+            history: input.history,
+            coverage: rebuildInput.input.sourceCoverage,
+          });
     const candidateSources = withActiveCheckpointProjection(
       removeCoveredConversationMessages(input.collected, candidateCoverage.coveredMessageIds),
       candidateCheckpoint,
@@ -1230,6 +1443,7 @@ function createCompactionComposition(input: CompactionCompositionInput): Compact
       identity: input.input.identity,
       signal: input.input.signal,
     });
+    const candidatePreparedAt = input.options.clock.now();
     const projection = await buildPreparedProjectionWithoutCompaction({
       contextInput: input.input,
       policy: rebuildInput.input.policy,
@@ -1256,11 +1470,47 @@ function createCompactionComposition(input: CompactionCompositionInput): Compact
       recoveryPlan: input.recoveryPlan,
       sourceCriticality: input.sourceCriticality,
       atomicGroupByItemId: input.atomicGroupByItemId,
-      compactionCount: 0,
+      compactionCount: 1,
+      lastCompactionAt: candidatePreparedAt,
     });
+    const turnBudget =
+      input.headroomPolicy === undefined || input.outputAllowanceTokens === undefined
+        ? undefined
+        : decideTurnBudget({
+            policy: input.headroomPolicy,
+            modelProfileRef: `${input.input.model.ref.provider}/${input.input.model.ref.model}`,
+            preparedSurfaceDigest: projectionContentFingerprint(projection.materializedMessages),
+            windowTokens: input.input.model.limits.contextWindowTokens,
+            fullInputTokens:
+              projection.audit.report.estimatedInputTokens +
+              projection.audit.report.requestOverheadTokens,
+            outputAllowanceTokens: input.outputAllowanceTokens,
+            ...(input.options.modelSettings?.maxOutputTokens === undefined
+              ? {}
+              : { configuredOutputCeiling: input.options.modelSettings.maxOutputTokens }),
+            compacted: true,
+          });
+    preparedProjection = projection;
+    preparedSources = candidateSources;
+    preparedPolicy = rebuildInput.input.policy;
+    preparedAt = candidatePreparedAt;
     return {
       estimatedInputTokens: projection.audit.report.estimatedInputTokens,
       retainedMessageIds: projection.selectedMessages.map((message) => message.message.id),
+      ...(projection.promptSurface.compactionActivation === undefined
+        ? {}
+        : {
+            activation: {
+              promptSurface: projection.promptSurface.compactionActivation,
+              usage: Object.freeze({
+                ...projection.audit.usage,
+                ...(input.recoveryStages.length === 0
+                  ? {}
+                  : { lastRecoveryStages: input.recoveryStages }),
+                ...(turnBudget === undefined ? {} : { turnBudget }),
+              }),
+            },
+          }),
     };
   };
 
@@ -1297,6 +1547,9 @@ function createCompactionComposition(input: CompactionCompositionInput): Compact
     rehydrator: input.rehydrator,
     tentativeRebuilder,
     commit,
+    ...(input.options.compactionAttemptStore === undefined
+      ? {}
+      : { attemptStore: input.options.compactionAttemptStore }),
     clock: input.options.clock,
     summarySourceTokenEstimator:
       input.options.tokenEstimator ?? createUtf8HeuristicTokenEstimator(),
@@ -1304,7 +1557,44 @@ function createCompactionComposition(input: CompactionCompositionInput): Compact
       create: () => createContextCheckpointId(requireCheckpointId(input.options)),
     },
   };
-  return Object.freeze({ dependencies: Object.freeze(dependencies), tentativeRebuild });
+  return Object.freeze({
+    dependencies: Object.freeze(dependencies),
+    tentativeRebuild,
+    finalizeCommittedProjection(
+      checkpoint:
+        | ContextCheckpointRecordV2
+        | import("../compaction/context-checkpoint-v3.js").ContextCheckpointRecordV3,
+      receipt: ContextCompactionReceipt,
+    ) {
+      if (
+        preparedProjection === undefined ||
+        preparedSources === undefined ||
+        preparedPolicy === undefined ||
+        preparedAt === undefined
+      ) {
+        throw new ContextExhaustedError();
+      }
+      const audit = input.receiptBuilder.build({
+        identity: input.input.identity,
+        turn: input.input.turn,
+        input: input.input.input,
+        mode: input.input.mode,
+        model: input.input.model,
+        tools: input.input.tools,
+        policy: preparedPolicy,
+        sourceResults: preparedSources,
+        plan: preparedProjection.plan,
+        conversationMessages: preparedProjection.selectedMessages,
+        materializedMessages: preparedProjection.materializedMessages,
+        checkpoint: checkpointRef(checkpoint),
+        compaction: receipt,
+        compactionCount: 1,
+        lastCompactionAt: preparedAt,
+        promptSurface: preparedProjection.promptSurface.receipt,
+      });
+      return Object.freeze({ ...preparedProjection, audit });
+    },
+  });
 }
 
 function requireCheckpointId(options: V2ContextEngineOptions): string {
@@ -1316,14 +1606,33 @@ function requireCheckpointId(options: V2ContextEngineOptions): string {
 }
 
 function checkpointRef(
-  record: ActiveCheckpointProjection | ContextCheckpointRecordV2,
+  record:
+    | ActiveCheckpointProjection
+    | ContextCheckpointRecordV2
+    | import("../compaction/context-checkpoint-v3.js").ContextCheckpointRecordV3,
 ): ContextCheckpointRef {
-  if (
-    record.checkpointId === undefined ||
-    record.sourceRange === undefined ||
-    record.degraded === undefined
-  ) {
-    throw new TypeError("Active Context Checkpoint projection is missing its V2 identity.");
+  if (record.checkpointId === undefined || record.degraded === undefined) {
+    throw new TypeError("Active Context Checkpoint projection is missing its identity.");
+  }
+  const sourceCoverage =
+    "coverage" in record
+      ? record.coverage
+      : "sourceCoverage" in record
+        ? record.sourceCoverage
+        : undefined;
+  if (record.schemaVersion === 3 || sourceCoverage !== undefined) {
+    if (sourceCoverage === undefined) {
+      throw new TypeError("Active Context Checkpoint V3 projection is missing its coverage.");
+    }
+    return Object.freeze({
+      checkpointId: record.checkpointId,
+      schemaVersion: 3,
+      sourceCoverage,
+      degraded: record.degraded,
+    });
+  }
+  if (record.sourceRange === undefined) {
+    throw new TypeError("Active Context Checkpoint V2 projection is missing its source range.");
   }
   return Object.freeze({
     checkpointId: record.checkpointId,
@@ -1333,9 +1642,23 @@ function checkpointRef(
   });
 }
 
-function activeCheckpointProjection(record: ContextCheckpointRecordV2): ActiveCheckpointProjection {
+function activeCheckpointProjection(
+  record:
+    | ContextCheckpointRecordV2
+    | import("../compaction/context-checkpoint-v3.js").ContextCheckpointRecordV3,
+): ActiveCheckpointProjection {
+  if (record.schemaVersion === 3) {
+    return Object.freeze({
+      checkpointId: record.checkpointId,
+      schemaVersion: 3,
+      structuredCheckpoint: record.structuredCheckpoint,
+      sourceCoverage: record.coverage,
+      degraded: record.degraded,
+    });
+  }
   return Object.freeze({
     checkpointId: record.checkpointId,
+    schemaVersion: 2,
     structuredCheckpoint: record.structuredCheckpoint,
     sourceRange: record.sourceRange,
     degraded: record.degraded,
@@ -1343,9 +1666,15 @@ function activeCheckpointProjection(record: ContextCheckpointRecordV2): ActiveCh
 }
 
 function checkpointReference(
-  record: ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1 | undefined,
+  record:
+    | ContextCheckpointRecordV2
+    | import("../compaction/context-checkpoint-v3.js").ContextCheckpointRecordV3
+    | LegacyContextCheckpointRecordV1
+    | undefined,
 ): { readonly checkpoint?: ContextCheckpointRef } {
-  return record?.schemaVersion === 2 ? { checkpoint: checkpointRef(record) } : {};
+  return record?.schemaVersion === 2 || record?.schemaVersion === 3
+    ? { checkpoint: checkpointRef(record) }
+    : {};
 }
 
 function sourcePriorityMap(registry: ContextSourceRegistry): Readonly<Record<string, number>> {
@@ -1441,9 +1770,19 @@ function checkpointFromIncrementalState(
   return state.kind === "NONE" ? undefined : state.checkpoint;
 }
 
+function isDurableSessionCheckpoint(
+  checkpoint: ApplicableContextCheckpoint | ContextCheckpointRecordV2 | undefined,
+): checkpoint is
+  | ContextCheckpointRecordV2
+  | import("../compaction/context-checkpoint-v3.js").ContextCheckpointRecordV3 {
+  return checkpoint?.schemaVersion === 2 || checkpoint?.schemaVersion === 3;
+}
+
 function withActiveCheckpoint(
   results: readonly ContextSourceResult[],
-  checkpoint: ContextCheckpointRecordV2,
+  checkpoint:
+    | ContextCheckpointRecordV2
+    | import("../compaction/context-checkpoint-v3.js").ContextCheckpointRecordV3,
 ): readonly ContextSourceResult[] {
   return withActiveCheckpointProjection(results, activeCheckpointProjection(checkpoint));
 }
@@ -1488,6 +1827,69 @@ function withActiveCheckpointProjection(
   );
 }
 
+function compactionAttemptSource(input: {
+  readonly history: ContextHistoryIndex;
+  readonly conversation: ContextPrepareInput["conversation"];
+  readonly model: ModelDescriptor;
+  readonly tokenEstimator: ContextTokenEstimatorPort;
+}): {
+  readonly messageRefs: readonly {
+    readonly runId: string;
+    readonly conversationTurnId: string;
+    readonly messageId: string;
+    readonly sequence: number;
+  }[];
+  readonly sourceTokens: number;
+} {
+  const unique = new Map<
+    string,
+    {
+      readonly runId: string;
+      readonly conversationTurnId: string;
+      readonly messageId: string;
+      readonly sequence: number;
+    }
+  >();
+  for (const unit of input.history.units) {
+    if (unit.status !== "CLOSED" || !unit.compactionEligible) continue;
+    for (const ref of unit.messages) {
+      const messageId = String(ref.messageId);
+      if (unique.has(messageId)) continue;
+      unique.set(
+        messageId,
+        Object.freeze({
+          runId: String(ref.runId),
+          conversationTurnId: String(ref.conversationTurnId),
+          messageId,
+          sequence: ref.sequence,
+        }),
+      );
+    }
+  }
+  const turnOrder = new Map(
+    input.conversation.turns.map((turn, index) => [
+      JSON.stringify([String(turn.runId), String(turn.id)]),
+      index,
+    ]),
+  );
+  const messageRefs = [...unique.values()].sort((left, right) => {
+    const leftTurn = turnOrder.get(JSON.stringify([left.runId, left.conversationTurnId])) ?? -1;
+    const rightTurn = turnOrder.get(JSON.stringify([right.runId, right.conversationTurnId])) ?? -1;
+    return leftTurn === rightTurn ? left.sequence - right.sequence : leftTurn - rightTurn;
+  });
+  const storedById = new Map(
+    input.conversation.turns.flatMap((turn) =>
+      turn.messages.map((stored) => [String(stored.message.id), stored] as const),
+    ),
+  );
+  const sourceTokens = messageRefs.reduce((total, ref) => {
+    const stored = storedById.get(ref.messageId);
+    if (stored === undefined) throw new ContextPlanningError("INCONSISTENT_PLAN");
+    return total + input.tokenEstimator.estimateAgentMessage(stored.message, input.model);
+  }, 0);
+  return Object.freeze({ messageRefs: Object.freeze(messageRefs), sourceTokens });
+}
+
 function throwIfAborted(signal: AbortSignal): void {
   if (!signal.aborted) return;
   const error = new Error("Context preparation was cancelled.");
@@ -1527,6 +1929,8 @@ interface PromptSurfacePreparationInput {
 interface PromptSurfacePreparationResult extends PreparedPromptSurface {
   /** True only when the existing epoch matches and the complete request can be replayed. */
   readonly replayEligible: boolean;
+  /** Transaction command for a prepared compaction baseline; never committed by the projector. */
+  readonly compactionActivation?: PromptSurfaceCompactionActivationCommand;
 }
 
 async function preparePromptSurface(
@@ -1618,6 +2022,17 @@ async function preparePromptSurface(
       "V2 Prompt Surface must be reset before a new Step executes.",
     );
   }
+  if (
+    surface.resetReason === "COMPACTION_COMMITTED" &&
+    surface.createdStepSequence === input.contextInput.turn.sequence &&
+    surface.records?.[0]?.kind === "BASELINE" &&
+    surface.records[0].sourceStepSequence === input.contextInput.turn.sequence
+  ) {
+    // A same-Step retry after an atomic compaction reuses the committed candidate exactly. A
+    // second source/authority collection can have moved since that candidate was prepared; it
+    // must not rewrite the request the activation transaction already made authoritative.
+    return preparedSurface(surface, input, true);
+  }
   try {
     return await prepareV3PromptSurface(input, surface);
   } catch (error) {
@@ -1673,6 +2088,7 @@ async function preparePromptSurface(
 function preparePreviewSurface(
   input: PromptSurfacePreparationInput,
   identity: ReturnType<typeof promptSurfaceIdentity>,
+  expectedCurrent?: PromptSurfaceCompactionActivationCommand["expectedCurrent"],
 ): PromptSurfacePreparationResult {
   const runId = input.contextInput.identity.runId;
   const previewKey = fingerprint(
@@ -1682,10 +2098,17 @@ function preparePreviewSurface(
       identity,
     }),
   ).slice("sha256:".length);
+  const compactionOperationId =
+    input.compactionCommitted && input.checkpointId !== undefined
+      ? `context-compaction:${input.checkpointId}`
+      : undefined;
   const epoch = createPromptSurfaceEpoch({
     runId,
     formatVersion: 3,
-    epochId: `preview-${previewKey}`,
+    epochId:
+      compactionOperationId === undefined
+        ? `preview-${previewKey}`
+        : `compaction-${fingerprint(compactionOperationId).slice("sha256:".length)}`,
     modelRef: input.contextInput.model.ref,
     stableHeadFingerprint: identity.stableHeadFingerprint,
     toolSchemaFingerprint: identity.toolSchemaFingerprint,
@@ -1716,7 +2139,23 @@ function preparePreviewSurface(
     records: [record],
     sectionStates,
   };
-  return preparedSurface(surface, input, false);
+  const prepared = preparedSurface(surface, input, false);
+  if (!input.compactionCommitted) return prepared;
+  if (input.checkpointId === undefined || expectedCurrent === undefined) {
+    throw new PromptSurfaceIntegrityError(
+      "Prepared compaction is missing its checkpoint or Prompt Surface compare-and-swap identity.",
+    );
+  }
+  return Object.freeze({
+    ...prepared,
+    compactionActivation: Object.freeze({
+      expectedCurrent,
+      operationId: compactionOperationId!,
+      newEpoch: epoch,
+      baseline: record,
+      expectedSectionStates: states,
+    }),
+  });
 }
 
 function prepareV3PromptSurface(
@@ -2013,6 +2452,33 @@ async function projectPromptSurface(
   } catch (error) {
     throw new PromptSurfaceIntegrityError("Prompt Surface epoch metadata could not be read.", {
       cause: error,
+    });
+  }
+  if (input.compactionCommitted) {
+    if (current === undefined) {
+      return preparePreviewSurface(input, identity, { kind: "ABSENT" });
+    }
+    let loaded: PromptSurfaceEpochWithSnapshots | undefined;
+    try {
+      loaded = await input.store.readEpoch(current.runId, current.epochId);
+      if (loaded === undefined) throw new Error("missing compaction source epoch");
+      assertPromptSurfaceEpochWithSnapshots(loaded);
+    } catch (error) {
+      throw new PromptSurfaceIntegrityError(
+        "Persisted Prompt Surface failed compaction compare-and-swap checks.",
+        { cause: error },
+      );
+    }
+    if (loaded.formatVersion !== 3 || loaded.records === undefined) {
+      throw new PromptSurfaceIntegrityError(
+        "Compaction activation requires a complete V3 Prompt Surface.",
+      );
+    }
+    return preparePreviewSurface(input, identity, {
+      kind: "CURRENT",
+      epoch: promptSurfaceEpochIdentity(loaded),
+      recordOrdinal: loaded.records.length,
+      decisionFingerprint: lastDurableDecisionFingerprint(loaded),
     });
   }
   if (current === undefined) return preparePreviewSurface(input, identity);
@@ -2387,14 +2853,58 @@ function createContextSummaryReplayPrefix(input: {
   readonly tools: ContextPrepareInput["tools"];
   readonly promptSurface: PromptSurfacePreparationResult;
   readonly messages: readonly AIMessage[];
+  readonly selectedMessages: readonly StoredAgentMessage[];
 }): ContextSummaryReplayPrefix {
   return Object.freeze({
     modelRef: Object.freeze({ ...input.model.ref }),
     api: input.model.api,
     surfaceFingerprint: input.promptSurface.receipt.prefixFingerprint,
+    messageRefs: Object.freeze(
+      input.selectedMessages.map((stored) =>
+        Object.freeze({
+          messageId: String(stored.message.id),
+          runId: String(stored.message.runId),
+          conversationTurnId: String(stored.message.conversationTurnId),
+          sequence: stored.sequence,
+          schemaVersion: stored.schemaVersion,
+          modelProjectionVersion: stored.modelProjectionVersion ?? null,
+        }),
+      ),
+    ),
     messages: Object.freeze([...input.messages]),
     tools: Object.freeze([...input.tools]),
   });
+}
+
+function replayProjectionIncludesCompactionSource(input: {
+  readonly conversation: ContextPrepareInput["conversation"];
+  readonly selectedMessages: readonly StoredAgentMessage[];
+  readonly ranges: readonly ContextMessageRange[];
+}): boolean {
+  const selectedIds = new Set(input.selectedMessages.map((stored) => String(stored.message.id)));
+  for (const range of input.ranges) {
+    const turn = input.conversation.turns.find(
+      (candidate) =>
+        String(candidate.runId) === String(range.runId) &&
+        String(candidate.id) === String(range.conversationTurnId),
+    );
+    if (turn === undefined) return false;
+    const messages = turn.messages.filter(
+      (stored) =>
+        stored.message.audience.model &&
+        stored.sequence >= range.firstSequence &&
+        stored.sequence <= range.lastSequence,
+    );
+    if (
+      messages.length !== range.lastSequence - range.firstSequence + 1 ||
+      String(messages[0]?.message.id) !== String(range.firstMessageId) ||
+      String(messages.at(-1)?.message.id) !== String(range.lastMessageId) ||
+      messages.some((stored) => !selectedIds.has(String(stored.message.id)))
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function resetReasonFor(
@@ -2600,6 +3110,22 @@ function projectionContentFingerprint(messages: readonly AIMessage[]): string {
     hash.update("\u0000", "utf8");
   }
   return `sha256:${hash.digest("hex")}`;
+}
+
+/**
+ * Why no compaction candidate exists, as one stable token on the recovery-stage channel.
+ *
+ * `NO_CLOSED_TURN` means there is nothing old enough to fold yet — the Run simply has to keep
+ * going. `NO_REPRESENTABLE_CUT` means closed history exists but no cut could be written as one
+ * `ContextMessageRange`, which is a defect rather than a state. Separating the two is what turns
+ * "compaction_count stayed 0" from a mystery into a diagnosis.
+ */
+function compactionSkipStage(history: ContextHistoryIndex): string {
+  const hasClosedTurn = history.units.some(
+    (unit) =>
+      unit.kind === "CONVERSATION_TURN" && unit.status === "CLOSED" && unit.compactionEligible,
+  );
+  return hasClosedTurn ? "COMPACTION_SKIP_NO_REPRESENTABLE_CUT" : "COMPACTION_SKIP_NO_CLOSED_TURN";
 }
 
 function estimatePromptSurfaceTokens(value: number, label: string): number {

@@ -8,7 +8,10 @@ export const ClientAgentSessionSchema = AgentSessionSchema.omit({ defaultModel: 
   .strict();
 export type ClientAgentSession = z.infer<typeof ClientAgentSessionSchema>;
 
-export const ClientAgentRunSchema = AgentRunSchema.omit({ model: true })
+export const ClientAgentRunSchema = AgentRunSchema.omit({
+  model: true,
+  contextCompactionRetryOf: true,
+})
   .extend({ model: ClientModelSelectionSchema })
   .strict();
 export type ClientAgentRun = z.infer<typeof ClientAgentRunSchema>;

@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPrivateReplayReference } from "@caelush/agent";
 import type {
+  ContextSummarizationInput,
   PrivateReplayIdentity,
   PrivateReplayReadScope,
   PrivateReplayStorePort,
 } from "@caelush/agent";
 import { createDaemonPrivateReplayResolver } from "../src/replay/private-replay-resolver.js";
+import { createContextSummaryPrivateReplayExecution } from "../src/context/v2-context-composition.js";
 
 const identity: PrivateReplayIdentity = {
   sessionId: "session-a",
@@ -38,6 +40,59 @@ async function resolverFixture() {
 }
 
 describe("daemon private replay resolver", () => {
+  it("opens summary replay with the exact selected message and Assistant scope", async () => {
+    const providerState = createPrivateReplayReference(identity);
+    const openExecution = vi.fn(async () => ({ read: vi.fn(), dispose: vi.fn() }));
+    const store = { openExecution } as unknown as PrivateReplayStorePort;
+    const summaryInput = {
+      identity: { runId: "run-2", sessionId: identity.sessionId },
+      replayPrefix: {
+        modelRef: { provider: identity.providerId, model: identity.model },
+        api: identity.api,
+        surfaceFingerprint: `sha256:${"a".repeat(64)}`,
+        messageRefs: [
+          {
+            messageId: identity.messageId,
+            runId: identity.runId,
+            conversationTurnId: "turn-1",
+            sequence: 1,
+            schemaVersion: 1,
+            modelProjectionVersion: 1,
+          },
+        ],
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Prior answer." }],
+            providerState,
+          },
+        ],
+        tools: [],
+      },
+    } as unknown as ContextSummarizationInput;
+
+    const execution = await createContextSummaryPrivateReplayExecution({
+      input: summaryInput,
+      store,
+      signal: new AbortController().signal,
+    });
+
+    expect(execution).toBeDefined();
+    expect(openExecution).toHaveBeenCalledWith(
+      {
+        sessionId: identity.sessionId,
+        executionRunId: "run-2",
+        providerId: identity.providerId,
+        model: identity.model,
+        api: identity.api,
+        selectedMessageIds: [identity.messageId],
+        selectedAssistantMessageIds: [identity.messageId],
+      },
+      { signal: expect.any(AbortSignal) },
+    );
+    await execution?.dispose();
+  });
+
   it("resolves the full opaque identity for a Context-selected same-Session historical Assistant", async () => {
     const { execution, resolver, read } = await resolverFixture();
     const state = createPrivateReplayReference(identity);

@@ -33,6 +33,16 @@ export const STAGE8_LIMITS = Object.freeze({
   reusablePrefixAnomalyFloor: 0.9,
 });
 
+/** A separate real-usage acceptance profile; existing Stage 8 fuses remain unchanged. */
+export const DEEP_COMPACTION_CACHE_95_PROFILE = Object.freeze({
+  id: "DEEP_COMPACTION_CACHE_95",
+  minimumCompactions: 2,
+  minimumPostCompactionMainCalls: 3,
+  minimumNaturalTriggerRatio: 0.9,
+  minimumAllPurposeHitRate: 0.95,
+  minimumReusablePrefixEfficiency: 0.99,
+});
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const NOTES_ROOT = "D:\\Develop\\Caelush-work-notes\\prompt-cache-97";
 const SCENARIO_ROOT = resolve(NOTES_ROOT, "scenarios");
@@ -1347,6 +1357,395 @@ export function evaluateStage8ExitGate(state) {
   );
 }
 
+/**
+ * Evaluate a frozen, all-purpose deep-compaction cache evidence artifact without issuing Provider
+ * requests. Unknown usage and incomplete task coverage remain INCONCLUSIVE instead of disappearing
+ * from the hit-rate denominator.
+ */
+export function evaluateDeepCompactionCache95Evidence(value) {
+  assertClosedRecord(
+    value,
+    new Set(["schemaVersion", "profile", "frozen", "control", "observed"]),
+    "Deep compaction evidence",
+  );
+  if (value.schemaVersion !== 1 || value.profile !== DEEP_COMPACTION_CACHE_95_PROFILE.id) {
+    throw new TypeError("Deep compaction evidence profile identity is invalid.");
+  }
+  const frozenKeys = new Set([
+    "taskDigest",
+    "modelFingerprint",
+    "maxProviderCalls",
+    "maxMainCalls",
+    "maxToolInvocations",
+    "maxElapsedMs",
+    "maxInputTokens",
+    "maxCostNanoUsd",
+  ]);
+  assertClosedRecord(value.frozen, frozenKeys, "Frozen deep compaction manifest");
+  const frozen = value.frozen;
+  if (
+    !FINGERPRINT.test(frozen.taskDigest ?? "") ||
+    !FINGERPRINT.test(frozen.modelFingerprint ?? "") ||
+    [
+      frozen.maxProviderCalls,
+      frozen.maxMainCalls,
+      frozen.maxToolInvocations,
+      frozen.maxElapsedMs,
+      frozen.maxInputTokens,
+      frozen.maxCostNanoUsd,
+    ].some((count) => !Number.isSafeInteger(count) || count < 1)
+  ) {
+    throw new TypeError("Frozen deep compaction budgets or identity are invalid.");
+  }
+  const observedKeys = new Set([
+    "taskDigest",
+    "modelFingerprint",
+    "terminalState",
+    "costStatus",
+    "qualityAssessment",
+    "qualityEvidenceDigest",
+    "providerCallCount",
+    "mainCallCount",
+    "toolInvocationCount",
+    "elapsedMs",
+    "inputTokens",
+    "costNanoUsd",
+    "unexpectedResetCount",
+    "duplicateSummaryCount",
+    "compactions",
+    "scenarioChecks",
+    "prefixEfficiencySamples",
+    "samples",
+  ]);
+  assertClosedRecord(value.observed, observedKeys, "Observed deep compaction evidence");
+  const observed = value.observed;
+  const observedCounts = [
+    observed.providerCallCount,
+    observed.mainCallCount,
+    observed.toolInvocationCount,
+    observed.elapsedMs,
+    observed.inputTokens,
+    observed.costNanoUsd,
+    observed.unexpectedResetCount,
+    observed.duplicateSummaryCount,
+  ];
+  if (
+    !FINGERPRINT.test(observed.taskDigest ?? "") ||
+    !FINGERPRINT.test(observed.modelFingerprint ?? "") ||
+    observedCounts.some((count) => !Number.isSafeInteger(count) || count < 0) ||
+    !["COMPLETED", "INCOMPLETE", "FAILED"].includes(observed.terminalState) ||
+    !["RECONCILED", "UNKNOWN", "MISMATCH"].includes(observed.costStatus) ||
+    !Array.isArray(observed.compactions) ||
+    !Array.isArray(observed.prefixEfficiencySamples) ||
+    !Array.isArray(observed.samples)
+  ) {
+    throw new TypeError("Observed deep compaction evidence fields are invalid.");
+  }
+
+  const reasons = new Set();
+  const hardFailures = new Set();
+  let control;
+  if (value.control === undefined || value.control === null) {
+    reasons.add("CONTROL_COMPARISON_MISSING");
+  } else {
+    assertClosedRecord(
+      value.control,
+      new Set([
+        "taskDigest",
+        "modelFingerprint",
+        "terminalState",
+        "costStatus",
+        "providerCallCount",
+        "mainCallCount",
+        "toolInvocationCount",
+        "elapsedMs",
+        "inputTokens",
+        "costNanoUsd",
+      ]),
+      "Control-run comparison",
+    );
+    control = value.control;
+    if (
+      !FINGERPRINT.test(control.taskDigest ?? "") ||
+      !FINGERPRINT.test(control.modelFingerprint ?? "") ||
+      [
+        control.providerCallCount,
+        control.mainCallCount,
+        control.toolInvocationCount,
+        control.elapsedMs,
+        control.inputTokens,
+        control.costNanoUsd,
+      ].some((count) => !Number.isSafeInteger(count) || count < 0) ||
+      !["COMPLETED", "INCOMPLETE", "FAILED"].includes(control.terminalState) ||
+      !["RECONCILED", "UNKNOWN", "MISMATCH"].includes(control.costStatus)
+    ) {
+      throw new TypeError("Control-run comparison fields are invalid.");
+    }
+    if (
+      control.taskDigest !== frozen.taskDigest ||
+      control.modelFingerprint !== frozen.modelFingerprint
+    ) {
+      hardFailures.add("CONTROL_TASK_OR_MODEL_MISMATCH");
+    }
+    if (control.terminalState !== "COMPLETED") reasons.add("CONTROL_TASK_NOT_COMPLETED");
+    if (control.costStatus === "UNKNOWN") reasons.add("CONTROL_COST_NOT_RECONCILED");
+    if (control.costStatus === "MISMATCH") hardFailures.add("CONTROL_COST_MISMATCH");
+  }
+  if (observed.qualityAssessment === undefined) {
+    reasons.add("COMPLETION_QUALITY_NOT_ASSESSED");
+  } else if (observed.qualityAssessment === "CANDIDATE_REGRESSION") {
+    hardFailures.add("CANDIDATE_COMPLETION_QUALITY_REGRESSION");
+  } else if (observed.qualityAssessment !== "EQUIVALENT_OR_BETTER") {
+    reasons.add("COMPLETION_QUALITY_NOT_ASSESSED");
+  }
+  if (
+    observed.qualityEvidenceDigest !== undefined &&
+    !FINGERPRINT.test(observed.qualityEvidenceDigest)
+  ) {
+    throw new TypeError("Completion quality evidence fingerprint is invalid.");
+  }
+  if (
+    observed.qualityAssessment === "EQUIVALENT_OR_BETTER" &&
+    !FINGERPRINT.test(observed.qualityEvidenceDigest ?? "")
+  ) {
+    reasons.add("COMPLETION_QUALITY_EVIDENCE_MISSING");
+  }
+  if (
+    observed.taskDigest !== frozen.taskDigest ||
+    observed.modelFingerprint !== frozen.modelFingerprint
+  ) {
+    hardFailures.add("FROZEN_TASK_OR_MODEL_MISMATCH");
+  }
+  if (
+    observed.providerCallCount + (control?.providerCallCount ?? 0) > frozen.maxProviderCalls ||
+    observed.mainCallCount + (control?.mainCallCount ?? 0) > frozen.maxMainCalls ||
+    observed.toolInvocationCount + (control?.toolInvocationCount ?? 0) >
+      frozen.maxToolInvocations ||
+    observed.elapsedMs + (control?.elapsedMs ?? 0) > frozen.maxElapsedMs ||
+    observed.inputTokens + (control?.inputTokens ?? 0) > frozen.maxInputTokens ||
+    observed.costNanoUsd + (control?.costNanoUsd ?? 0) > frozen.maxCostNanoUsd
+  ) {
+    hardFailures.add("FROZEN_BUDGET_EXCEEDED");
+  }
+  if (observed.unexpectedResetCount > 0) hardFailures.add("UNEXPECTED_PREFIX_RESET");
+  if (observed.duplicateSummaryCount > 0) hardFailures.add("DUPLICATE_SUMMARY");
+  if (observed.scenarioChecks === undefined || observed.scenarioChecks === null) {
+    reasons.add("SCENARIO_EVIDENCE_INCOMPLETE");
+  } else {
+    assertClosedRecord(
+      observed.scenarioChecks,
+      new Set(["largeToolResult", "newRunContinuation", "boundedRecovery"]),
+      "Required deep compaction scenario checks",
+    );
+    const checks = [
+      observed.scenarioChecks.largeToolResult,
+      observed.scenarioChecks.newRunContinuation,
+      observed.scenarioChecks.boundedRecovery,
+    ];
+    if (checks.some((check) => typeof check !== "boolean")) {
+      throw new TypeError("Required deep compaction scenario checks are invalid.");
+    }
+    if (checks.some((check) => check === false)) {
+      hardFailures.add("REQUIRED_SCENARIO_NOT_COVERED");
+    }
+  }
+
+  const callIds = new Set();
+  const providerEventSequences = new Set();
+  let hitTokens = 0n;
+  let missTokens = 0n;
+  let inputTokens = 0;
+  let mainSamples = 0;
+  let usageComplete = true;
+  for (const sample of observed.samples) {
+    assertClosedRecord(
+      sample,
+      new Set([
+        "callId",
+        "eventSequence",
+        "purpose",
+        "inputTokens",
+        "hitTokens",
+        "missTokens",
+        "usageComplete",
+      ]),
+      "Deep compaction Provider sample",
+    );
+    if (
+      typeof sample.callId !== "string" ||
+      sample.callId.trim().length === 0 ||
+      !Number.isSafeInteger(sample.eventSequence) ||
+      sample.eventSequence < 1 ||
+      !PURPOSES.has(sample.purpose) ||
+      !Number.isSafeInteger(sample.inputTokens) ||
+      sample.inputTokens < 0 ||
+      typeof sample.usageComplete !== "boolean" ||
+      (sample.usageComplete &&
+        (!Number.isSafeInteger(sample.hitTokens) ||
+          sample.hitTokens < 0 ||
+          !Number.isSafeInteger(sample.missTokens) ||
+          sample.missTokens < 0)) ||
+      (!sample.usageComplete &&
+        !(sample.hitTokens === null && sample.missTokens === null) &&
+        (!Number.isSafeInteger(sample.hitTokens) ||
+          sample.hitTokens < 0 ||
+          !Number.isSafeInteger(sample.missTokens) ||
+          sample.missTokens < 0))
+    ) {
+      throw new TypeError("Deep compaction Provider sample is invalid.");
+    }
+    if (callIds.has(sample.callId) || providerEventSequences.has(sample.eventSequence)) {
+      hardFailures.add("DUPLICATE_PROVIDER_CALL_ID_OR_SEQUENCE");
+    }
+    callIds.add(sample.callId);
+    providerEventSequences.add(sample.eventSequence);
+    if (sample.purpose === "MAIN_AGENT") mainSamples += 1;
+    inputTokens += sample.inputTokens;
+    if (!sample.usageComplete || sample.inputTokens !== sample.hitTokens + sample.missTokens) {
+      usageComplete = false;
+      continue;
+    }
+    hitTokens += BigInt(sample.hitTokens);
+    missTokens += BigInt(sample.missTokens);
+  }
+  if (
+    observed.samples.length !== observed.providerCallCount ||
+    mainSamples !== observed.mainCallCount ||
+    inputTokens !== observed.inputTokens
+  ) {
+    usageComplete = false;
+  }
+  if (!usageComplete) reasons.add("PROVIDER_USAGE_INCOMPLETE");
+
+  if (observed.terminalState !== "COMPLETED") reasons.add("TASK_NOT_COMPLETED");
+  if (observed.costStatus !== "RECONCILED") reasons.add("COST_NOT_RECONCILED");
+  if (observed.terminalState === "COMPLETED") {
+    const compactionIds = new Set();
+    const compactionEventSequences = new Set();
+    const validCompactions = [];
+    for (const compaction of observed.compactions) {
+      assertClosedRecord(
+        compaction,
+        new Set([
+          "operationId",
+          "summaryCallId",
+          "completionEventSequence",
+          "reason",
+          "tokensBefore",
+          "effectiveInputLimitTokens",
+        ]),
+        "Deep compaction operation sample",
+      );
+      const summarySample = observed.samples.find(
+        (sample) => sample.callId === compaction.summaryCallId,
+      );
+      if (
+        typeof compaction.operationId !== "string" ||
+        compaction.operationId.trim().length === 0 ||
+        typeof compaction.summaryCallId !== "string" ||
+        !Number.isSafeInteger(compaction.completionEventSequence) ||
+        compaction.completionEventSequence < 1 ||
+        providerEventSequences.has(compaction.completionEventSequence) ||
+        compactionEventSequences.has(compaction.completionEventSequence) ||
+        !["PROACTIVE_PRESSURE", "SELECTION_PRESSURE"].includes(compaction.reason) ||
+        !Number.isSafeInteger(compaction.tokensBefore) ||
+        compaction.tokensBefore < 1 ||
+        !Number.isSafeInteger(compaction.effectiveInputLimitTokens) ||
+        compaction.effectiveInputLimitTokens < 1 ||
+        summarySample === undefined ||
+        summarySample.purpose !== "COMPACTION" ||
+        summarySample.eventSequence >= compaction.completionEventSequence
+      ) {
+        throw new TypeError("Deep compaction operation sample is invalid.");
+      }
+      if (compactionIds.has(compaction.operationId)) {
+        hardFailures.add("DUPLICATE_COMPACTION_OPERATION");
+      }
+      compactionIds.add(compaction.operationId);
+      compactionEventSequences.add(compaction.completionEventSequence);
+      const triggerRatio = compaction.tokensBefore / compaction.effectiveInputLimitTokens;
+      if (triggerRatio >= DEEP_COMPACTION_CACHE_95_PROFILE.minimumNaturalTriggerRatio) {
+        validCompactions.push(compaction);
+      }
+    }
+    const orderedCompactions = [...observed.compactions].sort(
+      (left, right) => left.completionEventSequence - right.completionEventSequence,
+    );
+    for (let index = 0; index < orderedCompactions.length; index += 1) {
+      const compaction = orderedCompactions[index];
+      const nextEventSequence = orderedCompactions[index + 1]?.completionEventSequence ?? Infinity;
+      const naturalAtThreshold =
+        compaction.reason === "PROACTIVE_PRESSURE" || compaction.reason === "SELECTION_PRESSURE";
+      const atThreshold =
+        compaction.tokensBefore / compaction.effectiveInputLimitTokens >=
+        DEEP_COMPACTION_CACHE_95_PROFILE.minimumNaturalTriggerRatio;
+      if (!naturalAtThreshold || !atThreshold) continue;
+      const continuations = observed.samples.filter(
+        (sample) =>
+          sample.purpose === "MAIN_AGENT" &&
+          sample.eventSequence > compaction.completionEventSequence &&
+          sample.eventSequence < nextEventSequence,
+      );
+      if (continuations.length < DEEP_COMPACTION_CACHE_95_PROFILE.minimumPostCompactionMainCalls) {
+        hardFailures.add("INSUFFICIENT_POST_COMPACTION_CONTINUATIONS");
+      }
+    }
+    if (validCompactions.length < DEEP_COMPACTION_CACHE_95_PROFILE.minimumCompactions) {
+      hardFailures.add("INSUFFICIENT_NATURAL_COMPACTIONS");
+    }
+  }
+
+  if (observed.prefixEfficiencySamples.length === 0) {
+    reasons.add("PREFIX_EFFICIENCY_UNREPORTED");
+  }
+  for (const efficiency of observed.prefixEfficiencySamples) {
+    if (typeof efficiency !== "number" || !Number.isFinite(efficiency) || efficiency < 0) {
+      throw new TypeError("Deep compaction prefix efficiency sample is invalid.");
+    }
+    if (efficiency < DEEP_COMPACTION_CACHE_95_PROFILE.minimumReusablePrefixEfficiency) {
+      hardFailures.add("REUSABLE_PREFIX_EFFICIENCY_BELOW_TARGET");
+    }
+  }
+  if (missTokens + hitTokens === 0n) reasons.add("CACHE_USAGE_DENOMINATOR_EMPTY");
+  const allPurposeHitRate =
+    usageComplete && hitTokens + missTokens > 0n
+      ? Number(hitTokens) / Number(hitTokens + missTokens)
+      : null;
+  if (
+    allPurposeHitRate !== null &&
+    allPurposeHitRate < DEEP_COMPACTION_CACHE_95_PROFILE.minimumAllPurposeHitRate
+  ) {
+    hardFailures.add("ALL_PURPOSE_HIT_RATE_BELOW_TARGET");
+  }
+  if (observed.costStatus === "MISMATCH") hardFailures.add("COST_MISMATCH");
+  if (observed.costStatus === "UNKNOWN") reasons.add("COST_NOT_RECONCILED");
+
+  const status = hardFailures.size > 0 ? "FAIL" : reasons.size > 0 ? "INCONCLUSIVE" : "PASS";
+  return Object.freeze({
+    profile: DEEP_COMPACTION_CACHE_95_PROFILE.id,
+    status,
+    reasons: Object.freeze([...hardFailures, ...reasons].sort()),
+    allPurposeHitRate,
+    providerCallCount: observed.providerCallCount,
+    mainCallCount: observed.mainCallCount,
+    compactionCount: observed.compactions.length,
+    ...(control === undefined
+      ? {}
+      : {
+          control: Object.freeze({
+            providerCallCount: control.providerCallCount,
+            mainCallCount: control.mainCallCount,
+            inputTokens: control.inputTokens,
+            costNanoUsd: control.costNanoUsd,
+            elapsedMs: control.elapsedMs,
+          }),
+        }),
+    targetHitRate: DEEP_COMPACTION_CACHE_95_PROFILE.minimumAllPurposeHitRate,
+    minimumReusablePrefixEfficiency:
+      DEEP_COMPACTION_CACHE_95_PROFILE.minimumReusablePrefixEfficiency,
+  });
+}
+
 export async function runLocalFixtureMode() {
   const result = spawnSync(
     process.execPath,
@@ -1497,6 +1896,12 @@ async function main() {
   const [mode, attemptId] = process.argv.slice(2);
   if (mode === "--local-fixture") return runLocalFixtureMode();
   if (mode === "--preflight") return runPreflight();
+  if (mode === "--evaluate-deep-profile") {
+    if (attemptId === undefined) {
+      throw new TypeError("Deep profile evaluation requires a frozen evidence JSON path.");
+    }
+    return evaluateDeepProfileFile(attemptId);
+  }
   if (mode === "--run" || mode === "--resume" || mode === "--summarize") {
     assertAttemptId(attemptId);
     if (mode === "--summarize") return runSummarize(attemptId);
@@ -1504,9 +1909,18 @@ async function main() {
     return runAttempt(attemptId, true);
   }
   process.stderr.write(
-    "Expected --local-fixture, --preflight, --run <attempt-id>, --resume <attempt-id>, or --summarize <attempt-id>.\n",
+    "Expected --local-fixture, --preflight, --run <attempt-id>, --resume <attempt-id>, --summarize <attempt-id>, or --evaluate-deep-profile <evidence-json>.\n",
   );
   process.exitCode = 2;
+}
+
+async function evaluateDeepProfileFile(evidencePath) {
+  const text = await readFile(resolve(evidencePath), "utf8");
+  const evidence = JSON.parse(text);
+  const report = evaluateDeepCompactionCache95Evidence(evidence);
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  process.exitCode = report.status === "PASS" ? 0 : report.status === "INCONCLUSIVE" ? 3 : 4;
+  return report;
 }
 
 async function runPreflight({ writeOutput = true } = {}) {

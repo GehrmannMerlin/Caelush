@@ -30,11 +30,14 @@ export function ContextUsageRing(props: {
         : (props.usage?.fullRequestInputEstimateTokens ?? props.usage?.estimatedInputTokens ?? 0) /
           contextWindowTokens),
   );
+  const process = props.process ?? props.usage?.process;
+  const compacting = process?.kind === "COMPACTING";
   const label =
     props.usage == null
       ? "工作上下文用量：暂无数据"
-      : `工作上下文用量：${Math.round(ratio * 100)}%`;
-  const process = props.process ?? props.usage?.process;
+      : compacting
+        ? "正在压缩上下文（生成摘要）"
+        : `工作上下文用量：${Math.round(ratio * 100)}%`;
   const runId = props.runId ?? props.usage?.runId;
   const processPanel =
     props.usage !== undefined && props.usage !== null
@@ -63,7 +66,7 @@ export function ContextUsageRing(props: {
       "button",
       {
         type: "button",
-        className: "context-usage-ring-button",
+        className: `context-usage-ring-button${compacting ? " context-usage-ring-button--compacting" : ""}`,
         "aria-label": label,
         "aria-expanded": open,
         title: label,
@@ -77,7 +80,7 @@ export function ContextUsageRing(props: {
         { className: "context-usage-ring", viewBox: "0 0 18 18", "aria-hidden": "true" },
         createElement("circle", { className: "context-usage-ring-track", cx: 9, cy: 9, r: 7 }),
         createElement("circle", {
-          className: `context-usage-ring-progress context-usage-ring-progress--${props.usage?.pressureState ?? "EMPTY"}`,
+          className: `context-usage-ring-progress context-usage-ring-progress--${props.usage?.pressureState ?? "EMPTY"}${compacting ? " context-usage-ring-progress--compacting" : ""}`,
           cx: 9,
           cy: 9,
           r: 7,

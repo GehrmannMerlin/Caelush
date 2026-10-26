@@ -166,6 +166,9 @@ export async function archiveGraph(database: CaelushDatabase, label: string) {
       id: `${label}:${table}`,
       event_id: `${label}:event`,
       call_id: `${label}:call`,
+      ...(table === "context_checkpoints"
+        ? { summary_version: 2, source_sequence_from: 0, source_sequence_to: 0 }
+        : {}),
     });
   }
   return { workspace, session, run };

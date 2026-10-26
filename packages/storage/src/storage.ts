@@ -67,7 +67,10 @@ import {
   type ContextCheckpointRepository,
 } from "./context-checkpoint-repository.js";
 import { SqliteContextCheckpointRepositoryV2 } from "./context-checkpoint-repository-v2.js";
+import { SqliteContextCheckpointRepositoryV3 } from "./context-checkpoint-repository-v3.js";
+import { SqliteContextCheckpointActivationReader } from "./context-checkpoint-activation-reader.js";
 import type { ContextCheckpointRepositoryPort } from "@caelush/agent";
+import type { ContextCheckpointV3RepositoryPort } from "@caelush/agent";
 import { SqliteContextArtifactStore } from "./context-artifact-store.js";
 import { SqliteContextUsageStore } from "./context-usage-store.js";
 import type { ContextArtifactStorePort, ContextUsageStorePort } from "@caelush/agent";
@@ -131,6 +134,8 @@ export interface CaelushStorage {
   readonly memoryExtractionJobs: MemoryExtractionJobStore;
   readonly contextCheckpoints: ContextCheckpointRepository;
   readonly contextCheckpointsV2: ContextCheckpointRepositoryPort;
+  readonly contextCheckpointsV3: ContextCheckpointV3RepositoryPort;
+  readonly contextCheckpointActivationReader: SqliteContextCheckpointActivationReader;
   readonly contextArtifacts: ContextArtifactRepository;
   readonly contextArtifactsV2: ContextArtifactStorePort;
   readonly contextRuntimeStates: ContextRuntimeStateRepository;
@@ -203,6 +208,11 @@ export async function openCaelushStorage(options: {
       memoryExtractionJobs: new SqliteMemoryExtractionJobRepository(database),
       contextCheckpoints: new SqliteContextCheckpointRepository(database),
       contextCheckpointsV2: new SqliteContextCheckpointRepositoryV2(database),
+      contextCheckpointsV3: new SqliteContextCheckpointRepositoryV3(database),
+      contextCheckpointActivationReader: new SqliteContextCheckpointActivationReader(
+        database,
+        promptSurfaceStore,
+      ),
       contextArtifacts: new SqliteContextArtifactRepository(database),
       contextArtifactsV2: new SqliteContextArtifactStore(database),
       contextRuntimeStates: new SqliteContextRuntimeStateRepository(database),

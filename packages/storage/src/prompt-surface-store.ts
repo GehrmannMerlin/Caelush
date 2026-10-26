@@ -16,6 +16,7 @@ import {
   type PromptSurfaceEpochInput,
   type PromptSurfaceEpochId,
   type PromptSurfaceEpochWithSnapshots,
+  type PromptSurfaceCompactionActivationCommand,
   type PromptSurfaceRolloverCommand,
   type PromptSurfaceRolloverResult,
   type PromptSurfaceSnapshot,
@@ -505,6 +506,134 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
       if (error instanceof StorageError) throw error;
       throw new StorageError("Unable to roll over the Prompt Surface epoch.", { cause: error });
     }
+  }
+
+  /**
+   * Apply a prepared compaction activation inside an already-open Storage transaction.
+   * The ContextCompactionCommitStore owns the enclosing transaction with checkpoint, usage and
+   * durable event writes; this method deliberately issues no BEGIN/COMMIT of its own.
+   */
+  activateCompactionInTransaction(
+    command: PromptSurfaceCompactionActivationCommand,
+  ): "COMMITTED" | "IDEMPOTENT" {
+    try {
+      assertPromptSurfaceEpoch(command.newEpoch);
+      assertPromptSurfaceRecord(command.baseline);
+      assertPromptSurfaceSectionStates(command.expectedSectionStates);
+      if (
+        command.operationId.trim().length === 0 ||
+        command.newEpoch.formatVersion !== 3 ||
+        command.newEpoch.resetReason !== "COMPACTION_COMMITTED" ||
+        command.baseline.epochId !== command.newEpoch.epochId ||
+        command.baseline.runId !== command.newEpoch.runId ||
+        command.baseline.ordinal !== 1 ||
+        command.baseline.kind !== "BASELINE" ||
+        command.baseline.sourceStepSequence !== command.newEpoch.createdStepSequence
+      ) {
+        throw new TypeError("Prepared compaction activation identity is invalid.");
+      }
+      if (command.expectedCurrent.kind === "CURRENT") {
+        assertPromptSurfaceEpoch(command.expectedCurrent.epoch);
+        if (
+          !Number.isSafeInteger(command.expectedCurrent.recordOrdinal) ||
+          command.expectedCurrent.recordOrdinal < 0 ||
+          (command.expectedCurrent.decisionFingerprint !== null &&
+            !/^[0-9a-f]{64}$/.test(command.expectedCurrent.decisionFingerprint))
+        ) {
+          throw new TypeError("Prepared compaction activation CAS identity is invalid.");
+        }
+      }
+    } catch (error) {
+      throw new StorageError("Prepared Prompt Surface compaction activation is invalid.", {
+        cause: error,
+      });
+    }
+
+    const { newEpoch, baseline } = command;
+    const existingTarget = this.readEpochRow(newEpoch.runId, newEpoch.epochId);
+    if (existingTarget !== undefined) {
+      if (!sameEpochIdentity(decodeEpoch(existingTarget), newEpoch)) {
+        throw new PromptSurfaceRolloverConflictError(
+          "Prompt Surface compaction operation is bound to another epoch.",
+        );
+      }
+      const storedBaseline = this.readRecordBySourceStep(
+        newEpoch.runId,
+        newEpoch.epochId,
+        baseline.sourceStepSequence,
+      );
+      if (
+        storedBaseline === undefined ||
+        decodeRecord(storedBaseline).contentHash !== baseline.contentHash
+      ) {
+        throw new PromptSurfaceRolloverConflictError(
+          "Prompt Surface compaction operation is bound to another baseline.",
+        );
+      }
+      const current = this.readCurrentRow(newEpoch.runId);
+      if (current?.epoch_id !== newEpoch.epochId) {
+        throw new PromptSurfaceRolloverConflictError(
+          "Previously activated Prompt Surface is no longer current.",
+        );
+      }
+      return "IDEMPOTENT";
+    }
+
+    const current = this.readCurrentRow(newEpoch.runId);
+    if (command.expectedCurrent.kind === "ABSENT") {
+      if (current !== undefined) {
+        throw new PromptSurfaceRolloverConflictError(
+          "Prompt Surface compaction expected no current epoch.",
+        );
+      }
+    } else {
+      const expected = command.expectedCurrent;
+      if (
+        current === undefined ||
+        current.epoch_id !== expected.epoch.epochId ||
+        !sameEpoch(decodeEpoch(current), expected.epoch)
+      ) {
+        throw new PromptSurfaceRolloverConflictError(
+          "Prompt Surface compaction did not target the expected current epoch.",
+        );
+      }
+      const source = this.readEpochSync(newEpoch.runId, expected.epoch.epochId);
+      const records = source?.records;
+      if (
+        source === undefined ||
+        source.formatVersion !== 3 ||
+        records === undefined ||
+        records.length !== expected.recordOrdinal ||
+        (records.at(-1)?.decisionFingerprint ?? null) !== expected.decisionFingerprint
+      ) {
+        throw new PromptSurfaceRolloverConflictError(
+          "Prompt Surface compaction compare-and-swap did not hold.",
+        );
+      }
+      if (newEpoch.createdStepSequence < expected.epoch.createdStepSequence) {
+        throw new PromptSurfaceRolloverConflictError(
+          "Prompt Surface compaction would move behind the current epoch.",
+        );
+      }
+    }
+
+    const appliedStates = applyPromptSurfaceSectionUpdates([], "BASELINE", baseline.updates);
+    if (stableJson(appliedStates) !== stableJson(command.expectedSectionStates)) {
+      throw new StorageDecodeError(
+        "PromptSurfaceSectionState",
+        epochKey(newEpoch.runId, newEpoch.epochId),
+        "prompt_surface_section_state",
+      );
+    }
+    this.insertEpochRow(newEpoch);
+    this.insertRecordRow(baseline);
+    const resolved = this.readCurrentRow(newEpoch.runId);
+    if (resolved?.epoch_id !== newEpoch.epochId) {
+      throw new PromptSurfaceRolloverConflictError(
+        "Prompt Surface compaction epoch did not become current.",
+      );
+    }
+    return "COMMITTED";
   }
 
   async readEpoch(

@@ -44,6 +44,11 @@ export class SqliteContextUsageStore implements ContextUsageStorePort {
   constructor(private readonly database: CaelushDatabase) {}
 
   async upsert(snapshot: ContextUsageSnapshot): Promise<void> {
+    this.upsertInTransaction(snapshot);
+  }
+
+  /** Write using the caller's active authoritative SQLite transaction. */
+  upsertInTransaction(snapshot: ContextUsageSnapshot): void {
     assertSnapshot(snapshot);
     const breakdown = [...snapshot.breakdown].sort((left, right) =>
       compareStrings(left.sourceId, right.sourceId),
