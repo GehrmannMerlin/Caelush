@@ -97,6 +97,108 @@ function policy(
 }
 
 describe("cross-turn compaction cut", () => {
+  it("chooses a legal protocol cut over an oversized full-turn tail across Runs", () => {
+    const oldTurn = weightedTurnUnit({
+      run: createRunId(),
+      turn: "cturn_huge_old_run",
+      id: "huge-old-run",
+      count: 10,
+      tokens: 1_054_914,
+    });
+    const compressibleTurn = weightedTurnUnit({
+      run: createRunId(),
+      turn: "cturn_large_tool_run",
+      id: "large-tool-run",
+      count: 372,
+      tokens: 276_441,
+    });
+    const continuedTurns = [
+      weightedTurnUnit({
+        run: createRunId(),
+        turn: "cturn_continue_a",
+        id: "continue-a",
+        count: 1,
+        tokens: 147,
+      }),
+      weightedTurnUnit({
+        run: createRunId(),
+        turn: "cturn_continue_b",
+        id: "continue-b",
+        count: 1,
+        tokens: 147,
+      }),
+    ];
+    const currentTurn = weightedTurnUnit({
+      run: createRunId(),
+      turn: "cturn_current",
+      id: "current",
+      count: 1,
+      tokens: 147,
+      status: "OPEN",
+    });
+    const compressibleMessages = compressibleTurn.messages;
+    const protocols: ToolProtocolUnit[] = [];
+    for (let firstSequence = 2; firstSequence <= 352; firstSequence += 10) {
+      const messages = compressibleMessages.slice(firstSequence - 1, firstSequence + 2);
+      const first = messages[0];
+      const last = messages.at(-1);
+      if (first === undefined || last === undefined || messages.length !== 3) continue;
+      protocols.push({
+        id: `tool-protocol:${first.messageId}`,
+        kind: "TOOL_PROTOCOL",
+        status: "CLOSED",
+        messages,
+        tokenEstimate: messages.reduce((total, message) => total + (message.tokenEstimate ?? 0), 0),
+        atomicGroupId: String(first.messageId),
+        compactionEligible: true,
+        sourceAssistantMessageId: first.messageId,
+        toolCallIds: [`call_${firstSequence}`],
+        toolResultMessageIds: [last.messageId],
+      });
+    }
+    const openObligation: ToolProtocolUnit = {
+      id: "tool-protocol:open-obligation",
+      kind: "TOOL_PROTOCOL",
+      status: "OPEN",
+      messages: currentTurn.messages,
+      tokenEstimate: currentTurn.tokenEstimate,
+      atomicGroupId: "open-obligation",
+      compactionEligible: false,
+      sourceAssistantMessageId: currentTurn.messages[0]!.messageId,
+      toolCallIds: ["call_open"],
+      toolResultMessageIds: [],
+    };
+    const turns = [oldTurn, compressibleTurn, ...continuedTurns, currentTurn];
+    const units = [
+      oldTurn,
+      compressibleTurn,
+      ...protocols,
+      ...continuedTurns,
+      currentTurn,
+      openObligation,
+    ];
+    const indexedHistory: ContextHistoryIndex = {
+      units,
+      openUnits: [currentTurn, openObligation],
+      closedUnits: [oldTurn, compressibleTurn, ...protocols, ...continuedTurns],
+      estimatedTokens: turns.reduce((total, unit) => total + unit.tokenEstimate, 0),
+    };
+
+    const plan = createContextCompactionPlanner().plan({
+      history: indexedHistory,
+      policy: policy(20_000, 8_000),
+      reason: "PROACTIVE_PRESSURE",
+    });
+
+    expect(plan).not.toBeNull();
+    expect(plan?.retainedTokens).toBeLessThan(30_000);
+    expect(plan?.cut.kind).toBe("PROTOCOL_SAFE_SPLIT");
+    expect(plan?.retainedTokens).toBeGreaterThanOrEqual(8_000);
+    expect(plan?.minimumRetainedTokens).toBeLessThan(8_000);
+    expect(plan?.selectedUnitIds).not.toContain(openObligation.id);
+    expect(plan?.sourceCoverageDelta.length).toBeGreaterThan(1);
+  });
+
   it("folds only closed Tool batches and retains the final incomplete obligation", () => {
     const fixture = createLongOpenTurnFixture();
     const plan = createContextCompactionPlanner().plan({
@@ -222,3 +324,33 @@ describe("cross-turn compaction cut", () => {
     expect(plan).toBeNull();
   });
 });
+
+function weightedTurnUnit(input: {
+  readonly run: ReturnType<typeof createRunId>;
+  readonly turn: string;
+  readonly id: string;
+  readonly count: number;
+  readonly tokens: number;
+  readonly status?: "OPEN" | "CLOSED";
+}): ContextHistoryUnit {
+  const conversationTurn = conversationTurnId(input.turn);
+  const status = input.status ?? "CLOSED";
+  const baseTokens = Math.floor(input.tokens / input.count);
+  const remainder = input.tokens % input.count;
+  const messages: ContextMessageRef[] = Array.from({ length: input.count }, (_, index) => ({
+    messageId: agentMessageId(`amsg_${input.id}_${String(index + 1).padStart(3, "0")}`),
+    runId: input.run,
+    conversationTurnId: conversationTurn,
+    sequence: index + 1,
+    tokenEstimate: baseTokens + (index < remainder ? 1 : 0),
+  }));
+  return {
+    id: input.id,
+    kind: "CONVERSATION_TURN",
+    status,
+    messages,
+    tokenEstimate: input.tokens,
+    atomicGroupId: input.turn,
+    compactionEligible: status === "CLOSED",
+  };
+}

@@ -28,13 +28,38 @@ import { ContextPressureAccountingError } from "./context-policy.js";
 export const TURN_BUDGET_ALGORITHM = "HEADROOM_V1" as const;
 export type TurnBudgetAlgorithm = typeof TURN_BUDGET_ALGORITHM;
 
-export interface DeepCompactionPolicy {
+export interface DeepCompactionPolicyV1 {
   readonly version: "DEEP_COMPACTION_V1";
   readonly triggerRatio: number;
   readonly recentTokens: number;
   readonly checkpointMaxTokens: number;
   readonly boundaryTokens: number;
 }
+
+export interface DeepCompactionPolicyV2 {
+  readonly version: "DEEP_COMPACTION_V2";
+  readonly triggerRatio: number;
+  readonly recentRatio: number;
+  readonly minimumReleaseRatio: number;
+  readonly checkpointMaxTokens: number;
+  readonly boundaryTokens: number;
+}
+
+export type DeepCompactionPolicy = DeepCompactionPolicyV1 | DeepCompactionPolicyV2;
+
+/**
+ * Initial elastic defaults, centralized so representative window cases can calibrate them
+ * without changing historic V1 snapshots. The 8% tail and 70% release are starting points,
+ * not claims about the final input size or provider cache rate.
+ */
+export const DEEP_COMPACTION_V2_DEFAULTS = Object.freeze({
+  version: "DEEP_COMPACTION_V2",
+  triggerRatio: 0.9,
+  recentRatio: 0.08,
+  minimumReleaseRatio: 0.7,
+  checkpointMaxTokens: 8_192,
+  boundaryTokens: 4_096,
+} as const);
 
 /** Versioned, Run-frozen parameters of the headroom algorithm. */
 export interface TurnBudgetPolicyV3 {

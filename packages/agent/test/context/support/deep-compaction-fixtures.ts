@@ -185,6 +185,7 @@ export function createCompactionCandidate(input: { readonly estimatedInputTokens
     estimatedTokensBefore: 930_000,
     selectedTokens: 900_000,
     retainedTokens: 30_000,
+    minimumRetainedTokens: 8_000,
     targetRecentTailTokens: 20_000,
     minRecentTailTokens: 8_000,
   } satisfies ContextCompactionPlan;

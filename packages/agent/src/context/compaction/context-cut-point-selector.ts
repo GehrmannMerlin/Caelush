@@ -27,16 +27,22 @@ export function createContextCutPointSelector(): ContextCutPointSelector {
         input.targetRecentTailTokens,
         input.minRecentTailTokens,
       );
-      return (
-        fullTurnCandidate ??
-        selectProtocolSafeSplit(
-          prepared.history,
-          prepared.turns,
-          input.targetRecentTailTokens,
-          input.minRecentTailTokens,
-          input.allowCurrentTurnPrefix === true,
-        )
+      const protocolSafeCandidate = selectProtocolSafeSplit(
+        prepared.history,
+        prepared.turns,
+        input.targetRecentTailTokens,
+        input.minRecentTailTokens,
+        input.allowCurrentTurnPrefix === true,
       );
+      if (fullTurnCandidate === null) return protocolSafeCandidate;
+      if (protocolSafeCandidate === null) return fullTurnCandidate;
+      return isBetterCandidate(
+        protocolSafeCandidate,
+        fullTurnCandidate,
+        input.targetRecentTailTokens,
+      )
+        ? protocolSafeCandidate
+        : fullTurnCandidate;
     },
   });
 }
@@ -300,7 +306,11 @@ function isBetterCandidate(
   const currentDistance = Math.abs(current.retainedTokens - targetRecentTailTokens);
   return (
     candidateDistance < currentDistance ||
-    (candidateDistance === currentDistance && candidate.retainedTokens > current.retainedTokens)
+    (candidateDistance === currentDistance &&
+      (candidate.retainedTokens > current.retainedTokens ||
+        (candidate.retainedTokens === current.retainedTokens &&
+          candidate.cut.kind === "TURN_BOUNDARY" &&
+          current.cut.kind !== "TURN_BOUNDARY")))
   );
 }
 

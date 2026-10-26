@@ -873,7 +873,7 @@ function compactionDetail(payload: {
   readonly sourceRangeCount?: number;
   readonly sourceMessageCount?: number;
   readonly degraded: boolean;
-  readonly targetStatus?: "DEEP" | "FLOOR_LIMITED";
+  readonly targetStatus?: "DEEP" | "PREFERRED" | "ELASTIC" | "FLOOR_LIMITED";
 }): string {
   const coverage =
     payload.sourceSequenceFrom !== undefined && payload.sourceSequenceTo !== undefined
@@ -885,8 +885,23 @@ function compactionDetail(payload: {
     payload.degraded ? "降级摘要" : "语义摘要已校验",
     ...(payload.targetStatus === undefined
       ? []
-      : [payload.targetStatus === "FLOOR_LIMITED" ? "受必要内容下限限制" : "达到深度压缩目标"]),
+      : [compactionTargetStatusLabel(payload.targetStatus)]),
   ].join(" · ");
+}
+
+function compactionTargetStatusLabel(
+  status: "DEEP" | "PREFERRED" | "ELASTIC" | "FLOOR_LIMITED",
+): string {
+  switch (status) {
+    case "DEEP":
+      return "达到深度压缩目标";
+    case "PREFERRED":
+      return "达到偏好保留目标";
+    case "ELASTIC":
+      return "弹性保留（满足窗口与释放要求）";
+    case "FLOOR_LIMITED":
+      return "受必要内容下限限制";
+  }
 }
 
 function formatTokens(value: number): string {

@@ -432,19 +432,34 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
                 tokensAfter: event.payload.tokensAfter,
                 degraded: event.payload.degraded,
               }
-            : {
-                checkpointId: event.payload.checkpointId,
-                operationId: event.payload.operationId,
-                epochId: event.payload.epochId,
-                reason: event.payload.reason,
-                sourceRangeCount: event.payload.sourceRangeCount,
-                sourceMessageCount: event.payload.sourceMessageCount,
-                tokensBefore: event.payload.tokensBefore,
-                tokensAfter: event.payload.tokensAfter,
-                freedTokens: event.payload.freedTokens,
-                degraded: event.payload.degraded,
-                targetStatus: event.payload.targetStatus,
-              };
+            : "retention" in event.payload
+              ? {
+                  checkpointId: event.payload.checkpointId,
+                  operationId: event.payload.operationId,
+                  epochId: event.payload.epochId,
+                  reason: event.payload.reason,
+                  sourceRangeCount: event.payload.sourceRangeCount,
+                  sourceMessageCount: event.payload.sourceMessageCount,
+                  tokensBefore: event.payload.tokensBefore,
+                  tokensAfter: event.payload.tokensAfter,
+                  freedTokens: event.payload.freedTokens,
+                  degraded: event.payload.degraded,
+                  targetStatus: event.payload.targetStatus,
+                  retention: event.payload.retention,
+                }
+              : {
+                  checkpointId: event.payload.checkpointId,
+                  operationId: event.payload.operationId,
+                  epochId: event.payload.epochId,
+                  reason: event.payload.reason,
+                  sourceRangeCount: event.payload.sourceRangeCount,
+                  sourceMessageCount: event.payload.sourceMessageCount,
+                  tokensBefore: event.payload.tokensBefore,
+                  tokensAfter: event.payload.tokensAfter,
+                  freedTokens: event.payload.freedTokens,
+                  degraded: event.payload.degraded,
+                  targetStatus: event.payload.targetStatus,
+                };
         break;
       default:
         return null;

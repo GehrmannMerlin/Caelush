@@ -205,7 +205,9 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
       maxObservationBatchRatio: 0.12,
     },
     requestOverheadEstimator: createContextRequestOverheadEstimator({ tokenEstimator }),
-    historyIndexer: createContextHistoryIndexer(),
+    historyIndexer: createContextHistoryIndexer({
+      estimateMessageTokens: (stored, model) => candidateMessageEstimator([stored], model),
+    }),
     documentBuilder: createContextDocumentBuilder(),
     rehydrator: createContextRehydrator(),
     materializer: createContextMaterializer({

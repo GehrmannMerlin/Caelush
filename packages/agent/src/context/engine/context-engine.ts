@@ -192,6 +192,8 @@ import {
   beginPersistedCompactionAttempt,
   createCompactionSourceCoverageDigest,
   finishPersistedCompactionAttempt,
+  hasReusableAcceptedSummary,
+  hasPersistedCompactionSubcall,
   recordPersistedCompactionFailureBaseline,
   type PersistedCompactionAttempt,
 } from "../compaction/persisted-compaction-attempt.js";
@@ -221,6 +223,7 @@ export interface ContextCompactionEventFactory {
     readonly checkpoint: import("../compaction/context-checkpoint-v3.js").ContextCheckpointCreateInputV3;
     readonly epochId: string;
     readonly freedTokens: number;
+    readonly retention: import("../compaction/compaction-retention-budget.js").CompactionRetentionDiagnostics;
     readonly eventId: EventId;
     readonly timestamp: TimestampMs;
   }): DurableRunEventDraft;
@@ -275,7 +278,7 @@ export function createContextCompactionEventFactory(): ContextCompactionEventFac
     ): DurableRunEventDraft {
       return {
         eventId: input.eventId,
-        schemaVersion: 2,
+        schemaVersion: 3,
         runId: input.identity.runId,
         sessionId: input.identity.sessionId,
         timestamp: input.timestamp,
@@ -294,6 +297,7 @@ export function createContextCompactionEventFactory(): ContextCompactionEventFac
           freedTokens: input.freedTokens,
           degraded: input.checkpoint.degraded,
           targetStatus: input.checkpoint.targetStatus,
+          retention: input.retention,
         },
       };
     },
@@ -584,6 +588,8 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       let activeSources = sourceResults;
       let compactionReceipt: ContextCompactionReceipt | undefined;
       let committedCompactionProjection: ContextBuildProjection | undefined;
+      let forcedRecoveryInputBefore: number | undefined;
+      let forcedRecoveryCheckpointIdBefore: string | undefined;
       let compactionCount = 0;
       // Prove a protocol-safe history cut before letting an over-budget pinned/current projection
       // reach pressure evaluation. Without this preflight exception, the planner throws first and
@@ -799,6 +805,13 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                 compactionCount: 0,
               })
             : initialProjection;
+        if (input.mode === "FORCED_RECOVERY") {
+          forcedRecoveryInputBefore =
+            beforeCompactionProjection.audit.report.estimatedInputTokens +
+            beforeCompactionProjection.audit.report.requestOverheadTokens;
+          forcedRecoveryCheckpointIdBefore =
+            activeCheckpoint === undefined ? undefined : String(activeCheckpoint.checkpointId);
+        }
         const replayProjectionIsComplete =
           promptProjectionPreservesUncoveredModelMessages({
             conversationMessages: input.conversation.turns.flatMap((turn) => turn.messages),
@@ -895,12 +908,13 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           ...(options.compactionEvents === undefined || options.eventIdFactory === undefined
             ? {}
             : {
-                createEventsV3: ({ request, checkpoint, epochId, freedTokens }) => [
+                createEventsV3: ({ request, checkpoint, epochId, freedTokens, retention }) => [
                   options.compactionEvents!.completedV3({
                     identity: request.identity,
                     checkpoint,
                     epochId,
                     freedTokens,
+                    retention,
                     eventId: options.eventIdFactory!.create(),
                     timestamp: options.clock.now(),
                   }),
@@ -969,24 +983,54 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
               reason,
               estimatedInputTokensBefore:
                 beforeCompactionProjection.audit.report.estimatedInputTokens,
-              fixedInputTokens: beforeCompactionProjection.plan.budget.mandatoryTokens,
-              boundaryTokens: Math.min(4_096, policy.minRecentTailTokens),
+              boundaryTokens:
+                policy.deepCompaction?.version === "DEEP_COMPACTION_V2"
+                  ? policy.deepCompaction.boundaryTokens
+                  : Math.min(4_096, policy.minRecentTailTokens),
               signal: input.signal,
             });
           } catch (error) {
             coordinatorThrew = true;
             if (attempt !== undefined && options.compactionAttemptStore !== undefined) {
-              // Keep the START open because a thrown Provider/Gateway call may have completed
-              // remotely. Persist its fixed source baseline separately so a new message changing
-              // the source digest cannot bypass the minimum-growth retry rule.
-              await recordPersistedCompactionFailureBaseline({
-                store: options.compactionAttemptStore,
-                attempt,
-                createdSequence: input.turn.sequence,
-                createdAt: options.clock.now(),
-                failureFamily:
-                  input.mode === "FORCED_RECOVERY" ? "PROVIDER_OVERFLOW" : "UNKNOWN_OUTCOME",
-              });
+              if (
+                await hasReusableAcceptedSummary(options.compactionAttemptStore, attempt.attemptId)
+              ) {
+                await finishPersistedCompactionAttempt({
+                  store: options.compactionAttemptStore,
+                  attempt,
+                  createdSequence: input.turn.sequence,
+                  createdAt: options.clock.now(),
+                  outcome: "FAILED",
+                  failureFamily: "CANDIDATE_NOT_FIT",
+                });
+              } else if (
+                await hasPersistedCompactionSubcall(
+                  options.compactionAttemptStore,
+                  attempt.attemptId,
+                )
+              ) {
+                // A durable provider START without a reusable accepted result remains uncertain.
+                // Preserve its retry baseline and never send another summary request blindly.
+                await recordPersistedCompactionFailureBaseline({
+                  store: options.compactionAttemptStore,
+                  attempt,
+                  createdSequence: input.turn.sequence,
+                  createdAt: options.clock.now(),
+                  failureFamily:
+                    input.mode === "FORCED_RECOVERY" ? "PROVIDER_OVERFLOW" : "UNKNOWN_OUTCOME",
+                });
+              } else {
+                // No summary subcall crossed the provider boundary; this failure can be replanned
+                // locally without charging the source-growth retry threshold.
+                await finishPersistedCompactionAttempt({
+                  store: options.compactionAttemptStore,
+                  attempt,
+                  createdSequence: input.turn.sequence,
+                  createdAt: options.clock.now(),
+                  outcome: "FAILED",
+                  failureFamily: "CANDIDATE_NOT_FIT",
+                });
+              }
             }
             throwIfAborted(input.signal);
             if (!elective) throw error;
@@ -1097,6 +1141,26 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           compactionCount,
           ...(compactionCount === 0 ? {} : { lastCompactionAt: options.clock.now() }),
         }));
+      if (input.mode === "FORCED_RECOVERY" && pressure.trigger === "FORCED_PROVIDER_OVERFLOW") {
+        const fullInputAfter =
+          finalProjection.audit.report.estimatedInputTokens +
+          finalProjection.audit.report.requestOverheadTokens;
+        const growthReserve = headroomPolicy?.expectedGrowthTokens ?? 0;
+        const minimumReduction = Math.max(1, growthReserve);
+        if (
+          compactionCount !== 1 ||
+          activeCheckpoint === undefined ||
+          String(activeCheckpoint.checkpointId) === forcedRecoveryCheckpointIdBefore ||
+          forcedRecoveryInputBefore === undefined ||
+          coverage.coveredMessageIds.size >= activeCoverage.coveredMessageIds.size ||
+          forcedRecoveryInputBefore - fullInputAfter < minimumReduction ||
+          finalProjection.audit.report.estimatedInputTokens >
+            // The effective message-input limit already subtracts stable request overhead.
+            policy.effectiveInputLimitTokens - growthReserve
+        ) {
+          throw new ContextExhaustedError();
+        }
+      }
       if (
         finalProjection.audit.report.estimatedInputTokens > finalPolicy.effectiveInputLimitTokens
       ) {

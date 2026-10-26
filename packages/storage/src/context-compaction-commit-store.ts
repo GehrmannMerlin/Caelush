@@ -130,7 +130,7 @@ export class SqliteContextCompactionCommitStore implements ContextCompactionComm
     readonly events: readonly DurableRunEvent[];
     readonly status: "COMMITTED" | "IDEMPOTENT";
   }> {
-    assertV3EventOwnership(input.checkpoint, input.activation.promptSurface, input.events);
+    assertV3EventOwnership(input.checkpoint, input.activation, input.events);
     if (input.terminalArtifact !== undefined) {
       assertTerminalAttemptArtifact(input.checkpoint, input.terminalArtifact);
     }
@@ -153,13 +153,21 @@ export class SqliteContextCompactionCommitStore implements ContextCompactionComm
             checkpointId: String(input.checkpoint.checkpointId),
           },
         );
-        const event = matchingEvents.find((candidate) => candidate.schemaVersion === 2);
+        const event = matchingEvents[0];
         if (matchingEvents.length !== 1 || event === undefined) {
           throw new StorageConflictError(
-            "Existing Context Checkpoint V3 has no unique durable V2 completion proof.",
+            "Existing Context Checkpoint V3 has no unique durable completion proof.",
           );
         }
-        assertV3CompletionEventMatches(event, input.checkpoint, input.activation.promptSurface);
+        if (event.schemaVersion === 3) {
+          assertV3CompletionEventMatches(event, input.checkpoint, input.activation);
+        } else if (event.schemaVersion === 2) {
+          assertV2CompletionEventMatches(event, input.checkpoint, input.activation.promptSurface);
+        } else {
+          throw new StorageConflictError(
+            "Existing Context Checkpoint V3 has an unsupported completion proof version.",
+          );
+        }
         assertActivationProofMatches(
           this.database,
           input.checkpoint,
@@ -210,15 +218,13 @@ export class SqliteContextCompactionCommitStore implements ContextCompactionComm
 
 function assertV3EventOwnership(
   checkpoint: ContextCheckpointCreateInputV3,
-  activation: Parameters<
-    NonNullable<ContextCompactionCommitPort["commitV3"]>
-  >[0]["activation"]["promptSurface"],
+  activation: Parameters<NonNullable<ContextCompactionCommitPort["commitV3"]>>[0]["activation"],
   events: readonly DurableRunEventDraft[],
 ): void {
-  if (activation.operationId !== checkpoint.activationOperationId) {
+  if (activation.promptSurface.operationId !== checkpoint.activationOperationId) {
     throw new StorageConflictError("V3 checkpoint and Prompt Surface operation IDs differ.");
   }
-  if (String(activation.newEpoch.runId) !== String(checkpoint.ownerRunId)) {
+  if (String(activation.promptSurface.newEpoch.runId) !== String(checkpoint.ownerRunId)) {
     throw new StorageConflictError("V3 Prompt Surface activation belongs to another Run.");
   }
   const completions = events.filter((event) => event.type === "context.compaction.completed");
@@ -229,7 +235,7 @@ function assertV3EventOwnership(
   if (
     event.runId !== checkpoint.ownerRunId ||
     event.sessionId !== checkpoint.sessionId ||
-    event.schemaVersion !== 2
+    event.schemaVersion !== 3
   ) {
     throw new StorageConflictError("V3 completion event ownership or schema version is invalid.");
   }
@@ -239,16 +245,52 @@ function assertV3EventOwnership(
 function assertV3CompletionEventMatches(
   event: { readonly type?: unknown; readonly schemaVersion?: unknown; readonly payload?: unknown },
   checkpoint: ContextCheckpointCreateInputV3 | ContextCheckpointRecordV3,
-  activation: Parameters<
-    NonNullable<ContextCompactionCommitPort["commitV3"]>
-  >[0]["activation"]["promptSurface"],
+  activation: Parameters<NonNullable<ContextCompactionCommitPort["commitV3"]>>[0]["activation"],
 ): void {
-  if (event.type !== "context.compaction.completed" || event.schemaVersion !== 2) {
+  if (event.type !== "context.compaction.completed" || event.schemaVersion !== 3) {
     throw new StorageConflictError("V3 completion event type or version is invalid.");
   }
   const payload = event.payload;
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
     throw new StorageConflictError("V3 completion event payload is invalid.");
+  }
+  const value = payload as Record<string, unknown>;
+  const expected = {
+    checkpointId: String(checkpoint.checkpointId),
+    operationId: checkpoint.activationOperationId,
+    epochId: activation.promptSurface.newEpoch.epochId,
+    reason: checkpoint.reason,
+    sourceRangeCount: checkpoint.coverage.segments.length,
+    sourceMessageCount: checkpoint.coverage.messageCount,
+    tokensBefore: checkpoint.tokensBefore,
+    tokensAfter: checkpoint.tokensAfter,
+    freedTokens: Math.max(0, checkpoint.tokensBefore - checkpoint.tokensAfter),
+    degraded: checkpoint.degraded,
+    targetStatus: checkpoint.targetStatus,
+    retention: activation.usage.lastCompactionRetention,
+  };
+  if (activation.usage.lastCompactionRetention === undefined) {
+    throw new StorageConflictError("V3 activation is missing its retention diagnostics.");
+  }
+  if (canonicalJsonText(value as never) !== canonicalJsonText(expected as never)) {
+    throw new StorageConflictError("V3 completion event does not match its checkpoint.");
+  }
+}
+
+/** Historical V3 checkpoint commits used a V2 event and remain valid idempotency proofs. */
+function assertV2CompletionEventMatches(
+  event: { readonly type?: unknown; readonly schemaVersion?: unknown; readonly payload?: unknown },
+  checkpoint: ContextCheckpointCreateInputV3 | ContextCheckpointRecordV3,
+  activation: Parameters<
+    NonNullable<ContextCompactionCommitPort["commitV3"]>
+  >[0]["activation"]["promptSurface"],
+): void {
+  if (event.type !== "context.compaction.completed" || event.schemaVersion !== 2) {
+    throw new StorageConflictError("Historical V3 completion event type or version is invalid.");
+  }
+  const payload = event.payload;
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new StorageConflictError("Historical V3 completion event payload is invalid.");
   }
   const value = payload as Record<string, unknown>;
   const expected = {
@@ -265,7 +307,7 @@ function assertV3CompletionEventMatches(
     targetStatus: checkpoint.targetStatus,
   };
   if (canonicalJsonText(value as never) !== canonicalJsonText(expected as never)) {
-    throw new StorageConflictError("V3 completion event does not match its checkpoint.");
+    throw new StorageConflictError("Historical V3 completion event does not match its checkpoint.");
   }
 }
 

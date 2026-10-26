@@ -6,6 +6,7 @@ import type {
   ContextCheckpointRef,
   ContextCompactionReason,
 } from "../compaction/context-compaction-contracts.js";
+import type { CompactionRetentionDiagnostics } from "../compaction/compaction-retention-budget.js";
 import type { ContextBudgetSnapshot, ContextPressureState } from "../policy/context-policy.js";
 import type { ContextItemId, ContextSourceId } from "../item/context-item.js";
 import type { ContextBuildContribution } from "../../loop/types.js";
@@ -38,6 +39,7 @@ export interface ContextCompactionReceipt {
   readonly tokensAfter: number;
   readonly actualFreedTokens: number;
   readonly degraded: boolean;
+  readonly retention?: CompactionRetentionDiagnostics;
 }
 
 export interface ContextBuildReceipt {

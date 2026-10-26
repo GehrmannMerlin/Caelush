@@ -59,12 +59,15 @@ export { createContextCutPointSelector } from "./compaction/context-cut-point-se
 export { createContextCompactionPlanner } from "./compaction/context-compaction-planner.js";
 export {
   acceptCompactionCandidate,
+  evaluateCompactionCandidate,
   resolveCompactionRetentionBudget,
 } from "./compaction/compaction-retention-budget.js";
 export { maxNewTokensForTarget } from "./compaction/cache-growth-budget.js";
 export type {
   CompactionRetentionBudget,
   CompactionRetentionBudgetInput,
+  CompactionCandidateEvaluation,
+  CompactionRetentionDiagnostics,
 } from "./compaction/compaction-retention-budget.js";
 export {
   createContextCompactionCoverage,
@@ -415,6 +418,7 @@ export {
 export type {
   ContextHistoryIndex,
   ContextHistoryIndexer,
+  ContextHistoryIndexerOptions,
   ContextHistoryUnit,
   ContextHistoryUnitKind,
   ContextHistoryUnitStatus,
@@ -457,6 +461,7 @@ export type {
 export {
   computeRequestHeadroom,
   decideTurnBudget,
+  DEEP_COMPACTION_V2_DEFAULTS,
   HEADROOM_V1_DEFAULTS,
   planOutputAllowance,
   resolveOutputAllowance,
@@ -473,6 +478,8 @@ export type {
   TurnBudgetDecisionInput,
   TurnBudgetDecisionKind,
   DeepCompactionPolicy,
+  DeepCompactionPolicyV1,
+  DeepCompactionPolicyV2,
   TurnBudgetPolicy,
   TurnBudgetPolicyV3,
   TurnBudgetPolicyV4,

@@ -303,6 +303,9 @@ function sameSemanticArtifact(
 }
 
 function isCrossRunCompactionClaim(input: ContextArtifactCreateInput): boolean {
+  if (input.kind === "context-compaction-summary") {
+    return isCrossRunCompactionSummaryClaim(input);
+  }
   if (
     (input.kind !== "context-compaction-attempt" &&
       input.kind !== "context-compaction-subcall" &&
@@ -339,6 +342,97 @@ function isCrossRunCompactionClaim(input: ContextArtifactCreateInput): boolean {
       typeof record.attemptId === "string" &&
       Object.keys(record).every((key) => allowed.has(key))
     );
+  } catch {
+    return false;
+  }
+}
+
+function isCrossRunCompactionSummaryClaim(input: ContextArtifactCreateInput): boolean {
+  const sourcePrefix = "compaction-summary:";
+  const maxSummaryBytes = 32_768;
+  if (
+    input.sensitivity !== "INTERNAL" ||
+    input.mimeType !== "application/json" ||
+    !new RegExp(`^${sourcePrefix}sha256:[0-9a-f]{64}$`).test(input.sourceRef) ||
+    Buffer.byteLength(input.content, "utf8") > maxSummaryBytes
+  ) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(input.content) as unknown;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    const record = parsed as Record<string, unknown>;
+    const expectedKeys = [
+      "version",
+      "requestFingerprint",
+      "promptVersion",
+      "costVersion",
+      "modelRef",
+      "finishReason",
+      "sourceDigest",
+      "semanticDigest",
+      "semantic",
+    ].sort();
+    const actualKeys = Object.keys(record).sort();
+    if (
+      actualKeys.length !== expectedKeys.length ||
+      actualKeys.some((key, index) => key !== expectedKeys[index]) ||
+      record.version !== 1 ||
+      record.requestFingerprint !== input.sourceRef.slice(sourcePrefix.length) ||
+      !Number.isSafeInteger(record.promptVersion) ||
+      (record.promptVersion as number) < 1 ||
+      typeof record.costVersion !== "string" ||
+      record.costVersion.length === 0 ||
+      record.finishReason !== "STOP" ||
+      typeof record.sourceDigest !== "string" ||
+      !/^[0-9a-f]{64}$/.test(record.sourceDigest) ||
+      typeof record.semanticDigest !== "string" ||
+      !/^[0-9a-f]{64}$/.test(record.semanticDigest)
+    ) {
+      return false;
+    }
+    const modelRef = record.modelRef;
+    if (
+      modelRef === null ||
+      typeof modelRef !== "object" ||
+      Array.isArray(modelRef) ||
+      Object.keys(modelRef).sort().join(",") !== "model,provider" ||
+      typeof (modelRef as Record<string, unknown>).provider !== "string" ||
+      typeof (modelRef as Record<string, unknown>).model !== "string" ||
+      ((modelRef as Record<string, string>).provider ?? "").length > 256 ||
+      ((modelRef as Record<string, string>).model ?? "").length > 256
+    ) {
+      return false;
+    }
+    const semantic = record.semantic;
+    if (semantic === null || typeof semantic !== "object" || Array.isArray(semantic)) return false;
+    const draft = semantic as Record<string, unknown>;
+    const draftKeys = [
+      "constraints",
+      "completedWork",
+      "inProgress",
+      "blocked",
+      "importantDiscoveries",
+      "keyDecisions",
+      "criticalReferences",
+      "nextIntent",
+    ].sort();
+    if (Object.keys(draft).sort().join(",") !== draftKeys.join(",")) return false;
+    for (const field of draftKeys) {
+      const value = draft[field];
+      if (field === "nextIntent") {
+        if (typeof value !== "string" || value.length > 8_192) return false;
+        continue;
+      }
+      if (
+        !Array.isArray(value) ||
+        value.length > 64 ||
+        value.some((item) => typeof item !== "string" || item.length > 8_192)
+      ) {
+        return false;
+      }
+    }
+    return true;
   } catch {
     return false;
   }

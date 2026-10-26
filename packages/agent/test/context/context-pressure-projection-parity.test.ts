@@ -293,6 +293,19 @@ function surfaceMessages(messages: readonly { readonly content: unknown }[]): nu
 }
 
 describe("Context pressure preflight parity", () => {
+  it("lets the production message projector price cut-point history instead of durable rows", () => {
+    const seeded = scenario(2);
+    const conversation = conversationAt(seeded, 2);
+    const index = createContextHistoryIndexer({
+      estimateMessageTokens: () => 17,
+    }).index({ conversation, model: MODEL });
+
+    expect(index.estimatedTokens).toBe(3 * 17);
+    expect(index.units.find((unit) => unit.kind === "CONVERSATION_TURN")?.tokenEstimate).toBe(
+      3 * 17,
+    );
+  });
+
   it("measures the projection it sends, not a folded equivalent", async () => {
     const settledSteps = 6;
     const seeded = scenario(settledSteps + 1);

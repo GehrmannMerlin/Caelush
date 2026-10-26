@@ -72,6 +72,7 @@ function compactionFixture(options: {
   readonly signal: AbortSignal;
   readonly currentIntentRepetitions?: number;
   readonly mode?: "NORMAL" | "FORCED_RECOVERY";
+  readonly forceNoGain?: boolean;
 }) {
   const historicalRunId = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a";
   const currentRunId = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9c";
@@ -186,10 +187,10 @@ function compactionFixture(options: {
     compactionGainEvaluator: {
       evaluate() {
         return {
-          selectedTokens: 100,
+          selectedTokens: options.forceNoGain === true ? 0 : 100,
           estimatedCheckpointTokens: 10,
-          estimatedFreedTokens: 90,
-          gainRatio: 0.9,
+          estimatedFreedTokens: options.forceNoGain === true ? 0 : 90,
+          gainRatio: options.forceNoGain === true ? 0 : 0.9,
         };
       },
     },
@@ -297,6 +298,22 @@ describe("Phase 8C Context Engine failure boundaries", () => {
     expect(fixture.commitCalls).toBe(1);
     expect(prepared.report.compactionCount).toBe(1);
     expect(fixture.lastCheckpoint).toBeDefined();
+  });
+
+  it("does not yield a retryable projection when forced recovery cannot produce a new checkpoint", async () => {
+    const fixture = compactionFixture({
+      summarizer: acceptedSummarizer(),
+      factsProvider: facts(),
+      signal: new AbortController().signal,
+      currentIntentRepetitions: 400,
+      mode: "FORCED_RECOVERY",
+      forceNoGain: true,
+    });
+
+    await expect(fixture.engine.prepare(fixture.input)).rejects.toThrow(
+      "The model context is exhausted and cannot be reduced safely.",
+    );
+    expect(fixture.commitCalls).toBe(0);
   });
 
   it("stops after semantic output is cancelled and never collects facts or commits", async () => {

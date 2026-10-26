@@ -127,6 +127,53 @@ describe("SqliteContextArtifactStore", () => {
     });
   });
 
+  it("reuses only bounded internal semantic summary artifacts across Runs", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    stores.push(storage);
+    const firstRun = await addRun(storage);
+    const secondRun = await addRun(storage);
+    const fingerprint = `sha256:${"a".repeat(64)}`;
+    const summary = {
+      version: 1,
+      requestFingerprint: fingerprint,
+      promptVersion: 4,
+      costVersion: "CONTEXT_SUMMARY_UTF8_V1",
+      modelRef: { provider: "fixture", model: "fixture" },
+      finishReason: "STOP",
+      sourceDigest: "b".repeat(64),
+      semanticDigest: "c".repeat(64),
+      semantic: {
+        constraints: ["preserve the requested behavior"],
+        completedWork: [],
+        inProgress: [],
+        blocked: [],
+        importantDiscoveries: [],
+        keyDecisions: [],
+        criticalReferences: [],
+        nextIntent: "continue",
+      },
+    };
+    const input = {
+      artifactId: `artifact:compaction-summary:${"d".repeat(64)}` as never,
+      runId: firstRun.id,
+      kind: "context-compaction-summary",
+      sourceRef: `compaction-summary:${fingerprint}`,
+      content: JSON.stringify(summary),
+      mimeType: "application/json",
+      sensitivity: "INTERNAL" as const,
+      createdSequence: 1,
+      createdAt: createTimestampMs(3),
+    };
+
+    const first = await storage.contextArtifactsV2.claim(input);
+    const replay = await storage.contextArtifactsV2.claim({ ...input, runId: secondRun.id });
+
+    expect(first.kind).toBe("CREATED");
+    expect(replay.kind).toBe("EXISTING");
+    expect(replay.artifact.runId).toBe(firstRun.id);
+    expect(replay.artifact.byteLength).toBe(Buffer.byteLength(input.content, "utf8"));
+  });
+
   it("keeps metadata content-free and applies a UTF-8 byte-safe projection", async () => {
     const storage = await openCaelushStorage({ path: ":memory:" });
     stores.push(storage);

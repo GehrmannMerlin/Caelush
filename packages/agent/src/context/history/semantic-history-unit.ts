@@ -52,6 +52,12 @@ export interface ContextHistoryIndexer {
   }): ContextHistoryIndex;
 }
 
+export interface ContextHistoryIndexerOptions {
+  /** Host projection estimate for one durable message; used by production cut planning. */
+  readonly estimateMessageTokens?:
+    ((stored: StoredAgentMessage, model: ModelDescriptor) => number) | undefined;
+}
+
 /**
  * Order semantic views without comparing Run-local sequences across Turns.
  *
@@ -119,14 +125,27 @@ export function orderContextHistoryUnits(
  * atomicity boundary used by planning. `estimatedTokens` counts each durable message once,
  * even though a Tool protocol unit is also visible through its containing turn.
  */
-export function createContextHistoryIndexer(): ContextHistoryIndexer {
+export function createContextHistoryIndexer(
+  options: ContextHistoryIndexerOptions = {},
+): ContextHistoryIndexer {
   return Object.freeze({
     index(input: {
       readonly conversation: AgentConversationSnapshot;
       readonly model: ModelDescriptor;
     }): ContextHistoryIndex {
       createAgentConversationValidator().validate(input.conversation);
-      return indexConversation(input.conversation, input.model);
+      const fallbackEstimator = createUtf8HeuristicTokenEstimator();
+      const estimateMessageTokens =
+        options.estimateMessageTokens ??
+        ((stored: StoredAgentMessage, model: ModelDescriptor) =>
+          fallbackEstimator.estimateAgentMessage(stored.message, model));
+      return indexConversation(input.conversation, input.model, (stored, model) => {
+        const estimate = estimateMessageTokens(stored, model);
+        if (!Number.isSafeInteger(estimate) || estimate < 0) {
+          throw new TypeError("Context history message estimate is invalid.");
+        }
+        return estimate;
+      });
     },
   });
 }
@@ -134,8 +153,8 @@ export function createContextHistoryIndexer(): ContextHistoryIndexer {
 function indexConversation(
   conversation: AgentConversationSnapshot,
   model: ModelDescriptor,
+  estimateMessageTokens: (stored: StoredAgentMessage, model: ModelDescriptor) => number,
 ): ContextHistoryIndex {
-  const estimator = createUtf8HeuristicTokenEstimator();
   const units: ContextHistoryUnit[] = [];
   const allVisible = new Map<string, StoredAgentMessage>();
 
@@ -144,15 +163,16 @@ function indexConversation(
     for (const stored of visible) allVisible.set(stored.message.id, stored);
     // Snapshot order already is Session order. Keep each Turn together, and let the
     // Tool protocol views follow their assistant message order inside that Turn.
-    if (visible.length > 0) units.push(createConversationTurnUnit(turn, visible, model, estimator));
-    units.push(...createToolProtocolUnits(turn, visible, model, estimator));
+    if (visible.length > 0)
+      units.push(createConversationTurnUnit(turn, visible, model, estimateMessageTokens));
+    units.push(...createToolProtocolUnits(turn, visible, model, estimateMessageTokens));
   }
 
   const frozenUnits = orderContextHistoryUnits(units).map(freezeUnit);
   const openUnits = frozenUnits.filter((unit) => unit.status === "OPEN");
   const closedUnits = frozenUnits.filter((unit) => unit.status === "CLOSED");
   const estimatedTokens = [...allVisible.values()].reduce(
-    (total, stored) => total + estimator.estimateAgentMessage(stored.message, model),
+    (total, stored) => total + estimateMessageTokens(stored, model),
     0,
   );
 
@@ -168,15 +188,15 @@ function createConversationTurnUnit(
   turn: ConversationTurn,
   messages: readonly StoredAgentMessage[],
   model: ModelDescriptor,
-  estimator: ReturnType<typeof createUtf8HeuristicTokenEstimator>,
+  estimateMessageTokens: (stored: StoredAgentMessage, model: ModelDescriptor) => number,
 ): ContextHistoryUnit {
   return {
     id: `conversation:${turn.id}`,
     kind: "CONVERSATION_TURN",
     status: turn.status,
-    messages: messages.map((stored) => toMessageRef(stored, model, estimator)),
+    messages: messages.map((stored) => toMessageRef(stored, model, estimateMessageTokens)),
     tokenEstimate: messages.reduce(
-      (total, stored) => total + estimator.estimateAgentMessage(stored.message, model),
+      (total, stored) => total + estimateMessageTokens(stored, model),
       0,
     ),
     atomicGroupId: turn.id,
@@ -188,7 +208,7 @@ function createToolProtocolUnits(
   turn: ConversationTurn,
   messages: readonly StoredAgentMessage[],
   model: ModelDescriptor,
-  estimator: ReturnType<typeof createUtf8HeuristicTokenEstimator>,
+  estimateMessageTokens: (stored: StoredAgentMessage, model: ModelDescriptor) => number,
 ): readonly ToolProtocolUnit[] {
   const units: ToolProtocolUnit[] = [];
   for (const stored of turn.messages) {
@@ -221,9 +241,9 @@ function createToolProtocolUnits(
       .map((call) => results.get(call.toolCallId)?.message.id)
       .filter((id): id is AgentMessageId => id !== undefined);
     const closed = resultIds.length === callIds.length;
-    const refs = members.map((member) => toMessageRef(member, model, estimator));
+    const refs = members.map((member) => toMessageRef(member, model, estimateMessageTokens));
     const tokenEstimate = members.reduce(
-      (total, member) => total + estimator.estimateAgentMessage(member.message, model),
+      (total, member) => total + estimateMessageTokens(member, model),
       0,
     );
 
@@ -253,7 +273,7 @@ function messagesAfter(
 function toMessageRef(
   stored: StoredAgentMessage,
   model: ModelDescriptor,
-  estimator: ReturnType<typeof createUtf8HeuristicTokenEstimator>,
+  estimateMessageTokens: (stored: StoredAgentMessage, model: ModelDescriptor) => number,
 ): ContextMessageRef {
   const message = stored.message;
   return Object.freeze({
@@ -261,7 +281,7 @@ function toMessageRef(
     runId: message.runId,
     conversationTurnId: message.conversationTurnId,
     sequence: stored.sequence,
-    tokenEstimate: estimator.estimateAgentMessage(message, model),
+    tokenEstimate: estimateMessageTokens(stored, model),
   });
 }
 

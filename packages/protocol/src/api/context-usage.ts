@@ -509,6 +509,19 @@ const LastCompactionProjectionSchema = z
     tokensAfter: SafeTokenCountSchema.optional(),
     /** When the checkpoint committed, so a surface can date the last reduction. */
     finishedAt: TimestampMsSchema.optional(),
+    retention: z
+      .object({
+        status: z.enum(["PREFERRED", "ELASTIC", "FLOOR_LIMITED"]),
+        preferredInputTokens: SafeTokenCountSchema,
+        protectedFloorInputTokens: SafeTokenCountSchema,
+        hardInputLimitTokens: SafeTokenCountSchema,
+        compressibleTokens: SafeTokenCountSchema,
+        minimumReleaseRatio: SafeRateSchema,
+        minimumReleaseTokens: SafeTokenCountSchema,
+        actualFreedTokens: SafeTokenCountSchema,
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

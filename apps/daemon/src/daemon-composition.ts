@@ -66,6 +66,7 @@ import {
   createControlHookRunner,
   createContextContributionPipeline,
   createContextRequestOverheadEstimator,
+  DEEP_COMPACTION_V2_DEFAULTS,
   resolveAdaptiveContextBudget,
   resolveTurnBudgetPolicy,
   createModelTurnExecutor,
@@ -1149,13 +1150,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           preferredOutputTokens: headroom.preferredOutputTokens,
           safetyTokens: headroom.safetyTokens,
           expectedGrowthTokens: headroom.expectedGrowthTokens,
-          deepCompaction: Object.freeze({
-            version: "DEEP_COMPACTION_V1" as const,
-            triggerRatio: 0.9,
-            recentTokens: 20_000,
-            checkpointMaxTokens: 8_192,
-            boundaryTokens: 4_096,
-          }),
+          deepCompaction: DEEP_COMPACTION_V2_DEFAULTS,
           outputRecovery: Object.freeze({
             version: "OUTPUT_RECOVERY_V1" as const,
             maxRecoveryTurns: 1 as const,

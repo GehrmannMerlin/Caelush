@@ -99,6 +99,8 @@ function policyIdentity(policy: ContextPolicy): unknown {
     targetPostCompactionTokens: policy.targetPostCompactionTokens,
     allowCurrentTurnPrefix: policy.allowCurrentTurnPrefix ?? false,
     workingSet: policy.workingSet ?? null,
+    deepCompaction: policy.deepCompaction ?? null,
+    requestHeadroom: policy.requestHeadroom ?? null,
     observationPolicy: policy.observationPolicy,
     conversationCapTokens: policy.conversationCapTokens,
     sourceLimits: policy.sourceLimits,

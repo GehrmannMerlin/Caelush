@@ -505,7 +505,7 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
     }
   });
 
-  it("maps a candidate that is still too large to INSUFFICIENT_GAIN without committing", async () => {
+  it("reports a candidate above the hard input limit without committing", async () => {
     let commitCalls = 0;
     const coordinator = createContextCompactionCoordinator({
       dependencies: dependencies(
@@ -530,12 +530,12 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
 
     await expect(coordinator.compact(request)).resolves.toEqual({
       kind: "NOT_APPLICABLE",
-      reason: "INSUFFICIENT_GAIN",
+      reason: "REQUEST_TOO_LARGE",
     });
     expect(commitCalls).toBe(0);
   });
 
-  it("rejects a fitted candidate that exceeds the explicit retention target", async () => {
+  it("accepts a useful candidate above the soft V1 retention target", async () => {
     let commitCalls = 0;
     const coordinator = createContextCompactionCoordinator({
       dependencies: dependencies(
@@ -563,6 +563,7 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
         ...request,
         policy: {
           ...((request.policy ?? {}) as object),
+          effectiveInputLimitTokens: 1_000,
           deepCompaction: {
             version: "DEEP_COMPACTION_V1",
             triggerRatio: 0.9,
@@ -571,13 +572,10 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
             boundaryTokens: 4,
           },
         } as never,
-        estimatedInputTokensBefore: 1_000,
+        estimatedInputTokensBefore: 2_000,
       }),
-    ).resolves.toEqual({
-      kind: "NOT_APPLICABLE",
-      reason: "INSUFFICIENT_GAIN",
-    });
-    expect(commitCalls).toBe(0);
+    ).resolves.toMatchObject({ kind: "COMPACTED", receipt: { retention: { status: "ELASTIC" } } });
+    expect(commitCalls).toBe(1);
   });
 
   it("records actual freed tokens when the fitted candidate meets the retention target", async () => {

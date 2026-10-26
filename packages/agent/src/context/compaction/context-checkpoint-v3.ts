@@ -11,7 +11,10 @@ import type {
 import type { ContextSourceCoverage } from "./context-source-coverage.js";
 import type { StructuredCheckpointV2 } from "../checkpoint/structured-checkpoint.js";
 
-export type CompactionTargetStatus = "DEEP" | "FLOOR_LIMITED";
+/** `DEEP` is a historical label; new V2 retention writes use explicit outcomes. */
+export type CompactionTargetStatus = "DEEP" | "PREFERRED" | "ELASTIC" | "FLOOR_LIMITED";
+
+export type NewCompactionTargetStatus = Exclude<CompactionTargetStatus, "DEEP">;
 
 export interface ContextCheckpointRecordV3 {
   readonly checkpointId: ContextCheckpointId;
@@ -35,7 +38,10 @@ export interface ContextCheckpointRecordV3 {
   readonly createdAt: TimestampMs;
 }
 
-export type ContextCheckpointCreateInputV3 = Omit<ContextCheckpointRecordV3, "schemaVersion">;
+export type ContextCheckpointCreateInputV3 = Omit<
+  ContextCheckpointRecordV3,
+  "schemaVersion" | "targetStatus"
+> & { readonly targetStatus: NewCompactionTargetStatus };
 
 export interface ContextCheckpointSessionCandidates {
   readonly records: readonly (
@@ -79,7 +85,10 @@ export function assertContextCheckpointRecordV3(
     !Number.isSafeInteger(checkpoint.tokensAfter) ||
     (checkpoint.tokensAfter as number) < 0 ||
     typeof checkpoint.degraded !== "boolean" ||
-    (checkpoint.targetStatus !== "DEEP" && checkpoint.targetStatus !== "FLOOR_LIMITED")
+    (checkpoint.targetStatus !== "DEEP" &&
+      checkpoint.targetStatus !== "PREFERRED" &&
+      checkpoint.targetStatus !== "ELASTIC" &&
+      checkpoint.targetStatus !== "FLOOR_LIMITED")
   ) {
     throw new TypeError("ContextCheckpointRecordV3 fields are invalid.");
   }

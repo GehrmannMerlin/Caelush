@@ -116,6 +116,22 @@ export const DeepCompactionPolicyV1Schema = z
   })
   .strict();
 
+/** Elastic retention targets. The ratios are Run-frozen soft policy parameters. */
+export const DeepCompactionPolicyV2Schema = z
+  .object({
+    version: z.literal("DEEP_COMPACTION_V2"),
+    triggerRatio: z.number().finite().gt(0).lt(1),
+    recentRatio: z.number().finite().gt(0).lt(1),
+    minimumReleaseRatio: z.number().finite().gt(0).lt(1),
+    checkpointMaxTokens: z.number().int().safe().positive(),
+    boundaryTokens: z.number().int().safe().nonnegative(),
+  })
+  .strict();
+
+export const DeepCompactionPolicySchema = DeepCompactionPolicyV1Schema.or(
+  DeepCompactionPolicyV2Schema,
+);
+
 /** Run-frozen V4 policy: output headroom plus explicit post-compaction retention inputs. */
 export const TurnBudgetPolicyV4SnapshotSchema = z
   .object({
@@ -125,7 +141,7 @@ export const TurnBudgetPolicyV4SnapshotSchema = z
     preferredOutputTokens: z.number().int().safe().positive(),
     safetyTokens: z.number().int().safe().nonnegative(),
     expectedGrowthTokens: z.number().int().safe().positive(),
-    deepCompaction: DeepCompactionPolicyV1Schema,
+    deepCompaction: DeepCompactionPolicySchema,
     outputRecovery: OutputRecoveryPolicySchema.optional(),
   })
   .strict();
@@ -146,6 +162,7 @@ export type ContextRequestBudgetSnapshot = z.infer<typeof ContextRequestBudgetSn
 export type WorkingSetPolicyV2 = z.infer<typeof WorkingSetPolicyV2Schema>;
 export type TurnBudgetPolicySnapshot = z.infer<typeof TurnBudgetPolicySnapshotSchema>;
 export type DeepCompactionPolicyV1 = z.infer<typeof DeepCompactionPolicyV1Schema>;
+export type DeepCompactionPolicyV2 = z.infer<typeof DeepCompactionPolicyV2Schema>;
 export type TurnBudgetPolicyV4Snapshot = z.infer<typeof TurnBudgetPolicyV4SnapshotSchema>;
 
 /**

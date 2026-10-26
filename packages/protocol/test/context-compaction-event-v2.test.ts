@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   RUN_EVENT_SCHEMA_REGISTRY,
+  RunEventSchema,
   createEventId,
   createRunId,
   createSessionId,
@@ -37,5 +38,43 @@ describe("Context compaction durable event V2", () => {
       schemaVersion: 2,
       payload: { checkpointId: "checkpoint_v3", freedTokens: 885_808 },
     });
+  });
+
+  it("keeps the elastic-retention completion shape in the canonical RunEvent union", () => {
+    const event = {
+      eventId: createEventId(),
+      schemaVersion: 3,
+      runId: createRunId(),
+      sessionId: createSessionId(),
+      timestamp: 1_798_000_000_000,
+      visibility: "USER_VISIBLE",
+      durability: { kind: "DURABLE", version: 1, sequence: 1 },
+      type: "context.compaction.completed",
+      payload: {
+        checkpointId: "checkpoint_v4",
+        operationId: "operation_v4",
+        epochId: "epoch_v4",
+        reason: "PROACTIVE_PRESSURE",
+        sourceRangeCount: 3,
+        sourceMessageCount: 240,
+        tokensBefore: 930_000,
+        tokensAfter: 170_000,
+        freedTokens: 760_000,
+        degraded: false,
+        targetStatus: "ELASTIC",
+        retention: {
+          status: "ELASTIC",
+          preferredInputTokens: 44_192,
+          protectedFloorInputTokens: 15_000,
+          hardInputLimitTokens: 900_000,
+          compressibleTokens: 800_000,
+          minimumReleaseRatio: 0.7,
+          minimumReleaseTokens: 560_000,
+          actualFreedTokens: 760_000,
+        },
+      },
+    };
+
+    expect(RunEventSchema.safeParse(event).success).toBe(true);
   });
 });

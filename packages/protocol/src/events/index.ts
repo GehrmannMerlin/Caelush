@@ -72,6 +72,7 @@ import { ConversationMessageCommittedEventSchema } from "./conversation.js";
 import {
   ContextCompactionCompletedEventSchema,
   ContextCompactionCompletedEventV2Schema,
+  ContextCompactionCompletedEventV3Schema,
   ContextCompactionProgressEventSchema,
 } from "./context.js";
 import { RunSecurityPolicyBoundEventSchema } from "./security-policy.js";
@@ -139,6 +140,8 @@ export { ContextCompactionCompletedEventSchema } from "./context.js";
 export type { ContextCompactionCompletedEvent } from "./context.js";
 export { ContextCompactionCompletedEventV2Schema } from "./context.js";
 export type { ContextCompactionCompletedEventV2 } from "./context.js";
+export { ContextCompactionCompletedEventV3Schema } from "./context.js";
+export type { ContextCompactionCompletedEventV3 } from "./context.js";
 export { ContextCompactionProgressEventSchema } from "./context.js";
 export type { ContextCompactionProgressEvent } from "./context.js";
 export { RunInputAcceptedEventSchema, RunInputAssignedEventSchema } from "./run-input.js";
@@ -236,6 +239,7 @@ const currentRunEventSchema = z.union([
   ConversationMessageCommittedEventSchema,
   ContextCompactionCompletedEventSchema,
   ContextCompactionCompletedEventV2Schema,
+  ContextCompactionCompletedEventV3Schema,
   ContextCompactionProgressEventSchema,
   RunInputAcceptedEventSchema,
   RunInputAssignedEventSchema,

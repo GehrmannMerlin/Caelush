@@ -175,7 +175,10 @@ function parseEnvelope(value: unknown): ContextCheckpointV3Envelope {
     record.version !== 3 ||
     typeof record.degraded !== "boolean" ||
     !isCompactionReason(record.reason) ||
-    (record.targetStatus !== "DEEP" && record.targetStatus !== "FLOOR_LIMITED")
+    (record.targetStatus !== "DEEP" &&
+      record.targetStatus !== "PREFERRED" &&
+      record.targetStatus !== "ELASTIC" &&
+      record.targetStatus !== "FLOOR_LIMITED")
   ) {
     throw new TypeError("Context Checkpoint V3 envelope is invalid.");
   }

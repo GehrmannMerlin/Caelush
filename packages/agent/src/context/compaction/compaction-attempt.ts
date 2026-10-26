@@ -83,6 +83,7 @@ export function createCompactionAttemptArtifactId(input: {
   readonly kind:
     | "context-compaction-attempt"
     | "context-compaction-subcall"
+    | "context-compaction-summary"
     | "context-compaction-failure-baseline";
   readonly sourceRef: string;
   readonly content: string;

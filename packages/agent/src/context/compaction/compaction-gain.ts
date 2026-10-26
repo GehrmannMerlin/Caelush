@@ -1,7 +1,7 @@
 import type { ContextCheckpointBudget } from "./checkpoint-budget.js";
 import type { ContextCompactionPlan } from "./context-compaction-contracts.js";
 
-const MINIMUM_GAIN_RATIO = 0.15;
+export const MINIMUM_CONTEXT_COMPACTION_GAIN_RATIO = 0.15;
 
 export interface ContextCompactionGain {
   readonly selectedTokens: number;
@@ -45,7 +45,7 @@ export function createContextCompactionGainEvaluator(): ContextCompactionGainEva
 
 /** Package-internal gate used by ContextEngine; deliberately absent from public exports. */
 export function isMeaningfulContextCompactionGain(gain: ContextCompactionGain): boolean {
-  return gain.estimatedFreedTokens > 0 && gain.gainRatio >= MINIMUM_GAIN_RATIO;
+  return gain.estimatedFreedTokens > 0 && gain.gainRatio >= MINIMUM_CONTEXT_COMPACTION_GAIN_RATIO;
 }
 
 function assertPositiveSafeInteger(value: number, name: string): void {

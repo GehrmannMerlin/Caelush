@@ -31,21 +31,27 @@ import type {
 import { estimateAIMessages } from "../token/materialized-message-estimator.js";
 import { createContextSourceCoverage } from "./context-source-coverage.js";
 import {
-  beginPersistedCompactionSubcall,
+  beginNextPersistedCompactionSubcall,
   createPersistedCompactionAttemptTerminalArtifact,
   finishPersistedCompactionSubcall,
+  readPersistedAcceptedSummary,
+  CONTEXT_SUMMARY_COST_VERSION,
   MAX_PERSISTED_COMPACTION_SUBCALLS,
 } from "./persisted-compaction-attempt.js";
 import {
   ContextCheckpointBudgetUnavailableError,
   fitStructuredCheckpointToBudget,
 } from "./checkpoint-budget.js";
-import { isMeaningfulContextCompactionGain } from "./compaction-gain.js";
+import {
+  isMeaningfulContextCompactionGain,
+  MINIMUM_CONTEXT_COMPACTION_GAIN_RATIO,
+} from "./compaction-gain.js";
 import type { ContextCompactionRebuildInput } from "./context-compaction-rebuilder.js";
 import type { DeterministicCompactionFacts } from "./deterministic-compaction-facts.js";
 import {
-  acceptCompactionCandidate,
+  evaluateCompactionCandidate,
   resolveCompactionRetentionBudget,
+  type CompactionRetentionDiagnostics,
 } from "./compaction-retention-budget.js";
 import { createHistorySourceRef } from "../../messages/history-lookup-port.js";
 import type { StoredAgentMessage } from "../../messages/persistence/record.js";
@@ -83,12 +89,13 @@ export function createContextCompactionCoordinator(
     async compact(request: ContextCompactionRequest): Promise<ContextCompactionOutcome> {
       throwIfAborted(request.signal);
       assertTokenEstimate(request.estimatedInputTokensBefore, "estimatedInputTokensBefore");
+      const compactionRequest = withElasticRetentionTarget(request);
       options.onProgress?.("PREPARING", request.reason);
       const previousCheckpoint =
         options.latest.kind === "V2" ? options.latest.checkpoint : undefined;
       const plan = options.dependencies.planner.plan({
-        history: request.history,
-        policy: request.policy,
+        history: compactionRequest.history,
+        policy: compactionRequest.policy,
         reason: request.reason,
         ...(previousCheckpoint === undefined ? {} : { latestCheckpoint: previousCheckpoint }),
       });
@@ -100,7 +107,7 @@ export function createContextCompactionCoordinator(
         options.createEventsV3 !== undefined &&
         request.ownerStepSequence !== undefined
       ) {
-        return compactV3({ options, request, plan });
+        return compactV3({ options, request: compactionRequest, plan });
       }
       // A V2 envelope can express one Run-local range only. Without the prepared V3 activation
       // transaction, never persist a partial representation of a multi-Run plan.
@@ -128,36 +135,7 @@ export function createContextCompactionCoordinator(
         return { kind: "NOT_APPLICABLE", reason: "INSUFFICIENT_GAIN" };
       }
       const retentionBudget = resolveCompactionRetentionBudget({
-        fixedTokens:
-          request.fixedInputTokens ??
-          Math.max(
-            0,
-            request.estimatedInputTokensBefore -
-              (Number.isSafeInteger(request.history.estimatedTokens)
-                ? request.history.estimatedTokens
-                : plan.estimatedTokensBefore),
-          ),
-        recentTokens: Math.min(
-          plan.retainedTokens,
-          request.policy.deepCompaction?.recentTokens ??
-            (Number.isSafeInteger(request.policy.targetRecentTailTokens)
-              ? request.policy.targetRecentTailTokens
-              : plan.targetRecentTailTokens),
-        ),
-        checkpointMaxTokens: Math.min(
-          checkpointBudget.maxTokens,
-          request.policy.deepCompaction?.checkpointMaxTokens ?? checkpointBudget.maxTokens,
-        ),
-        boundaryTokens:
-          request.boundaryTokens ??
-          request.policy.deepCompaction?.boundaryTokens ??
-          Math.min(
-            4_096,
-            Number.isSafeInteger(request.policy.minRecentTailTokens)
-              ? request.policy.minRecentTailTokens
-              : plan.minRecentTailTokens,
-          ),
-        availableInputTokens: request.policy.effectiveInputLimitTokens,
+        ...retentionBudgetInput(request, plan, checkpointBudget),
       });
 
       const incremental = options.dependencies.incrementalResolver.resolve({
@@ -273,17 +251,26 @@ export function createContextCompactionCoordinator(
       throwIfAborted(request.signal);
       assertTokenEstimate(rebuild.estimatedInputTokens, "estimatedInputTokensAfter");
       const actualFreedTokens = request.estimatedInputTokensBefore - rebuild.estimatedInputTokens;
-      const candidateFits =
-        request.reason === "FORCED_PROVIDER_OVERFLOW"
-          ? rebuild.estimatedInputTokens < request.estimatedInputTokensBefore &&
-            rebuild.estimatedInputTokens <= retentionBudget.availableInputTokens
-          : acceptCompactionCandidate({
-              inputTokens: rebuild.estimatedInputTokens,
-              budget: retentionBudget,
-            });
-      if (!candidateFits) {
-        return { kind: "NOT_APPLICABLE", reason: "INSUFFICIENT_GAIN" };
+      const evaluation = evaluateCompactionCandidate({
+        inputTokens: rebuild.estimatedInputTokens,
+        inputTokensBefore: request.estimatedInputTokensBefore,
+        compressibleTokens: plan.selectedTokens,
+        minimumReleaseRatio: minimumReleaseRatio(request.policy),
+        minimumLegalCut: isMinimumLegalCut(plan),
+        budget: retentionBudget,
+      });
+      if (!evaluation.accepted) {
+        return {
+          kind: "NOT_APPLICABLE",
+          reason: evaluation.reason ?? "INSUFFICIENT_GAIN",
+        };
       }
+      const retention = createRetentionDiagnostics(
+        evaluation,
+        retentionBudget,
+        plan.selectedTokens,
+        minimumReleaseRatio(request.policy),
+      );
 
       const committedInput: ContextCheckpointCreateInputV2 = {
         ...checkpoint,
@@ -299,7 +286,17 @@ export function createContextCompactionCoordinator(
       const committed = await options.dependencies.commit.commit({
         checkpoint: committedInput,
         events: options.createEvents?.(eventInput) ?? [],
-        ...(rebuild.activation === undefined ? {} : { activation: rebuild.activation }),
+        ...(rebuild.activation === undefined
+          ? {}
+          : {
+              activation: {
+                ...rebuild.activation,
+                usage: Object.freeze({
+                  ...rebuild.activation.usage,
+                  lastCompactionRetention: retention,
+                }),
+              },
+            }),
       });
       options.notifyCommitted?.(committed.events);
       return {
@@ -312,6 +309,7 @@ export function createContextCompactionCoordinator(
           tokensAfter: committed.checkpoint.tokensAfter,
           actualFreedTokens,
           degraded,
+          retention,
         },
       };
     },
@@ -352,38 +350,9 @@ async function compactV3(input: {
     return { kind: "NOT_APPLICABLE", reason: "INSUFFICIENT_GAIN" };
   }
 
-  const retentionBudget = resolveCompactionRetentionBudget({
-    fixedTokens:
-      request.fixedInputTokens ??
-      Math.max(
-        0,
-        request.estimatedInputTokensBefore -
-          (Number.isSafeInteger(request.history.estimatedTokens)
-            ? request.history.estimatedTokens
-            : plan.estimatedTokensBefore),
-      ),
-    recentTokens: Math.min(
-      plan.retainedTokens,
-      request.policy.deepCompaction?.recentTokens ??
-        (Number.isSafeInteger(request.policy.targetRecentTailTokens)
-          ? request.policy.targetRecentTailTokens
-          : plan.targetRecentTailTokens),
-    ),
-    checkpointMaxTokens: Math.min(
-      checkpointBudget.maxTokens,
-      request.policy.deepCompaction?.checkpointMaxTokens ?? checkpointBudget.maxTokens,
-    ),
-    boundaryTokens:
-      request.boundaryTokens ??
-      request.policy.deepCompaction?.boundaryTokens ??
-      Math.min(
-        4_096,
-        Number.isSafeInteger(request.policy.minRecentTailTokens)
-          ? request.policy.minRecentTailTokens
-          : plan.minRecentTailTokens,
-      ),
-    availableInputTokens: request.policy.effectiveInputLimitTokens,
-  });
+  const retentionBudget = resolveCompactionRetentionBudget(
+    retentionBudgetInput(request, plan, checkpointBudget),
+  );
 
   const sourceCoverageDelta = plan.sourceCoverageDelta ?? [plan.sourceRange];
   const previousCheckpoint = options.latestSessionCheckpoint;
@@ -520,7 +489,8 @@ async function compactV3(input: {
     checkpointDigest,
     degraded,
     reason: request.reason,
-    targetStatus: retentionBudget.targetStatus,
+    // The exact result is filled only after the tentative, fully materialized rebuild.
+    targetStatus: "PREFERRED",
     createdAt: options.dependencies.clock.now(),
   };
   const rebuildInput: ContextCompactionRebuildInput = {
@@ -538,17 +508,27 @@ async function compactV3(input: {
   throwIfAborted(request.signal);
   assertTokenEstimate(rebuild.estimatedInputTokens, "estimatedInputTokensAfter");
   const actualFreedTokens = request.estimatedInputTokensBefore - rebuild.estimatedInputTokens;
-  const candidateFits =
-    request.reason === "FORCED_PROVIDER_OVERFLOW"
-      ? rebuild.estimatedInputTokens < request.estimatedInputTokensBefore &&
-        rebuild.estimatedInputTokens <= retentionBudget.availableInputTokens
-      : acceptCompactionCandidate({
-          inputTokens: rebuild.estimatedInputTokens,
-          budget: retentionBudget,
-        });
-  if (!candidateFits) {
-    return { kind: "NOT_APPLICABLE", reason: "INSUFFICIENT_GAIN" };
+  const releaseRatio = minimumReleaseRatio(request.policy);
+  const evaluation = evaluateCompactionCandidate({
+    inputTokens: rebuild.estimatedInputTokens,
+    inputTokensBefore: request.estimatedInputTokensBefore,
+    compressibleTokens: plan.selectedTokens,
+    minimumReleaseRatio: releaseRatio,
+    minimumLegalCut: isMinimumLegalCut(plan),
+    budget: retentionBudget,
+  });
+  if (!evaluation.accepted || evaluation.status === undefined) {
+    return {
+      kind: "NOT_APPLICABLE",
+      reason: evaluation.reason ?? "INSUFFICIENT_GAIN",
+    };
   }
+  const retention = createRetentionDiagnostics(
+    evaluation,
+    retentionBudget,
+    plan.selectedTokens,
+    releaseRatio,
+  );
   if (rebuild.activation === undefined) {
     throw new TypeError(
       "V3 compaction rebuild did not prepare an atomic Prompt Surface activation.",
@@ -557,6 +537,7 @@ async function compactV3(input: {
   const committedInput: ContextCheckpointCreateInputV3 = {
     ...checkpoint,
     tokensAfter: rebuild.estimatedInputTokens,
+    targetStatus: evaluation.status,
   };
   throwIfAborted(request.signal);
   const events = createEventsV3({
@@ -564,6 +545,7 @@ async function compactV3(input: {
     checkpoint: committedInput,
     epochId: String(rebuild.activation.promptSurface.newEpoch.epochId),
     freedTokens: actualFreedTokens,
+    retention,
   });
   const committed = await options.dependencies.commit.commitV3({
     checkpoint: committedInput,
@@ -582,7 +564,11 @@ async function compactV3(input: {
         }),
     activation: {
       ...rebuild.activation,
-      targetStatus: retentionBudget.targetStatus,
+      usage: Object.freeze({
+        ...rebuild.activation.usage,
+        lastCompactionRetention: retention,
+      }),
+      targetStatus: evaluation.status,
     },
   });
   options.notifyCommitted?.(committed.events);
@@ -596,8 +582,119 @@ async function compactV3(input: {
       tokensAfter: committed.checkpoint.tokensAfter,
       actualFreedTokens,
       degraded,
+      retention,
     },
   };
+}
+
+function withElasticRetentionTarget(request: ContextCompactionRequest): ContextCompactionRequest {
+  const policy = request.policy;
+  const deepCompaction = policy.deepCompaction;
+  if (deepCompaction?.version !== "DEEP_COMPACTION_V2") return request;
+  const fixedTokens = fixedInputTokens(request);
+  const historyCapacity = Math.max(0, policy.effectiveInputLimitTokens - fixedTokens);
+  const targetRecentTailTokens = Math.max(
+    policy.minRecentTailTokens,
+    Math.floor(historyCapacity * deepCompaction.recentRatio),
+  );
+  return Object.freeze({
+    ...request,
+    policy: Object.freeze({ ...policy, targetRecentTailTokens }),
+  });
+}
+
+function retentionBudgetInput(
+  request: ContextCompactionRequest,
+  plan: ContextCompactionPlan,
+  checkpointBudget: ContextCheckpointBudget,
+): Parameters<typeof resolveCompactionRetentionBudget>[0] {
+  const policy = request.policy;
+  const deepCompaction = policy.deepCompaction;
+  const fixedTokens = fixedInputTokens(request, plan);
+  const expectedGrowth = expectedGrowthTokens(policy);
+  const availableInputTokens = Math.max(1, policy.effectiveInputLimitTokens - expectedGrowth);
+  const recentTokens =
+    deepCompaction?.version === "DEEP_COMPACTION_V1"
+      ? Math.min(plan.retainedTokens, deepCompaction.recentTokens)
+      : deepCompaction?.version === "DEEP_COMPACTION_V2"
+        ? Math.max(
+            plan.minimumRetainedTokens,
+            plan.minRecentTailTokens,
+            Math.floor(
+              Math.max(0, policy.effectiveInputLimitTokens - fixedTokens) *
+                deepCompaction.recentRatio,
+            ),
+          )
+        : Math.min(
+            plan.retainedTokens,
+            Number.isSafeInteger(policy.targetRecentTailTokens)
+              ? policy.targetRecentTailTokens
+              : plan.targetRecentTailTokens,
+          );
+  const checkpointMaxTokens = Math.min(
+    checkpointBudget.maxTokens,
+    deepCompaction?.checkpointMaxTokens ?? checkpointBudget.maxTokens,
+  );
+  const boundaryTokens =
+    request.boundaryTokens ??
+    deepCompaction?.boundaryTokens ??
+    Math.min(4_096, policy.minRecentTailTokens);
+  return {
+    fixedTokens,
+    recentTokens,
+    protectedRecentTokens: plan.minimumRetainedTokens,
+    checkpointMaxTokens,
+    boundaryTokens,
+    availableInputTokens,
+  };
+}
+
+function fixedInputTokens(request: ContextCompactionRequest, plan?: ContextCompactionPlan): number {
+  return (
+    request.fixedInputTokens ??
+    Math.max(
+      0,
+      request.estimatedInputTokensBefore -
+        (Number.isSafeInteger(request.history.estimatedTokens)
+          ? request.history.estimatedTokens
+          : (plan?.estimatedTokensBefore ?? 0)),
+    )
+  );
+}
+
+function expectedGrowthTokens(policy: ContextCompactionRequest["policy"]): number {
+  return policy.requestHeadroom?.expectedGrowthTokens ?? 0;
+}
+
+function minimumReleaseRatio(policy: ContextCompactionRequest["policy"]): number {
+  return policy.deepCompaction?.version === "DEEP_COMPACTION_V2"
+    ? policy.deepCompaction.minimumReleaseRatio
+    : MINIMUM_CONTEXT_COMPACTION_GAIN_RATIO;
+}
+
+function isMinimumLegalCut(plan: ContextCompactionPlan): boolean {
+  return plan.retainedTokens === plan.minimumRetainedTokens;
+}
+
+function createRetentionDiagnostics(
+  evaluation: ReturnType<typeof evaluateCompactionCandidate>,
+  budget: ReturnType<typeof resolveCompactionRetentionBudget>,
+  compressibleTokens: number,
+  releaseRatio: number,
+): CompactionRetentionDiagnostics {
+  if (evaluation.status === undefined || evaluation.minimumReleaseTokens < 1) {
+    throw new TypeError("Accepted compaction is missing retention diagnostics.");
+  }
+  return Object.freeze({
+    status: evaluation.status,
+    preferredInputTokens: budget.targetInputTokens,
+    protectedFloorInputTokens: budget.protectedFloorInputTokens,
+    hardInputLimitTokens: budget.availableInputTokens,
+    compressibleTokens,
+    minimumReleaseRatio: releaseRatio,
+    minimumReleaseTokens: evaluation.minimumReleaseTokens,
+    actualFreedTokens: evaluation.actualFreedTokens,
+  });
 }
 
 function createAttemptClaimedSummaryRunner(input: {
@@ -619,42 +716,88 @@ function createAttemptClaimedSummaryRunner(input: {
           "Persistent compaction attempt has no summary subcall Artifact store.",
         );
       }
-      const ordinal = callOrdinal;
-      if (ordinal >= MAX_PERSISTED_COMPACTION_SUBCALLS) {
+      if (callOrdinal >= MAX_PERSISTED_COMPACTION_SUBCALLS) {
         throw new ContextSummarizationInfrastructureError(
           "Compaction summary exceeded its durable subcall limit.",
         );
       }
-      callOrdinal += 1;
       const requestFingerprint = `sha256:${digestJsonValue({
         source: JSON.parse(serializeContextSummarySource(summaryInput)) as never,
         replayPrefixFingerprint: summaryInput.replayPrefixFingerprint ?? null,
-        modelRef: summaryInput.model.ref,
+        modelRef: {
+          provider: summaryInput.model.ref.provider,
+          model: summaryInput.model.ref.model,
+        },
         api: summaryInput.model.api,
         targetTokens: summaryInput.targetTokens,
+        promptVersion: CONTEXT_SUMMARY_PROMPT_VERSION,
+        costVersion: CONTEXT_SUMMARY_COST_VERSION,
       } as never)}`;
+      const sourceDigest = digestJsonValue(
+        JSON.parse(serializeContextSummarySource(summaryInput)) as never,
+      );
+      const cached = await readPersistedAcceptedSummary({
+        store,
+        requestFingerprint,
+        modelRef: summaryInput.model.ref,
+        sourceDigest,
+      });
       const createdSequence = input.request.ownerStepSequence ?? 1;
       const createdAt = input.dependencies.clock.now();
-      const claimed = await beginPersistedCompactionSubcall({
+      const claimed = await beginNextPersistedCompactionSubcall({
         store,
         attempt,
-        callOrdinal: ordinal,
         requestFingerprint,
         createdSequence,
         createdAt,
       });
-      if (claimed.kind !== "CLAIMED") {
+      if (claimed.kind === "BLOCKED") {
+        if (
+          cached !== undefined &&
+          claimed.callOrdinal !== undefined &&
+          claimed.requestFingerprint === requestFingerprint
+        ) {
+          await finishPersistedCompactionSubcall({
+            store,
+            attempt,
+            callOrdinal: claimed.callOrdinal,
+            requestFingerprint,
+            outcome: "ACCEPTED",
+            acceptedResult: cached,
+            createdSequence,
+            createdAt: input.dependencies.clock.now(),
+          });
+          return Object.freeze({ kind: "ACCEPTED", result: cached, degraded: false });
+        }
+        if (cached !== undefined) {
+          return Object.freeze({ kind: "ACCEPTED", result: cached, degraded: false });
+        }
         throw new ContextSummarizationInfrastructureError(
           "Compaction summary subcall was already started and cannot be resent.",
         );
+      }
+      callOrdinal = claimed.callOrdinal + 1;
+      if (cached !== undefined) {
+        await finishPersistedCompactionSubcall({
+          store,
+          attempt,
+          callOrdinal: claimed.callOrdinal,
+          requestFingerprint,
+          outcome: "ACCEPTED",
+          acceptedResult: cached,
+          createdSequence,
+          createdAt: input.dependencies.clock.now(),
+        });
+        return Object.freeze({ kind: "ACCEPTED", result: cached, degraded: false });
       }
       const result = await input.runner.summarize(summaryInput, options);
       await finishPersistedCompactionSubcall({
         store,
         attempt,
-        callOrdinal: ordinal,
+        callOrdinal: claimed.callOrdinal,
         requestFingerprint,
         outcome: result.kind === "ACCEPTED" ? "ACCEPTED" : "FALLBACK_REQUIRED",
+        ...(result.kind === "ACCEPTED" ? { acceptedResult: result.result } : {}),
         createdSequence,
         createdAt: input.dependencies.clock.now(),
       });

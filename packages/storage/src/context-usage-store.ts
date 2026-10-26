@@ -38,6 +38,7 @@ interface UsageEnvelope {
   readonly fullRequestInputEstimateTokens?: number;
   readonly fullWindowUsedRatio?: number;
   readonly turnBudget?: TurnBudgetDecision | null;
+  readonly lastCompactionRetention?: NonNullable<ContextUsageSnapshot["lastCompactionRetention"]>;
 }
 
 export class SqliteContextUsageStore implements ContextUsageStorePort {
@@ -59,6 +60,9 @@ export class SqliteContextUsageStore implements ContextUsageStorePort {
       contextFingerprint: snapshot.contextFingerprint ?? null,
       promptSurface: snapshot.promptSurface ?? null,
       turnBudget: snapshot.turnBudget ?? null,
+      ...(snapshot.lastCompactionRetention === undefined
+        ? {}
+        : { lastCompactionRetention: snapshot.lastCompactionRetention }),
       ...(snapshot.requestOverheadTokens === undefined
         ? {}
         : {
@@ -215,6 +219,9 @@ function assertSnapshot(snapshot: ContextUsageSnapshot): void {
   }
   if (snapshot.promptSurface !== undefined) assertPromptSurfaceReceipt(snapshot.promptSurface);
   if (snapshot.turnBudget !== undefined) decodeTurnBudget(snapshot.turnBudget);
+  if (snapshot.lastCompactionRetention !== undefined) {
+    decodeCompactionRetention(snapshot.lastCompactionRetention);
+  }
 }
 
 function decodeUsage(row: UsageRow): ContextUsageSnapshot {
@@ -280,6 +287,13 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
       candidate.version === 5 && candidate.turnBudget !== null
         ? decodeTurnBudget(candidate.turnBudget)
         : undefined;
+    if (candidate.version !== 5 && Object.hasOwn(candidate, "lastCompactionRetention")) {
+      throw new Error("invalid pre-V5 compaction retention usage");
+    }
+    const lastCompactionRetention =
+      candidate.version === 5 && candidate.lastCompactionRetention !== undefined
+        ? decodeCompactionRetention(candidate.lastCompactionRetention)
+        : undefined;
     const fullUsageFields = [
       candidate.requestOverheadTokens,
       candidate.fullRequestInputEstimateTokens,
@@ -341,6 +355,7 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
         : { contextFingerprint: candidate.contextFingerprint as never }),
       ...(promptSurface === undefined ? {} : { promptSurface }),
       ...(turnBudget === undefined ? {} : { turnBudget }),
+      ...(lastCompactionRetention === undefined ? {} : { lastCompactionRetention }),
       updatedAt: row.updated_at_ms as ContextUsageSnapshot["updatedAt"],
     });
   } catch (error) {
@@ -507,6 +522,72 @@ function decodeRecoveryStages(value: string | null): readonly string[] {
     throw new Error("invalid recovery stages");
   }
   return Object.freeze([...parsed]);
+}
+
+function decodeCompactionRetention(
+  value: unknown,
+): NonNullable<ContextUsageSnapshot["lastCompactionRetention"]> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid compaction retention diagnostics");
+  }
+  const candidate = value as Record<string, unknown>;
+  const expectedKeys = [
+    "status",
+    "preferredInputTokens",
+    "protectedFloorInputTokens",
+    "hardInputLimitTokens",
+    "compressibleTokens",
+    "minimumReleaseRatio",
+    "minimumReleaseTokens",
+    "actualFreedTokens",
+  ].sort();
+  const actualKeys = Object.keys(candidate).sort();
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    actualKeys.some((key, index) => key !== expectedKeys[index])
+  ) {
+    throw new Error("invalid compaction retention diagnostic fields");
+  }
+  if (
+    candidate.status !== "PREFERRED" &&
+    candidate.status !== "ELASTIC" &&
+    candidate.status !== "FLOOR_LIMITED"
+  ) {
+    throw new Error("invalid compaction retention outcome");
+  }
+  for (const field of [
+    "preferredInputTokens",
+    "protectedFloorInputTokens",
+    "hardInputLimitTokens",
+    "compressibleTokens",
+    "minimumReleaseTokens",
+    "actualFreedTokens",
+  ] as const) {
+    if (!Number.isSafeInteger(candidate[field]) || (candidate[field] as number) < 0) {
+      throw new Error("invalid compaction retention token count");
+    }
+  }
+  if (
+    (candidate.compressibleTokens as number) < 1 ||
+    (candidate.minimumReleaseTokens as number) < 1 ||
+    (candidate.actualFreedTokens as number) < 1 ||
+    typeof candidate.minimumReleaseRatio !== "number" ||
+    !Number.isFinite(candidate.minimumReleaseRatio) ||
+    candidate.minimumReleaseRatio <= 0 ||
+    candidate.minimumReleaseRatio >= 1
+  ) {
+    throw new Error("invalid compaction retention ratio or magnitude");
+  }
+  return Object.freeze({
+    status: candidate.status,
+    preferredInputTokens: candidate.preferredInputTokens as number,
+    protectedFloorInputTokens: candidate.protectedFloorInputTokens as number,
+    hardInputLimitTokens: candidate.hardInputLimitTokens as number,
+    compressibleTokens: candidate.compressibleTokens as number,
+    minimumReleaseRatio: candidate.minimumReleaseRatio,
+    minimumReleaseTokens: candidate.minimumReleaseTokens as number,
+    actualFreedTokens: candidate.actualFreedTokens as number,
+  });
 }
 
 function decodeBreakdown(value: unknown): ContextUsageSourceBreakdown {

@@ -45,10 +45,23 @@ function planCompaction(
   };
   const candidate = selector.select(cutInput);
   if (candidate === null) return null;
+  const minimumCandidate = selector.select({
+    ...cutInput,
+    targetRecentTailTokens: 0,
+    minRecentTailTokens: 0,
+  });
+  const minimumRetainedTokens = minimumCandidate?.retainedTokens ?? candidate.retainedTokens;
 
   const sourceCoverageDelta = createRanges(history.units, candidate);
   if (sourceCoverageDelta.length > 0) {
-    return buildPlan(history, policy, reason, candidate, sourceCoverageDelta);
+    return buildPlan(
+      history,
+      policy,
+      reason,
+      candidate,
+      sourceCoverageDelta,
+      minimumRetainedTokens,
+    );
   }
 
   /*
@@ -63,7 +76,7 @@ function planCompaction(
   const split = selectProtocolSafeSplitCandidate(cutInput);
   const splitRanges = split === null ? [] : createRanges(history.units, split);
   if (split === null || splitRanges.length === 0) return null;
-  return buildPlan(history, policy, reason, split, splitRanges);
+  return buildPlan(history, policy, reason, split, splitRanges, minimumRetainedTokens);
 }
 
 function buildPlan(
@@ -72,6 +85,7 @@ function buildPlan(
   reason: ContextCompactionReason,
   candidate: ContextCompactionCutCandidate,
   sourceCoverageDelta: readonly ContextMessageRange[],
+  minimumRetainedTokens: number,
 ): ContextCompactionPlan {
   const sourceRange = sourceCoverageDelta[0];
   if (sourceRange === undefined)
@@ -86,6 +100,7 @@ function buildPlan(
     estimatedTokensBefore: history.estimatedTokens,
     selectedTokens: candidate.compactedTokens,
     retainedTokens: candidate.retainedTokens,
+    minimumRetainedTokens,
     targetRecentTailTokens: policy.targetRecentTailTokens,
     minRecentTailTokens: policy.minRecentTailTokens,
   });

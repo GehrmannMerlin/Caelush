@@ -20,6 +20,7 @@ import type { ContextTokenEstimatorPort } from "../token/context-token-estimator
 import type { ContextCompactionRebuilder } from "./context-compaction-rebuilder.js";
 import type { ContextCompactionRebuildResult } from "./context-compaction-rebuilder.js";
 import type { ContextCompactionCommitPort } from "../ports/context-compaction-commit-port.js";
+import type { CompactionRetentionDiagnostics } from "./compaction-retention-budget.js";
 import type { ContextArtifactStorePort } from "../artifacts/context-artifact.js";
 import type { ContextIncrementalCompactionResolver } from "./incremental-compaction-resolver.js";
 import type { IncrementalCheckpointState } from "./incremental-checkpoint-resolver.js";
@@ -72,6 +73,8 @@ export interface ContextCompactionPlan {
   readonly estimatedTokensBefore: number;
   readonly selectedTokens: number;
   readonly retainedTokens: number;
+  /** Minimum retained history among all legal full-turn and protocol-safe cuts. */
+  readonly minimumRetainedTokens: number;
   readonly targetRecentTailTokens: number;
   readonly minRecentTailTokens: number;
 }
@@ -273,7 +276,12 @@ export type ContextCompactionOutcome =
     }
   | {
       readonly kind: "NOT_APPLICABLE";
-      readonly reason: "NO_COMPRESSIBLE_HISTORY" | "INSUFFICIENT_GAIN";
+      readonly reason:
+        | "NO_COMPRESSIBLE_HISTORY"
+        | "INSUFFICIENT_GAIN"
+        | "REQUEST_TOO_LARGE"
+        | "INSUFFICIENT_REDUCTION"
+        | "PROTECTED_CONTENT_MISSING";
     };
 
 export interface ContextCompactionCoordinator {
@@ -317,6 +325,7 @@ export interface ContextCompactionV3EventFactoryInput {
   readonly checkpoint: import("./context-checkpoint-v3.js").ContextCheckpointCreateInputV3;
   readonly epochId: string;
   readonly freedTokens: number;
+  readonly retention: CompactionRetentionDiagnostics;
 }
 
 export interface ContextCompactionCoordinatorOptions {

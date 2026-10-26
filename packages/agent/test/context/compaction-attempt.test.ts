@@ -1,11 +1,17 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import {
   beginPersistedCompactionAttempt,
   beginPersistedCompactionSubcall,
+  createPersistedCompactionAttemptTerminalArtifact,
   deriveCompactionRetryGeneration,
   deriveCompactionAttemptIdentity,
+  digestJsonValue,
   evaluateCompactionRetryEligibility,
+  finishPersistedCompactionSubcall,
+  finishPersistedCompactionAttempt,
   mayStartCompactionSubcall,
   recordPersistedCompactionFailureBaseline,
 } from "@caelush/agent";
@@ -15,6 +21,10 @@ import type {
   ContextArtifactStorePort,
 } from "@caelush/agent";
 import { createTimestampMs } from "@caelush/protocol";
+import {
+  beginNextPersistedCompactionSubcall,
+  readPersistedAcceptedSummary,
+} from "../../src/context/compaction/persisted-compaction-attempt.js";
 
 const sessionId = "session:attempt-test" as never;
 
@@ -249,9 +259,228 @@ describe("persistent compaction attempt identity", () => {
       "subcall limit",
     );
   });
+
+  it("keeps an atomic COMPACTED terminal result when a later failure is observed", async () => {
+    const store = createMemoryArtifactStore();
+    const claim = await beginPersistedCompactionAttempt({
+      store,
+      runId: "run:committed-attempt" as never,
+      sessionId,
+      sourceCoverageDigest: "coverage:committed-attempt",
+      sourceTokens: 20_000,
+      createdSequence: 1,
+      createdAt: createTimestampMs(28),
+    });
+    if (claim.kind !== "CLAIMED") throw new Error("attempt should be claimed");
+    await store.claim(
+      createPersistedCompactionAttemptTerminalArtifact({
+        attempt: claim.attempt,
+        createdSequence: 1,
+        createdAt: createTimestampMs(29),
+        outcome: "COMPACTED",
+        checkpointId: "checkpoint:committed",
+        activationOperationId: "operation:committed",
+      }),
+    );
+
+    await finishPersistedCompactionAttempt({
+      store,
+      attempt: claim.attempt,
+      createdSequence: 1,
+      createdAt: createTimestampMs(30),
+      outcome: "FAILED",
+      failureFamily: "CANDIDATE_NOT_FIT",
+    });
+
+    const attempts = await store.listBySourceRef({
+      kind: "context-compaction-attempt",
+      sourceRef: claim.attempt.attemptId,
+    });
+    const records = await Promise.all(
+      attempts.records.map(async (metadata) => {
+        const artifact = await store.readInternal(metadata.artifactId);
+        if (artifact === undefined) throw new Error("attempt fixture disappeared");
+        return JSON.parse(artifact.content) as Record<string, unknown>;
+      }),
+    );
+    expect(records.filter((record) => record.state === "RESULT")).toEqual([
+      expect.objectContaining({ outcome: "COMPACTED" }),
+    ]);
+  });
+
+  it("allows a local failure with no provider subcall to be replanned without source growth", async () => {
+    const store = createMemoryArtifactStore();
+    const first = await beginPersistedCompactionAttempt({
+      store,
+      runId: "run:local-replan-first" as never,
+      sessionId,
+      sourceCoverageDigest: "coverage:local-replan",
+      sourceTokens: 20_000,
+      createdSequence: 1,
+      createdAt: createTimestampMs(24),
+    });
+    if (first.kind !== "CLAIMED") throw new Error("attempt should be claimed");
+
+    await finishPersistedCompactionAttempt({
+      store,
+      attempt: first.attempt,
+      createdSequence: 1,
+      createdAt: createTimestampMs(25),
+      outcome: "FAILED",
+      failureFamily: "NO_COMPRESSIBLE_HISTORY",
+    });
+
+    await expect(
+      beginPersistedCompactionAttempt({
+        store,
+        runId: "run:local-replan-second" as never,
+        sessionId,
+        sourceCoverageDigest: "coverage:local-replan",
+        sourceTokens: 20_000,
+        createdSequence: 2,
+        createdAt: createTimestampMs(26),
+      }),
+    ).resolves.toMatchObject({ kind: "CLAIMED" });
+  });
+
+  it("reports the identity of an unknown START without claiming a different summary request", async () => {
+    const store = createMemoryArtifactStore();
+    const claim = await beginPersistedCompactionAttempt({
+      store,
+      runId: "run:unknown-start" as never,
+      sessionId,
+      sourceCoverageDigest: "coverage:unknown-start",
+      sourceTokens: 20_000,
+      createdSequence: 1,
+      createdAt: createTimestampMs(25),
+    });
+    if (claim.kind !== "CLAIMED") throw new Error("attempt should be claimed");
+    const unknownFingerprint = `sha256:${"a".repeat(64)}`;
+    const retryFingerprint = `sha256:${"b".repeat(64)}`;
+    await beginPersistedCompactionSubcall({
+      store,
+      attempt: claim.attempt,
+      callOrdinal: 0,
+      requestFingerprint: unknownFingerprint,
+      createdSequence: 1,
+      createdAt: createTimestampMs(26),
+    });
+
+    await expect(
+      beginNextPersistedCompactionSubcall({
+        store,
+        attempt: claim.attempt,
+        requestFingerprint: retryFingerprint,
+        createdSequence: 1,
+        createdAt: createTimestampMs(27),
+      }),
+    ).resolves.toEqual({
+      kind: "BLOCKED",
+      reason: "SUBCALL_ALREADY_STARTED",
+      callOrdinal: 0,
+      requestFingerprint: unknownFingerprint,
+    });
+  });
+
+  it("persists the bounded accepted semantic draft before closing the summary subcall", async () => {
+    const store = createMemoryArtifactStore();
+    const claim = await beginPersistedCompactionAttempt({
+      store,
+      runId: "run:summary-artifact" as never,
+      sessionId,
+      sourceCoverageDigest: "coverage:summary-artifact",
+      sourceTokens: 20_000,
+      createdSequence: 1,
+      createdAt: createTimestampMs(30),
+    });
+    if (claim.kind !== "CLAIMED") throw new Error("attempt should be claimed");
+    const fingerprint = `sha256:${"b".repeat(64)}`;
+    const subcall = {
+      store,
+      attempt: claim.attempt,
+      callOrdinal: 0,
+      requestFingerprint: fingerprint,
+      createdSequence: 1,
+      createdAt: createTimestampMs(31),
+    };
+    await beginPersistedCompactionSubcall(subcall);
+
+    await finishPersistedCompactionSubcall({
+      ...subcall,
+      outcome: "ACCEPTED",
+      acceptedResult: (() => {
+        const semantic = {
+          constraints: ["keep the task intact"],
+          completedWork: [],
+          inProgress: ["validate compaction"],
+          blocked: [],
+          importantDiscoveries: [],
+          keyDecisions: [],
+          criticalReferences: [],
+          nextIntent: "continue validation",
+        };
+        return {
+          semantic,
+          modelRef: { provider: "test", model: "summary", baseUrl: "https://secret.invalid" },
+          finishReason: "STOP",
+          summaryPromptVersion: 4,
+          sourceDigest: "c".repeat(64),
+          semanticDigest: digestJsonValue(semantic),
+        };
+      })(),
+    });
+
+    const summaries = await store.listBySourceRef({
+      kind: "context-compaction-summary",
+      sourceRef: `compaction-summary:${fingerprint}`,
+    });
+    expect(summaries.records).toHaveLength(1);
+    const summary = await store.readInternal(summaries.records[0]!.artifactId);
+    expect(summary?.content).not.toContain("secret.invalid");
+    await expect(
+      readPersistedAcceptedSummary({
+        store,
+        requestFingerprint: fingerprint,
+        modelRef: { provider: "test", model: "summary" },
+        sourceDigest: "c".repeat(64),
+      }),
+    ).resolves.toMatchObject({ semantic: { nextIntent: "continue validation" } });
+
+    await finishPersistedCompactionAttempt({
+      store,
+      attempt: claim.attempt,
+      createdSequence: 1,
+      createdAt: createTimestampMs(32),
+      outcome: "FAILED",
+      failureFamily: "PROTECTED_CONTENT_MISSING",
+    });
+    await expect(
+      beginPersistedCompactionAttempt({
+        store,
+        runId: "run:summary-replan" as never,
+        sessionId,
+        sourceCoverageDigest: "coverage:summary-artifact",
+        sourceTokens: 20_000,
+        createdSequence: 2,
+        createdAt: createTimestampMs(33),
+      }),
+    ).resolves.toMatchObject({ kind: "CLAIMED" });
+
+    store.corruptContentHash(summaries.records[0]!.artifactId);
+    await expect(
+      readPersistedAcceptedSummary({
+        store,
+        requestFingerprint: fingerprint,
+        modelRef: { provider: "test", model: "summary" },
+        sourceDigest: "c".repeat(64),
+      }),
+    ).rejects.toThrow("content hash");
+  });
 });
 
-function createMemoryArtifactStore(): ContextArtifactStorePort {
+function createMemoryArtifactStore(): ContextArtifactStorePort & {
+  corruptContentHash(artifactId: ContextArtifact["artifactId"]): void;
+} {
   const records = new Map<string, ContextArtifact>();
   const metadata = (artifact: ContextArtifact) => {
     const { content: _content, ...entry } = artifact;
@@ -266,13 +495,18 @@ function createMemoryArtifactStore(): ContextArtifactStorePort {
     const artifact = Object.freeze({
       ...input,
       artifactId,
-      contentHash: `hash:${input.content}`,
+      contentHash: createHash("sha256").update(input.content, "utf8").digest("hex"),
       byteLength: new TextEncoder().encode(input.content).byteLength,
     });
     records.set(String(artifactId), artifact);
     return { kind: "CREATED" as const, artifact };
   };
   return {
+    corruptContentHash(artifactId) {
+      const record = records.get(String(artifactId));
+      if (record === undefined) throw new Error("artifact missing");
+      records.set(String(artifactId), Object.freeze({ ...record, contentHash: "corrupt" }));
+    },
     createOrGet: async (input) => (await save(input)).artifact,
     claim: save,
     listBySourceRef: async ({ kind, sourceRef, cursor, limit = 20 }) => {

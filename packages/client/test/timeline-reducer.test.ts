@@ -1260,6 +1260,50 @@ describe("shared Timeline reducer", () => {
     expect(next.settled[0]?.detail).toContain("覆盖 24 条消息（3 段）");
     expect(next.settled[0]?.detail).toContain("达到深度压缩目标");
   });
+
+  it("uses elastic-retention labels for V3 outcomes without claiming they reached the old target", () => {
+    const cases = [
+      ["PREFERRED", "达到偏好保留目标"],
+      ["ELASTIC", "弹性保留（满足窗口与释放要求）"],
+      ["FLOOR_LIMITED", "受必要内容下限限制"],
+    ] as const;
+
+    for (const [targetStatus, expectedLabel] of cases) {
+      const next = reduceTimelineEvent(
+        createInitialTimelineState(runId),
+        eventOf(
+          "context.compaction.completed",
+          7,
+          {
+            checkpointId: "ctx_00000000-0000-7000-8000-000000000002",
+            operationId: "operation:elastic",
+            epochId: "epoch:elastic",
+            reason: "PROACTIVE_PRESSURE",
+            sourceRangeCount: 3,
+            sourceMessageCount: 24,
+            tokensBefore: 900_000,
+            tokensAfter: 220_000,
+            freedTokens: 680_000,
+            degraded: false,
+            targetStatus,
+            retention: {
+              status: targetStatus,
+              preferredInputTokens: 44_192,
+              protectedFloorInputTokens: 12_000,
+              hardInputLimitTokens: 900_000,
+              compressibleTokens: 800_000,
+              minimumReleaseRatio: 0.7,
+              minimumReleaseTokens: 560_000,
+              actualFreedTokens: 680_000,
+            },
+          },
+          { schemaVersion: 3 },
+        ),
+      );
+
+      expect(next.settled[0]?.detail).toContain(expectedLabel);
+    }
+  });
 });
 
 function toolForShell() {

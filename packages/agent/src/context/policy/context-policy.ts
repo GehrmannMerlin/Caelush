@@ -279,19 +279,28 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
   assertRatio(maxSingleObservationRatio, "maxSingleObservationRatio");
   assertRatio(maxObservationBatchRatio, "maxObservationBatchRatio");
 
-  const targetRecentTailTokens = boundedRatioCap(
-    effectiveInputLimitTokens,
-    targetRecentTailRatio,
-    options.targetRecentTailTokensCap ?? DEFAULTS.targetRecentTailTokensCap,
-  );
-  const baseMinRecentTailTokens = boundedRatioCap(
-    effectiveInputLimitTokens,
-    minRecentTailRatio,
-    options.minRecentTailTokensCap ?? DEFAULTS.minRecentTailTokensCap,
-  );
+  const deepCompaction = options.deepCompaction;
+  const baseMinRecentTailTokens =
+    deepCompaction?.version === "DEEP_COMPACTION_V2"
+      ? 0
+      : boundedRatioCap(
+          effectiveInputLimitTokens,
+          minRecentTailRatio,
+          options.minRecentTailTokensCap ?? DEFAULTS.minRecentTailTokensCap,
+        );
+  const targetRecentTailTokens =
+    deepCompaction?.version === "DEEP_COMPACTION_V2"
+      ? Math.max(
+          baseMinRecentTailTokens,
+          Math.floor(effectiveInputLimitTokens * deepCompaction.recentRatio),
+        )
+      : boundedRatioCap(
+          effectiveInputLimitTokens,
+          targetRecentTailRatio,
+          options.targetRecentTailTokensCap ?? DEFAULTS.targetRecentTailTokensCap,
+        );
   const workingSet = options.workingSet;
   const requestHeadroom = options.requestHeadroom;
-  const deepCompaction = options.deepCompaction;
   if (workingSet !== undefined && requestHeadroom !== undefined) {
     throw new RangeError(
       "A Context policy cannot be frozen against both a working set and headroom.",
@@ -299,7 +308,12 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
   }
   if (deepCompaction !== undefined) {
     assertRatio(deepCompaction.triggerRatio, "deepCompaction.triggerRatio");
-    assertPositiveSafeInteger(deepCompaction.recentTokens, "deepCompaction.recentTokens");
+    if (deepCompaction.version === "DEEP_COMPACTION_V1") {
+      assertPositiveSafeInteger(deepCompaction.recentTokens, "deepCompaction.recentTokens");
+    } else {
+      assertRatio(deepCompaction.recentRatio, "deepCompaction.recentRatio");
+      assertRatio(deepCompaction.minimumReleaseRatio, "deepCompaction.minimumReleaseRatio");
+    }
     assertPositiveSafeInteger(
       deepCompaction.checkpointMaxTokens,
       "deepCompaction.checkpointMaxTokens",
@@ -320,21 +334,28 @@ export function createContextPolicy(input: ContextPolicyInput): ContextPolicy {
     }
   }
   const targetPostCompactionTokens =
-    deepCompaction !== undefined
+    deepCompaction?.version === "DEEP_COMPACTION_V1"
       ? Math.min(
           effectiveInputLimitTokens,
           deepCompaction.recentTokens +
             deepCompaction.checkpointMaxTokens +
             deepCompaction.boundaryTokens,
         )
-      : requestHeadroom !== undefined
-        ? Math.max(
-            1,
-            Math.floor(effectiveInputLimitTokens * (requestHeadroom.postCompactionRatio ?? 0.8)),
+      : deepCompaction?.version === "DEEP_COMPACTION_V2"
+        ? Math.min(
+            effectiveInputLimitTokens,
+            targetRecentTailTokens +
+              deepCompaction.checkpointMaxTokens +
+              deepCompaction.boundaryTokens,
           )
-        : workingSet === undefined
-          ? Math.floor(effectiveInputLimitTokens * 0.8)
-          : Math.max(1, Math.floor(workingSet.targetTokens * workingSet.postCompactionRatio));
+        : requestHeadroom !== undefined
+          ? Math.max(
+              1,
+              Math.floor(effectiveInputLimitTokens * (requestHeadroom.postCompactionRatio ?? 0.8)),
+            )
+          : workingSet === undefined
+            ? Math.floor(effectiveInputLimitTokens * 0.8)
+            : Math.max(1, Math.floor(workingSet.targetTokens * workingSet.postCompactionRatio));
   const boundedTargetRecentTailTokens = Math.min(
     targetRecentTailTokens,
     targetPostCompactionTokens,

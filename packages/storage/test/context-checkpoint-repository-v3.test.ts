@@ -225,7 +225,7 @@ function checkpoint(input: {
     checkpointDigest: "b".repeat(64),
     degraded: false,
     reason: "PROACTIVE_PRESSURE",
-    targetStatus: "DEEP",
+    targetStatus: "PREFERRED",
     createdAt: createTimestampMs(input.createdAt),
   };
 }
@@ -395,7 +395,7 @@ describe("SqliteContextCheckpointRepositoryV3", () => {
     storages.splice(storages.indexOf(storage), 1);
   });
 
-  it("atomically activates a multi-Run V3 checkpoint with usage and a V2 completion proof", async () => {
+  it("atomically activates a multi-Run V3 checkpoint with usage and a V3 completion proof", async () => {
     const storage = await openCaelushStorage({ path: ":memory:" });
     storages.push(storage);
     const session = makeSession();
@@ -432,14 +432,17 @@ describe("SqliteContextCheckpointRepositoryV3", () => {
     });
     const coverage = source.coverage;
     await persistConversation(storage, source.conversation);
-    const checkpointInput = checkpoint({
-      ownerRun,
-      sessionId: session.id,
-      coverage,
-      stepSequence: 1,
-      id: "checkpoint:v3:atomic",
-      createdAt: 40,
-    });
+    const checkpointInput = {
+      ...checkpoint({
+        ownerRun,
+        sessionId: session.id,
+        coverage,
+        stepSequence: 1,
+        id: "checkpoint:v3:atomic",
+        createdAt: 40,
+      }),
+      targetStatus: "FLOOR_LIMITED" as const,
+    };
     const epoch = createPromptSurfaceEpoch({
       formatVersion: 3,
       runId: ownerRun.id,
@@ -476,9 +479,19 @@ describe("SqliteContextCheckpointRepositoryV3", () => {
       expectedSectionStates: sectionStates,
     };
     const eventId = createEventId();
+    const retention = {
+      status: checkpointInput.targetStatus,
+      preferredInputTokens: 44_192,
+      protectedFloorInputTokens: 20_000,
+      hardInputLimitTokens: 900_000,
+      compressibleTokens: checkpointInput.tokensBefore - checkpointInput.tokensAfter,
+      minimumReleaseRatio: 0.7,
+      minimumReleaseTokens: 8_192,
+      actualFreedTokens: checkpointInput.tokensBefore - checkpointInput.tokensAfter,
+    } as const;
     const completion = {
       eventId,
-      schemaVersion: 2 as const,
+      schemaVersion: 3 as const,
       runId: ownerRun.id,
       sessionId: session.id,
       timestamp: createTimestampMs(51),
@@ -497,6 +510,7 @@ describe("SqliteContextCheckpointRepositoryV3", () => {
         freedTokens: checkpointInput.tokensBefore - checkpointInput.tokensAfter,
         degraded: checkpointInput.degraded,
         targetStatus: checkpointInput.targetStatus,
+        retention,
       },
     };
     const usage = {
@@ -510,6 +524,7 @@ describe("SqliteContextCheckpointRepositoryV3", () => {
       compactionCount: 1,
       breakdown: [],
       lastBuildStatus: "SUCCESS" as const,
+      lastCompactionRetention: retention,
       updatedAt: createTimestampMs(51),
     };
     const attemptClaim = await beginPersistedCompactionAttempt({
@@ -588,6 +603,25 @@ describe("SqliteContextCheckpointRepositoryV3", () => {
     await expect(
       storage.contextArtifactsV2.readInternal(terminalArtifact.artifactId!),
     ).resolves.toMatchObject({ content: expect.stringContaining('"state":"RESULT"') });
+
+    const persistedCompletionRow = storage.messageRecords.database.client
+      .prepare("SELECT data_json FROM agent_events WHERE event_id = ?")
+      .get(eventId) as { readonly data_json: string } | undefined;
+    if (persistedCompletionRow === undefined) throw new Error("completion event is unavailable");
+    const persistedCompletion = JSON.parse(persistedCompletionRow.data_json) as {
+      readonly payload: Record<string, unknown>;
+      readonly [key: string]: unknown;
+    };
+    const { retention: _retention, ...legacyPayload } = persistedCompletion.payload;
+    void _retention;
+    const historicalCompletion = JSON.stringify({
+      ...persistedCompletion,
+      schemaVersion: 2,
+      payload: legacyPayload,
+    });
+    storage.messageRecords.database.client
+      .prepare("UPDATE agent_events SET event_schema_version = 2, data_json = ? WHERE event_id = ?")
+      .run(historicalCompletion, eventId);
 
     const replayed = await storage.contextCompactionCommit.commitV3!({
       checkpoint: checkpointInput,

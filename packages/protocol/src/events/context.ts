@@ -60,6 +60,43 @@ export type ContextCompactionCompletedEventV2 = z.infer<
   typeof ContextCompactionCompletedEventV2Schema
 >;
 
+/** Durable completion facts for elastic retention, added without changing V1/V2 decoders. */
+export const ContextCompactionCompletedEventV3Schema = createVersionedEventSchema(
+  "context.compaction.completed",
+  3,
+  z
+    .object({
+      checkpointId: z.string().min(1),
+      operationId: z.string().min(1),
+      epochId: z.string().min(1),
+      reason: ContextCompactionReasonSchema,
+      sourceRangeCount: z.number().int().positive().refine(Number.isSafeInteger),
+      sourceMessageCount: z.number().int().positive().refine(Number.isSafeInteger),
+      tokensBefore: z.number().int().nonnegative().refine(Number.isSafeInteger),
+      tokensAfter: z.number().int().nonnegative().refine(Number.isSafeInteger),
+      freedTokens: z.number().int().nonnegative().refine(Number.isSafeInteger),
+      degraded: z.boolean(),
+      targetStatus: z.enum(["PREFERRED", "ELASTIC", "FLOOR_LIMITED"]),
+      retention: z
+        .object({
+          status: z.enum(["PREFERRED", "ELASTIC", "FLOOR_LIMITED"]),
+          preferredInputTokens: z.number().int().nonnegative().refine(Number.isSafeInteger),
+          protectedFloorInputTokens: z.number().int().nonnegative().refine(Number.isSafeInteger),
+          hardInputLimitTokens: z.number().int().nonnegative().refine(Number.isSafeInteger),
+          compressibleTokens: z.number().int().positive().refine(Number.isSafeInteger),
+          minimumReleaseRatio: z.number().finite().gt(0).lt(1),
+          minimumReleaseTokens: z.number().int().positive().refine(Number.isSafeInteger),
+          actualFreedTokens: z.number().int().positive().refine(Number.isSafeInteger),
+        })
+        .strict(),
+    })
+    .strict(),
+);
+
+export type ContextCompactionCompletedEventV3 = z.infer<
+  typeof ContextCompactionCompletedEventV3Schema
+>;
+
 /** A live-only, bounded stage signal; checkpoint completion remains the durable compaction fact. */
 export const ContextCompactionProgressEventSchema = createVersionedEventSchema(
   "context.compaction.progress",

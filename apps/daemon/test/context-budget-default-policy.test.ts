@@ -13,7 +13,7 @@ import { FIXTURE_API, fixtureBinding, fixtureModelSource } from "./support/ai-fi
  *
  * ```text
  * daemon default                     → TURN_BUDGET_V3 (stable policy while cache gate is pending)
- * explicit deep-compaction opt-in    → TURN_BUDGET_V4 (HEADROOM_V1 + 90%/retention budgets)
+ * explicit deep-compaction opt-in    → TURN_BUDGET_V4 (HEADROOM_V1 + elastic retention budgets)
  * explicit LEGACY_FULL_OUTPUT_V1     → LEGACY_FULL_OUTPUT_V1
  * explicit WORKING_SET_V2            → WORKING_SET_V2, for reproducing the old behaviour
  * a Run created before the default   → whatever it was frozen with
@@ -166,9 +166,10 @@ describe("Context budget policy default", () => {
     expect(deepRun.contextBudgetPolicy).toMatchObject({
       version: "TURN_BUDGET_V4",
       deepCompaction: {
-        version: "DEEP_COMPACTION_V1",
+        version: "DEEP_COMPACTION_V2",
         triggerRatio: 0.9,
-        recentTokens: 20_000,
+        recentRatio: 0.08,
+        minimumReleaseRatio: 0.7,
         checkpointMaxTokens: 8_192,
         boundaryTokens: 4_096,
       },

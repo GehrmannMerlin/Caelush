@@ -5,6 +5,7 @@ import type { ContextFingerprint } from "../contracts/context-fingerprint.js";
 import type { ContextPressureState } from "../policy/context-policy.js";
 import type { ContextPromptSurfaceReceipt } from "./context-build-receipt.js";
 import type { TurnBudgetDecision } from "../policy/request-headroom.js";
+import type { CompactionRetentionDiagnostics } from "../compaction/compaction-retention-budget.js";
 
 export type ContextUsageBuildStatus = "SUCCESS" | "FAILED" | "CONTEXT_EXHAUSTED";
 
@@ -43,6 +44,8 @@ export interface ContextUsageSnapshot {
    * a restart, from the same row the ring and the inspector already read.
    */
   readonly turnBudget?: TurnBudgetDecision;
+  /** Last durably committed elastic retention decision, if available. */
+  readonly lastCompactionRetention?: CompactionRetentionDiagnostics;
   readonly updatedAt: TimestampMs;
 }
 
