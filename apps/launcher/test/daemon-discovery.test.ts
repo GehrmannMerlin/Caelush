@@ -247,4 +247,64 @@ describe("daemon discovery", () => {
     expect(spawnOptions.env.CAELUSH_SANDBOX_RUNNER_PATH).toBe("C:/prepared/runner.exe");
     expect(spawnOptions.env.CAELUSH_SANDBOX_RUNNER_MANIFEST).toBe("C:/prepared/manifest.json");
   });
+
+  it("reuses a daemon that becomes healthy just before a waiting launcher acquires the lease", async () => {
+    const root = await mkdtemp(join(tmpdir(), "caelush-launcher-acquire-race-"));
+    createdDirectories.push(root);
+    let healthy = false;
+    let signalSecondWaiter!: () => void;
+    let signalFirstSpawn!: () => void;
+    let firstCompleted!: () => void;
+    const secondWaiting = new Promise<void>((resolve) => {
+      signalSecondWaiter = resolve;
+    });
+    const firstSpawned = new Promise<void>((resolve) => {
+      signalFirstSpawn = resolve;
+    });
+    const firstReleasedLease = new Promise<void>((resolve) => {
+      firstCompleted = resolve;
+    });
+    const child: SpawnedDaemon = {
+      pid: 1234,
+      exitCode: undefined,
+      unref: vi.fn(),
+    };
+    const spawn = vi.fn(() => {
+      signalFirstSpawn();
+      return child;
+    });
+    const createClient = () =>
+      createProbeClient(async () => {
+        if (!healthy) throw new Error("connection refused");
+        return health;
+      });
+    const productPaths = resolveProductPaths({ environment: { CAELUSH_HOME: root } });
+    const first = ensureDaemon({
+      environment: { CAELUSH_HOME: root },
+      productPaths,
+      clientFactory: createClient,
+      spawn,
+      delay: async () => {
+        await secondWaiting;
+        healthy = true;
+      },
+    }).finally(() => firstCompleted());
+
+    await firstSpawned;
+    const second = ensureDaemon({
+      environment: { CAELUSH_HOME: root },
+      productPaths,
+      clientFactory: createClient,
+      spawn,
+      delay: async () => {
+        signalSecondWaiter();
+        await firstReleasedLease;
+      },
+    });
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult.mode).toBe("LOCAL_STARTED");
+    expect(secondResult.mode).toBe("LOCAL_REUSED");
+    expect(spawn).toHaveBeenCalledOnce();
+  });
 });

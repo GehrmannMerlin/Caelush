@@ -170,6 +170,16 @@ export async function ensureDaemon(
   );
   heartbeat.unref();
   try {
+    // A competing launcher can observe the old lease, then reach its next acquisition attempt
+    // just after the owner has discovered a healthy daemon and released that lease. Re-probe only
+    // after winning the lease so that gap cannot turn into a second local daemon spawn.
+    const leaseProbe = await probe(client, productVersion, false);
+    if (leaseProbe.kind === "HEALTHY" && leaseProbe.info !== undefined) {
+      return { mode: "LOCAL_REUSED", url, client, info: leaseProbe.info };
+    }
+    if (leaseProbe.kind === "INCOMPATIBLE") {
+      throw new DaemonBootstrapError("INCOMPATIBLE_DAEMON", incompatibleMessage());
+    }
     const spawnEnvironment =
       options.prepareEnvironment === undefined
         ? environment
