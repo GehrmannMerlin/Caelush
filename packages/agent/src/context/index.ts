@@ -59,7 +59,6 @@ export { createContextCutPointSelector } from "./compaction/context-cut-point-se
 export { createContextCompactionPlanner } from "./compaction/context-compaction-planner.js";
 export {
   acceptCompactionCandidate,
-  evaluateCompactionCandidate,
   resolveCompactionRetentionBudget,
 } from "./compaction/compaction-retention-budget.js";
 export { maxNewTokensForTarget } from "./compaction/cache-growth-budget.js";

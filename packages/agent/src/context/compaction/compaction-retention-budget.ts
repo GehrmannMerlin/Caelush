@@ -91,6 +91,8 @@ export function evaluateCompactionCandidate(input: {
   readonly minimumReleaseRatio: number;
   readonly minimumReleaseTokens?: number;
   readonly minimumLegalCut: boolean;
+  /** True only when every raw history message outside checkpoint coverage remains in the rebuild. */
+  readonly protectedContentRetained: boolean;
   readonly budget: CompactionRetentionBudget;
 }): CompactionCandidateEvaluation {
   const compressibleTokens = assertPositiveSafeInteger(
@@ -104,6 +106,9 @@ export function evaluateCompactionCandidate(input: {
   const minimumReleaseTokens =
     input.minimumReleaseTokens ?? Math.ceil(compressibleTokens * minimumReleaseRatio);
   assertPositiveSafeInteger(minimumReleaseTokens, "minimumReleaseTokens");
+  if (typeof input.protectedContentRetained !== "boolean") {
+    throw new TypeError("protectedContentRetained must be a boolean.");
+  }
   if (!Number.isSafeInteger(input.inputTokens) || input.inputTokens < 0) {
     return rejected("INSUFFICIENT_REDUCTION", 0, minimumReleaseTokens);
   }
@@ -114,7 +119,7 @@ export function evaluateCompactionCandidate(input: {
       minimumReleaseTokens,
     );
   }
-  if (input.inputTokens < input.budget.protectedFloorInputTokens) {
+  if (!input.protectedContentRetained) {
     return rejected("PROTECTED_CONTENT_MISSING", 0, minimumReleaseTokens);
   }
   const actualFreedTokens = input.inputTokensBefore - input.inputTokens;
@@ -129,18 +134,14 @@ export function evaluateCompactionCandidate(input: {
       minimumReleaseTokens,
     });
   }
-  // A minimum cut alone does not prove that required raw content limits the result: the summary
-  // may itself be oversized. The protected history plus bounded summary and boundary must explain
-  // the complete rebuilt input before the minimum-release exception can apply.
+  // Token estimates for isolated history and a fully materialized request are not additive.
+  // Protected message identity is verified separately; this upper bound only checks that the
+  // complete request can be explained by the protected content plus bounded summary and boundary.
   const maximumFloorInputTokens =
     input.budget.protectedFloorInputTokens +
     input.budget.checkpointMaxTokens +
     input.budget.boundaryTokens;
-  if (
-    input.minimumLegalCut &&
-    input.inputTokens >= input.budget.protectedFloorInputTokens &&
-    input.inputTokens <= maximumFloorInputTokens
-  ) {
+  if (input.minimumLegalCut && input.inputTokens <= maximumFloorInputTokens) {
     return Object.freeze({
       accepted: true,
       status: "FLOOR_LIMITED",
@@ -160,6 +161,7 @@ export function acceptCompactionCandidate(input: {
   readonly minimumReleaseRatio?: number;
   readonly minimumReleaseTokens?: number;
   readonly minimumLegalCut?: boolean;
+  readonly protectedContentRetained?: boolean;
 }): boolean {
   if (
     input.inputTokensBefore === undefined ||
@@ -174,6 +176,7 @@ export function acceptCompactionCandidate(input: {
       input.inputTokens <= input.budget.availableInputTokens
     );
   }
+  if (input.protectedContentRetained === undefined) return false;
   return evaluateCompactionCandidate({
     inputTokens: input.inputTokens,
     inputTokensBefore: input.inputTokensBefore,
@@ -183,6 +186,7 @@ export function acceptCompactionCandidate(input: {
       ? {}
       : { minimumReleaseTokens: input.minimumReleaseTokens }),
     minimumLegalCut: input.minimumLegalCut,
+    protectedContentRetained: input.protectedContentRetained,
     budget: input.budget,
   }).accepted;
 }

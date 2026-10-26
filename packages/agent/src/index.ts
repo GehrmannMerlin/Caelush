@@ -119,7 +119,6 @@ export {
   createContextCheckpointId,
   createContextCompactionPlanner,
   acceptCompactionCandidate,
-  evaluateCompactionCandidate,
   resolveCompactionRetentionBudget,
   maxNewTokensForTarget,
   createContextCutPointSelector,

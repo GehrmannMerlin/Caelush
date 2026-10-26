@@ -31,7 +31,7 @@ const request = {
     goal: "goal",
   },
   conversation: {} as never,
-  history: {} as never,
+  history: { units: [], openUnits: [], closedUnits: [], estimatedTokens: 0 },
   policy: {
     effectiveInputLimitTokens: 100,
     outputReserveTokens: 20,

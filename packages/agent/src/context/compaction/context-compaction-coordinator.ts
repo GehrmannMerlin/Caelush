@@ -55,7 +55,8 @@ import {
 } from "./compaction-retention-budget.js";
 import { createHistorySourceRef } from "../../messages/history-lookup-port.js";
 import type { StoredAgentMessage } from "../../messages/persistence/record.js";
-import type { ContextHistoryUnit } from "../history/semantic-history-unit.js";
+import type { AgentMessageId } from "../../messages/types/ids.js";
+import type { ContextHistoryUnit, ContextMessageRef } from "../history/semantic-history-unit.js";
 import {
   createUtf8HeuristicTokenEstimator,
   type ContextTokenEstimatorPort,
@@ -257,6 +258,11 @@ export function createContextCompactionCoordinator(
         compressibleTokens: plan.selectedTokens,
         minimumReleaseRatio: minimumReleaseRatio(request.policy),
         minimumLegalCut: isMinimumLegalCut(plan),
+        protectedContentRetained: areUncoveredHistoryMessagesRetained({
+          history: request.history,
+          coveredRanges: [incremental.cumulativeSourceRange],
+          retainedMessageIds: rebuild.retainedMessageIds,
+        }),
         budget: retentionBudget,
       });
       if (!evaluation.accepted) {
@@ -515,6 +521,11 @@ async function compactV3(input: {
     compressibleTokens: plan.selectedTokens,
     minimumReleaseRatio: releaseRatio,
     minimumLegalCut: isMinimumLegalCut(plan),
+    protectedContentRetained: areUncoveredHistoryMessagesRetained({
+      history: request.history,
+      coveredRanges: sourceCoverage.segments,
+      retainedMessageIds: rebuild.retainedMessageIds,
+    }),
     budget: retentionBudget,
   });
   if (!evaluation.accepted || evaluation.status === undefined) {
@@ -674,6 +685,29 @@ function minimumReleaseRatio(policy: ContextCompactionRequest["policy"]): number
 
 function isMinimumLegalCut(plan: ContextCompactionPlan): boolean {
   return plan.retainedTokens === plan.minimumRetainedTokens;
+}
+
+function areUncoveredHistoryMessagesRetained(input: {
+  readonly history: ContextHistoryIndex;
+  readonly coveredRanges: readonly ContextMessageRange[];
+  readonly retainedMessageIds: readonly AgentMessageId[];
+}): boolean {
+  const messages = new Map<string, ContextMessageRef>();
+  for (const unit of input.history.units) {
+    for (const message of unit.messages) messages.set(String(message.messageId), message);
+  }
+  const retainedIds = new Set(input.retainedMessageIds.map(String));
+  for (const [messageId, message] of messages) {
+    const covered = input.coveredRanges.some(
+      (range) =>
+        String(range.runId) === String(message.runId) &&
+        String(range.conversationTurnId) === String(message.conversationTurnId) &&
+        message.sequence >= range.firstSequence &&
+        message.sequence <= range.lastSequence,
+    );
+    if (!covered && !retainedIds.has(messageId)) return false;
+  }
+  return true;
 }
 
 function createRetentionDiagnostics(

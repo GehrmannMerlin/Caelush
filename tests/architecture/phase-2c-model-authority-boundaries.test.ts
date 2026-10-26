@@ -318,6 +318,7 @@ describe("Phase 2C package edges", () => {
         "ControlHookPipelineError",
         "ControlHookReentrancyError",
         "ControlHookTimeoutError",
+        "DEEP_COMPACTION_V2_DEFAULTS",
         "DEFAULT_CONTEXT_CONTRIBUTION_LIMITS",
         // --- Phase 3C Checkpoint 4: the canonical Run state machine and the general Run/AgentState
         // transitions moved into the kernel, and the pure Run transition planner was implemented

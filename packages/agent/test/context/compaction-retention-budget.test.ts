@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   acceptCompactionCandidate,
-  evaluateCompactionCandidate,
   maxNewTokensForTarget,
   resolveCompactionRetentionBudget,
 } from "@caelush/agent";
+import { evaluateCompactionCandidate } from "../../src/context/compaction/compaction-retention-budget.js";
 
 describe("deep compaction retention budget", () => {
   it("calculates a cache-hit advisory without making it an execution ceiling", () => {
@@ -67,9 +67,34 @@ describe("deep compaction retention budget", () => {
         compressibleTokens: 800_000,
         minimumReleaseRatio: 0.7,
         minimumLegalCut: false,
+        protectedContentRetained: true,
         budget,
       }),
     ).toMatchObject({ accepted: true, status: "ELASTIC" });
+  });
+
+  it("accepts verified retained content when the rebuilt estimate is below the additive floor", () => {
+    const budget = resolveCompactionRetentionBudget({
+      fixedTokens: 1_000,
+      recentTokens: 2_000,
+      protectedRecentTokens: 1_500,
+      checkpointMaxTokens: 500,
+      boundaryTokens: 500,
+      availableInputTokens: 10_000,
+    });
+
+    expect(budget.protectedFloorInputTokens).toBe(2_500);
+    expect(
+      evaluateCompactionCandidate({
+        inputTokens: 2_300,
+        inputTokensBefore: 9_000,
+        compressibleTokens: 8_000,
+        minimumReleaseRatio: 0.7,
+        minimumLegalCut: false,
+        protectedContentRetained: true,
+        budget,
+      }),
+    ).toMatchObject({ accepted: true, status: "PREFERRED", actualFreedTokens: 6_700 });
   });
 
   it("permits a below-threshold release only at the proven minimum legal cut", () => {
@@ -89,6 +114,7 @@ describe("deep compaction retention budget", () => {
         compressibleTokens: 100_000,
         minimumReleaseRatio: 0.7,
         minimumLegalCut: true,
+        protectedContentRetained: true,
         budget,
       }),
     ).toMatchObject({ accepted: true, status: "FLOOR_LIMITED" });
@@ -99,6 +125,7 @@ describe("deep compaction retention budget", () => {
         compressibleTokens: 100_000,
         minimumReleaseRatio: 0.7,
         minimumLegalCut: false,
+        protectedContentRetained: true,
         budget,
       }),
     ).toMatchObject({ accepted: false, reason: "INSUFFICIENT_REDUCTION" });
@@ -109,6 +136,7 @@ describe("deep compaction retention budget", () => {
         compressibleTokens: 100_000,
         minimumReleaseRatio: 0.7,
         minimumLegalCut: true,
+        protectedContentRetained: true,
         budget,
       }),
     ).toMatchObject({ accepted: false, reason: "INSUFFICIENT_REDUCTION" });
@@ -127,6 +155,7 @@ describe("deep compaction retention budget", () => {
       compressibleTokens: 800_000,
       minimumReleaseRatio: 0.7,
       minimumLegalCut: false,
+      protectedContentRetained: true,
       budget,
     };
 
@@ -140,7 +169,7 @@ describe("deep compaction retention budget", () => {
     });
   });
 
-  it("rejects a candidate that removes content below the proven protected floor", () => {
+  it("rejects a candidate whose required raw history is absent", () => {
     const budget = resolveCompactionRetentionBudget({
       fixedTokens: 30_000,
       recentTokens: 40_000,
@@ -157,6 +186,7 @@ describe("deep compaction retention budget", () => {
         compressibleTokens: 800_000,
         minimumReleaseRatio: 0.7,
         minimumLegalCut: false,
+        protectedContentRetained: false,
         budget,
       }),
     ).toMatchObject({ accepted: false, reason: "PROTECTED_CONTENT_MISSING" });

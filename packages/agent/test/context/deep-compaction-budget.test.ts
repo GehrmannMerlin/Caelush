@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   createContextPolicy,
   DEEP_COMPACTION_V2_DEFAULTS,
-  evaluateCompactionCandidate,
   resolveCompactionRetentionBudget,
   resolveTurnBudgetPolicy,
   type ContextCompactionRequest,
 } from "@caelush/agent";
+import { evaluateCompactionCandidate } from "../../src/context/compaction/compaction-retention-budget.js";
 import type { ModelDescriptor } from "@caelush/ai";
 import { createCompactionCandidate } from "./support/deep-compaction-fixtures.js";
 
@@ -85,6 +85,7 @@ describe("deep compaction retention budget", () => {
         compressibleTokens,
         minimumReleaseRatio: DEEP_COMPACTION_V2_DEFAULTS.minimumReleaseRatio,
         minimumLegalCut: false,
+        protectedContentRetained: true,
         budget,
       });
 
