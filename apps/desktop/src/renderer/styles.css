@@ -1301,9 +1301,6 @@ button:disabled {
   }
 }
 
-.account-content-inner.is-update-view .account-page-head {
-  margin-bottom: 8px;
-}
 .account-page-head--updates h2 {
   font-size: 22px;
   line-height: 30px;
