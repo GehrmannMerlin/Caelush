@@ -5940,7 +5940,7 @@ body {
 .workspace-sidebar-content {
   display: flex;
   min-height: 0;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   flex-direction: column;
   overflow: hidden;
 }
@@ -5950,15 +5950,21 @@ body {
   flex: 0 0 auto;
 }
 
-.workspace-list {
+.workspace-list-viewport {
+  width: calc(100% + 10px);
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
-  align-content: start;
+  margin-right: -10px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+}
+
+.workspace-list {
+  width: calc(100% - 10px);
+  align-content: start;
 }
 
 .workspace-sidebar-footer {
@@ -10356,47 +10362,45 @@ button.transcript-attachment-card:disabled {
 }
 
 /* Keep the project and session navigation scrollbar quiet and compact. */
-.workspace-list {
+.workspace-list-viewport {
   --workspace-scrollbar-thumb: rgb(15 23 42 / 16%);
   --workspace-scrollbar-thumb-hover: rgb(15 23 42 / 28%);
-  margin-right: -10px;
-  padding-right: 10px;
   scrollbar-color: var(--workspace-scrollbar-thumb) transparent;
   scrollbar-width: thin;
 }
 
-.workspace-list::-webkit-scrollbar {
+.workspace-list-viewport::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-.workspace-list::-webkit-scrollbar-track,
-.workspace-list::-webkit-scrollbar-corner {
+.workspace-list-viewport::-webkit-scrollbar-track,
+.workspace-list-viewport::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-.workspace-list::-webkit-scrollbar-thumb {
+.workspace-list-viewport::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background-color: var(--workspace-scrollbar-thumb);
 }
 
-.workspace-list::-webkit-scrollbar-thumb:hover {
+.workspace-list-viewport::-webkit-scrollbar-thumb:hover {
   background-color: var(--workspace-scrollbar-thumb-hover);
 }
 
-.workspace-list::-webkit-scrollbar-button {
+.workspace-list-viewport::-webkit-scrollbar-button {
   display: none;
   width: 0;
   height: 0;
 }
 
-:root[data-caelush-theme="dark"] .workspace-list {
+:root[data-caelush-theme="dark"] .workspace-list-viewport {
   --workspace-scrollbar-thumb: rgb(255 255 255 / 20%);
   --workspace-scrollbar-thumb-hover: rgb(255 255 255 / 32%);
 }
 
 @supports selector(::-webkit-scrollbar) {
-  .workspace-list {
+  .workspace-list-viewport {
     scrollbar-color: auto;
     scrollbar-width: auto;
   }

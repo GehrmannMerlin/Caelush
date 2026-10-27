@@ -90,6 +90,10 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
           createElement("span", null, "添加工作区"),
         ),
       ),
+    ),
+    createElement(
+      "div",
+      { className: "workspace-list-viewport" },
       createElement(
         "ol",
         { className: "workspace-list" },
