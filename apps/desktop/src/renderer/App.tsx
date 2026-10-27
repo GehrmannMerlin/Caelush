@@ -1153,10 +1153,12 @@ function AccountHome(props: {
         className={`account-content${props.activeView === "archives" ? " account-content--archives" : ""}`}
       >
         <div
-          className={`account-content-inner${props.activeView === "profile" ? " is-profile-view" : props.activeView === "archives" ? " is-archives-view" : ""}`}
+          className={`account-content-inner${props.activeView === "profile" ? " is-profile-view" : props.activeView === "archives" ? " is-archives-view" : props.activeView === "updates" ? " is-update-view" : ""}`}
         >
           {props.activeView !== "archives" && (
-            <div className="account-page-head">
+            <div
+              className={`account-page-head${props.activeView === "updates" ? " account-page-head--updates" : ""}`}
+            >
               <h2>
                 {props.activeView === "home"
                   ? "总览"

@@ -65,7 +65,7 @@ describe("update page presentation", () => {
   it("shows a page with update-introduction versions and selected release notes", () => {
     const html = render();
     expect(html).toContain("检查更新");
-    expect(html).toContain("更新介绍");
+    expect(html).toContain("版本记录");
     expect(html).toContain("0.1.1");
     expect(html).toContain("0.1.0");
     expect(html).toContain("新增版本记录内容");

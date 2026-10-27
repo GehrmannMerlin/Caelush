@@ -1301,150 +1301,327 @@ button:disabled {
   }
 }
 
+.account-content-inner.is-update-view .account-page-head {
+  margin-bottom: 8px;
+}
+.account-page-head--updates h2 {
+  font-size: 22px;
+  line-height: 30px;
+  letter-spacing: -0.035em;
+}
 .update-page {
   display: grid;
   max-width: 1120px;
-  gap: 16px;
+  gap: 14px;
+  font-family: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+}
+.update-page-subtitle {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 19px;
 }
 .update-skeleton-symbol {
-  width: 43px;
-  height: 43px;
+  width: 42px;
+  height: 42px;
   flex: 0 0 auto;
-  border-radius: 12px;
+  border-radius: 11px;
 }
 .update-skeleton-title-group {
   display: grid;
-  gap: 9px;
-  padding-top: 5px;
+  gap: 6px;
+  padding-top: 2px;
 }
 .update-skeleton-title {
-  width: 154px;
-  height: 16px;
+  width: 120px;
+  height: 15px;
 }
 .update-skeleton-version {
-  width: 204px;
-  height: 10px;
+  width: 148px;
+  height: 11px;
 }
-.update-skeleton-toolbar {
-  display: flex;
+.update-skeleton-state {
+  display: grid;
+  min-height: 76px;
+  grid-template-columns: 28px minmax(0, 1fr) 110px;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-top: 19px;
-  border-top: 1px solid var(--line);
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-raised);
+}
+.update-skeleton-state-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+}
+.update-skeleton-state-copy {
+  display: grid;
+  gap: 7px;
 }
 .update-skeleton-button {
-  width: 108px;
-  height: 38px;
+  width: 110px;
+  height: 36px;
   border-radius: 8px;
 }
-.update-skeleton-message {
-  width: 100%;
-  height: 42px;
-  border-radius: 8px;
+.update-skeleton-history {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.update-skeleton-history-copy {
+  width: min(220px, 70%);
+  height: 14px;
 }
 .update-skeleton-note {
   width: min(82%, 640px);
-  height: 10px;
+  height: 11px;
 }
 .update-status-card {
-  position: relative;
   display: grid;
-  gap: 24px;
-  padding: 24px;
+  gap: 16px;
+  padding: 22px 24px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
-  box-shadow: 0 8px 24px rgb(23 43 77 / 4%);
+  box-shadow: 0 6px 20px rgb(23 43 77 / 4%);
 }
 .update-status-copy {
   display: flex;
-  align-items: flex-start;
-  gap: 15px;
+  align-items: center;
+  gap: 14px;
 }
 .update-symbol {
   display: grid;
-  width: 43px;
-  height: 43px;
+  width: 42px;
+  height: 42px;
   flex: 0 0 auto;
   place-items: center;
   border: 1px solid var(--brand-line);
-  border-radius: 12px;
+  border-radius: 11px;
   color: var(--brand);
   background: var(--brand-soft);
 }
 .update-status-copy h3 {
-  margin: 5px 0 6px;
+  margin: 0 0 3px;
   color: var(--text);
-  font-size: 1.06rem;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 21px;
 }
 .update-current-version {
   margin: 0;
   color: var(--muted);
-  font-size: 0.74rem;
+  font-size: 11.5px;
+  line-height: 17px;
 }
 .update-current-version b {
   margin-left: 5px;
   color: var(--text);
-  font-weight: 650;
+  font-weight: 600;
 }
-.update-toolbar {
+.update-state-panel {
+  display: grid;
+  min-width: 0;
+  min-height: 78px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 15px 18px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--text);
+  background: var(--surface-raised);
+}
+.update-state-panel.is-success {
+  border-color: var(--brand-line);
+  background: var(--brand-soft);
+}
+.update-state-panel.is-error {
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+}
+.update-state-main {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-top: 19px;
-  border-top: 1px solid var(--line);
+  min-width: 0;
+  align-items: flex-start;
+  gap: 14px;
 }
-.update-toolbar .primary-button,
-.update-toolbar .secondary-button,
-.update-install-actions .primary-button,
-.update-install-actions .secondary-button {
-  min-height: 38px;
-  border-radius: 8px;
-  font-size: 0.74rem;
+.update-state-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  margin-top: 1px;
+  color: var(--muted);
 }
-.update-check-button,
-.update-intro-button {
-  display: inline-flex;
+.update-state-panel.is-success .update-state-icon {
+  color: var(--brand);
+}
+.update-state-panel.is-error .update-state-icon {
+  color: var(--danger);
+}
+.update-state-copy {
+  min-width: 0;
+}
+.update-state-copy h4 {
+  margin: 0 0 3px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 21px;
+}
+.update-state-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+.update-state-panel.is-error .update-state-copy h4,
+.update-state-panel.is-error .update-state-copy p {
+  color: var(--danger);
+}
+.update-status-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
 }
-.update-history-control {
-  position: relative;
+.update-check-button,
+.update-action-primary,
+.update-action-secondary {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 8px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
 }
-.update-intro-button {
+.update-action-secondary {
   color: var(--text);
   background: var(--surface);
 }
-.update-intro-button svg:last-child {
+.update-cancel-download {
+  padding: 8px 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.update-version-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 17px;
+}
+.update-version-facts b {
+  margin-right: 8px;
+  color: var(--text);
+  font-weight: 600;
+}
+.update-download-progress {
+  display: grid;
+  max-width: 520px;
+  gap: 6px;
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 19px;
+}
+.update-download-progress > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.update-download-progress b {
+  color: var(--brand);
+  font-weight: 600;
+}
+.update-download-progress progress {
+  width: 100%;
+  height: 6px;
+  accent-color: var(--brand);
+}
+.update-history-section {
+  border-top: 1px solid var(--line);
+}
+.update-history-toggle {
+  display: grid;
+  width: 100%;
+  min-height: 62px;
+  grid-template-columns: 42px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 0 4px;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.update-history-toggle:hover {
+  background: var(--surface-raised);
+}
+.update-history-symbol {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--text);
+  background: var(--surface-raised);
+}
+.update-history-copy {
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 19px;
+}
+.update-history-copy small {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 17px;
+}
+.update-history-toggle > svg:last-child {
+  color: var(--muted);
+  transform: rotate(-90deg);
   transition: transform 120ms ease;
 }
-.update-intro-button svg.is-open {
-  transform: rotate(180deg);
+.update-history-toggle > svg:last-child.is-open {
+  transform: rotate(0deg);
 }
-.update-history-menu {
-  position: absolute;
-  z-index: 12;
-  top: calc(100% + 9px);
-  left: 0;
+.update-history-panel {
   display: grid;
-  width: min(520px, calc(100vw - 255px));
-  max-height: min(480px, 65vh);
-  grid-template-columns: minmax(135px, 0.8fr) minmax(0, 1.6fr);
+  max-height: min(380px, 55vh);
+  grid-template-columns: minmax(150px, 0.65fr) minmax(0, 1.35fr);
   overflow: auto;
-  border: 1px solid var(--line-bright);
-  border-radius: 11px;
-  background: var(--surface);
-  box-shadow: 0 18px 45px rgb(23 43 77 / 16%);
+  border-top: 1px solid var(--line);
 }
 .update-history-skeleton {
   display: grid;
   grid-column: 1 / -1;
   align-content: start;
   gap: 8px;
-  padding: 10px;
+  padding: 12px;
 }
 .update-history-skeleton > .skeleton-block {
   height: 34px;
@@ -1461,12 +1638,13 @@ button:disabled {
 .update-release-option {
   display: flex;
   min-width: 0;
+  min-height: 46px;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  padding: 9px;
+  gap: 8px;
   border: 1px solid transparent;
   border-radius: 7px;
+  padding: 6px 9px;
   color: var(--muted);
   background: transparent;
   text-align: left;
@@ -1475,19 +1653,21 @@ button:disabled {
 .update-release-option > span {
   display: grid;
   min-width: 0;
-  gap: 5px;
+  gap: 2px;
 }
 .update-release-option b {
   overflow: hidden;
   color: var(--text);
-  font-size: 0.68rem;
-  font-weight: 650;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .update-release-option small {
   color: var(--muted);
-  font-size: 0.6rem;
+  font-size: 11.5px;
+  line-height: 17px;
 }
 .update-release-option svg {
   flex: 0 0 auto;
@@ -1500,92 +1680,41 @@ button:disabled {
 }
 .update-release-detail {
   min-width: 0;
-  padding: 16px;
+  padding: 14px;
 }
 .update-release-detail pre {
-  max-height: 380px;
-  margin: 12px 0 0;
+  max-height: 300px;
+  margin: 0;
   overflow: auto;
   color: var(--muted);
   font-family: inherit;
-  font-size: 0.72rem;
-  line-height: 1.7;
+  font-size: 12.5px;
+  line-height: 19px;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 .update-history-empty {
   grid-column: 1 / -1;
   margin: 0;
-  padding: 18px;
+  padding: 16px;
   color: var(--muted);
-  font-size: 0.72rem;
-}
-.update-state-message {
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--muted);
-  background: var(--surface-raised);
-  font-size: 0.75rem;
-  line-height: 1.55;
-}
-.update-state-message.is-success {
-  border-color: var(--brand-line);
-  color: var(--brand-hover);
-  background: var(--brand-soft);
-}
-.update-state-message.is-error {
-  border-color: var(--danger-line);
-  color: var(--danger);
-  background: var(--danger-soft);
-}
-.update-version-facts {
-  display: grid;
-  grid-template-columns: auto 1fr auto 1fr;
-  gap: 8px 12px;
-  align-items: center;
-  color: var(--muted);
-  font-size: 0.68rem;
-}
-.update-version-facts b {
-  color: var(--text);
-  font-weight: 650;
-}
-.update-download-progress {
-  display: grid;
-  gap: 9px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 0.7rem;
-}
-.update-download-progress > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-.update-download-progress b {
-  color: var(--brand);
-}
-.update-download-progress progress {
-  width: 100%;
-  height: 8px;
-  accent-color: var(--brand);
-}
-.update-install-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 9px;
-}
-.update-install-actions .secondary-button {
-  background: var(--surface-raised);
+  font-size: 12.5px;
+  line-height: 19px;
 }
 .update-security-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
   margin: 0;
   padding: 0 3px;
   color: var(--muted);
-  font-size: 0.68rem;
-  line-height: 1.6;
+  font-size: 11.5px;
+  line-height: 17px;
+}
+.update-security-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--muted);
 }
 @media (max-width: 760px) {
   .side-nav {
@@ -1599,14 +1728,28 @@ button:disabled {
   .update-status-card {
     padding: 17px;
   }
-  .update-history-menu {
-    left: 0;
-    right: auto;
-    width: min(520px, calc(100vw - 40px));
-    grid-template-columns: minmax(102px, 0.75fr) minmax(0, 1.5fr);
+  .update-state-panel {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 13px;
+  }
+  .update-status-actions {
+    justify-content: flex-start;
+    padding-left: 42px;
+  }
+  .update-history-panel {
+    max-height: none;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .update-release-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
   }
   .update-release-detail {
     padding: 12px;
+  }
+  .update-release-detail pre {
+    max-height: 240px;
   }
 }
 
