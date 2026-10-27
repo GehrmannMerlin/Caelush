@@ -177,12 +177,20 @@ export class WebWorkspaceManager {
       ) {
         this.persistExpansion(expandedWorkspaceIds);
       }
+      const workspaceIdsToLoad = new Set(
+        expandedWorkspaceIds.filter(
+          (workspaceId) => this.snapshot.sessionSummaries[workspaceId] === undefined,
+        ),
+      );
       if (selectedWorkspaceId !== undefined) {
         this.persistSelection(selectedWorkspaceId);
-        await this.loadWorkspaceSessions(selectedWorkspaceId);
-        if (persistedExpansion === undefined) {
-          this.seedInitialExpansion(selectedWorkspaceId);
-        }
+        workspaceIdsToLoad.add(selectedWorkspaceId);
+      }
+      await Promise.all(
+        [...workspaceIdsToLoad].map((workspaceId) => this.loadWorkspaceSessions(workspaceId)),
+      );
+      if (selectedWorkspaceId !== undefined && persistedExpansion === undefined) {
+        this.seedInitialExpansion(selectedWorkspaceId);
       }
     } catch (error) {
       if (this.disposed || generation !== this.loadGeneration) return;

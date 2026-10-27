@@ -108,12 +108,13 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
 function renderWorkspace(props: WorkspaceSidebarProps, workspace: WorkspaceRecord): ReactElement {
   const selected = workspace.id === props.selectedWorkspaceId;
   const expanded = props.expandedWorkspaceIds.includes(workspace.id);
-  const summaries = props.sessionSummaries[workspace.id] ?? [];
-  const visibleSummaries = summaries;
+  const visibleSummaries = props.sessionSummaries[workspace.id] ?? [];
+  const hasDraft = props.isDraft && selected;
+  const hasSessionContent = visibleSummaries.length > 0 || hasDraft;
   const listItemClasses = ["workspace-list-item"];
   if (selected) listItemClasses.push("workspace-list-item--selected");
-  if (summaries.length > 0) listItemClasses.push("workspace-list-item--has-sessions");
-  const hasActiveRun = summaries.some(
+  if (visibleSummaries.length > 0) listItemClasses.push("workspace-list-item--has-sessions");
+  const hasActiveRun = visibleSummaries.some(
     (summary) => summary.latestRun !== undefined && nonTerminalRuns([summary.latestRun]).length > 0,
   );
   return createElement(
@@ -183,11 +184,11 @@ function renderWorkspace(props: WorkspaceSidebarProps, workspace: WorkspaceRecor
         ),
       ),
     ),
-    expanded
+    expanded && hasSessionContent
       ? createElement(
           "div",
           { className: "workspace-session-group" },
-          props.isDraft && selected
+          hasDraft
             ? createElement(
                 "div",
                 { className: "workspace-session-item workspace-session-item--draft" },
@@ -200,9 +201,6 @@ function renderWorkspace(props: WorkspaceSidebarProps, workspace: WorkspaceRecor
               )
             : null,
           visibleSummaries.map((summary) => renderSession(props, workspace, summary)),
-          visibleSummaries.length === 0 && !(props.isDraft && selected)
-            ? createElement("p", { className: "workspace-session-empty" }, "还没有会话。")
-            : null,
         )
       : null,
   );
