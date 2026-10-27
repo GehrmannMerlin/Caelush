@@ -61,6 +61,34 @@
   --caelush-terminal-bright-white: #ffffff;
   --caelush-shadow: 0 18px 50px rgb(0 0 0 / 42%);
 
+  --caelush-workbench-font-family:
+    "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+  --caelush-workbench-code-font-family: "Cascadia Code", Consolas, monospace;
+  --caelush-workbench-font-size-body: 14px;
+  --caelush-workbench-line-height-body: 22px;
+  --caelush-workbench-font-size-tool: 12.5px;
+  --caelush-workbench-line-height-tool: 19px;
+  --caelush-workbench-font-size-code: 12px;
+  --caelush-workbench-line-height-code: 19px;
+  --caelush-workbench-font-size-control: 12px;
+  --caelush-workbench-font-size-meta: 11.5px;
+  --caelush-workbench-line-height-meta: 19px;
+  --caelush-workbench-control-height: 28px;
+  --caelush-workbench-control-gap: 6px;
+  --caelush-workbench-composer-radius: 12px;
+  --caelush-workbench-composer-padding: 10px;
+  --caelush-workbench-composer-shadow: 0 2px 6px rgb(0 0 0 / 20%), 0 10px 24px rgb(0 0 0 / 26.7%);
+  --caelush-workbench-composer-focus-ring: 0 0 0 2px rgb(122 162 255 / 12%);
+  --caelush-workbench-button-shadow: 0 2px 5px rgb(0 0 0 / 28%);
+  --caelush-workbench-button-hover-shadow: 0 3px 8px rgb(0 0 0 / 36%);
+  --caelush-workbench-menu-radius: 10px;
+  --caelush-workbench-menu-padding: 5px;
+  --caelush-workbench-menu-item-height: 34px;
+  --caelush-workbench-menu-outline: transparent;
+  --caelush-workbench-menu-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 8%), 0 4px 8px rgb(0 0 0 / 24%), 0 12px 32px rgb(0 0 0 / 38%);
+  --caelush-workbench-session-radius: 7px;
+
   --web-sidebar-bg: var(--caelush-sidebar);
   --web-sidebar-ink: var(--caelush-text);
   --web-sidebar-muted: var(--caelush-muted);
