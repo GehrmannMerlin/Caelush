@@ -1476,15 +1476,19 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           options.storage.contextCheckpointsV2.listByRun(typedRunId),
           options.storage.runs.get(typedRunId),
         ]);
-        const latestCheckpointV3 =
+        const checkpointHistory =
           ownerRun === undefined || ownerRun === null
             ? undefined
-            : await latestActivatedContextCheckpointV3(options.storage, ownerRun);
+            : await activatedContextCheckpointHistory(options.storage, ownerRun);
+        const latestCheckpointV3 = checkpointHistory?.latestRunCheckpointV3;
         const currentSurface =
           currentEpoch === undefined
             ? undefined
             : await options.storage.promptSurface.readEpoch(typedRunId, currentEpoch.epochId);
-        const projectedContextUsage = projectV2ContextUsage(usage);
+        const projectedContextUsage = projectV2ContextUsage({
+          ...usage,
+          compactionCount: checkpointHistory?.compactionCount ?? usage.compactionCount,
+        });
         const latestCheckpoint =
           latestCheckpointV3 ??
           [...checkpoints].reverse().find((checkpoint) => checkpoint.schemaVersion === 2);
@@ -1620,19 +1624,21 @@ function projectContextRunProcess(
   return undefined;
 }
 
-async function latestActivatedContextCheckpointV3(
+type ContextCheckpointCandidate = Awaited<
+  ReturnType<CaelushStorage["contextCheckpointsV3"]["listCandidatesBySession"]>
+>["records"][number];
+type ContextCheckpointV3Candidate = Extract<ContextCheckpointCandidate, { schemaVersion: 3 }>;
+
+async function activatedContextCheckpointHistory(
   storage: CaelushStorage,
   run: AgentRun,
-): Promise<
-  | Extract<
-      Awaited<
-        ReturnType<CaelushStorage["contextCheckpointsV3"]["listCandidatesBySession"]>
-      >["records"][number],
-      { readonly schemaVersion: 3 }
-    >
-  | undefined
-> {
+): Promise<{
+  readonly compactionCount: number;
+  readonly latestRunCheckpointV3?: ContextCheckpointV3Candidate;
+}> {
   let cursor: string | undefined;
+  let compactionCount = 0;
+  let latestRunCheckpointV3: ContextCheckpointV3Candidate | undefined;
   do {
     const page = await storage.contextCheckpointsV3.listCandidatesBySession({
       sessionId: run.sessionId,
@@ -1641,19 +1647,31 @@ async function latestActivatedContextCheckpointV3(
       limit: 100,
     });
     for (const checkpoint of page.records) {
-      if (checkpoint.schemaVersion !== 3 || checkpoint.ownerRunId !== run.id) continue;
       if (
-        await storage.contextCheckpointActivationReader.isActivated({
+        !(await storage.contextCheckpointActivationReader.isActivated({
           checkpoint,
           sessionId: run.sessionId,
-        })
+        }))
+      )
+        continue;
+      compactionCount += 1;
+      if (!Number.isSafeInteger(compactionCount)) {
+        throw new RangeError("Context compaction count exceeds the safe integer limit.");
+      }
+      if (
+        latestRunCheckpointV3 === undefined &&
+        checkpoint.schemaVersion === 3 &&
+        checkpoint.ownerRunId === run.id
       ) {
-        return checkpoint;
+        latestRunCheckpointV3 = checkpoint;
       }
     }
     cursor = page.nextCursor;
   } while (cursor !== undefined);
-  return undefined;
+  return {
+    compactionCount,
+    ...(latestRunCheckpointV3 === undefined ? {} : { latestRunCheckpointV3 }),
+  };
 }
 
 function toolResultFeedbackText(

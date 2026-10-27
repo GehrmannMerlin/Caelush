@@ -203,9 +203,28 @@ describe("M4 — failed semantic summary through the pinned SDK and durable daem
       const degraded = checkpoints.find((checkpoint) => checkpoint.degraded);
       expect(degraded).toBeDefined();
       if (degraded === undefined) throw new Error("expected a committed degraded checkpoint");
+      const persistedUsage = await fixture.storage.contextUsage.getByRun(fixture.run.id);
+      if (persistedUsage === undefined) throw new Error("expected persisted context usage");
+      await fixture.storage.contextUsage.upsert({ ...persistedUsage, compactionCount: 0 });
+      const candidates = await fixture.storage.contextCheckpointsV3.listCandidatesBySession({
+        sessionId: fixture.run.sessionId,
+        throughRunId: fixture.run.id,
+        limit: 100,
+      });
+      const activationResults = await Promise.all(
+        candidates.records.map((checkpoint) =>
+          fixture.storage.contextCheckpointActivationReader.isActivated({
+            checkpoint,
+            sessionId: fixture.run.sessionId,
+          }),
+        ),
+      );
+      const activatedCheckpointCount = activationResults.filter(Boolean).length;
+      expect(activatedCheckpointCount).toBeGreaterThan(0);
       await expect(
         fixture.composition.contextUsage.getContextUsage(String(fixture.run.id)),
       ).resolves.toMatchObject({
+        compactionCount: activatedCheckpointCount,
         lastCompaction: { reason: degraded.reason, quality: "DEGRADED" },
       });
       const sourceRef = degraded?.structuredCheckpoint.criticalReferences.find((reference) =>

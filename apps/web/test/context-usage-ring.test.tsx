@@ -185,7 +185,8 @@ describe("ContextUsageRing", () => {
     expect(inspectorMarkup).toContain("可用输入预算");
     expect(inspectorMarkup).toContain("400 tokens");
     expect(inspectorMarkup).toContain("缓存命中率");
-    expect(inspectorMarkup).toContain("上下文压缩");
+    expect(inspectorMarkup).toContain("本会话压缩");
+    expect(inspectorMarkup).toContain("1 次");
     expect(inspectorMarkup).not.toContain("Current Turn");
     expect(inspectorMarkup).not.toContain("Raw Context Window");
   });

@@ -103,7 +103,7 @@ export function ContextInspector(props: {
       createElement(
         "div",
         { className: "context-inspector-metric" },
-        createElement("span", null, "上下文压缩"),
+        createElement("span", null, "本会话压缩"),
         createElement("strong", null, `${usage.compactionCount.toLocaleString()} 次`),
         usage.lastCompaction === undefined
           ? null

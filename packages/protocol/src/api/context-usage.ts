@@ -546,6 +546,7 @@ export const ContextUsageProjectionSchema = z
     lastCompaction: LastCompactionProjectionSchema.optional(),
     /** Read-only projection of an active durable execution boundary. */
     process: RunProcessProjectionSchema.optional(),
+    /** Count of activated Context checkpoints in this Session through the projected Run. */
     compactionCount: z.number().int().nonnegative(),
     lastCompactionAt: TimestampMsSchema.optional(),
     lastBuildAt: TimestampMsSchema.optional(),
