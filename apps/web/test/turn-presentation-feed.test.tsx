@@ -27,6 +27,10 @@ import {
   TurnPresentationFeed,
   type TurnPresentationFeedProps,
 } from "../src/components/turn-presentation-feed.js";
+import {
+  isUserMessageContentOverflowing,
+  USER_MESSAGE_COLLAPSED_CONTENT_HEIGHT_PX,
+} from "../src/components/user-message-bubble.js";
 import { ReconnectBanner } from "../src/components/reconnect-banner.js";
 import { modelWaitMessage } from "../src/components/model-wait-presentation.js";
 
@@ -120,6 +124,12 @@ function presentation(): SessionTurnPresentationResponse {
 }
 
 describe("TurnPresentationFeed", () => {
+  it("folds user message content only when its measured height exceeds the limit", () => {
+    expect(USER_MESSAGE_COLLAPSED_CONTENT_HEIGHT_PX).toBe(456);
+    expect(isUserMessageContentOverflowing(456)).toBe(false);
+    expect(isUserMessageContentOverflowing(457)).toBe(true);
+  });
+
   it("shows safe attachment cards for transcript users on legacy presentation responses", () => {
     const sessionId = createSessionId();
     const transcriptUser = {
@@ -197,6 +207,21 @@ describe("TurnPresentationFeed", () => {
     expect(html).toContain('data-format="excel"');
     expect(html).not.toContain("turn-presentation-user-bubble");
     expect(html).not.toContain("[已附加文件]");
+  });
+
+  it("keeps long user text intact and exposes a labelled copy action", () => {
+    const longText = "用户原始任务内容 ".repeat(120);
+    const base = presentation();
+    const longMessagePresentation: SessionTurnPresentationResponse = {
+      ...base,
+      items: base.items.map((item) => (item.kind === "USER" ? { ...item, text: longText } : item)),
+    };
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed presentation={longMessagePresentation} isActive={false} />,
+    );
+
+    expect(html).toContain(longText);
+    expect(html).toContain('aria-label="复制用户消息"');
   });
 
   it("sizes every transcript attachment the same, including image previews", () => {

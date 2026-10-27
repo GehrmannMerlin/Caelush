@@ -48,6 +48,7 @@ import { projectTurnPresentation } from "../application/turn-presentation-view-m
 import { ModelWaitNotice, usePresentationNow } from "./model-wait-presentation.js";
 import { LiveOutputEntry, ToolActivityEntry } from "./tool-activity-entry.js";
 import { TranscriptAttachmentList } from "./transcript-attachment-list.js";
+import { UserMessageBubble } from "./user-message-bubble.js";
 
 const AssistantMarkdown = lazy(async () => {
   const module = await import("./assistant-markdown.js");
@@ -255,7 +256,7 @@ export function SessionConversation(props: SessionConversationProps): ReactEleme
             : createElement(
                 "article",
                 { className: "turn-presentation-item turn-presentation-item--user" },
-                createElement("p", { className: "turn-presentation-user-bubble" }, item.text),
+                createElement(UserMessageBubble, { text: item.text }),
               ),
         ),
       ),
@@ -588,11 +589,7 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
               ? createElement(
                   "article",
                   { className: "turn-presentation-item turn-presentation-item--user" },
-                  createElement(
-                    "p",
-                    { className: "turn-presentation-user-bubble" },
-                    props.optimisticUser.text,
-                  ),
+                  createElement(UserMessageBubble, { text: props.optimisticUser.text }),
                 )
               : null
             : userItems.map((item) => renderItem(item)),
@@ -856,7 +853,7 @@ function renderItem(
       return createElement(
         "article",
         { className: "turn-presentation-item turn-presentation-item--user", key: item.id },
-        createElement("p", { className: "turn-presentation-user-bubble" }, item.text),
+        createElement(UserMessageBubble, { text: item.text }),
       );
     case "ASSISTANT": {
       const label = assistantLabel(item.phase);
