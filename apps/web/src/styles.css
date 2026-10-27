@@ -929,7 +929,10 @@ textarea:disabled {
 
 .turn-presentation-user-bubble-content {
   margin: 0;
-  line-height: 1.65;
+  font-family: var(--caelush-workbench-font-family);
+  font-size: var(--caelush-workbench-font-size-body);
+  font-weight: 400;
+  line-height: var(--caelush-workbench-line-height-body);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
