@@ -34,7 +34,10 @@ describe("responsive workspace layout", () => {
       /\.workspace-sidebar\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?overflow:\s*hidden;/,
     );
     expect(shell).toMatch(
-      /\.workspace-sidebar-content\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?flex:\s*1 1 auto;[\s\S]*?overflow-y:\s*auto;/,
+      /\.workspace-sidebar-content\s*\{[\s\S]*?display:\s*flex;[\s\S]*?min-height:\s*0;[\s\S]*?flex:\s*1 1 auto;[\s\S]*?flex-direction:\s*column;[\s\S]*?overflow:\s*hidden;/,
+    );
+    expect(shell).toMatch(
+      /\.workspace-list\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?flex:\s*1 1 auto;[\s\S]*?overflow-y:\s*auto;/,
     );
     expect(shell).toMatch(/\.workspace-sidebar-footer\s*\{[\s\S]*?flex:\s*0 0 auto;/);
     expect(shell).toMatch(

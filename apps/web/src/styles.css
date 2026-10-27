@@ -5938,6 +5938,20 @@ body {
 }
 
 .workspace-sidebar-content {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workspace-sidebar-content > .workspace-sidebar-brand,
+.workspace-sidebar-content > .workspace-sidebar-heading {
+  flex: 0 0 auto;
+}
+
+.workspace-list {
+  min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
   overflow-x: hidden;
@@ -10341,45 +10355,45 @@ button.transcript-attachment-card:disabled {
 }
 
 /* Keep the project and session navigation scrollbar quiet and compact. */
-.workspace-sidebar-content {
+.workspace-list {
   --workspace-scrollbar-thumb: rgb(15 23 42 / 16%);
   --workspace-scrollbar-thumb-hover: rgb(15 23 42 / 28%);
   scrollbar-color: var(--workspace-scrollbar-thumb) transparent;
   scrollbar-width: thin;
 }
 
-.workspace-sidebar-content::-webkit-scrollbar {
+.workspace-list::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-.workspace-sidebar-content::-webkit-scrollbar-track,
-.workspace-sidebar-content::-webkit-scrollbar-corner {
+.workspace-list::-webkit-scrollbar-track,
+.workspace-list::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-.workspace-sidebar-content::-webkit-scrollbar-thumb {
+.workspace-list::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background-color: var(--workspace-scrollbar-thumb);
 }
 
-.workspace-sidebar-content::-webkit-scrollbar-thumb:hover {
+.workspace-list::-webkit-scrollbar-thumb:hover {
   background-color: var(--workspace-scrollbar-thumb-hover);
 }
 
-.workspace-sidebar-content::-webkit-scrollbar-button {
+.workspace-list::-webkit-scrollbar-button {
   display: none;
   width: 0;
   height: 0;
 }
 
-:root[data-caelush-theme="dark"] .workspace-sidebar-content {
+:root[data-caelush-theme="dark"] .workspace-list {
   --workspace-scrollbar-thumb: rgb(255 255 255 / 20%);
   --workspace-scrollbar-thumb-hover: rgb(255 255 255 / 32%);
 }
 
 @supports selector(::-webkit-scrollbar) {
-  .workspace-sidebar-content {
+  .workspace-list {
     scrollbar-color: auto;
     scrollbar-width: auto;
   }

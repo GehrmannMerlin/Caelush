@@ -85,7 +85,7 @@ describe("WorkspaceSidebar", () => {
     expect(html).toContain("添加工作区");
   });
 
-  it("keeps the account and settings footer outside the scrollable sidebar content", () => {
+  it("keeps the account and settings footer outside the project-list scroll region", () => {
     const html = renderToStaticMarkup(
       <WorkspaceSidebar
         workspaces={[]}
