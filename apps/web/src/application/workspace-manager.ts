@@ -19,6 +19,7 @@ export interface WorkspaceSelectionStorage {
 type StorageLike = WorkspaceSelectionStorage | Map<string, string>;
 
 const SELECTED_WORKSPACE_KEY = "caelush:selected-workspace";
+const EXPANDED_WORKSPACES_KEY = "caelush:expanded-workspaces";
 
 /** Persists only the selected registry id. Workspace paths never come from browser storage. */
 export class WorkspaceSelectionStore {
@@ -53,6 +54,42 @@ export class WorkspaceSelectionStore {
 
   clear(): void {
     remove(this.storage, SELECTED_WORKSPACE_KEY);
+  }
+}
+
+/** Persists only expanded registry ids. Workspace paths never come from browser storage. */
+export class WorkspaceExpansionStore {
+  constructor(private readonly storage: StorageLike = browserStorage()) {}
+
+  read(): readonly WorkspaceId[] | undefined {
+    const raw = get(this.storage, EXPANDED_WORKSPACES_KEY);
+    if (raw === null) return undefined;
+    let value: unknown;
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      this.clear();
+      return undefined;
+    }
+    const parsed = WorkspaceIdSchema.array().safeParse(value);
+    if (!parsed.success) {
+      this.clear();
+      return undefined;
+    }
+    return [...new Set(parsed.data)];
+  }
+
+  write(workspaceIds: readonly WorkspaceId[]): void {
+    const parsed = WorkspaceIdSchema.array().safeParse(workspaceIds);
+    if (!parsed.success) {
+      this.clear();
+      return;
+    }
+    set(this.storage, EXPANDED_WORKSPACES_KEY, JSON.stringify([...new Set(parsed.data)]));
+  }
+
+  clear(): void {
+    remove(this.storage, EXPANDED_WORKSPACES_KEY);
   }
 }
 
@@ -99,6 +136,7 @@ export class WebWorkspaceManager {
     private readonly options: {
       readonly client: WorkspaceManagerClient;
       readonly selectionStore?: WorkspaceSelectionStore;
+      readonly expansionStore?: WorkspaceExpansionStore;
       readonly initialWorkspaceId?: WorkspaceId | undefined;
     },
   ) {}
@@ -122,9 +160,10 @@ export class WebWorkspaceManager {
       const workspaces = [...response.items];
       const selectedWorkspaceId = this.chooseWorkspace(workspaces);
       const availableWorkspaceIds = new Set(workspaces.map((workspace) => workspace.id));
-      const expandedWorkspaceIds = this.snapshot.expandedWorkspaceIds.filter((workspaceId) =>
-        availableWorkspaceIds.has(workspaceId),
-      );
+      const persistedExpansion = this.options.expansionStore?.read();
+      const expandedWorkspaceIds = (
+        persistedExpansion ?? this.snapshot.expandedWorkspaceIds
+      ).filter((workspaceId) => availableWorkspaceIds.has(workspaceId));
       this.publish({
         status: "READY",
         workspaces,
@@ -132,9 +171,18 @@ export class WebWorkspaceManager {
         expandedWorkspaceIds,
         error: undefined,
       });
+      if (
+        persistedExpansion !== undefined &&
+        expandedWorkspaceIds.length !== persistedExpansion.length
+      ) {
+        this.persistExpansion(expandedWorkspaceIds);
+      }
       if (selectedWorkspaceId !== undefined) {
         this.persistSelection(selectedWorkspaceId);
         await this.loadWorkspaceSessions(selectedWorkspaceId);
+        if (persistedExpansion === undefined) {
+          this.seedInitialExpansion(selectedWorkspaceId);
+        }
       }
     } catch (error) {
       if (this.disposed || generation !== this.loadGeneration) return;
@@ -154,11 +202,13 @@ export class WebWorkspaceManager {
     if (workspace === undefined) return false;
     this.persistSelection(workspace.id);
     const hasSessionHistory = (this.snapshot.sessionSummaries[workspace.id]?.length ?? 0) > 0;
-    const shouldExpand = options.expand === true || hasSessionHistory;
+    const shouldExpand =
+      options.expand === true || (this.options.expansionStore === undefined && hasSessionHistory);
     const expandedWorkspaceIds =
       shouldExpand && !this.snapshot.expandedWorkspaceIds.includes(workspace.id)
         ? [...this.snapshot.expandedWorkspaceIds, workspace.id]
         : this.snapshot.expandedWorkspaceIds;
+    this.persistExpansion(expandedWorkspaceIds);
     this.publish({
       selectedWorkspaceId: workspace.id,
       expandedWorkspaceIds,
@@ -181,6 +231,7 @@ export class WebWorkspaceManager {
       )
         return;
       const expandedWorkspaceIds =
+        this.options.expansionStore === undefined &&
         response.items.length > 0 &&
         this.snapshot.selectedWorkspaceId === workspaceId &&
         !this.snapshot.expandedWorkspaceIds.includes(workspaceId)
@@ -261,6 +312,7 @@ export class WebWorkspaceManager {
     const expanded = this.snapshot.expandedWorkspaceIds.includes(workspaceId)
       ? this.snapshot.expandedWorkspaceIds.filter((id) => id !== workspaceId)
       : [...this.snapshot.expandedWorkspaceIds, workspaceId];
+    this.persistExpansion(expanded);
     this.publish({ expandedWorkspaceIds: expanded });
     if (
       expanded.includes(workspaceId) &&
@@ -272,8 +324,12 @@ export class WebWorkspaceManager {
 
   expandWorkspace(workspaceId: WorkspaceId): void {
     if (this.disposed || !this.snapshot.workspaces.some((item) => item.id === workspaceId)) return;
-    if (!this.snapshot.expandedWorkspaceIds.includes(workspaceId)) {
-      this.publish({ expandedWorkspaceIds: [...this.snapshot.expandedWorkspaceIds, workspaceId] });
+    const expandedWorkspaceIds = this.snapshot.expandedWorkspaceIds.includes(workspaceId)
+      ? this.snapshot.expandedWorkspaceIds
+      : [...this.snapshot.expandedWorkspaceIds, workspaceId];
+    this.persistExpansion(expandedWorkspaceIds);
+    if (expandedWorkspaceIds !== this.snapshot.expandedWorkspaceIds) {
+      this.publish({ expandedWorkspaceIds });
     }
     if (this.snapshot.sessionSummaries[workspaceId] === undefined) {
       void this.loadWorkspaceSessions(workspaceId);
@@ -306,6 +362,27 @@ export class WebWorkspaceManager {
 
   private persistSelection(workspaceId: WorkspaceId): void {
     this.options.selectionStore?.write(workspaceId);
+  }
+
+  private persistExpansion(workspaceIds: readonly WorkspaceId[]): void {
+    this.options.expansionStore?.write(workspaceIds);
+  }
+
+  private seedInitialExpansion(workspaceId: WorkspaceId): void {
+    if (
+      this.disposed ||
+      this.snapshot.selectedWorkspaceId !== workspaceId ||
+      this.options.expansionStore?.read() !== undefined
+    ) {
+      return;
+    }
+    const expandedWorkspaceIds =
+      (this.snapshot.sessionSummaries[workspaceId]?.length ?? 0) > 0 &&
+      !this.snapshot.expandedWorkspaceIds.includes(workspaceId)
+        ? [...this.snapshot.expandedWorkspaceIds, workspaceId]
+        : this.snapshot.expandedWorkspaceIds;
+    this.publish({ expandedWorkspaceIds });
+    this.persistExpansion(expandedWorkspaceIds);
   }
 
   private publish(patch: Partial<WorkspaceManagerState>): void {

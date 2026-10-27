@@ -45,6 +45,7 @@ import {
 } from "./application/attachment-draft-store.js";
 import {
   WebWorkspaceManager,
+  WorkspaceExpansionStore,
   WorkspaceSelectionStore,
   type WorkspaceManagerClient,
   type WorkspaceManagerState,
@@ -96,6 +97,7 @@ const DesktopWorkspacePanel = lazy(async () => {
 const sessionSelectionStore = new SessionSelectionStore();
 const permissionPresetSelectionStore = new PermissionPresetSelectionStore();
 const workspaceSelectionStore = new WorkspaceSelectionStore();
+const workspaceExpansionStore = new WorkspaceExpansionStore();
 
 const EMPTY_SESSION_SNAPSHOT: WebSessionSnapshot = {
   status: "IDLE",
@@ -222,6 +224,7 @@ export function WebHostApp(props: {
     return new WebWorkspaceManager({
       client: props.client as unknown as WorkspaceManagerClient,
       selectionStore: workspaceSelectionStore,
+      expansionStore: workspaceExpansionStore,
       initialWorkspaceId: state.initialWorkspaceId,
     });
   }, [props.client, state.bootstrap, state.initialWorkspaceId]);
