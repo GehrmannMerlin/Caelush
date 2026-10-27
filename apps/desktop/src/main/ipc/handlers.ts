@@ -423,6 +423,14 @@ export interface RegisterDesktopIpcOptions {
 
 type IpcCallerPolicy = "LOGIN" | "AGENT" | "LOGIN_OR_AGENT";
 
+export function publishAccountState(
+  target: { send(channel: string, state: AccountState): void },
+  state: AccountState,
+): void {
+  const safeState = AccountStateSchema.safeParse(state);
+  if (safeState.success) target.send(IPC_CHANNELS.account.state, safeState.data);
+}
+
 export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => void {
   const main = options.ipcMain ?? ipcMain;
   const registered: string[] = [];
@@ -1196,8 +1204,7 @@ export function registerDesktopIpc(options: RegisterDesktopIpcOptions): () => vo
     if (options.window.isDestroyed() || options.window.webContents.isDestroyed()) return;
     if (!isTrustedUrl(options.window.webContents.mainFrame.url, options.rendererTrust)) return;
     const projected = options.projectAccountState?.(state) ?? state;
-    const safeState = AccountStateSchema.safeParse(projected);
-    if (safeState.success) options.window.webContents.send(account.state, safeState.data);
+    publishAccountState(options.window.webContents, projected);
   });
 
   return () => {

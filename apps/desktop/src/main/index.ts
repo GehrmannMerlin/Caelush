@@ -21,7 +21,7 @@ import { UpdateStateStore } from "./update/state-store.js";
 import { downloadInstaller } from "./update/downloader.js";
 import { handoffVerifiedNsis } from "./update/nsis-handoff.js";
 import { captureUpdateProfile, verifyUpdateProfile } from "./update/profile-verification.js";
-import { registerDesktopIpc } from "./ipc/handlers.js";
+import { publishAccountState, registerDesktopIpc } from "./ipc/handlers.js";
 import { registerAppProtocol } from "./protocol/app-protocol.js";
 import { DesktopLocalProxy } from "./protocol/local-proxy.js";
 import { DesktopArchiveController } from "./archive/controller.js";
@@ -284,7 +284,7 @@ if (!singleInstance) {
     if (mainWindow === null || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed())
       return;
     if (isTrustedCurrentWindow()) {
-      mainWindow.webContents.send("caelush:account:state", projectAccountState(account.getState()));
+      publishAccountState(mainWindow.webContents, projectAccountState(account.getState()));
     }
     if (isTrustedAgentWindow()) {
       mainWindow.webContents.send("caelush:workspace:availability-state", {

@@ -1089,9 +1089,11 @@ function projectGrant(
   entitlements: readonly string[],
   now: Date,
 ): NonNullable<AccountState["offlineGrant"]> {
+  // Verification permits small issue-time skew; the display must not exceed the signed lifetime.
+  const displayNow = Math.max(now.getTime(), Date.parse(issuedAt));
   const remainingHours = Math.max(
     0,
-    Math.ceil((expiresAt.getTime() - now.getTime()) / (60 * 60 * 1000)),
+    Math.ceil((expiresAt.getTime() - displayNow) / (60 * 60 * 1000)),
   );
   return {
     issuedAt,
