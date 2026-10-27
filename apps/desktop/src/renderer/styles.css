@@ -2527,6 +2527,20 @@ button:disabled {
   border-radius: 8px;
   background: var(--surface-raised);
 }
+:root:not([data-caelush-theme="dark"]) .connection-banner,
+:root:not([data-caelush-theme="dark"]) .connection-banner.is-offline,
+:root:not([data-caelush-theme="dark"]) .banner-icon,
+:root:not([data-caelush-theme="dark"]) .is-offline .banner-icon,
+:root:not([data-caelush-theme="dark"]) .grant-panel,
+:root:not([data-caelush-theme="dark"]) .grant-icon,
+:root:not([data-caelush-theme="dark"]) .legacy-import-panel,
+:root:not([data-caelush-theme="dark"]) .legacy-import-panel.is-recovery,
+:root:not([data-caelush-theme="dark"]) .legacy-import-icon,
+:root:not([data-caelush-theme="dark"]) .is-recovery .legacy-import-icon,
+:root:not([data-caelush-theme="dark"]) .legacy-count,
+:root:not([data-caelush-theme="dark"]) .legacy-confirmation {
+  background: #fff;
+}
 .legacy-count span {
   color: var(--muted);
   font-size: 0.66rem;
