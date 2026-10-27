@@ -7,7 +7,6 @@ import {
   Download,
   FileText,
   RefreshCw,
-  ShieldCheck,
 } from "lucide-react";
 import { CaelushBrand } from "@caelush/ui-theme/brand";
 import type { ResolvedTheme } from "@caelush/ui-theme/appearance";
@@ -263,13 +262,6 @@ export function UpdatePage({ theme = "light" }: { readonly theme?: ResolvedTheme
           )}
         </div>
       </section>
-
-      <p className="update-security-note">
-        <ShieldCheck size={15} aria-hidden="true" />
-        <span>
-          更新安装包会先通过签名和完整性验证；下载完成后，安装仍需确认，并等待本地 Agent 安全退出。
-        </span>
-      </p>
     </div>
   );
 }
@@ -302,7 +294,6 @@ export function UpdatePageSkeleton() {
           <span className="skeleton-block update-skeleton-history-copy" />
         </div>
       </section>
-      <span className="skeleton-block update-skeleton-note" aria-hidden="true" />
       <span className="visually-hidden" role="status">
         正在读取更新状态
       </span>
