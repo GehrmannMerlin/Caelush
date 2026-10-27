@@ -1325,7 +1325,7 @@ button:disabled {
   width: 42px;
   height: 42px;
   flex: 0 0 auto;
-  border-radius: 11px;
+  border-radius: 50%;
 }
 .update-skeleton-title-group {
   display: grid;
@@ -1396,15 +1396,11 @@ button:disabled {
   gap: 14px;
 }
 .update-symbol {
-  display: grid;
+  display: block;
   width: 42px;
   height: 42px;
   flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid var(--brand-line);
-  border-radius: 11px;
-  color: var(--brand);
-  background: var(--brand-soft);
+  object-fit: contain;
 }
 .update-status-copy h3 {
   margin: 0 0 3px;
@@ -1427,38 +1423,22 @@ button:disabled {
 .update-state-panel {
   display: grid;
   min-width: 0;
-  min-height: 78px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 62px;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 18px;
-  padding: 15px 18px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
+  gap: 12px;
+  padding: 8px 0 4px;
   color: var(--text);
-  background: var(--surface-raised);
-}
-.update-state-panel.is-success {
-  border-color: var(--brand-line);
-  background: var(--brand-soft);
-}
-.update-state-panel.is-error {
-  border-color: var(--danger-line);
-  background: var(--danger-soft);
-}
-.update-state-main {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  gap: 14px;
 }
 .update-state-icon {
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: 40px;
+  height: 40px;
   flex: 0 0 auto;
   place-items: center;
-  margin-top: 1px;
+  border-radius: 10px;
   color: var(--muted);
+  background: var(--surface-raised);
 }
 .update-state-panel.is-success .update-state-icon {
   color: var(--brand);
@@ -1467,21 +1447,26 @@ button:disabled {
   color: var(--danger);
 }
 .update-state-copy {
+  display: grid;
   min-width: 0;
+  gap: 2px;
 }
 .update-state-copy h4 {
-  margin: 0 0 3px;
+  margin: 0;
   color: var(--text);
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 21px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 19px;
 }
 .update-state-copy p {
   margin: 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 11.5px;
   font-weight: 400;
-  line-height: 22px;
+  line-height: 17px;
+}
+.update-state-panel.is-success .update-state-copy h4 {
+  color: var(--brand-hover);
 }
 .update-state-panel.is-error .update-state-copy h4,
 .update-state-panel.is-error .update-state-copy p {
@@ -1729,13 +1714,14 @@ button:disabled {
     padding: 17px;
   }
   .update-state-panel {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 42px minmax(0, 1fr);
     gap: 12px;
-    padding: 13px;
+    padding: 8px 0 4px;
   }
   .update-status-actions {
+    grid-column: 2;
     justify-content: flex-start;
-    padding-left: 42px;
+    padding-left: 0;
   }
   .update-history-panel {
     max-height: none;

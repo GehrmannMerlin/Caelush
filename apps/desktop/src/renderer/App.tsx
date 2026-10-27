@@ -1219,7 +1219,9 @@ function AccountHome(props: {
               onPreferenceChange={props.onAppearancePreferenceChange}
             />
           )}
-          {props.activeView === "updates" && <UpdatePage />}
+          {props.activeView === "updates" && (
+            <UpdatePage theme={props.appearanceSnapshot.resolvedTheme} />
+          )}
           {props.activeView === "archives" && (
             <AccountArchiveEntry
               api={props.archiveApi}

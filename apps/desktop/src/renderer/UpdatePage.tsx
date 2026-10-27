@@ -9,9 +9,13 @@ import {
   RefreshCw,
   ShieldCheck,
 } from "lucide-react";
+import { CaelushBrand } from "@caelush/ui-theme/brand";
+import type { ResolvedTheme } from "@caelush/ui-theme/appearance";
+import caelushIconLight from "@caelush/ui-theme/assets/caelush-icon.png";
+import caelushIconDark from "@caelush/ui-theme/assets/caelush-icon-white.png";
 import type { DesktopReleaseHistoryItem, DesktopUpdateState } from "../shared/update-contract.js";
 
-export function UpdatePage() {
+export function UpdatePage({ theme = "light" }: { readonly theme?: ResolvedTheme } = {}) {
   const [state, setState] = useState<DesktopUpdateState | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [releases, setReleases] = useState<readonly DesktopReleaseHistoryItem[]>([]);
@@ -90,9 +94,14 @@ export function UpdatePage() {
       <p className="update-page-subtitle">查看当前版本并安全更新</p>
       <section className="update-status-card" aria-labelledby="update-status-heading">
         <div className="update-status-copy">
-          <span className="update-symbol">
-            <Download size={19} />
-          </span>
+          <CaelushBrand
+            kind="icon"
+            theme={theme}
+            lightSrc={caelushIconLight}
+            darkSrc={caelushIconDark}
+            className="update-symbol"
+            alt="Caelush"
+          />
           <div>
             <h3 id="update-status-heading">软件更新</h3>
             <p className="update-current-version">
@@ -105,50 +114,48 @@ export function UpdatePage() {
         <div
           className={`update-state-panel${isError ? " is-error" : isSuccess ? " is-success" : ""}`}
         >
-          <div className="update-state-main">
-            <span className="update-state-icon" aria-hidden="true">
-              {isError ? (
-                <AlertCircle size={20} />
-              ) : isSuccess ? (
-                <Check size={20} />
-              ) : status === "IDLE" ? (
-                <Clock3 size={20} />
-              ) : status === "UPDATE_AVAILABLE" || status === "DOWNLOADING" || ready ? (
-                <Download size={20} />
-              ) : (
-                <RefreshCw size={19} className={busy ? "spin" : ""} />
-              )}
-            </span>
-            <div className="update-state-copy">
-              <h4 id="update-state-heading">{statusHeading}</h4>
-              <p role={isError ? "alert" : "status"}>{statusMessage}</p>
+          <span className="update-state-icon" aria-hidden="true">
+            {isError ? (
+              <AlertCircle size={20} />
+            ) : isSuccess ? (
+              <Check size={20} />
+            ) : status === "IDLE" ? (
+              <Clock3 size={20} />
+            ) : status === "UPDATE_AVAILABLE" || status === "DOWNLOADING" || ready ? (
+              <Download size={20} />
+            ) : (
+              <RefreshCw size={19} className={busy ? "spin" : ""} />
+            )}
+          </span>
+          <div className="update-state-copy">
+            <h4 id="update-state-heading">{statusHeading}</h4>
+            <p role={isError ? "alert" : "status"}>{statusMessage}</p>
 
-              {state?.latestVersion && state.latestVersion !== state.currentVersion && (
-                <div className="update-version-facts">
-                  <span>目标版本</span>
-                  <b>Caelush {state.latestVersion}</b>
-                  <span>安装包</span>
-                  <b>
-                    {(state.artifactSize / 1024 / 1024).toFixed(1)} MB
-                    {state.mandatory ? " · 必须更新" : ""}
-                  </b>
-                </div>
-              )}
+            {state?.latestVersion && state.latestVersion !== state.currentVersion && (
+              <div className="update-version-facts">
+                <span>目标版本</span>
+                <b>Caelush {state.latestVersion}</b>
+                <span>安装包</span>
+                <b>
+                  {(state.artifactSize / 1024 / 1024).toFixed(1)} MB
+                  {state.mandatory ? " · 必须更新" : ""}
+                </b>
+              </div>
+            )}
 
-              {status === "DOWNLOADING" && state && (
-                <div className="update-download-progress">
-                  <div>
-                    <span>正在下载并校验安装包</span>
-                    <b>{percent}%</b>
-                  </div>
-                  <progress
-                    aria-label="安装包下载进度"
-                    max={Math.max(1, state.artifactSize)}
-                    value={state.downloadedBytes}
-                  />
+            {status === "DOWNLOADING" && state && (
+              <div className="update-download-progress">
+                <div>
+                  <span>正在下载并校验安装包</span>
+                  <b>{percent}%</b>
                 </div>
-              )}
-            </div>
+                <progress
+                  aria-label="安装包下载进度"
+                  max={Math.max(1, state.artifactSize)}
+                  value={state.downloadedBytes}
+                />
+              </div>
+            )}
           </div>
 
           <div className="update-status-actions">
