@@ -90,7 +90,6 @@ export function UpdatePage({ theme = "light" }: { readonly theme?: ResolvedTheme
 
   return (
     <div className="update-page">
-      <p className="update-page-subtitle">查看当前版本并安全更新</p>
       <section className="update-status-card" aria-labelledby="update-status-heading">
         <div className="update-status-copy">
           <CaelushBrand

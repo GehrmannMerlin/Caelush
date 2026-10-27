@@ -1315,12 +1315,6 @@ button:disabled {
   gap: 14px;
   font-family: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
 }
-.update-page-subtitle {
-  margin: 0 0 4px;
-  color: var(--muted);
-  font-size: 12.5px;
-  line-height: 19px;
-}
 .update-skeleton-symbol {
   width: 42px;
   height: 42px;
