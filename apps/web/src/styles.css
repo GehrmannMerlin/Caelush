@@ -888,7 +888,7 @@ textarea:disabled {
 .turn-presentation-feed {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
   width: min(100%, 860px);
   margin: 0 auto;
 }
@@ -906,6 +906,14 @@ textarea:disabled {
 
 .turn-presentation-item--user {
   max-width: min(88%, 680px);
+}
+
+.turn-presentation-user-message {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  flex-direction: column;
+  align-items: stretch;
 }
 
 .turn-presentation-user-bubble {
@@ -931,8 +939,7 @@ textarea:disabled {
   mask-image: linear-gradient(to bottom, #000 84%, transparent 100%);
 }
 
-.turn-presentation-user-expand,
-.turn-presentation-user-copy {
+.turn-presentation-user-expand {
   position: absolute;
   bottom: 5px;
   display: inline-flex;
@@ -969,34 +976,90 @@ textarea:disabled {
   transform: rotate(180deg);
 }
 
+.turn-presentation-user-actions {
+  display: flex;
+  min-height: 26px;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
 .turn-presentation-user-copy {
-  right: 7px;
-  width: 28px;
-  height: 28px;
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
   padding: 0;
   border: 0;
   border-radius: 8px;
-  background: rgb(255 255 255 / 76%);
+  background: transparent;
+  color: #496987;
+  cursor: pointer;
   opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px);
   transition:
-    opacity 120ms ease,
-    background-color 120ms ease;
+    opacity 140ms ease,
+    transform 140ms ease,
+    background-color 140ms ease,
+    color 180ms ease;
+}
+
+.turn-presentation-user-copy-icons {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+}
+
+.turn-presentation-user-copy-icon {
+  grid-area: 1 / 1;
+  opacity: 0;
+  transform: scale(0.78) rotate(-8deg);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.turn-presentation-user-copy-icon--visible {
+  opacity: 1;
+  transform: scale(1) rotate(0);
+}
+
+.turn-presentation-user-message:hover .turn-presentation-user-copy,
+.turn-presentation-user-copy:focus-visible,
+.turn-presentation-user-copy--copied {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .turn-presentation-user-copy:hover,
 .turn-presentation-user-copy:focus-visible {
   background: #ffffff;
-  opacity: 1;
+}
+
+.turn-presentation-user-copy--copied,
+.turn-presentation-user-copy--copied:hover {
+  color: #27804a;
+  background: #e8f6ed;
+}
+
+.turn-presentation-user-copy:disabled {
+  cursor: default;
 }
 
 @media (hover: none) {
   .turn-presentation-user-copy {
     opacity: 1;
+    pointer-events: auto;
+    transform: none;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .turn-presentation-user-copy {
+  .turn-presentation-user-copy,
+  .turn-presentation-user-copy-icon {
     transition: none;
   }
 }
@@ -7724,6 +7787,10 @@ body {
 .turn-presentation-process .turn-presentation-item--user .turn-presentation-user-bubble {
   max-width: 100%;
   overflow-wrap: anywhere;
+}
+
+.turn-presentation-process .turn-presentation-item--user .turn-presentation-user-message {
+  max-width: 100%;
 }
 
 .turn-presentation-process .turn-presentation-item--commentary {

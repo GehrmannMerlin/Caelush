@@ -28,8 +28,10 @@ import {
   type TurnPresentationFeedProps,
 } from "../src/components/turn-presentation-feed.js";
 import {
+  copyUserMessageText,
   isUserMessageContentOverflowing,
   USER_MESSAGE_COLLAPSED_CONTENT_HEIGHT_PX,
+  USER_MESSAGE_COPY_FEEDBACK_DURATION_MS,
 } from "../src/components/user-message-bubble.js";
 import { ReconnectBanner } from "../src/components/reconnect-banner.js";
 import { modelWaitMessage } from "../src/components/model-wait-presentation.js";
@@ -222,6 +224,32 @@ describe("TurnPresentationFeed", () => {
 
     expect(html).toContain(longText);
     expect(html).toContain('aria-label="复制用户消息"');
+    expect(html).toContain('class="turn-presentation-user-actions"');
+    expect(html).toContain('class="visually-hidden" aria-live="polite"');
+    const bubble =
+      html.match(/<div class="turn-presentation-user-bubble"[\s\S]*?<\/div>/u)?.[0] ?? "";
+    expect(bubble).not.toContain("turn-presentation-user-copy");
+    expect(USER_MESSAGE_COPY_FEEDBACK_DURATION_MS).toBe(2000);
+  });
+
+  it("falls back to the browser copy command when clipboard access is denied", async () => {
+    const text = "原始任务\n保留换行与内容";
+    const clipboard = { writeText: vi.fn().mockRejectedValue(new Error("clipboard denied")) };
+    const legacyCopy = vi.fn().mockReturnValue(true);
+
+    await expect(copyUserMessageText(text, clipboard, legacyCopy)).resolves.toBeUndefined();
+
+    expect(clipboard.writeText).toHaveBeenCalledWith(text);
+    expect(legacyCopy).toHaveBeenCalledWith(text);
+  });
+
+  it("reports copy failure only when both clipboard paths fail", async () => {
+    const clipboard = { writeText: vi.fn().mockRejectedValue(new Error("clipboard denied")) };
+    const legacyCopy = vi.fn().mockReturnValue(false);
+
+    await expect(copyUserMessageText("原始任务", clipboard, legacyCopy)).rejects.toThrow(
+      "Unable to copy user message",
+    );
   });
 
   it("sizes every transcript attachment the same, including image previews", () => {
