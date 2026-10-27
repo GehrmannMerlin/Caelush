@@ -10359,6 +10359,8 @@ button.transcript-attachment-card:disabled {
 .workspace-list {
   --workspace-scrollbar-thumb: rgb(15 23 42 / 16%);
   --workspace-scrollbar-thumb-hover: rgb(15 23 42 / 28%);
+  margin-right: -10px;
+  padding-right: 10px;
   scrollbar-color: var(--workspace-scrollbar-thumb) transparent;
   scrollbar-width: thin;
 }
