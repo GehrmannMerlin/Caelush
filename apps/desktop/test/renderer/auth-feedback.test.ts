@@ -77,6 +77,21 @@ describe("Desktop auth feedback scope", () => {
     ).toEqual(currentFeedback);
   });
 
+  it("shows actionable guidance when offline authorization has expired", () => {
+    expect(
+      resolveAuthMessage(null, "login", 4, {
+        status: "OFFLINE_GRANT_EXPIRED",
+        lastError: { code: "GRANT_EXPIRED", message: "Offline authorization expired." },
+        notice: "Offline authorization has expired. Connect to Cloud and sign in again.",
+      }),
+    ).toEqual({
+      screen: "login",
+      generation: 4,
+      tone: "error",
+      message: "离线授权已过期，请连接云端并重新登录。",
+    });
+  });
+
   it("localizes account notices as informational messages", () => {
     expect(
       resolveAuthMessage(null, "login", 4, {

@@ -11,6 +11,7 @@ const authErrorMessages: Readonly<Record<string, string>> = {
   CLOUD_RESPONSE_INVALID: "服务返回的数据异常，请稍后重试。",
   DEVICE_LIMIT_REACHED: "已达到可授权设备数量上限，请先撤销不再使用的设备。",
   DEVICE_REVOKED: "此设备的访问权限已撤销，请重新登录。",
+  GRANT_EXPIRED: "离线授权已过期，请连接云端并重新登录。",
   INTERNAL_ERROR: "请求未能完成，请稍后重试。",
   IPC_CANCELLED: "操作已取消。",
   IPC_INPUT_INVALID: "提交的信息格式不正确，请检查后重试。",
