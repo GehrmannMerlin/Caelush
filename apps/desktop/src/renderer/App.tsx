@@ -43,7 +43,7 @@ import {
 import type { AccountState, DesktopAccountProfile, SafeDevice } from "../main/account/state.js";
 import type { AccountProfileUpdateInput } from "../main/cloud/schemas.js";
 import { createAgentDeepLink } from "./agent-link.js";
-import { errorMessage, localizeUiMessage } from "./account-messages.js";
+import { authErrorMessage, errorMessage, localizeUiMessage } from "./account-messages.js";
 import {
   isCurrentAuthOperation,
   resolveAuthMessage,
@@ -366,6 +366,8 @@ export function DesktopApp() {
     }
     if (shouldStartAgent && screen !== "agent-starting") {
       invalidateAuthFeedback();
+      setPassword("");
+      setManualReconnect(false);
       setScreen("agent-starting");
     }
     if (!shouldStartAgent) agentNavigationStarted.current = false;
@@ -476,19 +478,19 @@ export function DesktopApp() {
     try {
       await operation(generation);
     } catch (error) {
-      showAuthFeedback(authScreen, generation, "error", errorMessage(error));
+      showAuthFeedback(authScreen, generation, "error", authErrorMessage(error));
     } finally {
       setBusy(false);
     }
   }
 
   async function login(event: FormEvent<HTMLFormElement>) {
-    await submit(event, "login", async () => {
+    await submit(event, "login", async (generation) => {
       await window.caelushDesktop.account.login({ email, password });
+      if (!isCurrentAuthOperation(generation, authFeedbackGeneration.current)) return;
       setPassword("");
       setManualReconnect(false);
       invalidateAuthFeedback();
-      setScreen("agent-starting");
     });
   }
 

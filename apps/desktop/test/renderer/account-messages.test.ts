@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   accountNoticeMessage,
+  authErrorMessage,
   errorMessage,
   localizeUiMessage,
 } from "../../src/renderer/account-messages.js";
 
-describe("Desktop account error messages", () => {
+describe("Desktop auth error messages", () => {
   it("explains an invalid account-state response by code without blaming credentials", () => {
     expect(
-      errorMessage({
+      authErrorMessage({
         code: "IPC_RESPONSE_INVALID",
         message: "The desktop request could not return a safe response.",
       }),
@@ -16,9 +17,9 @@ describe("Desktop account error messages", () => {
   });
 
   it("explains a changed account state even when the server wording changes", () => {
-    expect(errorMessage({ code: "ACCOUNT_STATE_INVALID", message: "Operation rejected." })).toBe(
-      "账户状态已变化，请重新打开账户页面后重试。",
-    );
+    expect(
+      authErrorMessage({ code: "ACCOUNT_STATE_INVALID", message: "Operation rejected." }),
+    ).toBe("账户状态已变化，请重新打开账户页面后重试。");
   });
 
   it("preserves existing localization for errors outside the repaired codes", () => {
@@ -45,13 +46,34 @@ describe("Desktop account error messages", () => {
     ["NETWORK_UNAVAILABLE", "网络连接暂不可用，请检查网络后重试。"],
     ["NETWORK_TIMEOUT", "网络连接暂不可用，请检查网络后重试。"],
   ])("maps %s by code rather than relying on the server wording", (code, expected) => {
-    expect(errorMessage({ code, message: "Upstream wording changed." })).toBe(expected);
+    expect(authErrorMessage({ code, message: "Upstream wording changed." })).toBe(expected);
   });
 
-  it("does not echo arbitrary text from an unknown error code", () => {
+  it.each(["private backend diagnostic", "服务器内部诊断信息，不应展示给用户。"])(
+    "does not echo arbitrary text from an unknown error code: %s",
+    (message) => {
+      expect(authErrorMessage({ code: "UNKNOWN_CLOUD_ERROR", message })).toBe(
+        "请求未能完成，请检查信息或网络连接后重试。",
+      );
+    },
+  );
+
+  it("uses the safe fallback for malformed and prototype-property codes", () => {
+    expect(authErrorMessage({ message: "private diagnostic" })).toBe(
+      "请求未能完成，请检查信息或网络连接后重试。",
+    );
+    expect(authErrorMessage({ code: "toString", message: "private diagnostic" })).toBe(
+      "请求未能完成，请检查信息或网络连接后重试。",
+    );
+  });
+
+  it("keeps code-first auth wording scoped away from account-page errors", () => {
     expect(
-      errorMessage({ code: "UNKNOWN_CLOUD_ERROR", message: "private backend diagnostic" }),
-    ).toBe("请求未能完成，请检查信息或网络连接后重试。");
+      errorMessage({ code: "AUTH_INVALID_CREDENTIALS", message: "Invalid email or password." }),
+    ).toBe("密码不正确，请检查后重试。");
+    expect(errorMessage({ code: "RATE_LIMITED", message: "Too many requests." })).toBe(
+      "账户请求未能完成，请检查信息或稍后重试。",
+    );
   });
 
   it.each([
@@ -62,5 +84,9 @@ describe("Desktop account error messages", () => {
     ],
   ])("localizes the account notice %s", (notice, expected) => {
     expect(accountNoticeMessage(notice)).toBe(expected);
+  });
+
+  it("does not resolve prototype properties as account notices", () => {
+    expect(accountNoticeMessage("constructor")).toBe("账户状态已更新。");
   });
 });

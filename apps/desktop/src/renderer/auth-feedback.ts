@@ -1,5 +1,5 @@
 import type { AccountState, AccountStatus } from "../main/account/state.js";
-import { accountNoticeMessage, errorMessage } from "./account-messages.js";
+import { accountNoticeMessage, authErrorMessage } from "./account-messages.js";
 
 export type AuthScreen = "login" | "register" | "verify" | "forgot" | "reset";
 
@@ -45,7 +45,7 @@ export function resolveAuthMessage(
       screen,
       generation,
       tone: "error",
-      message: errorMessage(state.lastError),
+      message: authErrorMessage(state.lastError),
     };
   }
 

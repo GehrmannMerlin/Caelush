@@ -1,4 +1,4 @@
-const accountErrorMessages: Readonly<Record<string, string>> = {
+const authErrorMessages: Readonly<Record<string, string>> = {
   ACCOUNT_STATE_INVALID: "账户状态已变化，请重新打开账户页面后重试。",
   AUTH_INVALID_CREDENTIALS: "邮箱或密码不正确，或邮箱尚未完成验证，请检查后重试。",
   AUTH_RECOVERY_INVALID: "重置码无效、已过期或已使用，请重新申请密码重置邮件。",
@@ -94,10 +94,9 @@ export function localizeUiMessage(message: string): string {
 
 export function errorMessage(error: unknown): string {
   if (error !== null && typeof error === "object" && "code" in error) {
-    if (typeof error.code === "string") {
-      const mapped = accountErrorMessages[error.code.slice(0, 64)];
-      if (mapped !== undefined) return mapped;
-    }
+    if (error.code === "IPC_RESPONSE_INVALID")
+      return "账户状态读取异常，请重新打开账户页面后重试。";
+    if (error.code === "ACCOUNT_STATE_INVALID") return "账户状态已变化，请重新打开账户页面后重试。";
   }
   if (
     error !== null &&
@@ -110,7 +109,26 @@ export function errorMessage(error: unknown): string {
   return "账户请求未能完成，请稍后重试。";
 }
 
+export function authErrorMessage(error: unknown): string {
+  if (
+    error !== null &&
+    typeof error === "object" &&
+    Object.hasOwn(error, "code") &&
+    "code" in error &&
+    typeof error.code === "string"
+  ) {
+    const code = error.code.slice(0, 64);
+    const message = authErrorMessages[code];
+    if (Object.hasOwn(authErrorMessages, code) && message !== undefined) return message;
+  }
+  return "请求未能完成，请检查信息或网络连接后重试。";
+}
+
 export function accountNoticeMessage(notice: string): string {
   if (/[㐀-鿿]/u.test(notice)) return notice.slice(0, 512);
-  return accountNotices[notice.slice(0, 512)] ?? "账户状态已更新。";
+  const boundedNotice = notice.slice(0, 512);
+  const message = accountNotices[boundedNotice];
+  return Object.hasOwn(accountNotices, boundedNotice) && message !== undefined
+    ? message
+    : "账户状态已更新。";
 }
