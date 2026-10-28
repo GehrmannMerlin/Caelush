@@ -44,13 +44,18 @@ import type { AccountState, DesktopAccountProfile, SafeDevice } from "../main/ac
 import type { AccountProfileUpdateInput } from "../main/cloud/schemas.js";
 import { createAgentDeepLink } from "./agent-link.js";
 import { errorMessage, localizeUiMessage } from "./account-messages.js";
+import {
+  isCurrentAuthOperation,
+  resolveAuthMessage,
+  type AuthFeedback,
+  type AuthScreen,
+} from "./auth-feedback.js";
 import type {
   LegacyDataImportSummary,
   LegacyImportProgress,
 } from "../shared/legacy-data-contract.js";
 import type { SessionId } from "@caelush/protocol";
 
-type AuthScreen = "login" | "register" | "verify" | "forgot" | "reset";
 type AccountScreen = "home" | "profile" | "appearance" | "archives" | "updates";
 type AppScreen = AuthScreen | AccountScreen | "agent-starting";
 
@@ -108,6 +113,8 @@ export function DesktopApp() {
   const [agentRetrying, setAgentRetrying] = useState(false);
   const [manualReconnect, setManualReconnect] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [authFeedback, setAuthFeedback] = useState<AuthFeedback | null>(null);
+  const authFeedbackGeneration = useRef(0);
   const agentNavigationStarted = useRef(false);
   const agentLaunchRetryStarted = useRef(false);
   const [devices, setDevices] = useState<readonly SafeDevice[]>([]);
@@ -133,6 +140,40 @@ export function DesktopApp() {
   const committedAppearanceSnapshot = useRef(appearanceSnapshot);
   const latestAppearanceRequestId = useRef(0);
   const pendingAppearanceRequestId = useRef(0);
+
+  function invalidateAuthFeedback(): void {
+    authFeedbackGeneration.current += 1;
+    setAuthFeedback(null);
+  }
+
+  function navigateAuthScreen(
+    nextScreen: AuthScreen,
+    message?: Pick<AuthFeedback, "tone" | "message">,
+  ): void {
+    const generation = ++authFeedbackGeneration.current;
+    setAuthFeedback(message === undefined ? null : { ...message, screen: nextScreen, generation });
+    setScreen(nextScreen);
+  }
+
+  function navigateAuthScreenFromOperation(
+    generation: number,
+    nextScreen: AuthScreen,
+    message?: Pick<AuthFeedback, "tone" | "message">,
+  ): boolean {
+    if (!isCurrentAuthOperation(generation, authFeedbackGeneration.current)) return false;
+    navigateAuthScreen(nextScreen, message);
+    return true;
+  }
+
+  function showAuthFeedback(
+    screenForMessage: AuthScreen,
+    generation: number,
+    tone: AuthFeedback["tone"],
+    message: string,
+  ): void {
+    if (!isCurrentAuthOperation(generation, authFeedbackGeneration.current)) return;
+    setAuthFeedback({ screen: screenForMessage, generation, tone, message });
+  }
 
   const authenticated =
     accountState.status === "AUTHENTICATED_ONLINE" || accountState.status === "AUTHORIZED_OFFLINE";
@@ -312,17 +353,21 @@ export function DesktopApp() {
   useEffect(() => {
     if (!authenticated) {
       agentNavigationStarted.current = false;
-      setScreen((current) =>
-        current === "profile" ||
-        current === "appearance" ||
-        current === "updates" ||
-        current === "agent-starting"
-          ? "login"
-          : current,
-      );
+      if (
+        screen === "profile" ||
+        screen === "appearance" ||
+        screen === "updates" ||
+        screen === "agent-starting"
+      ) {
+        invalidateAuthFeedback();
+        setScreen("login");
+      }
       return;
     }
-    if (shouldStartAgent && screen !== "agent-starting") setScreen("agent-starting");
+    if (shouldStartAgent && screen !== "agent-starting") {
+      invalidateAuthFeedback();
+      setScreen("agent-starting");
+    }
     if (!shouldStartAgent) agentNavigationStarted.current = false;
   }, [authenticated, shouldStartAgent, screen]);
 
@@ -418,69 +463,101 @@ export function DesktopApp() {
     };
   }, [authenticated, accountState.account?.userId]);
 
-  async function submit(event: FormEvent<HTMLFormElement>, operation: () => Promise<unknown>) {
+  async function submit(
+    event: FormEvent<HTMLFormElement>,
+    authScreen: AuthScreen,
+    operation: (generation: number) => Promise<unknown>,
+  ) {
     event.preventDefault();
+    const generation = ++authFeedbackGeneration.current;
+    setAuthFeedback(null);
     setFeedback(null);
     setBusy(true);
     try {
-      await operation();
+      await operation(generation);
     } catch (error) {
-      setFeedback(errorMessage(error));
+      showAuthFeedback(authScreen, generation, "error", errorMessage(error));
     } finally {
       setBusy(false);
     }
   }
 
   async function login(event: FormEvent<HTMLFormElement>) {
-    await submit(event, async () => {
+    await submit(event, "login", async () => {
       await window.caelushDesktop.account.login({ email, password });
       setPassword("");
       setManualReconnect(false);
+      invalidateAuthFeedback();
       setScreen("agent-starting");
     });
   }
 
   async function register(event: FormEvent<HTMLFormElement>) {
-    await submit(event, async () => {
+    await submit(event, "register", async (generation) => {
       await window.caelushDesktop.account.register({ email, password });
+      if (
+        !navigateAuthScreenFromOperation(generation, "verify", {
+          tone: "info",
+          message: "如果该邮箱可以注册，我们已发送验证邮件。",
+        })
+      ) {
+        return;
+      }
       setPassword("");
-      setFeedback("如果该邮箱可以注册，我们已发送验证邮件。");
-      setScreen("verify");
     });
   }
 
   async function verifyEmail(event: FormEvent<HTMLFormElement>) {
-    await submit(event, async () => {
+    await submit(event, "verify", async (generation) => {
       await window.caelushDesktop.account.verifyEmail({ verificationToken: token });
+      if (
+        !navigateAuthScreenFromOperation(generation, "login", {
+          tone: "info",
+          message: "邮箱验证成功。请登录以连接此设备。",
+        })
+      ) {
+        return;
+      }
       setToken("");
       setPassword("");
-      setFeedback("邮箱验证成功。请登录以连接此设备。");
-      setScreen("login");
     });
   }
 
   async function resendVerification(event: FormEvent<HTMLFormElement>) {
-    await submit(event, async () => {
+    await submit(event, "verify", async (generation) => {
       await window.caelushDesktop.account.resendVerification({ email });
-      setFeedback("如果该邮箱需要验证，我们已重新发送验证邮件。");
+      showAuthFeedback(
+        "verify",
+        generation,
+        "info",
+        "如果该邮箱需要验证，我们已重新发送验证邮件。",
+      );
     });
   }
 
   async function forgotPassword(event: FormEvent<HTMLFormElement>) {
-    await submit(event, async () => {
+    await submit(event, "forgot", async (generation) => {
       await window.caelushDesktop.account.forgotPassword({ email });
-      setFeedback("如果该邮箱已注册，我们已发送密码重置说明。");
-      setScreen("reset");
+      navigateAuthScreenFromOperation(generation, "reset", {
+        tone: "info",
+        message: "如果该邮箱已注册，我们已发送密码重置说明。",
+      });
     });
   }
 
   async function resetPassword(event: FormEvent<HTMLFormElement>) {
-    await submit(event, async () => {
+    await submit(event, "reset", async (generation) => {
       await window.caelushDesktop.account.resetPassword({ resetToken: token, newPassword });
+      if (
+        !navigateAuthScreenFromOperation(generation, "login", {
+          tone: "info",
+          message: "密码已重置。现在可以使用新密码登录。",
+        })
+      ) {
+        return;
+      }
       setToken("");
       setNewPassword("");
-      setFeedback("密码已重置。现在可以使用新密码登录。");
-      setScreen("login");
     });
   }
 
@@ -549,6 +626,14 @@ export function DesktopApp() {
 
   const apiError =
     feedback ?? (accountState.lastError ? errorMessage(accountState.lastError) : null);
+  const displayedAuthScreen: AuthScreen =
+    screen === "agent-starting" ? "login" : (screen as AuthScreen);
+  const authMessage = resolveAuthMessage(
+    authFeedback,
+    displayedAuthScreen,
+    authFeedbackGeneration.current,
+    accountState,
+  );
   const authenticatedScreen =
     accountRouteRequested && accountState.status === "INITIALIZING" ? (
       <AccountLoadingScreen view={activeView} />
@@ -589,7 +674,7 @@ export function DesktopApp() {
           setEmail(accountState.account?.email ?? "");
           setManualReconnect(true);
           setFeedback(null);
-          setScreen("login");
+          navigateAuthScreen("login");
         }}
         legacySummary={legacySummary}
         legacyLoading={legacyLoading}
@@ -609,7 +694,7 @@ export function DesktopApp() {
           try {
             await window.caelushDesktop.account.logout();
             setPassword("");
-            setScreen("login");
+            navigateAuthScreen("login");
           } catch (error) {
             setFeedback(errorMessage(error));
           } finally {
@@ -628,7 +713,7 @@ export function DesktopApp() {
       />
     ) : (
       <AuthShell
-        screen={screen === "agent-starting" ? "login" : (screen as AuthScreen)}
+        screen={displayedAuthScreen}
         theme={appearanceSnapshot.resolvedTheme}
         status={accountState.status}
         email={email}
@@ -637,13 +722,13 @@ export function DesktopApp() {
         token={token}
         busy={busy}
         showPassword={showPassword}
-        message={apiError ?? accountState.notice}
+        message={authMessage}
         setEmail={setEmail}
         setPassword={setPassword}
         setNewPassword={setNewPassword}
         setToken={setToken}
         setShowPassword={setShowPassword}
-        setScreen={setScreen}
+        setScreen={navigateAuthScreen}
         onLogin={(event) => void login(event)}
         onRegister={(event) => void register(event)}
         onVerify={(event) => void verifyEmail(event)}
@@ -807,13 +892,13 @@ function AuthShell(props: {
   token: string;
   busy: boolean;
   showPassword: boolean;
-  message: string | null;
+  message: AuthFeedback | null;
   setEmail(value: string): void;
   setPassword(value: string): void;
   setNewPassword(value: string): void;
   setToken(value: string): void;
   setShowPassword(value: boolean): void;
-  setScreen(value: AuthScreen | AccountScreen): void;
+  setScreen(value: AuthScreen): void;
   onLogin(event: FormEvent<HTMLFormElement>): void;
   onRegister(event: FormEvent<HTMLFormElement>): void;
   onVerify(event: FormEvent<HTMLFormElement>): void;
@@ -852,7 +937,8 @@ function AuthShell(props: {
                 </p>
                 <MessageBox
                   message={
-                    props.message ?? "请检查当前 Windows 用户配置，然后重新启动 Caelush 桌面端。"
+                    props.message?.message ??
+                    "请检查当前 Windows 用户配置，然后重新启动 Caelush 桌面端。"
                   }
                   tone="error"
                 />
@@ -864,10 +950,7 @@ function AuthShell(props: {
                   <p className="auth-description">{authDescription(props.screen)}</p>
                 </div>
                 {props.message && (
-                  <MessageBox
-                    message={props.message}
-                    tone={props.status === "ERROR" ? "error" : "info"}
-                  />
+                  <MessageBox message={props.message.message} tone={props.message.tone} />
                 )}
                 {props.screen === "login" && (
                   <form className="auth-form" onSubmit={props.onLogin}>
