@@ -39,6 +39,7 @@ module.exports = {
     target: [{ target: "nsis", arch: ["x64"] }],
   },
   nsis: {
+    include: path.join(__dirname, "resources", "installer.nsh"),
     oneClick: false,
     perMachine: false,
     selectPerMachineByDefault: false,

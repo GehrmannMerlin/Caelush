@@ -132,6 +132,17 @@ that checkout, checks the packaged resource manifest and packaged PTY/Runner
 probes, and rejects source maps. It stops on errors instead of falling back
 to the internal test channel.
 
+The Windows installer adds read/execute access for `ALL APPLICATION PACKAGES`
+to the selected Caelush installation directory. Electron's Windows sandbox
+requires this on some drives with custom ACLs. The permission is limited to the
+app directory and is inherited by its files; the installer does not change the
+parent directory or grant write access. If Windows refuses the change, an
+interactive install shows the target and reason, while a silent install exits
+with an error code. A diagnostic log is written to
+`%TEMP%\Caelush-install-permissions.log`; because the permission step runs after
+the app files are extracted, a failed install may need to be uninstalled or
+retried before Caelush can launch.
+
 Each run creates a new directory outside the checkout, for example
 `D:\Caelush-Releases\1.0.0\<commit>-<build-id>`:
 
