@@ -29,6 +29,18 @@ export function parseReleaseArguments(args) {
   return path.resolve(args[1]);
 }
 
+export function releaseDirectoryLayout(buildRoot) {
+  const root = path.resolve(buildRoot);
+  const workRoot = path.join(root, "work");
+  return Object.freeze({
+    workRoot,
+    resourceRoot: path.join(workRoot, "resources"),
+    tempRoot: path.join(root, "temp"),
+    publishRoot: path.join(root, "publish"),
+    evidenceRoot: path.join(root, "evidence"),
+  });
+}
+
 export function waitForChildClose(child) {
   return new Promise((resolve, reject) => {
     child.once("error", reject);
@@ -74,11 +86,8 @@ export async function runWindowsReleasePackage(configPath) {
     if (error?.code !== "ENOENT") throw error;
   }
   await mkdir(buildRoot, { recursive: false });
-  const workRoot = path.join(buildRoot, "work");
-  const resourceRoot = path.join(workRoot, "resources");
-  const tempRoot = path.join(workRoot, "temp");
-  const publishRoot = path.join(buildRoot, "publish");
-  const evidenceRoot = path.join(buildRoot, "evidence");
+  const { workRoot, resourceRoot, tempRoot, publishRoot, evidenceRoot } =
+    releaseDirectoryLayout(buildRoot);
   await Promise.all([
     mkdir(publishRoot),
     mkdir(evidenceRoot),

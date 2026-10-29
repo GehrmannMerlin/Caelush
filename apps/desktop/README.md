@@ -111,11 +111,12 @@ only; private signing keys do not belong in this file:
 }
 ```
 
-The Offline Grant key must match the public key configured by Caelush Cloud.
-The update key must be different and must match the key used to sign Cloud
-update metadata. Do not use generated internal-test identities. If either key
-is missing, malformed, or does not match the Cloud setup, packaging stops
-before creating the release output.
+Before packaging, verify that the Offline Grant public key matches Caelush
+Cloud's trusted keyring and that the separate update public key matches the
+active Cloud update-signing key. The local build validates key encoding and
+separation but cannot query Cloud to confirm those server-side values. Missing,
+malformed, or reused keys stop the build before it creates release output. Do
+not use generated internal-test identities.
 
 Run the command from a clean Windows x64 checkout with Node 24.18.0, pnpm
 11.21.0, and the Rust/MSVC tools required by the Sandbox Runner build:
@@ -135,7 +136,8 @@ Each run creates a new directory outside the checkout, for example
 `D:\Caelush-Releases\1.0.0\<commit>-<build-id>`:
 
 ```text
-work/       NSIS output, unpacked app, staged resources, and temporary build files
+work/       NSIS output, unpacked app, staged resources, and builder temporary files
+temp/       Windows temporary directory used while building
 publish/    Caelush-Setup.exe, SHA512SUMS.txt, and release-notes.txt
 evidence/   build.log, build-info.json, and verification-report.json
 ```

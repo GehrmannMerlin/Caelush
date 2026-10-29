@@ -33,6 +33,7 @@ import {
   findCompletedInstalledSession,
   isInstalledAgentEntryReady,
   normalizeRegistryRegistrationSnapshot,
+  resolveD6BaseProductVersion,
 } from "./windows-d6-acceptance-helpers.mjs";
 import { startD6ProviderFixture, startInternalCloudFixture } from "./windows-d6-fixtures.mjs";
 import { startLocalUpdateFixture } from "./local-update-fixture.mjs";
@@ -50,7 +51,7 @@ const D72_INPUT = process.env.CAELUSH_D72_SMOKE_INPUT
 const CURRENT_PRODUCT_VERSION = JSON.parse(
   await readFile(path.join(APP_ROOT, "package.json"), "utf8"),
 ).version;
-const BASE_PRODUCT_VERSION = D72_INPUT?.productVersionA ?? CURRENT_PRODUCT_VERSION;
+const BASE_PRODUCT_VERSION = resolveD6BaseProductVersion(D72_INPUT, CURRENT_PRODUCT_VERSION);
 const UPDATE_PRODUCT_VERSION = D72_INPUT?.productVersionB ?? "0.1.1";
 const OUTPUT_ROOT = path.resolve(
   process.env.CAELUSH_DESKTOP_OUTPUT_ROOT ?? path.join("D:\\", `Caelush D6 Recovery ${RUN_ID}`),
@@ -93,6 +94,7 @@ const INSTALLER_ENV = {
 };
 const evidence = [];
 let installed = false;
+let installedProductVersion = BASE_PRODUCT_VERSION;
 let retainTestDataOnFailure = true;
 let startMenuShortcutStatus = "NOT_RUN";
 let internalTestIdentity;
@@ -329,8 +331,10 @@ try {
   assert.ok(existsSync(path.join(profileRoot, "private-replay-keys")));
   record(`PERSISTENT_DATA_FILES=${retainedBeforeReinstall.length}`);
 
-  if (D72_INPUT) await runVerifiedVersionUpgrade();
-  else {
+  if (D72_INPUT) {
+    await runVerifiedVersionUpgrade();
+    installedProductVersion = UPDATE_PRODUCT_VERSION;
+  } else {
     await runInstaller(INSTALLER_PATH, INSTALL_ROOT, INSTALLER_ENV);
     const retainedAfterReinstall = await snapshotPersistentData(
       USER_DATA_ROOT,
@@ -454,7 +458,11 @@ try {
   }
   if (installed && !cleanupBlocked) {
     try {
-      const registration = await waitForUninstallEntry(INSTALL_ROOT, 3_000);
+      const registration = await waitForUninstallEntry(
+        INSTALL_ROOT,
+        3_000,
+        installedProductVersion,
+      );
       if (registration !== undefined)
         await runUninstaller(registration, INSTALL_ROOT, INSTALLER_ENV);
     } catch (error) {
@@ -2047,7 +2055,7 @@ if (!(Test-Path -LiteralPath $uninstallPath)) {
 async function waitForUninstallEntry(
   expectedInstallRoot,
   timeoutMs = 20_000,
-  expectedVersion = CURRENT_PRODUCT_VERSION,
+  expectedVersion = BASE_PRODUCT_VERSION,
 ) {
   let lastFailure = "REGISTRY_KEY_MISSING";
   try {

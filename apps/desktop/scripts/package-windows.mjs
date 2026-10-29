@@ -313,6 +313,38 @@ async function assertNoSourceMaps(root) {
   await visit(root);
 }
 
+export async function stripSourceMapsFromTree(root) {
+  async function visit(directory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const filePath = path.join(directory, entry.name);
+      const metadata = await lstat(filePath);
+      if (metadata.isSymbolicLink()) throw new Error("PRODUCTION_RESOURCE_REPARSE_POINT_FORBIDDEN");
+      if (metadata.isDirectory()) {
+        await visit(filePath);
+      } else if (metadata.isFile() && entry.name.toLowerCase().endsWith(".map")) {
+        await rm(filePath);
+      } else if (metadata.isFile() && /\.(?:c|m)?(?:js|ts|tsx|css)$/iu.test(entry.name)) {
+        const source = await readFile(filePath, "utf8");
+        const stripped = source
+          .replace(/^[ \t]*\/\/[#@]\s*sourceMappingURL=[^\r\n]*(?:\r?\n|$)/gmu, "")
+          .replace(/\/\*[#@]\s*sourceMappingURL=[\s\S]*?\*\//gu, "");
+        if (stripped !== source) await writeFile(filePath, stripped, "utf8");
+      }
+    }
+  }
+
+  await visit(root);
+}
+
+export function electronBuilderArguments(buildMode) {
+  const args = ["--config", "electron-builder.config.cjs", "--win"];
+  if (buildMode === "nsis") args.push("nsis");
+  args.push("--x64");
+  if (buildMode === "dir") args.push("--dir");
+  args.push("--publish", "never");
+  return args;
+}
+
 function isPathInside(candidate, parent) {
   const relative = path.relative(path.resolve(parent), path.resolve(candidate));
   return (
@@ -467,6 +499,7 @@ async function stageVerifiedResources(channel) {
   );
   const desktopMetadata = JSON.parse(await readFile(path.join(APP_ROOT, "package.json"), "utf8"));
   const electronMetadata = await readElectronMetadata();
+  if (channel === "stable") await stripSourceMapsFromTree(RESOURCE_STAGE);
   const nativeFiles = [];
   const resourceFiles = await collectStagedResources(RESOURCE_STAGE);
   for (const file of resourceFiles) {
@@ -622,13 +655,9 @@ async function runElectronBuilder(buildMode, productionRelease) {
   await mkdir(DESKTOP_OUTPUT, { recursive: true });
   const builderTempRoot = path.join(DESKTOP_OUTPUT, ".nsis-temp");
   await mkdir(builderTempRoot, { recursive: true });
-  const args = ["--config", "electron-builder.config.cjs", "--win"];
-  if (buildMode === "nsis") args.push("nsis");
-  args.push("--x64");
-  if (buildMode === "dir") args.push("--dir");
   await runNode(path.join(APP_ROOT, "node_modules", "electron-builder", "cli.js"), {
     cwd: APP_ROOT,
-    args,
+    args: electronBuilderArguments(buildMode),
     env: {
       ...process.env,
       CAELUSH_DESKTOP_BUILD_PURPOSE: productionRelease ? "production" : "internal-test",

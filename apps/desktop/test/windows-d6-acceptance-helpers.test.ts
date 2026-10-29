@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
   assertInstallRegistration,
+  assertCurrentProductVersion,
   assertSuccessfulProcessExit,
   assertSuccessfulShutdown,
   buildNsisInstallArguments,
@@ -14,6 +15,7 @@ import {
   findCompletedInstalledSession,
   isInstalledAgentEntryReady,
   normalizeRegistryRegistrationSnapshot,
+  resolveD6BaseProductVersion,
 } from "../scripts/windows-d6-acceptance-helpers.mjs";
 
 const PRODUCT_VERSION = JSON.parse(
@@ -21,6 +23,16 @@ const PRODUCT_VERSION = JSON.parse(
 ).version;
 
 describe("D6 installed lifecycle evidence helpers", () => {
+  it("keeps a D72 historical base version separate from the current product version", () => {
+    expect(resolveD6BaseProductVersion({ productVersionA: "0.1.0" }, "1.0.0")).toBe("0.1.0");
+    expect(resolveD6BaseProductVersion(null, "1.0.0")).toBe("1.0.0");
+  });
+
+  it("rejects a stale current-version installer manifest", () => {
+    expect(assertCurrentProductVersion(PRODUCT_VERSION)).toBe(PRODUCT_VERSION);
+    expect(() => assertCurrentProductVersion("0.1.0")).toThrow("PRODUCT_VERSION_MISMATCH");
+  });
+
   it("uses an explicitly persistent secure cookie for restart preservation checks", () => {
     expect(buildPersistentBrowserFixtureCookie("fixture-value", 1_700_000_000_000)).toEqual({
       name: "caelush_d6_profile_fixture",

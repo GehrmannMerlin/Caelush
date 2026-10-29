@@ -18,6 +18,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { stageElectronRuntime } from "./stage-electron-runtime.mjs";
+import { assertCurrentProductVersion } from "./windows-d6-acceptance-helpers.mjs";
 import {
   validateDesktopResourceManifest,
   verifyDesktopResourceFiles,
@@ -65,7 +66,7 @@ const manifest = validateDesktopResourceManifest(
     await readFile(path.join(packagedResources, "desktop-resource-manifest.json"), "utf8"),
   ),
 );
-assert.equal(manifest.productVersion, "0.1.0");
+assertCurrentProductVersion(manifest.productVersion);
 assert.equal(manifest.channel, "dev");
 const originalResourceVerification = await verifyDesktopResourceFiles(manifest, packagedResources);
 let stagedRuntime;

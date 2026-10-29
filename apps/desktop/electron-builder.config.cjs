@@ -33,6 +33,7 @@ module.exports = {
   ],
   asar: true,
   npmRebuild: false,
+  publish: null,
   win: {
     icon,
     target: [{ target: "nsis", arch: ["x64"] }],

@@ -10,6 +10,15 @@ const APP_ID = "com.caelush.desktop";
 const INSTALL_REGISTRY_KEY = `Software\\${electronBuilderAppGuid(APP_ID)}`;
 const UNINSTALL_REGISTRY_KEY_PREFIX = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\";
 
+export function resolveD6BaseProductVersion(d72Input, currentProductVersion = PRODUCT_VERSION) {
+  return d72Input?.productVersionA ?? currentProductVersion;
+}
+
+export function assertCurrentProductVersion(actualVersion) {
+  if (actualVersion !== PRODUCT_VERSION) throw new Error("PRODUCT_VERSION_MISMATCH");
+  return PRODUCT_VERSION;
+}
+
 export function buildPersistentBrowserFixtureCookie(value, nowMs = Date.now()) {
   return Object.freeze({
     name: "caelush_d6_profile_fixture",
