@@ -163,7 +163,7 @@ export function resolveDesktopBuildConfiguration(environment) {
     allowedUpdateReleaseHosts: Object.freeze(allowedUpdateReleaseHosts),
     updateChannel: channel,
     internalTestUpdateCa,
-    externalHttpsHosts: Object.freeze(["github.com", "www.caelush.com"]),
+    externalHttpsHosts: Object.freeze(["github.com", "caelush.com.cn", "www.caelush.com.cn"]),
   });
 }
 

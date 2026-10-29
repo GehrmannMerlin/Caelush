@@ -20,6 +20,11 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { startInternalCloudFixture } from "./windows-d6-fixtures.mjs";
+import { resolveDesktopBuildConfiguration } from "./desktop-build-config.mjs";
+import {
+  buildSandboxRunner,
+  verifySandboxRunnerPackage as verifySandboxRunnerArtifact,
+} from "../../../scripts/build-sandbox-runner.mjs";
 import {
   assertDesktopResourceManifestCompatible,
   computeResourceSetDigest,
@@ -55,80 +60,130 @@ const REQUIRED_CAPABILITIES = [
   "sseReplay",
 ];
 
-if (process.platform !== "win32" || process.arch !== "x64") {
-  throw new Error("D6 Windows packaging requires Windows x64.");
+const isDirectExecution =
+  process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+export async function runWindowsPackage({ productionRelease = false } = {}) {
+  if (process.platform !== "win32" || process.arch !== "x64") {
+    throw new Error("Windows packaging requires Windows x64.");
+  }
+
+  const buildConfiguration = productionRelease
+    ? resolveDesktopBuildConfiguration(process.env)
+    : null;
+  if (
+    productionRelease &&
+    (buildConfiguration?.purpose !== "production" || buildConfiguration.channel !== "stable")
+  ) {
+    throw new Error("PRODUCTION_STABLE_BUILD_REQUIRED");
+  }
+  const mode = productionRelease ? "nsis" : process.argv.includes("--dir") ? "dir" : "nsis";
+  const outputRoot = path.parse(DESKTOP_OUTPUT).root;
+  if (outputRoot.toLowerCase() !== path.parse(REPOSITORY_ROOT).root.toLowerCase()) {
+    throw new Error("Desktop installer output must stay on the repository drive.");
+  }
+  if (outputRoot.toLowerCase() !== "d:\\") {
+    throw new Error("Desktop installer and build inputs must stay on D:.");
+  }
+  if (isPathInside(DESKTOP_OUTPUT, REPOSITORY_ROOT)) {
+    throw new Error("Desktop build inputs and outputs must stay outside the source tree.");
+  }
+  if (await pathExists(DESKTOP_OUTPUT)) {
+    throw new Error(`Desktop output path already exists; choose a new D: path: ${DESKTOP_OUTPUT}`);
+  }
+  await mkdir(DESKTOP_OUTPUT, { recursive: false });
+  await assertNoLowIntegrityLabel(DESKTOP_OUTPUT);
+  process.env.CAELUSH_DESKTOP_OUTPUT_ROOT = DESKTOP_OUTPUT;
+  process.env.CAELUSH_DESKTOP_RESOURCE_STAGE_ROOT = RESOURCE_STAGE;
+  if (productionRelease) {
+    process.env.CARGO_TARGET_DIR ??= path.join(DESKTOP_OUTPUT, "cargo-target");
+  }
+
+  let internalTestIdentity = null;
+  let cloudFixture = null;
+  if (!productionRelease) {
+    internalTestIdentity = await prepareInternalTestIdentity();
+    cloudFixture = await startInternalCloudFixture(internalTestIdentity);
+  }
+
+  try {
+    if (productionRelease) {
+      await buildLocalAgent();
+      await typecheckDesktop();
+      await buildElectronMain(null);
+      await buildElectronRenderer();
+      await buildVerifiedSandboxRunner();
+      await stageVerifiedResources("stable");
+      await assertNoSourceMaps(path.join(APP_ROOT, "dist"));
+      await assertNoSourceMaps(RESOURCE_STAGE);
+    } else if (process.env.CAELUSH_DESKTOP_REUSE_RESOURCES_FROM === undefined) {
+      await buildDependencies();
+      await buildDesktopWeb();
+      await typecheckDesktop();
+      await buildElectronMain(internalTestIdentity);
+      await buildElectronRenderer();
+      await buildVerifiedSandboxRunner();
+      await stageVerifiedResources("dev");
+    } else {
+      await typecheckDesktop();
+      await buildElectronMain(internalTestIdentity);
+      await reuseVerifiedResources(process.env.CAELUSH_DESKTOP_REUSE_RESOURCES_FROM, "dev");
+    }
+
+    await verifyRunnerDiscoveryAndTransport();
+    await verifyPackagedNodePty();
+    const stagedIdentity = await createBuildIdentitySeed(
+      mode,
+      productionRelease ? "production" : "internal-test",
+    );
+    await runElectronBuilder(mode, productionRelease);
+    const buildIdentitySeed = await finalizeBuildIdentitySeed(stagedIdentity);
+    if (!productionRelease) {
+      await writeFile(
+        BUILD_IDENTITY_SEED_PATH,
+        `${JSON.stringify(buildIdentitySeed, null, 2)}\n`,
+        "utf8",
+      );
+    }
+
+    const prefix = productionRelease ? "PRODUCTION" : "D6";
+    process.stdout.write(`${prefix}_PACKAGE_MODE=${mode.toUpperCase()}\n`);
+    process.stdout.write(`${prefix}_BUILD_ROOT_D_DRIVE=${DESKTOP_OUTPUT}\n`);
+    process.stdout.write(`${prefix}_RESOURCE_ROOT_D_DRIVE=${RESOURCE_STAGE}\n`);
+    if (mode === "nsis" && !productionRelease) {
+      const desktopPackage = JSON.parse(
+        await readFile(path.join(APP_ROOT, "package.json"), "utf8"),
+      );
+      const installerPath = path.join(
+        DESKTOP_OUTPUT,
+        `Caelush-${desktopPackage.version}-dev-win-x64-Setup.exe`,
+      );
+      await runNode(path.join(APP_ROOT, "scripts", "windows-d6-electron-path-probe.mjs"), {
+        cwd: APP_ROOT,
+        env: {
+          ...process.env,
+          CAELUSH_DESKTOP_OUTPUT_ROOT: DESKTOP_OUTPUT,
+        },
+      });
+      const smokeScript = path.join(APP_ROOT, "scripts", "windows-d6-smoke.mjs");
+      await runNode(smokeScript, {
+        cwd: APP_ROOT,
+        env: {
+          ...process.env,
+          CAELUSH_DESKTOP_OUTPUT_ROOT: DESKTOP_OUTPUT,
+          CAELUSH_DESKTOP_RESOURCE_STAGE_ROOT: RESOURCE_STAGE,
+          CAELUSH_D6_INSTALLER_PATH: installerPath,
+          CAELUSH_D6_CLOUD_FIXTURE_PARENT: "1",
+        },
+      });
+    }
+  } finally {
+    await cloudFixture?.close();
+  }
 }
 
-const outputRoot = path.parse(DESKTOP_OUTPUT).root;
-if (outputRoot.toLowerCase() !== path.parse(REPOSITORY_ROOT).root.toLowerCase()) {
-  throw new Error("D6 installer output must stay on the repository drive.");
-}
-
-const mode = process.argv.includes("--dir") ? "dir" : "nsis";
-if (path.parse(DESKTOP_OUTPUT).root.toLowerCase() !== "d:\\") {
-  throw new Error("D6 installer and build inputs must stay on D:.");
-}
-if (isPathInside(DESKTOP_OUTPUT, REPOSITORY_ROOT)) {
-  throw new Error("D6 build inputs and outputs must stay outside the LOW-integrity source tree.");
-}
-if (await pathExists(DESKTOP_OUTPUT)) {
-  throw new Error(`D6 output path already exists; choose a new D: path: ${DESKTOP_OUTPUT}`);
-}
-await mkdir(DESKTOP_OUTPUT, { recursive: false });
-await assertNoLowIntegrityLabel(DESKTOP_OUTPUT);
-process.env.CAELUSH_DESKTOP_OUTPUT_ROOT = DESKTOP_OUTPUT;
-process.env.CAELUSH_DESKTOP_RESOURCE_STAGE_ROOT = RESOURCE_STAGE;
-const internalTestIdentity = await prepareInternalTestIdentity();
-const cloudFixture = await startInternalCloudFixture(internalTestIdentity);
-try {
-  if (process.env.CAELUSH_DESKTOP_REUSE_RESOURCES_FROM === undefined) {
-    await buildDependencies();
-    await buildDesktopWeb();
-    await typecheckDesktop();
-    await buildElectronMain();
-    await buildElectronRenderer();
-    await stageVerifiedResources();
-  } else {
-    await typecheckDesktop();
-    await buildElectronMain();
-    await reuseVerifiedResources(process.env.CAELUSH_DESKTOP_REUSE_RESOURCES_FROM);
-  }
-  await verifyRunnerDiscoveryAndTransport();
-  await verifyPackagedNodePty();
-  const stagedIdentity = await createBuildIdentitySeed(mode);
-  await runElectronBuilder(mode);
-  const buildIdentitySeed = await finalizeBuildIdentitySeed(stagedIdentity);
-  await writeFile(
-    BUILD_IDENTITY_SEED_PATH,
-    `${JSON.stringify(buildIdentitySeed, null, 2)}\n`,
-    "utf8",
-  );
-  process.stdout.write(`D6_PACKAGE_MODE=${mode.toUpperCase()}\n`);
-  process.stdout.write(`D6_BUILD_ROOT_D_DRIVE=${DESKTOP_OUTPUT}\n`);
-  process.stdout.write(`D6_RESOURCE_ROOT_D_DRIVE=${RESOURCE_STAGE}\n`);
-  if (mode === "nsis") {
-    const installerPath = path.join(DESKTOP_OUTPUT, "Caelush-0.1.0-dev-win-x64-Setup.exe");
-    await runNode(path.join(APP_ROOT, "scripts", "windows-d6-electron-path-probe.mjs"), {
-      cwd: APP_ROOT,
-      env: {
-        ...process.env,
-        CAELUSH_DESKTOP_OUTPUT_ROOT: DESKTOP_OUTPUT,
-      },
-    });
-    const smokeScript = path.join(APP_ROOT, "scripts", "windows-d6-smoke.mjs");
-    await runNode(smokeScript, {
-      cwd: APP_ROOT,
-      env: {
-        ...process.env,
-        CAELUSH_DESKTOP_OUTPUT_ROOT: DESKTOP_OUTPUT,
-        CAELUSH_DESKTOP_RESOURCE_STAGE_ROOT: RESOURCE_STAGE,
-        CAELUSH_D6_INSTALLER_PATH: installerPath,
-        CAELUSH_D6_CLOUD_FIXTURE_PARENT: "1",
-      },
-    });
-  }
-} finally {
-  await cloudFixture.close();
+if (isDirectExecution) {
+  await runWindowsPackage({ productionRelease: process.argv.includes("--production-release") });
 }
 
 async function prepareInternalTestIdentity() {
@@ -171,7 +226,7 @@ async function reserveLoopbackPort() {
   return port;
 }
 
-async function createBuildIdentitySeed(buildMode) {
+async function createBuildIdentitySeed(buildMode, buildPurpose) {
   const baseGitSha = gitOutput(["rev-parse", "HEAD"]).trim();
   if (!/^[a-f0-9]{40}$/u.test(baseGitSha)) throw new Error("D6_BASE_GIT_SHA_INVALID");
   const trackedDiff = gitOutput(["diff", "--binary", "HEAD"]);
@@ -212,7 +267,7 @@ async function createBuildIdentitySeed(buildMode) {
     dirtyBuildInputDigest,
     electronBuilderConfigDigest,
     productVersion: desktopPackage.version,
-    buildMode: `internal-test-${buildMode}`,
+    buildMode: `${buildPurpose}-${buildMode}`,
     resourceSetSha256: null,
     stagedResourceSetSha256: resourceManifest.resourceSetDigest,
     installRoot: null,
@@ -240,6 +295,22 @@ async function pathExists(target) {
     if (error?.code === "ENOENT") return false;
     throw error;
   }
+}
+
+async function assertNoSourceMaps(root) {
+  async function visit(directory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const filePath = path.join(directory, entry.name);
+      const metadata = await lstat(filePath);
+      if (metadata.isSymbolicLink()) throw new Error("PRODUCTION_RESOURCE_REPARSE_POINT_FORBIDDEN");
+      if (metadata.isDirectory()) await visit(filePath);
+      else if (metadata.isFile() && entry.name.toLowerCase().endsWith(".map")) {
+        throw new Error("PRODUCTION_SOURCEMAPS_FORBIDDEN");
+      }
+    }
+  }
+
+  await visit(root);
 }
 
 function isPathInside(candidate, parent) {
@@ -273,6 +344,10 @@ async function buildDependencies() {
   await runPnpm(["--filter", "@caelush/daemon...", "run", "build"]);
 }
 
+async function buildLocalAgent() {
+  await runNode(path.join(APP_ROOT, "scripts", "build-local-agent.mjs"), { cwd: APP_ROOT });
+}
+
 async function buildDesktopWeb() {
   await runPnpm(["--filter", "@caelush/web", "run", "build:desktop"]);
 }
@@ -281,12 +356,10 @@ async function typecheckDesktop() {
   await runPnpm(["--filter", "@caelush/desktop", "run", "typecheck"]);
 }
 
-async function buildElectronMain() {
-  await runNode(path.join(APP_ROOT, "scripts", "build-main.mjs"), {
-    cwd: APP_ROOT,
-    env: {
-      ...process.env,
-      NODE_ENV: "production",
+async function buildElectronMain(internalTestIdentity) {
+  const environment = { ...process.env, NODE_ENV: "production" };
+  if (internalTestIdentity !== null) {
+    Object.assign(environment, {
       CAELUSH_DESKTOP_CHANNEL: "dev",
       CAELUSH_DESKTOP_BUILD_PURPOSE: "internal-test",
       CAELUSH_CLOUD_ORIGIN: `http://127.0.0.1:${internalTestIdentity.cloudPort}`,
@@ -294,7 +367,15 @@ async function buildElectronMain() {
       CAELUSH_OFFLINE_TRUSTED_KEYS_JSON: JSON.stringify({
         [internalTestIdentity.keyId]: internalTestIdentity.publicKey,
       }),
-    },
+      CAELUSH_UPDATE_TRUSTED_KEYS_JSON: "{}",
+      CAELUSH_UPDATE_RELEASE_HOSTS: "",
+      CAELUSH_UPDATE_TEST_CA_PEM: "",
+      CAELUSH_DESKTOP_INCLUDE_SOURCEMAPS: "false",
+    });
+  }
+  await runNode(path.join(APP_ROOT, "scripts", "build-main.mjs"), {
+    cwd: APP_ROOT,
+    env: environment,
   });
 }
 
@@ -302,7 +383,22 @@ async function buildElectronRenderer() {
   await runPnpm(["--filter", "@caelush/desktop", "exec", "vite", "build"]);
 }
 
-async function stageVerifiedResources() {
+async function buildVerifiedSandboxRunner() {
+  const cargoTargetRoot = path.resolve(
+    process.env.CARGO_TARGET_DIR ?? path.join(DESKTOP_OUTPUT, "cargo-target"),
+  );
+  process.env.CARGO_TARGET_DIR = cargoTargetRoot;
+  const runner = await buildSandboxRunner({
+    repositoryRoot: REPOSITORY_ROOT,
+    outputDirectory: path.join(DESKTOP_OUTPUT, "sandbox-runner"),
+    binaryPath: path.join(cargoTargetRoot, "release", "caelush-sandbox-runner.exe"),
+    platform: "windows",
+    arch: "x64",
+  });
+  await verifySandboxRunnerArtifact({ runnerPath: runner.binaryPath, manifest: runner.manifest });
+}
+
+async function stageVerifiedResources(channel) {
   assertExactChild(RESOURCE_STAGE, DESKTOP_OUTPUT, "resources");
   await mkdir(RESOURCE_STAGE, { recursive: true });
   await assertNoLowIntegrityLabel(RESOURCE_STAGE);
@@ -315,7 +411,7 @@ async function stageVerifiedResources() {
   const helperSource = path.join(APP_ROOT, ".stage", "daemon", "user-terminal-helper.mjs");
   const ptySource = path.join(APP_ROOT, ".stage", "daemon", "node_modules", "node-pty");
   const webSource = path.join(APP_ROOT, ".stage", "web");
-  const runnerSource = path.join(REPOSITORY_ROOT, "release-artifacts", "sandbox");
+  const runnerSource = path.join(DESKTOP_OUTPUT, "sandbox-runner");
 
   await mkdir(path.dirname(daemonPackage), { recursive: true });
   await runPnpm([
@@ -396,7 +492,7 @@ async function stageVerifiedResources() {
     schemaVersion: 1,
     product: "Caelush",
     productVersion: desktopMetadata.version,
-    channel: "dev",
+    channel,
     platform: "win32",
     architecture: "x64",
     electronVersion: electronMetadata.version,
@@ -436,13 +532,14 @@ async function stageVerifiedResources() {
     "utf8",
   );
   await verifyDesktopResourceFiles(manifest, RESOURCE_STAGE);
+  if (channel === "stable") await assertNoSourceMaps(RESOURCE_STAGE);
   process.stdout.write(
     `D6_RESOURCES_STAGED=${resourceFiles.length} NODE=${nodeIdentity.version} PTY=${ptyMetadata.version} DAEMON=${daemonMetadata.version} RUNNER_SHA256=${runnerRecord.sha256}\n`,
   );
 }
 
 /** An explicit Main-only recovery build can reuse an already verified external runtime stage. */
-async function reuseVerifiedResources(sourceDirectory) {
+async function reuseVerifiedResources(sourceDirectory, channel) {
   const source = path.resolve(sourceDirectory);
   assert.equal(path.parse(source).root.toLowerCase(), "d:\\");
   assert.equal(isPathInside(source, REPOSITORY_ROOT), false);
@@ -456,7 +553,7 @@ async function reuseVerifiedResources(sourceDirectory) {
     {
       productVersion: desktopPackage.version,
       daemonVersion: desktopPackage.version,
-      channel: "dev",
+      channel,
       electronVersion: electronPackage.version,
       nodeVersion: EXPECTED_NODE_VERSION,
       nodeExecutableSha256: NODE_RUNTIME_SHA256,
@@ -521,7 +618,7 @@ async function verifyPackagedNodePty() {
   process.stdout.write("D6_NODE_PTY_CONPTY_LOAD=PASS\n");
 }
 
-async function runElectronBuilder(buildMode) {
+async function runElectronBuilder(buildMode, productionRelease) {
   await mkdir(DESKTOP_OUTPUT, { recursive: true });
   const builderTempRoot = path.join(DESKTOP_OUTPUT, ".nsis-temp");
   await mkdir(builderTempRoot, { recursive: true });
@@ -534,6 +631,8 @@ async function runElectronBuilder(buildMode) {
     args,
     env: {
       ...process.env,
+      CAELUSH_DESKTOP_BUILD_PURPOSE: productionRelease ? "production" : "internal-test",
+      CAELUSH_DESKTOP_CHANNEL: productionRelease ? "stable" : "dev",
       TEMP: builderTempRoot,
       TMP: builderTempRoot,
     },
@@ -637,9 +736,7 @@ function runtimeIdentityFor(resourcePath) {
     return "Caelush USER_TERMINAL Node helper";
   if (resourcePath.startsWith("web/desktop/")) return "Caelush desktop Web asset";
   if (resourcePath.endsWith("package.json")) return "Production Node package metadata";
-  if (resourcePath.startsWith("daemon/runtime/")) {
-    return "Caelush production Daemon 0.1.0 module";
-  }
+  if (resourcePath.startsWith("daemon/runtime/")) return "Caelush production Daemon module";
   return "Caelush Daemon production dependency closure";
 }
 

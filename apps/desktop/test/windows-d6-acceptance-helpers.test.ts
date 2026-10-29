@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   assertInstallRegistration,
   assertSuccessfulProcessExit,
@@ -14,6 +15,10 @@ import {
   isInstalledAgentEntryReady,
   normalizeRegistryRegistrationSnapshot,
 } from "../scripts/windows-d6-acceptance-helpers.mjs";
+
+const PRODUCT_VERSION = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+).version;
 
 describe("D6 installed lifecycle evidence helpers", () => {
   it("uses an explicitly persistent secure cookie for restart preservation checks", () => {
@@ -95,8 +100,8 @@ describe("D6 installed lifecycle evidence helpers", () => {
           uninstall: {
             scope: "HKCU",
             keyPath: desktopUninstallRegistryKey(),
-            DisplayName: "Caelush 0.1.0",
-            DisplayVersion: "0.1.0",
+            DisplayName: `Caelush ${PRODUCT_VERSION}`,
+            DisplayVersion: PRODUCT_VERSION,
             UninstallString: '"D:\\Caelush\\Uninstall Caelush.exe" /currentuser',
           },
         },
@@ -117,8 +122,8 @@ describe("D6 installed lifecycle evidence helpers", () => {
           uninstall: {
             scope: "HKCU",
             keyPath: desktopUninstallRegistryKey(),
-            DisplayName: "Caelush 0.1.0",
-            DisplayVersion: "0.1.0",
+            DisplayName: `Caelush ${PRODUCT_VERSION}`,
+            DisplayVersion: PRODUCT_VERSION,
             UninstallString: '"D:\\Caelush\\Uninstall Caelush.exe" /currentuser',
           },
         },
@@ -137,8 +142,8 @@ describe("D6 installed lifecycle evidence helpers", () => {
       uninstall: {
         Scope: "HKCU",
         KeyPath: desktopUninstallRegistryKey(),
-        DisplayName: "Caelush 0.1.0",
-        DisplayVersion: "0.1.0",
+        DisplayName: `Caelush ${PRODUCT_VERSION}`,
+        DisplayVersion: PRODUCT_VERSION,
         UninstallString: '"D:\\开发\\Caelush App\\Uninstall Caelush.exe" /currentuser',
       },
     };
@@ -153,8 +158,8 @@ describe("D6 installed lifecycle evidence helpers", () => {
       uninstall: {
         scope: "HKCU",
         keyPath: desktopUninstallRegistryKey(),
-        DisplayName: "Caelush 0.1.0",
-        DisplayVersion: "0.1.0",
+        DisplayName: `Caelush ${PRODUCT_VERSION}`,
+        DisplayVersion: PRODUCT_VERSION,
         UninstallString: '"D:\\开发\\Caelush App\\Uninstall Caelush.exe" /currentuser',
       },
     });
@@ -174,8 +179,8 @@ describe("D6 installed lifecycle evidence helpers", () => {
       uninstall: {
         scope: "HKLM",
         keyPath: desktopUninstallRegistryKey(),
-        DisplayName: "Caelush 0.1.0",
-        DisplayVersion: "0.1.0",
+        DisplayName: `Caelush ${PRODUCT_VERSION}`,
+        DisplayVersion: PRODUCT_VERSION,
         UninstallString: '"D:\\Caelush\\Uninstall Caelush.exe" /currentuser',
       },
     };

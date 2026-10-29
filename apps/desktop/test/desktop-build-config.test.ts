@@ -6,13 +6,19 @@ const INTERNAL_KEYRING = JSON.stringify({ d6_test_fixture_1: "A".repeat(43) });
 
 describe("Desktop build purpose and release channel", () => {
   it("keeps the ordinary development build on the explicit loopback default", () => {
-    expect(resolveDesktopBuildConfiguration({})).toMatchObject({
+    const configuration = resolveDesktopBuildConfiguration({});
+    expect(configuration).toMatchObject({
       purpose: "development",
       production: false,
       channel: "dev",
       cloudOrigin: "http://127.0.0.1:8000",
       offlinePublicKeys: {},
     });
+    expect(configuration.externalHttpsHosts).toEqual([
+      "github.com",
+      "caelush.com.cn",
+      "www.caelush.com.cn",
+    ]);
   });
 
   it("requires the production trust configuration when NODE_ENV is production", () => {

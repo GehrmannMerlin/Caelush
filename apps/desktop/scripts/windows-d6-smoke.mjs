@@ -47,12 +47,17 @@ const RUN_ID = `${process.pid}-${randomUUID().slice(0, 8)}`;
 const D72_INPUT = process.env.CAELUSH_D72_SMOKE_INPUT
   ? JSON.parse(await readFile(process.env.CAELUSH_D72_SMOKE_INPUT, "utf8"))
   : null;
+const CURRENT_PRODUCT_VERSION = JSON.parse(
+  await readFile(path.join(APP_ROOT, "package.json"), "utf8"),
+).version;
+const BASE_PRODUCT_VERSION = D72_INPUT?.productVersionA ?? CURRENT_PRODUCT_VERSION;
+const UPDATE_PRODUCT_VERSION = D72_INPUT?.productVersionB ?? "0.1.1";
 const OUTPUT_ROOT = path.resolve(
   process.env.CAELUSH_DESKTOP_OUTPUT_ROOT ?? path.join("D:\\", `Caelush D6 Recovery ${RUN_ID}`),
 );
 const INSTALLER_PATH = path.resolve(
   process.env.CAELUSH_D6_INSTALLER_PATH ??
-    path.join(OUTPUT_ROOT, "Caelush-0.1.0-dev-win-x64-Setup.exe"),
+    path.join(OUTPUT_ROOT, `Caelush-${BASE_PRODUCT_VERSION}-dev-win-x64-Setup.exe`),
 );
 const TEST_ROOT = path.join(OUTPUT_ROOT, `D6 Test Data ${RUN_ID}`);
 const INSTALL_ROOT = path.join(OUTPUT_ROOT, `D6 安装目录 With Spaces ${RUN_ID}`);
@@ -138,7 +143,7 @@ try {
       D72_INPUT.updateIdentity,
       D72_INPUT.versionBInstaller,
     );
-    record(`D72_VERSION_A=0.1.0 VERSION_B=0.1.1`);
+    record(`D72_VERSION_A=${BASE_PRODUCT_VERSION} VERSION_B=${UPDATE_PRODUCT_VERSION}`);
     record(`D72_REAL_UPDATE_BYTES=${updateFixture.artifactSize}`);
     record(`D72_REAL_UPDATE_SHA512=${updateFixture.sha512}`);
   }
@@ -182,8 +187,8 @@ try {
   await runInstaller(INSTALLER_PATH, INSTALL_ROOT, INSTALLER_ENV);
   installed = true;
   const registration = await waitForUninstallEntry(INSTALL_ROOT);
-  assert.equal(registration.DisplayName, "Caelush 0.1.0");
-  assert.equal(registration.DisplayVersion, "0.1.0");
+  assert.equal(registration.DisplayName, `Caelush ${BASE_PRODUCT_VERSION}`);
+  assert.equal(registration.DisplayVersion, BASE_PRODUCT_VERSION);
   assert.equal(registration.Scope, "HKCU");
   assert.equal(registration.InstallScope, "HKCU");
   assert.equal(normalizePath(registration.InstallLocation), normalizePath(INSTALL_ROOT));
@@ -223,7 +228,7 @@ try {
   );
   const resourceVerification = await verifyDesktopResourceFiles(resourceManifest, RESOURCE_ROOT);
   assert.ok(resourceManifest.resourceFiles.some((file) => file.path === "app.asar"));
-  assert.equal(resourceManifest.productVersion, "0.1.0");
+  assert.equal(resourceManifest.productVersion, BASE_PRODUCT_VERSION);
   assert.equal(resourceManifest.channel, "dev");
   assert.equal(resourceManifest.platform, "win32");
   assert.equal(resourceManifest.architecture, "x64");
@@ -336,9 +341,12 @@ try {
   const registrationAfterReinstall = await waitForUninstallEntry(
     INSTALL_ROOT,
     20000,
-    D72_INPUT ? "0.1.1" : "0.1.0",
+    D72_INPUT ? UPDATE_PRODUCT_VERSION : BASE_PRODUCT_VERSION,
   );
-  assert.equal(registrationAfterReinstall.DisplayVersion, D72_INPUT ? "0.1.1" : "0.1.0");
+  assert.equal(
+    registrationAfterReinstall.DisplayVersion,
+    D72_INPUT ? UPDATE_PRODUCT_VERSION : BASE_PRODUCT_VERSION,
+  );
   assert.equal(registrationAfterReinstall.Scope, "HKCU");
   assert.equal(
     normalizePath(registrationAfterReinstall.InstallLocation),
@@ -497,7 +505,7 @@ async function runVerifiedVersionUpgrade() {
   );
   await waitForRenderer(
     runtime,
-    "document.querySelector('.desktop-update-panel')?.textContent.includes('Caelush 0.1.0')",
+    `document.querySelector('.desktop-update-panel')?.textContent.includes('Caelush ${BASE_PRODUCT_VERSION}')`,
     "installed update UI current version",
   );
   record("D72_INSTALLED_ACCOUNT_UPDATE_UI=PASS");
@@ -676,14 +684,14 @@ async function runVerifiedVersionUpgrade() {
       "B runtime Profile post-install completion",
       60000,
     );
-    assert.equal(completed.currentVersion, "0.1.1");
+    assert.equal(completed.currentVersion, UPDATE_PRODUCT_VERSION);
     const version = JSON.parse(
       await evaluateRenderer(
         newRuntime,
         "window.caelushDesktop.window.getPlatform().then(JSON.stringify)",
       ),
     );
-    assert.equal(version.version, "0.1.1");
+    assert.equal(version.version, UPDATE_PRODUCT_VERSION);
     const pending = JSON.parse(await readFile(path.join(updatesRoot, "state.json"), "utf8")).data
       .pending;
     assert.equal(pending.step, "COMPLETED");
@@ -695,8 +703,8 @@ async function runVerifiedVersionUpgrade() {
     const manifest = JSON.parse(
       await readFile(path.join(RESOURCE_ROOT, "desktop-resource-manifest.json"), "utf8"),
     );
-    assert.equal(manifest.productVersion, "0.1.1");
-    assert.equal(manifest.daemonVersion, "0.1.1");
+    assert.equal(manifest.productVersion, UPDATE_PRODUCT_VERSION);
+    assert.equal(manifest.daemonVersion, UPDATE_PRODUCT_VERSION);
     await verifyDesktopResourceFiles(manifest, RESOURCE_ROOT);
     record(`D72_NSIS_EXIT=${receipt.exitCode} PID=${receipt.installerPid}`);
     record("D72_B_DESKTOP_DAEMON_MANIFEST_PROFILE_VAULT_BROWSER_BACKUP_VERIFIED=PASS");
@@ -800,7 +808,7 @@ async function writeFinalBuildIdentity(seed, installerSha512) {
   }
   const identity = {
     ...seed,
-    productVersion: "0.1.0",
+    productVersion: BASE_PRODUCT_VERSION,
     installerPath: INSTALLER_PATH,
     installerSizeBytes: installerStat.size,
     installerSha512,
@@ -1136,7 +1144,7 @@ async function runInstalledMainSmoke(runtime) {
     "installed Agent UI",
   );
   const daemonInfo = await agentApi(runtime, "/api/v1/info");
-  assert.equal(daemonInfo.value.daemonVersion, "0.1.0");
+  assert.equal(daemonInfo.value.daemonVersion, BASE_PRODUCT_VERSION);
   assert.equal(daemonInfo.value.apiVersion, "v1");
   assert.equal(daemonInfo.value.protocolVersion, 1);
   for (const capability of [
@@ -1148,7 +1156,7 @@ async function runInstalledMainSmoke(runtime) {
     "sseReplay",
   ])
     assert.equal(daemonInfo.value.capabilities[capability], true);
-  record("INSTALLED_DAEMON_VERSION_API_PROTOCOL_CAPABILITIES=PASS:0.1.0/v1/1");
+  record(`INSTALLED_DAEMON_VERSION_API_PROTOCOL_CAPABILITIES=PASS:${BASE_PRODUCT_VERSION}/v1/1`);
   const importedWorkspaces = await agentApi(runtime, "/api/v1/workspaces");
   assert.ok(
     importedWorkspaces.value.items.length > 0,
@@ -2039,7 +2047,7 @@ if (!(Test-Path -LiteralPath $uninstallPath)) {
 async function waitForUninstallEntry(
   expectedInstallRoot,
   timeoutMs = 20_000,
-  expectedVersion = "0.1.0",
+  expectedVersion = CURRENT_PRODUCT_VERSION,
 ) {
   let lastFailure = "REGISTRY_KEY_MISSING";
   try {

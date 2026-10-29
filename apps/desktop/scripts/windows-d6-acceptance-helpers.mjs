@@ -1,8 +1,11 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 const PRODUCT_NAME = "Caelush";
-const PRODUCT_VERSION = "0.1.0";
+const PRODUCT_VERSION = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+).version;
 const APP_ID = "com.caelush.desktop";
 const INSTALL_REGISTRY_KEY = `Software\\${electronBuilderAppGuid(APP_ID)}`;
 const UNINSTALL_REGISTRY_KEY_PREFIX = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\";

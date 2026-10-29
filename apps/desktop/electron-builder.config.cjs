@@ -14,7 +14,11 @@ const outputRoot = path.resolve(
 module.exports = {
   appId: "com.caelush.desktop",
   productName: "Caelush",
-  artifactName: "Caelush-${version}-dev-win-x64-Setup.${ext}",
+  artifactName:
+    process.env.CAELUSH_DESKTOP_BUILD_PURPOSE === "production" &&
+    process.env.CAELUSH_DESKTOP_CHANNEL === "stable"
+      ? "Caelush-${version}-win-x64-Setup.${ext}"
+      : "Caelush-${version}-dev-win-x64-Setup.${ext}",
   directories: {
     buildResources: path.join(__dirname, "resources"),
     output: outputRoot,

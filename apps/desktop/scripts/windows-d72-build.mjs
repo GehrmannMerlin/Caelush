@@ -202,6 +202,8 @@ await writeFile(
       accountIdentity,
       versionA: path.join(root, "0.1.0"),
       versionBInstaller: path.join(root, "0.1.1", "Caelush-0.1.1-dev-win-x64-Setup.exe"),
+      productVersionA: "0.1.0",
+      productVersionB: "0.1.1",
     },
     null,
     2,

@@ -14,15 +14,16 @@ On a fresh checkout or after dependency/lockfile changes, first run
 pre-run dependency reinstall; build and launch commands reuse installed
 dependencies.
 
-| Command                                                     | Behavior                                                                                                        |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `pnpm dev:desktop`                                          | Build the daemon, shared workbench, Electron main/preload, and account renderer, then launch Desktop with Vite. |
-| `pnpm build:desktop`                                        | Build all Desktop development artifacts, including the account renderer. Does not create an installer.          |
-| `pnpm start:desktop`                                        | Launch the existing build without rebuilding. Missing artifacts produce a rebuild instruction.                  |
-| `pnpm --filter @caelush/web build:desktop`                  | Rebuild only the shared Agent workbench for Desktop. Reload the workbench afterwards.                           |
-| `pnpm --filter @caelush/desktop build:main`                 | Rebuild Electron main/preload. Restart Desktop afterwards.                                                      |
-| `pnpm --filter @caelush/desktop package:win`                | Explicitly create a Windows installer using the release build configuration.                                    |
-| `pnpm --filter @caelush/desktop test:reliability:workbench` | Launch the isolated Electron workbench smoke on Windows x64 with local Cloud and Provider fixtures.             |
+| Command                                                                       | Behavior                                                                                                        |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `pnpm dev:desktop`                                                            | Build the daemon, shared workbench, Electron main/preload, and account renderer, then launch Desktop with Vite. |
+| `pnpm build:desktop`                                                          | Build all Desktop development artifacts, including the account renderer. Does not create an installer.          |
+| `pnpm start:desktop`                                                          | Launch the existing build without rebuilding. Missing artifacts produce a rebuild instruction.                  |
+| `pnpm --filter @caelush/web build:desktop`                                    | Rebuild only the shared Agent workbench for Desktop. Reload the workbench afterwards.                           |
+| `pnpm --filter @caelush/desktop build:main`                                   | Rebuild Electron main/preload. Restart Desktop afterwards.                                                      |
+| `pnpm --filter @caelush/desktop package:win`                                  | Create the internal `dev` installer using local Cloud fixtures and run the D6 smoke.                            |
+| `pnpm release:desktop:win --config D:\Caelush-Release-Config\production.json` | Create the production 1.0.0 Windows x64 installer after release checks pass.                                    |
+| `pnpm --filter @caelush/desktop test:reliability:workbench`                   | Launch the isolated Electron workbench smoke on Windows x64 with local Cloud and Provider fixtures.             |
 
 The reliability workbench smoke launches a real Electron window with a
 disposable user-data directory and local Cloud/Provider fixtures. It exercises
@@ -82,6 +83,69 @@ damaged, or changed. Concurrent preparation is rejected; close other Desktop
 processes before upgrading or repairing this cache. The temporary preparation
 directory is fixed and replaced on retry. Smoke scripts that explicitly request
 a disposable runtime retain their existing per-run cleanup behavior.
+
+## Caelush 1.0.0 Windows release package
+
+`package:win` creates the internal `dev` installer and runs its local D6 test
+fixtures. It is not the public stable installer. The public release command
+uses the same verified resource and NSIS pipeline with `purpose=production`
+and `channel=stable`, and does not create test Cloud identities or start local
+fixtures.
+
+Keep the production configuration outside the checkout at
+`D:\Caelush-Release-Config\production.json`. It contains public build settings
+only; private signing keys do not belong in this file:
+
+```json
+{
+  "cloudOrigin": "https://api.caelush.com.cn",
+  "cloudAllowedHosts": ["api.caelush.com.cn"],
+  "offlineTrustedKeys": {
+    "<Cloud offline key ID>": "<matching raw Ed25519 public key in base64url>"
+  },
+  "updateTrustedKeys": {
+    "<release update key ID>": "<different raw Ed25519 public key in base64url>"
+  },
+  "updateReleaseHosts": ["releases.caelush.com.cn"],
+  "outputRoot": "D:\\Caelush-Releases"
+}
+```
+
+The Offline Grant key must match the public key configured by Caelush Cloud.
+The update key must be different and must match the key used to sign Cloud
+update metadata. Do not use generated internal-test identities. If either key
+is missing, malformed, or does not match the Cloud setup, packaging stops
+before creating the release output.
+
+Run the command from a clean Windows x64 checkout with Node 24.18.0, pnpm
+11.21.0, and the Rust/MSVC tools required by the Sandbox Runner build:
+
+```powershell
+pnpm release:desktop:win --config D:\Caelush-Release-Config\production.json
+```
+
+The command checks the canonical 1.0.0 package version and all workspace
+version mirrors, the production trust configuration, source cleanliness, and
+the pinned Node/pnpm versions. It builds the Desktop and Sandbox Runner from
+that checkout, checks the packaged resource manifest and packaged PTY/Runner
+probes, and rejects source maps. It stops on errors instead of falling back
+to the internal test channel.
+
+Each run creates a new directory outside the checkout, for example
+`D:\Caelush-Releases\1.0.0\<commit>-<build-id>`:
+
+```text
+work/       NSIS output, unpacked app, staged resources, and temporary build files
+publish/    Caelush-Setup.exe, SHA512SUMS.txt, and release-notes.txt
+evidence/   build.log, build-info.json, and verification-report.json
+```
+
+Only `publish/Caelush-Setup.exe` is intended for later distribution. The
+command does not upload files, create a Cloud release, or enable the website
+download button. The installer uses the current `PRIVATE_UNSIGNED`
+distribution profile; it does not claim a Windows verified publisher. The
+verification report marks clean-VM installation as not run, so perform the
+separate clean Windows acceptance before publishing it.
 
 ## Cleanup
 

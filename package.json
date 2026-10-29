@@ -1,6 +1,6 @@
 {
   "name": "caelush",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -20,6 +20,7 @@
     "dev:desktop": "pnpm --filter @caelush/desktop dev",
     "start:desktop": "pnpm --filter @caelush/desktop start",
     "build:desktop": "pnpm --filter @caelush/desktop build",
+    "release:desktop:win": "node apps/desktop/scripts/package-windows-release.mjs",
     "clean:desktop:dev": "pnpm --filter @caelush/desktop clean:dev",
     "clean:desktop:release": "pnpm --filter @caelush/desktop clean:release",
     "test:prompt-cache:deepseek": "node scripts/deepseek-prompt-cache-audit.mjs --local-fixture",
