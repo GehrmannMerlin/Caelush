@@ -2,7 +2,29 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { dirname } from "node:path";
+
+const streams = vi.hoisted(() => ({ active: 0, maximum: 0 }));
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...fs,
+    createReadStream: (...args: Parameters<typeof fs.createReadStream>) => {
+      const stream = fs.createReadStream(...args);
+      streams.active += 1;
+      streams.maximum = Math.max(streams.maximum, streams.active);
+      let released = false;
+      const release = () => {
+        if (!released) streams.active -= 1;
+        released = true;
+      };
+      stream.once("end", release);
+      stream.once("close", release);
+      return stream;
+    },
+  };
+});
 import {
   assertDesktopResourceManifestCompatible,
   computeResourceSetDigest,
@@ -19,6 +41,35 @@ afterEach(async () => {
 });
 
 describe("Desktop resource manifest", () => {
+  it("checks all resources with bounded parallel file reads", async () => {
+    const root = await mkdtemp(join(tmpdir(), "caelush-parallel-resources-"));
+    temporaryRoots.push(root);
+    const original = fixtureManifest();
+    const contents = ["node-runtime", "native-addon", "runner-binary", "<main>Caelush</main>"];
+    const extra = Array.from({ length: 40 }, (_, index) =>
+      file(`data/${index}.bin`, "resource".repeat(1024), "DATA", "fixture"),
+    );
+    const files = [...original.resourceFiles, ...extra];
+    for (const [index, record] of files.entries()) {
+      await mkdir(dirname(join(root, record.path)), { recursive: true });
+      await writeFile(join(root, record.path), contents[index] ?? "resource".repeat(1024));
+    }
+    const manifest = {
+      ...original,
+      resourceFiles: [...files].sort((a, b) => (a.path < b.path ? -1 : 1)),
+      resourceSetDigest: digestFiles(files),
+    };
+    streams.maximum = 0;
+    await expect(verifyDesktopResourceFiles(manifest, root)).resolves.toMatchObject({
+      verifiedFiles: 44,
+    });
+    expect(streams.maximum).toBeGreaterThan(1);
+    expect(streams.maximum).toBeLessThanOrEqual(16);
+    await writeFile(join(root, extra[39].path), "tampered");
+    await expect(verifyDesktopResourceFiles(manifest, root)).rejects.toThrow(
+      "DESKTOP_RESOURCE_FILE_HASH_MISMATCH",
+    );
+  });
   it.each([
     "/absolute.exe",
     "D:/absolute.exe",

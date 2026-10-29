@@ -192,13 +192,11 @@ export function computeResourceSetDigest(files) {
 
 export async function createDirectoryDigest(directoryPath) {
   const files = await collectDirectoryFiles(directoryPath, {}, nodeFs);
-  const records = await Promise.all(
-    files.map(async (file) => ({
-      path: file.path,
-      size: file.size,
-      sha256: await hashFile(file.absolutePath, nodeFs),
-    })),
-  );
+  const records = await mapBounded(files, async (file) => ({
+    path: file.path,
+    size: file.size,
+    sha256: await hashFile(file.absolutePath, nodeFs),
+  }));
   return { digest: computeResourceSetDigest(records), files: records };
 }
 
@@ -237,7 +235,7 @@ export async function verifyDesktopResourceFiles(manifestInput, resourceRoot) {
   const expectedByPath = new Map(manifest.resourceFiles.map((file) => [file.path, file]));
   const actualByPath = new Map(actualFiles.map((file) => [file.path, file]));
 
-  for (const expected of manifest.resourceFiles) {
+  await mapBounded(manifest.resourceFiles, async (expected) => {
     const actual = actualByPath.get(expected.path);
     if (actual === undefined) {
       throw new Error(`DESKTOP_RESOURCE_FILE_MISSING:${expected.path}`);
@@ -248,7 +246,7 @@ export async function verifyDesktopResourceFiles(manifestInput, resourceRoot) {
     ) {
       throw new Error("DESKTOP_RESOURCE_FILE_HASH_MISMATCH");
     }
-  }
+  });
   if ([...actualByPath.keys()].some((resourcePath) => !expectedByPath.has(resourcePath))) {
     throw new Error("DESKTOP_RESOURCE_FILE_SET_MISMATCH");
   }
@@ -280,7 +278,8 @@ async function collectDirectoryFiles(rootPath, options = {}, fileSystem = nodeFs
   }
   const files = [];
 
-  async function visit(directoryPath, relativeDirectory) {
+  const pending = [];
+  async function enqueue(directoryPath, relativeDirectory) {
     const entries = await fileSystem.readdir(directoryPath, { withFileTypes: true });
     entries.sort((left, right) => compareText(left.name, right.name));
     for (const entry of entries) {
@@ -290,28 +289,46 @@ async function collectDirectoryFiles(rootPath, options = {}, fileSystem = nodeFs
       }
       validateResourcePath(relativePath);
       const absolutePath = path.join(directoryPath, entry.name);
-      const metadata = await fileSystem.lstat(absolutePath);
-      if (metadata.isSymbolicLink()) throw new Error("DESKTOP_RESOURCE_REPARSE_POINT");
-      if (metadata.isDirectory()) {
-        const canonicalPath = await fileSystem.realpath(absolutePath);
-        if (normalizePath(canonicalPath) !== normalizePath(absolutePath)) {
-          throw new Error("DESKTOP_RESOURCE_REPARSE_POINT");
-        }
-        await visit(absolutePath, relativePath);
-      } else if (metadata.isFile()) {
-        const canonicalPath = await fileSystem.realpath(absolutePath);
-        if (normalizePath(canonicalPath) !== normalizePath(absolutePath)) {
-          throw new Error("DESKTOP_RESOURCE_REPARSE_POINT");
-        }
-        files.push({ path: relativePath, size: metadata.size, absolutePath });
-      } else {
-        throw new Error("DESKTOP_RESOURCE_FILE_TYPE_INVALID");
-      }
+      pending.push({ absolutePath, relativePath });
     }
   }
 
-  await visit(root, "");
+  await enqueue(root, "");
+  await mapBounded(pending, async ({ absolutePath, relativePath }) => {
+    const metadata = await fileSystem.lstat(absolutePath);
+    if (metadata.isSymbolicLink()) throw new Error("DESKTOP_RESOURCE_REPARSE_POINT");
+    if (metadata.isDirectory()) {
+      const canonicalPath = await fileSystem.realpath(absolutePath);
+      if (normalizePath(canonicalPath) !== normalizePath(absolutePath)) {
+        throw new Error("DESKTOP_RESOURCE_REPARSE_POINT");
+      }
+      await enqueue(absolutePath, relativePath);
+    } else if (metadata.isFile()) {
+      const canonicalPath = await fileSystem.realpath(absolutePath);
+      if (normalizePath(canonicalPath) !== normalizePath(absolutePath)) {
+        throw new Error("DESKTOP_RESOURCE_REPARSE_POINT");
+      }
+      files.push({ path: relativePath, size: metadata.size, absolutePath });
+    } else {
+      throw new Error("DESKTOP_RESOURCE_FILE_TYPE_INVALID");
+    }
+  });
   return files.sort(compareResourcePath);
+}
+
+// Bound disk pressure and memory, and drain each batch before propagating failure.
+// The traversal queue can grow while a batch discovers child directories.
+async function mapBounded(items, operation) {
+  const results = [];
+  for (let offset = 0; offset < items.length;) {
+    const batch = items.slice(offset, offset + 16);
+    const outcomes = await Promise.allSettled(batch.map(operation));
+    const failure = outcomes.find((outcome) => outcome.status === "rejected");
+    if (failure !== undefined) throw failure.reason;
+    results.push(...outcomes.map((outcome) => outcome.value));
+    offset += batch.length;
+  }
+  return results;
 }
 
 async function hashFile(filePath, fileSystem = nodeFs) {

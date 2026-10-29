@@ -39,6 +39,7 @@ import {
 import { DesktopDaemonSupervisor } from "./daemon/supervisor.js";
 import { DesktopWorkspacePanelController } from "./workspace/panel-controller.js";
 import { createMainWindow, loadMainWindow } from "./windows/create-window.js";
+import { createStartupWindow } from "./windows/startup-window.js";
 import { createRendererTrust } from "./windows/security-policy.js";
 
 logD6Startup("MAIN_MODULE", {
@@ -90,6 +91,11 @@ if (!singleInstance) {
   app.quit();
 } else {
   let mainWindow: BrowserWindow | null = null;
+  let startupWindow: BrowserWindow | null = null;
+  function closeStartupWindow(): void {
+    if (startupWindow !== null && !startupWindow.isDestroyed()) startupWindow.destroy();
+    startupWindow = null;
+  }
   let disposeIpc: (() => void) | null = null;
   let desktopAppearance: DesktopAppearanceController | null = null;
   let unsubscribeAppearance: (() => void) | null = null;
@@ -333,98 +339,112 @@ if (!singleInstance) {
     }
   });
 
-  app.whenReady().then(async () => {
-    if (developmentDataRoot !== undefined) {
-      try {
-        const permissions = new WindowsProfilePermissions(process.platform);
-        const userDataDirectory = app.getPath("userData");
-        await permissions.secureDirectory(userDataDirectory);
-        await permissions.verifyDirectory(userDataDirectory);
-      } catch {
-        dialog.showErrorBox(
-          "Development data permissions could not be verified",
-          "The isolated Desktop development data directory is not private to this Windows user. Choose a different directory and try again.",
-        );
-        app.quit();
-        return;
-      }
-    }
-    logD6Startup("APP_WHEN_READY", { userDataPath: app.getPath("userData") });
-    if (app.isPackaged) {
-      try {
-        const verified = await verifyPackagedDesktopResources(
-          {
-            packaged: true,
-            appPath: app.getAppPath(),
-            resourcesPath: process.resourcesPath,
-          },
-          (stage) => logD6Startup("RESOURCE_VERIFY", { stage }),
-        );
-        logD6Startup("MANIFEST_VERIFIED", { verifiedFileCount: verified.verifiedFileCount });
-      } catch (error) {
-        logD6Startup("MANIFEST_REJECT", { reason: safeResourceVerificationFailure(error) });
-        dialog.showErrorBox(
-          "Caelush resources could not be verified",
-          "The installed Caelush files are incomplete or do not match this application version. Repair or reinstall Caelush before continuing.",
-        );
-        app.quit();
-        return;
-      }
-    }
-    desktopAppearance = new DesktopAppearanceController({
-      store: new DesktopAppearanceStore(join(app.getPath("userData"), "appearance.json")),
-      nativeTheme,
-    });
-    await desktopAppearance.initialize();
-    unsubscribeAppearance = desktopAppearance.subscribe((snapshot) => {
-      if (mainWindow !== null && !mainWindow.isDestroyed()) {
-        mainWindow.setBackgroundColor(windowBackgroundColor(snapshot.resolvedTheme));
-      }
-    });
-    const appPath = app.getAppPath();
-    registerAppProtocol({
-      rendererRoot: join(appPath, "dist", "renderer"),
-      agentRoot: resolveDesktopWebRoot({
-        packaged: app.isPackaged,
-        appPath,
-        resourcesPath: process.resourcesPath,
-      }),
-      localProxy: proxy,
-      isAgentAvailable: () => supervisor.getAgentEntry(account.getState()).available,
-    });
-    session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) =>
-      callback(false),
-    );
-    logD6Startup("APP_PROTOCOL_REGISTERED");
-    await updates.initialize();
-    unsubscribeAccount = account.subscribe((state) => {
-      if (updateSuspendsAccountSynchronization || shutdownInProgress || safeQuitApproved) {
-        publishProjectedAccountState();
-        return;
-      }
-      void supervisor
-        .synchronizeAccountState(state)
-        .catch(() => undefined)
-        .finally(publishProjectedAccountState);
-    });
-    openMainWindow();
-    logD6Startup("ACCOUNT_INITIALIZATION_STARTED");
-    void (accountInitializedByUpdate ? Promise.resolve() : account.initialize())
-      .then(async () => {
-        logD6Startup("ACCOUNT_INITIALIZATION_COMPLETED");
+  app
+    .whenReady()
+    .then(async () => {
+      if (developmentDataRoot !== undefined) {
         try {
-          await supervisor.synchronizeAccountState(account.getState());
+          const permissions = new WindowsProfilePermissions(process.platform);
+          const userDataDirectory = app.getPath("userData");
+          await permissions.secureDirectory(userDataDirectory);
+          await permissions.verifyDirectory(userDataDirectory);
         } catch {
-          publishProjectedAccountState();
+          dialog.showErrorBox(
+            "Development data permissions could not be verified",
+            "The isolated Desktop development data directory is not private to this Windows user. Choose a different directory and try again.",
+          );
+          app.quit();
+          return;
         }
-      })
-      .catch((error: unknown) => {
-        logD6Startup("ACCOUNT_INITIALIZATION_FAILED", {
-          errorName: error instanceof Error ? error.name : "unknown",
-        });
-        publishProjectedAccountState();
+      }
+      logD6Startup("APP_WHEN_READY", { userDataPath: app.getPath("userData") });
+      if (app.isPackaged) {
+        startupWindow = createStartupWindow();
+        logD6Startup("STARTUP_WINDOW_CREATED");
+        try {
+          const verified = await verifyPackagedDesktopResources(
+            {
+              packaged: true,
+              appPath: app.getAppPath(),
+              resourcesPath: process.resourcesPath,
+            },
+            (stage) => logD6Startup("RESOURCE_VERIFY", { stage }),
+          );
+          logD6Startup("MANIFEST_VERIFIED", { verifiedFileCount: verified.verifiedFileCount });
+        } catch (error) {
+          logD6Startup("MANIFEST_REJECT", { reason: safeResourceVerificationFailure(error) });
+          dialog.showErrorBox(
+            "Caelush resources could not be verified",
+            "The installed Caelush files are incomplete or do not match this application version. Repair or reinstall Caelush before continuing.",
+          );
+          closeStartupWindow();
+          app.quit();
+          return;
+        }
+      }
+      desktopAppearance = new DesktopAppearanceController({
+        store: new DesktopAppearanceStore(join(app.getPath("userData"), "appearance.json")),
+        nativeTheme,
       });
-  });
+      await desktopAppearance.initialize();
+      unsubscribeAppearance = desktopAppearance.subscribe((snapshot) => {
+        if (mainWindow !== null && !mainWindow.isDestroyed()) {
+          mainWindow.setBackgroundColor(windowBackgroundColor(snapshot.resolvedTheme));
+        }
+      });
+      const appPath = app.getAppPath();
+      registerAppProtocol({
+        rendererRoot: join(appPath, "dist", "renderer"),
+        agentRoot: resolveDesktopWebRoot({
+          packaged: app.isPackaged,
+          appPath,
+          resourcesPath: process.resourcesPath,
+        }),
+        localProxy: proxy,
+        isAgentAvailable: () => supervisor.getAgentEntry(account.getState()).available,
+      });
+      session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) =>
+        callback(false),
+      );
+      logD6Startup("APP_PROTOCOL_REGISTERED");
+      await updates.initialize();
+      unsubscribeAccount = account.subscribe((state) => {
+        if (updateSuspendsAccountSynchronization || shutdownInProgress || safeQuitApproved) {
+          publishProjectedAccountState();
+          return;
+        }
+        void supervisor
+          .synchronizeAccountState(state)
+          .catch(() => undefined)
+          .finally(publishProjectedAccountState);
+      });
+      openMainWindow();
+      logD6Startup("ACCOUNT_INITIALIZATION_STARTED");
+      void (accountInitializedByUpdate ? Promise.resolve() : account.initialize())
+        .then(async () => {
+          logD6Startup("ACCOUNT_INITIALIZATION_COMPLETED");
+          try {
+            await supervisor.synchronizeAccountState(account.getState());
+          } catch {
+            publishProjectedAccountState();
+          }
+        })
+        .catch((error: unknown) => {
+          logD6Startup("ACCOUNT_INITIALIZATION_FAILED", {
+            errorName: error instanceof Error ? error.name : "unknown",
+          });
+          publishProjectedAccountState();
+        });
+    })
+    .catch((error: unknown) => {
+      logD6Startup("STARTUP_FAILED", { reason: safeResourceVerificationFailure(error) });
+      dialog.showErrorBox(
+        "Caelush 启动失败",
+        "应用初始化未能完成。请重新启动；若仍失败，请重新安装并联系开发者。",
+      );
+      closeStartupWindow();
+      app.quit();
+    });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -476,6 +496,7 @@ if (!singleInstance) {
       ),
     });
     logD6Startup("BROWSER_WINDOW_CREATED", { url: mainWindow.webContents.getURL() });
+    mainWindow.once("ready-to-show", closeStartupWindow);
     mainWindow.webContents.on("dom-ready", () => logD6Startup("RENDERER_DOM_READY"));
     mainWindow.webContents.on("did-finish-load", () =>
       logD6Startup("RENDERER_LOAD_FINISHED", { url: mainWindow?.webContents.getURL() ?? "" }),
