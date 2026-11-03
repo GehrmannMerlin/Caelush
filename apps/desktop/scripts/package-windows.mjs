@@ -611,9 +611,13 @@ async function verifyRunnerDiscoveryAndTransport() {
   const daemonPackage = path.join(RESOURCE_STAGE, "daemon", "runtime");
   const daemonHost = path.join(daemonPackage, "dist", "sandbox-runner-host.js");
   const daemon = await import(pathToFileURL(daemonHost).href);
+  // Use the same module-owned anchor as startDaemon(), not the process launcher path.
+  const { daemonEntryPath } = await import(
+    pathToFileURL(path.join(daemonPackage, "dist", "entry.js")).href
+  );
   const resolved = await daemon.resolveSandboxRunnerArtifact({
     environment: {},
-    daemonEntryPath: path.join(daemonPackage, "dist", "desktop-entry.js"),
+    daemonEntryPath,
     platform: "win32",
     arch: "x64",
   });

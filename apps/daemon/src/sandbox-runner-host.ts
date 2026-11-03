@@ -27,7 +27,10 @@ export const SANDBOX_RUNNER_MANIFEST_ENVIRONMENT_KEY = "CAELUSH_SANDBOX_RUNNER_M
  * Only the two shipped bundle entry layouts are accepted. Arbitrary parent traversal is
  * intentionally not a discovery strategy.
  */
-const DESKTOP_DAEMON_ENTRY_SUFFIX = ["daemon", "runtime", "dist", "desktop-entry.js"] as const;
+const DESKTOP_DAEMON_ENTRY_SUFFIXES = [
+  ["daemon", "runtime", "dist", "main.js"],
+  ["daemon", "runtime", "dist", "desktop-entry.js"],
+] as const;
 const PORTABLE_DAEMON_ENTRY_SUFFIX = [
   "node_modules",
   "@caelush",
@@ -112,7 +115,7 @@ function packagedBundleRoot(daemonEntryPath: string): string | undefined {
     .split(/[\\/]+/u)
     .filter((segment) => segment.length > 0)
     .map((segment) => segment.toLowerCase());
-  if (hasSuffix(segments, DESKTOP_DAEMON_ENTRY_SUFFIX)) {
+  if (DESKTOP_DAEMON_ENTRY_SUFFIXES.some((suffix) => hasSuffix(segments, suffix))) {
     return resolve(dirname(daemonEntryPath), "..", "..", "..");
   }
   if (hasSuffix(segments, PORTABLE_DAEMON_ENTRY_SUFFIX)) {

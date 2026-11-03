@@ -64,26 +64,31 @@ describe("resolveSandboxRunnerArtifact", () => {
     expect(availableArtifact(resolution).manifestPath).toBe(relocatedManifest);
   });
 
-  it("finds the fixed release-relative runner without any environment override", async () => {
-    const bundleRoot = join(root, "bundle");
-    const daemonEntryPath = await writeDaemonEntry(bundleRoot);
-    const packaged = await writeRunnerBundle(join(bundleRoot, SANDBOX_RUNNER_DIRECTORY_NAME), {
-      executableName: "caelush-sandbox-runner.exe",
-      platform: "windows",
-      arch: "x64",
-    });
+  it.each(["main.js", "desktop-entry.js"])(
+    "finds the fixed release-relative runner from %s without an override",
+    async (entryName) => {
+      const bundleRoot = join(root, "bundle");
+      const daemonEntryPath = join(bundleRoot, "daemon", "runtime", "dist", entryName);
+      await mkdir(join(bundleRoot, "daemon", "runtime", "dist"), { recursive: true });
+      await writeFile(daemonEntryPath, "", "utf8");
+      const packaged = await writeRunnerBundle(join(bundleRoot, SANDBOX_RUNNER_DIRECTORY_NAME), {
+        executableName: "caelush-sandbox-runner.exe",
+        platform: "windows",
+        arch: "x64",
+      });
 
-    const resolution = await resolve({
-      environment: {},
-      daemonEntryPath,
-      platform: "win32",
-      arch: "x64",
-    });
+      const resolution = await resolve({
+        environment: {},
+        daemonEntryPath,
+        platform: "win32",
+        arch: "x64",
+      });
 
-    expect(resolution.available).toBe(true);
-    expect(availableArtifact(resolution).runnerPath).toBe(packaged.runnerPath);
-    expect(availableArtifact(resolution).manifestPath).toBe(packaged.manifestPath);
-  });
+      expect(resolution.available).toBe(true);
+      expect(availableArtifact(resolution).runnerPath).toBe(packaged.runnerPath);
+      expect(availableArtifact(resolution).manifestPath).toBe(packaged.manifestPath);
+    },
+  );
 
   it("preserves the legacy Portable release layout", async () => {
     const bundleRoot = join(root, "portable-bundle");
@@ -249,7 +254,7 @@ function availableArtifact(resolution: SandboxRunnerResolution) {
 }
 
 function daemonEntryPathFor(bundleRoot: string): string {
-  return join(bundleRoot, "daemon", "runtime", "dist", "desktop-entry.js");
+  return join(bundleRoot, "daemon", "runtime", "dist", "main.js");
 }
 
 async function writeDaemonEntry(bundleRoot: string): Promise<string> {
