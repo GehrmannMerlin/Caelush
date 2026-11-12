@@ -2724,8 +2724,6 @@ body {
   border-radius: 50%;
   background: var(--web-sidebar-line);
   color: var(--web-sidebar-ink);
-  font-size: 0.75rem;
-  font-weight: 700;
 }
 
 .workspace-sidebar-footer--desktop .workspace-account-avatar img {

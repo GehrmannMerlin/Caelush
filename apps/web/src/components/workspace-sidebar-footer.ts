@@ -1,5 +1,13 @@
 import { createElement, useEffect, useRef, useState, type ReactElement } from "react";
-import { Archive, LogOut, RefreshCw, Settings, SlidersHorizontal, Sun } from "lucide-react";
+import {
+  Archive,
+  LogOut,
+  RefreshCw,
+  Settings,
+  SlidersHorizontal,
+  Sun,
+  UserRound,
+} from "lucide-react";
 
 export interface WorkspaceSidebarDesktopActions {
   readonly accountHref?: string | undefined;
@@ -166,7 +174,7 @@ export function WorkspaceSidebarFooter(props: {
             "span",
             { className: "workspace-account-avatar", "aria-hidden": true },
             avatarSource === null
-              ? firstAccountCharacter(accountName)
+              ? createElement(UserRound, { size: 17, strokeWidth: 1.8, "aria-hidden": true })
               : createElement("img", { src: avatarSource, alt: "" }),
           ),
           createElement("span", { className: "workspace-account-name" }, accountName),
@@ -214,8 +222,4 @@ function avatarBytesToDataUrl(bytes: Uint8Array): string {
     );
   }
   return `data:image/webp;base64,${btoa(binary)}`;
-}
-
-function firstAccountCharacter(value: string): string {
-  return Array.from(value.trim())[0]?.toLocaleUpperCase() ?? "C";
 }
