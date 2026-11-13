@@ -430,7 +430,19 @@ jobs:
       - name: Run production browser E2E
         run: corepack pnpm@11.21.0 test:web:e2e
 
+      - name: Resolve canonical Windows test temp path
+        id: windows-temp
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tempPath = node -e "const fs=require('node:fs'); const os=require('node:os'); process.stdout.write(fs.realpathSync(process.env.TEMP || os.tmpdir()))"
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tempPath)) { throw 'Could not resolve the Windows test temp path.' }
+          "path=$tempPath" >> $env:GITHUB_OUTPUT
+
       - name: Run quality gate
+        env:
+          TEMP: ${{ steps.windows-temp.outputs.path || runner.temp }}
+          TMP: ${{ steps.windows-temp.outputs.path || runner.temp }}
         run: corepack pnpm@11.21.0 run check
 
   release-smoke:
@@ -487,7 +499,19 @@ jobs:
       - name: Build platform release artifact
         run: corepack pnpm@11.21.0 build:release
 
+      - name: Resolve canonical Windows test temp path
+        id: windows-temp
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tempPath = node -e "const fs=require('node:fs'); const os=require('node:os'); process.stdout.write(fs.realpathSync(process.env.TEMP || os.tmpdir()))"
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tempPath)) { throw 'Could not resolve the Windows test temp path.' }
+          "path=$tempPath" >> $env:GITHUB_OUTPUT
+
       - name: Run artifact-only E2E
+        env:
+          TEMP: ${{ steps.windows-temp.outputs.path || runner.temp }}
+          TMP: ${{ steps.windows-temp.outputs.path || runner.temp }}
         run: corepack pnpm@11.21.0 test:release
 
       - name: Upload platform artifact

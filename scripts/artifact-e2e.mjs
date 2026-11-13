@@ -855,10 +855,62 @@ async function runPackagedPty(runtimeModule, protocolModule, workspace) {
     cwd: workspace,
     env: process.env,
   });
-  assert(
-    result.exitCode === 0,
-    `packaged PTY smoke failed: stdout=${result.stdout}; stderr=${result.stderr}`,
-  );
+  if (result.exitCode !== 0) {
+    const diagnostics = await runPackagedPtyDiagnostics(runtimeModule, workspace);
+    throw new Error(
+      `packaged PTY smoke failed: stdout=${result.stdout}; stderr=${result.stderr}; diagnosticExitCode=${diagnostics.exitCode}; diagnosticStdout=${diagnostics.stdout}; diagnosticStderr=${diagnostics.stderr}`,
+    );
+  }
+}
+
+async function runPackagedPtyDiagnostics(runtimeModule, workspace) {
+  const source = [
+    `const runtimeUrl = ${JSON.stringify(runtimeModule)};`,
+    'const { createRequire } = await import("node:module");',
+    "const { createAgentProcessEnvironment, LocalShellResolver } = await import(runtimeUrl);",
+    'const pty = createRequire(new URL(runtimeUrl))("node-pty");',
+    'const { spawn } = await import("node:child_process");',
+    'const marker = "CAELUSH_PACKAGED_PTY_DIAGNOSTIC";',
+    'const filteredEnv = createAgentProcessEnvironment(process.env, "win32");',
+    'const wrapper = new LocalShellResolver({ platform: "win32" }).resolve(`Write-Output ${marker}`);',
+    "const ptyCases = [",
+    '  ["full-environment-simple", "powershell.exe", ["-NoLogo", "-NoProfile", "-Command", `Write-Output ${marker}`], process.env],',
+    '  ["filtered-environment-simple", "powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `Write-Output ${marker}`], filteredEnv],',
+    '  ["filtered-environment-wrapper", wrapper.executable, wrapper.args, filteredEnv],',
+    "];",
+    "function probePty([label, executable, args, env]) {",
+    "  return new Promise(resolve => {",
+    '    const startedAt = Date.now(); let output = ""; let completed = false; let timer;',
+    "    const finish = result => { if (completed) return; completed = true; clearTimeout(timer); resolve({ label, ...result, hasMarker: output.includes(marker), output: output.slice(0, 180), elapsedMs: Date.now() - startedAt }); };",
+    "    let child;",
+    '    try { child = pty.spawn(executable, args, { name: "xterm-256color", cols: 120, rows: 40, cwd: process.cwd(), env: { ...env } }); }',
+    "    catch (error) { finish({ spawnError: String(error) }); return; }",
+    "    child.onData(data => output += data);",
+    "    child.onExit(({ exitCode, signal }) => finish({ exitCode, signal }));",
+    "    timer = setTimeout(() => { try { child.kill(); } catch {} finish({ timeout: true }); }, 6000);",
+    "  });",
+    "}",
+    "function probePipe() {",
+    "  return new Promise(resolve => {",
+    '    const startedAt = Date.now(); let stdout = ""; let stderr = ""; let completed = false; let timer;',
+    '    const finish = result => { if (completed) return; completed = true; clearTimeout(timer); resolve({ label: "filtered-environment-pipe", ...result, hasMarker: stdout.includes(marker), stdout: stdout.slice(0, 180), stderr: stderr.slice(0, 180), elapsedMs: Date.now() - startedAt }); };',
+    '    const child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `Write-Output ${marker}`], { cwd: process.cwd(), env: filteredEnv, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });',
+    '    child.stdout.on("data", chunk => stdout += chunk); child.stderr.on("data", chunk => stderr += chunk);',
+    '    child.on("error", error => finish({ spawnError: String(error) }));',
+    '    child.on("close", (exitCode, signal) => finish({ exitCode, signal }));',
+    "    timer = setTimeout(() => { child.kill(); finish({ timeout: true }); }, 6000);",
+    "  });",
+    "}",
+    'if (process.platform !== "win32") { console.log(JSON.stringify({ skipped: "Windows launch diagnostics only" })); process.exit(0); }',
+    "const results = []; for (const testCase of ptyCases) results.push(await probePty(testCase)); results.push(await probePipe());",
+    'console.log(JSON.stringify({ environment: { hasPath: Object.keys(filteredEnv).some(key => key.toUpperCase() === "PATH"), hasTemp: Object.keys(filteredEnv).some(key => key.toUpperCase() === "TEMP"), hasTmp: Object.keys(filteredEnv).some(key => key.toUpperCase() === "TMP") }, results }));',
+    "process.exit(0);",
+  ].join("\n");
+  return await run(process.execPath, ["--input-type=module", "-e", source], {
+    cwd: workspace,
+    env: process.env,
+    timeoutMs: 60_000,
+  });
 }
 
 function runLauncher(binPath, args, options) {
@@ -881,7 +933,7 @@ function run(command, args, options) {
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error(`Timed out running ${command} ${args.join(" ")}`));
-    }, 30_000);
+    }, options.timeoutMs ?? 30_000);
     child.once("error", (error) => {
       clearTimeout(timer);
       reject(error);
