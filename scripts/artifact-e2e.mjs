@@ -864,8 +864,26 @@ async function runPackagedPty(runtimeModule, protocolModule, workspace) {
 }
 
 async function runPackagedPtyDiagnostics(runtimeModule, workspace) {
+  const candidateGroups = [
+    ["filtered-plus-PSModulePath", ["PSModulePath"]],
+    ["filtered-plus-AppData", ["APPDATA", "LOCALAPPDATA"]],
+    ["filtered-plus-HomePath", ["HOMEDRIVE", "HOMEPATH"]],
+    [
+      "filtered-plus-machine-context",
+      [
+        "OS",
+        "COMPUTERNAME",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "PROCESSOR_ARCHITECTURE",
+        "PROCESSOR_IDENTIFIER",
+        "NUMBER_OF_PROCESSORS",
+      ],
+    ],
+  ];
   const source = [
     `const runtimeUrl = ${JSON.stringify(runtimeModule)};`,
+    `const candidateGroups = ${JSON.stringify(candidateGroups)};`,
     'const { createRequire } = await import("node:module");',
     "const { createAgentProcessEnvironment, LocalShellResolver } = await import(runtimeUrl);",
     'const pty = createRequire(new URL(runtimeUrl))("node-pty");',
@@ -873,11 +891,12 @@ async function runPackagedPtyDiagnostics(runtimeModule, workspace) {
     'const marker = "CAELUSH_PACKAGED_PTY_DIAGNOSTIC";',
     'const filteredEnv = createAgentProcessEnvironment(process.env, "win32");',
     'const wrapper = new LocalShellResolver({ platform: "win32" }).resolve(`Write-Output ${marker}`);',
-    "const ptyCases = [",
-    '  ["full-environment-simple", "powershell.exe", ["-NoLogo", "-NoProfile", "-Command", `Write-Output ${marker}`], process.env],',
-    '  ["filtered-environment-simple", "powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `Write-Output ${marker}`], filteredEnv],',
-    '  ["filtered-environment-wrapper", wrapper.executable, wrapper.args, filteredEnv],',
-    "];",
+    "function environmentWithExtras(names) {",
+    "  const result = { ...filteredEnv };",
+    "  for (const name of names) { const actualName = Object.keys(process.env).find(key => key.toUpperCase() === name.toUpperCase()); if (actualName !== undefined) result[actualName] = process.env[actualName]; }",
+    "  return result;",
+    "}",
+    'const ptyCases = [["full-environment-simple", "powershell.exe", ["-NoLogo", "-NoProfile", "-Command", `Write-Output ${marker}`], process.env], ["filtered-environment-simple", "powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `Write-Output ${marker}`], filteredEnv], ...candidateGroups.map(([label, names]) => [label, "powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `Write-Output ${marker}`], environmentWithExtras(names)]), ["filtered-environment-wrapper", wrapper.executable, wrapper.args, filteredEnv]];',
     "function probePty([label, executable, args, env]) {",
     "  return new Promise(resolve => {",
     '    const startedAt = Date.now(); let output = ""; let completed = false; let timer;',
@@ -887,7 +906,7 @@ async function runPackagedPtyDiagnostics(runtimeModule, workspace) {
     "    catch (error) { finish({ spawnError: String(error) }); return; }",
     "    child.onData(data => output += data);",
     "    child.onExit(({ exitCode, signal }) => finish({ exitCode, signal }));",
-    "    timer = setTimeout(() => { try { child.kill(); } catch {} finish({ timeout: true }); }, 6000);",
+    "    timer = setTimeout(() => { try { child.kill(); } catch {} finish({ timeout: true }); }, 4500);",
     "  });",
     "}",
     "function probePipe() {",
@@ -898,12 +917,12 @@ async function runPackagedPtyDiagnostics(runtimeModule, workspace) {
     '    child.stdout.on("data", chunk => stdout += chunk); child.stderr.on("data", chunk => stderr += chunk);',
     '    child.on("error", error => finish({ spawnError: String(error) }));',
     '    child.on("close", (exitCode, signal) => finish({ exitCode, signal }));',
-    "    timer = setTimeout(() => { child.kill(); finish({ timeout: true }); }, 6000);",
+    "    timer = setTimeout(() => { child.kill(); finish({ timeout: true }); }, 4500);",
     "  });",
     "}",
     'if (process.platform !== "win32") { console.log(JSON.stringify({ skipped: "Windows launch diagnostics only" })); process.exit(0); }',
     "const results = []; for (const testCase of ptyCases) results.push(await probePty(testCase)); results.push(await probePipe());",
-    'console.log(JSON.stringify({ environment: { hasPath: Object.keys(filteredEnv).some(key => key.toUpperCase() === "PATH"), hasTemp: Object.keys(filteredEnv).some(key => key.toUpperCase() === "TEMP"), hasTmp: Object.keys(filteredEnv).some(key => key.toUpperCase() === "TMP") }, results }));',
+    'console.log(JSON.stringify({ availableCandidates: candidateGroups.flatMap(([, names]) => names).filter(name => Object.keys(process.env).some(key => key.toUpperCase() === name.toUpperCase())), environment: { hasPath: Object.keys(filteredEnv).some(key => key.toUpperCase() === "PATH"), hasTemp: Object.keys(filteredEnv).some(key => key.toUpperCase() === "TEMP"), hasTmp: Object.keys(filteredEnv).some(key => key.toUpperCase() === "TMP") }, results }));',
     "process.exit(0);",
   ].join("\n");
   return await run(process.execPath, ["--input-type=module", "-e", source], {
