@@ -126,6 +126,11 @@ describe.skipIf(!existsSync(chromium.executablePath()))("Desktop account appeara
       page.evaluate(() => {
         const color = (id: string, property: "backgroundColor" | "color" | "borderTopColor") =>
           getComputedStyle(document.getElementById(id)!)[property];
+        const inputTokenProbe = document.createElement("div");
+        inputTokenProbe.style.backgroundColor = "var(--caelush-input)";
+        document.body.append(inputTokenProbe);
+        const inputToken = getComputedStyle(inputTokenProbe).backgroundColor;
+        inputTokenProbe.remove();
         return {
           theme: document.documentElement.dataset.caelushTheme,
           sidebar: color("theme-sidebar", "backgroundColor"),
@@ -142,6 +147,7 @@ describe.skipIf(!existsSync(chromium.executablePath()))("Desktop account appeara
           archiveBulk: color("theme-archive-bulk", "backgroundColor"),
           archiveDanger: color("theme-archive-danger", "backgroundColor"),
           authInput: color("theme-auth-input", "backgroundColor"),
+          inputToken,
           authButton: color("theme-auth-button", "backgroundColor"),
           authButtonText: color("theme-auth-button", "color"),
           authInfo: color("theme-auth-info", "backgroundColor"),
@@ -173,7 +179,9 @@ describe.skipIf(!existsSync(chromium.executablePath()))("Desktop account appeara
     expect(dark.archive).toBe("rgb(24, 24, 24)");
     expect(dark.popover).toBe("rgb(42, 42, 42)");
     expect(dark.archiveDialog).toBe("rgb(42, 42, 42)");
-    expect(dark.authInput).toBe("rgb(54, 54, 54)");
+    expect(light.authInput).toBe(light.inputToken);
+    expect(dark.authInput).toBe(dark.inputToken);
+    expect(dark.authInput).not.toBe(light.authInput);
     expect(dark.revoke).toBe("rgb(61, 39, 41)");
     expect(dark.authButton).toBe("rgb(122, 162, 255)");
     expect(dark.authButtonText).toBe("rgb(18, 18, 18)");
