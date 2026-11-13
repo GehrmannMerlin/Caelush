@@ -2,7 +2,6 @@ import type {
   AIMessage,
   AIModelRequest,
   AIToolSpec,
-  JsonObject,
   ModelCatalog,
   ModelDescriptor,
 } from "@caelush/ai";
@@ -105,7 +104,6 @@ export type ToolBatchAnswer = ToolBatchOutcome;
 export interface ItemLike {
   readonly externalCallId: string;
   readonly toolName: ToolName;
-  readonly args: JsonObject;
 }
 
 /** A deterministic id, so a fixture is byte-stable across runs. */

@@ -90,7 +90,8 @@ describe("Phase 8D ContextCompactionRebuilder", () => {
     const result = await rebuilder.rebuild(rebuildInput());
 
     expect(result).toEqual(expected);
-    expect(received?.checkpoint.sourceRange).toEqual({ from: 1, to: 2 });
+    if (received?.checkpoint.version !== 1) throw new Error("expected a V1 checkpoint");
+    expect(received.checkpoint.sourceRange).toEqual({ from: 1, to: 2 });
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.retainedMessageIds)).toBe(true);
   });

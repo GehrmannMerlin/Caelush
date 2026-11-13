@@ -14,6 +14,26 @@ import {
   type WorkspaceInspectionFacts,
 } from "../src/index.js";
 
+interface ArtifactEvidenceDetails {
+  readonly artifactEvidence: readonly { readonly content?: string; readonly truncated: boolean }[];
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isArtifactEvidenceDetails(value: unknown): value is ArtifactEvidenceDetails {
+  if (!isJsonObject(value) || !Array.isArray(value["artifactEvidence"])) return false;
+  return value["artifactEvidence"].every((artifact: unknown) => {
+    if (!isJsonObject(artifact)) return false;
+    const content = artifact["content"];
+    return (
+      typeof artifact["truncated"] === "boolean" &&
+      (content === undefined || typeof content === "string")
+    );
+  });
+}
+
 const changedFiles = [
   { path: "src/new.ts", changeType: "CREATED" as const },
   { path: "src/old.ts", changeType: "MODIFIED" as const },
@@ -334,9 +354,10 @@ describe("workspace verification", () => {
       result,
     });
     const parsed = VerificationEvidenceSchema.parse(evidence);
-    const details = parsed.details as {
-      artifactEvidence: readonly { content?: string; truncated: boolean }[];
-    };
+    const details = parsed.details;
+    if (!isArtifactEvidenceDetails(details)) {
+      throw new Error("workspace evidence must contain valid artifact evidence");
+    }
     const boundedContent = details.artifactEvidence[0]?.content;
     expect(boundedContent).toBeDefined();
     expect(content.startsWith(boundedContent!)).toBe(true);

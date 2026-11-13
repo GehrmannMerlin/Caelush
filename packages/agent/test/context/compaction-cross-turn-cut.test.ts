@@ -196,7 +196,7 @@ describe("cross-turn compaction cut", () => {
     expect(plan?.retainedTokens).toBeGreaterThanOrEqual(8_000);
     expect(plan?.minimumRetainedTokens).toBeLessThan(8_000);
     expect(plan?.selectedUnitIds).not.toContain(openObligation.id);
-    expect(plan?.sourceCoverageDelta.length).toBeGreaterThan(1);
+    expect(plan?.sourceCoverageDelta?.length ?? 0).toBeGreaterThan(1);
   });
 
   it("folds only closed Tool batches and retains the final incomplete obligation", () => {

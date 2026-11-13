@@ -6,7 +6,7 @@ import {
   createTimestampMs,
   createToolInvocationId,
 } from "@caelush/protocol";
-import type { ToolInvocation } from "@caelush/protocol";
+import type { ToolInvocation, TransientRunEvent } from "@caelush/protocol";
 import {
   createRuntimeProgressSignalProjector,
   type CodingRuntimeProgressEnvelope,
@@ -54,6 +54,28 @@ function projector() {
   });
 }
 
+function chunkOf(event: TransientRunEvent): string {
+  switch (event.type) {
+    case "shell.output":
+    case "process.output":
+    case "tool.output":
+      return event.payload.chunk;
+    default:
+      throw new Error(`expected an output event, received ${event.type}`);
+  }
+}
+
+function streamSequenceOf(event: TransientRunEvent): number {
+  if (event.durability.deliveryClass !== "ORDERED") {
+    throw new Error("expected an ordered output event");
+  }
+  return event.durability.streamSequence;
+}
+
+function isWellFormed(value: string): boolean {
+  return value === Buffer.from(value, "utf8").toString("utf8");
+}
+
 describe("RuntimeProgressSignalProjector", () => {
   it("keeps a mixed Unicode chunk intact across the exact 8 KiB boundary", () => {
     const source = `${"x".repeat(8 * 1024 - 1)}😀中文z`;
@@ -62,16 +84,13 @@ describe("RuntimeProgressSignalProjector", () => {
     );
 
     expect(events).toHaveLength(2);
-    expect(events!.map((event) => event.payload.chunk)).toEqual([
-      "x".repeat(8 * 1024 - 1),
-      "😀中文z",
-    ]);
-    expect(
-      events!.every((event) => Buffer.byteLength(event.payload.chunk, "utf8") <= 8 * 1024),
-    ).toBe(true);
-    expect(events!.every((event) => event.payload.chunk.isWellFormed())).toBe(true);
-    expect(events!.map((event) => event.durability.streamSequence)).toEqual([1, 2]);
-    expect(events!.map((event) => event.payload.chunk).join("")).toBe(source);
+    expect(events!.map(chunkOf)).toEqual(["x".repeat(8 * 1024 - 1), "😀中文z"]);
+    expect(events!.every((event) => Buffer.byteLength(chunkOf(event), "utf8") <= 8 * 1024)).toBe(
+      true,
+    );
+    expect(events!.every((event) => isWellFormed(chunkOf(event)))).toBe(true);
+    expect(events!.map(streamSequenceOf)).toEqual([1, 2]);
+    expect(events!.map(chunkOf).join("")).toBe(source);
   });
 
   it("projects 1 MiB shell, process and generic output without growing-prefix re-encoding", () => {
@@ -81,7 +100,7 @@ describe("RuntimeProgressSignalProjector", () => {
     const originalEncode = TextEncoder.prototype.encode;
     let encodedBytes = 0;
     const encodeSpy = vi.spyOn(TextEncoder.prototype, "encode").mockImplementation(function (
-      this: TextEncoder,
+      this: InstanceType<typeof TextEncoder>,
       value?: string,
     ) {
       const encoded = originalEncode.call(this, value);
@@ -115,11 +134,11 @@ describe("RuntimeProgressSignalProjector", () => {
 
     expect(encodedBytes).toBeLessThanOrEqual(sourceBytes * 6);
     for (const events of [shellEvents!, processEvents!, toolEvents!]) {
-      const chunks = events.map((event) => event.payload.chunk);
+      const chunks = events.map(chunkOf);
       expect(events).toHaveLength(128);
       expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 8 * 1024)).toBe(true);
       expect(chunks.join("")).toBe(source);
-      expect(events.map((event) => event.durability.streamSequence)).toEqual(
+      expect(events.map(streamSequenceOf)).toEqual(
         Array.from({ length: 128 }, (_, index) => index + 1),
       );
     }

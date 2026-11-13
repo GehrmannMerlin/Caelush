@@ -32,6 +32,7 @@ const TURN_RESULT: AIModelTurnResult = {
   providerId: "test",
   model: { provider: "test", model: "model-a" },
   text: "answer",
+  toolRequests: [],
   toolCalls: [],
   finishReason: "STOP",
   resolution: {

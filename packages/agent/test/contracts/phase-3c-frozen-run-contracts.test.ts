@@ -120,6 +120,12 @@ type FrozenToolTurnResult =
     }
   | { readonly kind: "RESOURCE_WAIT"; readonly reason: "NO_PROGRESS" }
   | {
+      readonly kind: "EFFECT_UNCONFIRMED";
+      readonly invocationId: import("@caelush/protocol").ToolInvocationId;
+      readonly toolName: import("@caelush/protocol").ToolName;
+      readonly reasonCode: "DOES_NOT_MATCH" | "INCONCLUSIVE" | "UNSUPPORTED" | "UNAVAILABLE";
+    }
+  | {
       readonly kind: "REPLAN";
       readonly syntheticResults: readonly import("@caelush/agent").AgentToolResult[];
     };
@@ -194,6 +200,39 @@ interface FrozenRunTransitionPlanner {
 
 interface FrozenRunExecutionCoordinator {
   next(snapshot: RunExecutionSnapshot, now: TimestampMs): RunExecutionDirective;
+}
+
+interface FrozenPendingRunInput {
+  readonly inputId: string;
+  readonly acceptedSequence: number;
+  readonly text: string;
+}
+
+interface FrozenRecordedRunInput {
+  readonly inputId: string;
+  readonly acceptedSequence: number;
+  readonly messageId: string;
+}
+
+interface FrozenRunInputSnapshot {
+  readonly pending: readonly FrozenPendingRunInput[];
+  readonly recorded: readonly FrozenRecordedRunInput[];
+  readonly pendingCount: number;
+  readonly recordedCount: number;
+  readonly unassignedCount: number;
+}
+
+interface FrozenRunExecutionSnapshot {
+  readonly run: import("@caelush/protocol").AgentRun;
+  readonly state?: import("@caelush/protocol").AgentState;
+  readonly stateRevision?: number;
+  readonly activeStep?: import("@caelush/protocol").AgentStep;
+  readonly activeStepProviderStarted?: boolean;
+  readonly conversationRecords: readonly import("@caelush/agent").AgentMessageRecord[];
+  readonly continuation?: import("@caelush/agent").RunContinuationCheckpoint;
+  readonly continuationRevision?: number;
+  readonly cancellationIntent?: import("@caelush/protocol").RunCancellationIntent;
+  readonly runInputs?: FrozenRunInputSnapshot;
 }
 
 /* ------------------------------------------------------------- assertions */
@@ -303,7 +342,12 @@ type ToolTurnExact = Expect<Equal<ToolTurnResult, FrozenToolTurnResult>>;
 type ToolTurnKinds = Expect<
   Equal<
     ToolTurnResult["kind"],
-    "COMPLETED" | "WAITING_APPROVAL" | "BUDGET_EXCEEDED" | "RESOURCE_WAIT" | "REPLAN"
+    | "COMPLETED"
+    | "WAITING_APPROVAL"
+    | "BUDGET_EXCEEDED"
+    | "RESOURCE_WAIT"
+    | "EFFECT_UNCONFIRMED"
+    | "REPLAN"
   >
 >;
 /* The completion gate contract: four `kind`-discriminated decisions, no `outcome`, no drift. */
@@ -434,12 +478,15 @@ type SnapshotKeys = Expect<
     | "state"
     | "stateRevision"
     | "activeStep"
+    | "activeStepProviderStarted"
     | "conversationRecords"
     | "continuation"
     | "continuationRevision"
     | "cancellationIntent"
+    | "runInputs"
   >
 >;
+type SnapshotExact = Expect<Equal<RunExecutionSnapshot, FrozenRunExecutionSnapshot>>;
 type SnapshotHasNoVerificationPlan = Expect<
   Equal<Extract<Keys<RunExecutionSnapshot>, "verificationPlan">, never>
 >;
@@ -459,6 +506,8 @@ type ContinuationTypes = Expect<
     | "AWAITING_VERIFICATION"
     | "WAITING_VERIFICATION_REPAIR"
     | "WAITING_RESOURCE"
+    | "WAITING_STEERING"
+    | "WAITING_PROVIDER"
     | "WAITING_RETRY"
   >
 >;
@@ -595,6 +644,7 @@ export type PHASE_3C_ASSERTIONS = [
   StorePortKeys,
   StorePortHasNoVerification,
   SnapshotKeys,
+  SnapshotExact,
   SnapshotHasNoVerificationPlan,
   ConversationRecordsAreAgentRecords,
   ContinuationTypes,

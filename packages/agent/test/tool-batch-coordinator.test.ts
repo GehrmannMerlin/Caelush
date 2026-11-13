@@ -23,6 +23,7 @@ import {
   type DurableToolExecutionOutcome,
   type PreparedToolCall,
   type ToolBatchCoordinator,
+  type ToolBatchCall,
   type ToolBatchItemOutcome,
   type ToolBatchOutcome,
   type ToolCallPreparationOutcome,
@@ -204,7 +205,7 @@ function harness(
   };
 }
 
-function request(calls: readonly ToolCallRequest[], signal = new AbortController().signal) {
+function request(calls: readonly ToolBatchCall[], signal = new AbortController().signal) {
   return {
     runId: createRunId(),
     sessionId: createSessionId(),

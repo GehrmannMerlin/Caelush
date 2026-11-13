@@ -31,7 +31,14 @@ const expected = JSON.parse(
   keyId: string;
 };
 
-function verify(envelope = vector.envelope, overrides: Record<string, unknown> = {}) {
+function verify(
+  envelope = vector.envelope,
+  overrides: {
+    allowedReleaseHosts?: readonly string[];
+    now?: number;
+    acceptedPolicy?: { revision: number; digestSha256: string };
+  } = {},
+) {
   return verifySignedUpdatePolicy(JSON.stringify(envelope), {
     publicKeys: vector.testOnlyPublicKeys,
     allowedReleaseHosts: vector.testOnlyAllowedReleaseHosts,

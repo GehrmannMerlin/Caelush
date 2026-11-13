@@ -111,6 +111,7 @@ describe("Phase 7D canonical contracts", () => {
       estimatedTokensBefore: 100,
       selectedTokens: 40,
       retainedTokens: 60,
+      minimumRetainedTokens: 60,
       targetRecentTailTokens: 60,
       minRecentTailTokens: 40,
     };

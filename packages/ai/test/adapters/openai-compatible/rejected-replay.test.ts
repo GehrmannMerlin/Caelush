@@ -78,9 +78,11 @@ async function runWithReplay(): Promise<{
     credentials: { apiKey: "fixture-key" },
     headers: {},
     queryParams: {},
-    compatibility: undefined,
     transport: {
-      fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+      fetch: async (
+        _input: Parameters<typeof globalThis.fetch>[0],
+        init?: Parameters<typeof globalThis.fetch>[1],
+      ) => {
         capturedBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
         return sseResponse([
           openAIChunk({

@@ -84,7 +84,7 @@ function record(input: {
   readonly epochId: string;
   readonly ordinal: number;
   readonly sequence: number;
-  readonly kind: "BASELINE" | "DELTA";
+  readonly kind: "BASELINE" | "DELTA" | "NOOP";
   readonly states: readonly PromptSurfaceSectionState[];
   readonly fingerprint: string;
 }): PromptSurfaceRecord {

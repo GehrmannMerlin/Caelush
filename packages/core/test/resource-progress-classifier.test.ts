@@ -45,7 +45,9 @@ function rejection(overrides: { readonly content?: string; readonly issues?: unk
 }
 
 function factFor(overrides: { readonly patchText?: string; readonly property?: string }) {
-  const fact = preparationFailureFactFromRejection(rejection({ content: overrides.patchText }));
+  const fact = preparationFailureFactFromRejection(
+    rejection(overrides.patchText === undefined ? {} : { content: overrides.patchText }),
+  );
   if (fact === undefined) throw new Error("expected a preparation failure fact");
   if (overrides.property === undefined) return fact;
   return {

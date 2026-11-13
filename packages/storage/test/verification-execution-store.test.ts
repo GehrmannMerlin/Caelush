@@ -297,7 +297,9 @@ describe("atomic verification execution persistence", () => {
         details: { kind: "WORKSPACE", purpose: "CHANGESET_SANITY" },
         capturedAt: createTimestampMs(capturedAt),
       }),
-      onCommittedEvents: (events) => notified.push(...events.map((event) => event.type)),
+      onCommittedEvents: (events) => {
+        notified.push(...events.map((event) => event.type));
+      },
       executors: {
         WORKSPACE: {
           async execute(check) {

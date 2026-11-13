@@ -9,6 +9,11 @@ import {
 
 const fixtureRoot = new URL("./fixtures/", import.meta.url);
 
+function requireValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) throw new Error(`Expected ${label} to be present.`);
+  return value;
+}
+
 async function readJson(url: URL) {
   return JSON.parse(await readFile(url, "utf8")) as Record<string, unknown>;
 }
@@ -33,8 +38,12 @@ describe("Cloud OpenAPI v1 contract guard", () => {
       schemas: { AuthTokens: { properties: Record<string, Record<string, unknown>> } };
     };
     for (const field of ["accessToken", "refreshToken"]) {
-      expect(components.schemas.AuthTokens.properties[field]["x-caelush-secret"]).toBe(true);
-      expect(components.schemas.AuthTokens.properties[field].writeOnly).toBeUndefined();
+      const property = requireValue(
+        components.schemas.AuthTokens.properties[field],
+        `AuthTokens.${field}`,
+      );
+      expect(property["x-caelush-secret"]).toBe(true);
+      expect(property.writeOnly).toBeUndefined();
     }
   });
 
@@ -72,13 +81,16 @@ describe("Cloud OpenAPI v1 contract guard", () => {
     const components = candidate.components as {
       schemas: Record<string, { required: string[]; properties: Record<string, unknown> }>;
     };
-    components.schemas.RegisterRequest.required.push("clientNonce");
-    components.schemas.RegisterRequest.properties.clientNonce = { type: "string" };
+    const registerRequest = requireValue(components.schemas.RegisterRequest, "RegisterRequest");
+    registerRequest.required.push("clientNonce");
+    registerRequest.properties.clientNonce = { type: "string" };
     const candidatePaths = candidate.paths as Record<
       string,
       Record<string, Record<string, unknown>>
     >;
-    candidatePaths["/v1/auth/login"].post["x-caelush-authentication"] = "NONE";
+    const loginPath = requireValue(candidatePaths["/v1/auth/login"], "POST /v1/auth/login");
+    const loginPost = requireValue(loginPath.post, "POST /v1/auth/login operation");
+    loginPost["x-caelush-authentication"] = "NONE";
 
     const errors = compareCloudOpenApiContracts(baseline, candidate);
     expect(errors).toContain(
@@ -95,7 +107,7 @@ describe("Cloud OpenAPI v1 contract guard", () => {
     };
     const baseline = structuredClone(document);
     const candidate = structuredClone(document);
-    candidate.components.schemas.RegisterRequest.minProperties = 1;
+    requireValue(candidate.components.schemas.RegisterRequest, "RegisterRequest").minProperties = 1;
 
     expect(compareCloudOpenApiContracts(baseline, candidate)).toContain(
       "UNDETERMINED SCHEMA_KEYWORD_CHANGED: POST /v1/auth/register requestBody changed minProperties; manual compatibility review is required.",

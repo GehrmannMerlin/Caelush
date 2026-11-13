@@ -12,13 +12,21 @@ import type { AIModelTurnResult } from "@caelush/ai";
 const model = { provider: "fixture", model: "fixture-model" };
 
 function makeTurnResult(overrides: Partial<AIModelTurnResult> = {}): AIModelTurnResult {
+  const toolCalls = overrides.toolCalls ?? [];
   return {
     // The AI call id and the Protocol call id are two brands of the same string.
     callId: createLLMCallId() as unknown as AIModelTurnResult["callId"],
     providerId: "fixture",
     model,
     text: "candidate",
-    toolCalls: [],
+    toolRequests:
+      overrides.toolRequests ??
+      toolCalls.map((call, sourceOrdinal) => ({
+        kind: "EXECUTABLE" as const,
+        sourceOrdinal,
+        call,
+      })),
+    toolCalls,
     finishReason: "STOP",
     resolution: {
       api: "test-api",

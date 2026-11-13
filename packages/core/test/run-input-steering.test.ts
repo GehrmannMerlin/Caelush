@@ -345,9 +345,11 @@ describe("Run input steering through the direct driver", () => {
       if (callIndex === 0) {
         const store = storeRef.current!;
         store.acceptPending("a correction");
+        const state = store.stateRevision;
+        const continuation = store.continuationRevision;
         observedDuringTurn = {
-          state: store.stateRevision,
-          continuation: store.continuationRevision,
+          ...(state === undefined ? {} : { state }),
+          ...(continuation === undefined ? {} : { continuation }),
         };
         return turn("answer");
       }

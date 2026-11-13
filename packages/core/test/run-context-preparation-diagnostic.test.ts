@@ -224,7 +224,7 @@ describe("Context preparation settlement error", () => {
             reason: "BASELINE_TOO_LARGE",
             stage: "surface_capacity",
             // A producer that ignored the type: neither value is a bound a reader could trust.
-            dimension: `${CANARY}\n`,
+            dimension: `${CANARY}\n` as never,
             observed: -1,
             limit: 1.5,
           },

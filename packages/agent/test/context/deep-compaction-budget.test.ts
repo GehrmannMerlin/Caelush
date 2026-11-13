@@ -56,7 +56,16 @@ describe("deep compaction retention budget", () => {
       });
       const policy = createContextPolicy({
         model,
-        options: { requestHeadroom: headroom, deepCompaction: DEEP_COMPACTION_V2_DEFAULTS },
+        options: {
+          requestHeadroom: {
+            expectedGrowthTokens: headroom.expectedGrowthTokens,
+            postCompactionRatio: headroom.postCompactionRatio,
+            ...(headroom.proactiveRatio === undefined
+              ? {}
+              : { proactiveRatio: headroom.proactiveRatio }),
+          },
+          deepCompaction: DEEP_COMPACTION_V2_DEFAULTS,
+        },
       });
       const fixedTokens = 12_000;
       const protectedRecentTokens = 8_000;

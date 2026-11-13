@@ -52,6 +52,7 @@ export type WorkspaceManifest = {
   name?: unknown;
   private?: unknown;
   type?: unknown;
+  main?: unknown;
   exports?: unknown;
   dependencies?: Record<string, unknown>;
   devDependencies?: Record<string, unknown>;

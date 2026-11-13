@@ -5,15 +5,13 @@ function withUtf8ScanGuard(maxScannedUnits: number, action: () => void): number 
   const originalByteLength = Buffer.byteLength.bind(Buffer);
   const originalCharCodeAt = String.prototype.charCodeAt;
   let scannedUnits = 0;
-  const byteLengthImplementation = function (
-    value: string | ArrayBuffer | ArrayBufferView,
-    encoding?: BufferEncoding,
-  ): number {
+  const byteLengthImplementation = (...args: Parameters<typeof Buffer.byteLength>): number => {
+    const [value] = args;
     scannedUnits += typeof value === "string" ? value.length : value.byteLength;
     if (scannedUnits > maxScannedUnits) {
       throw new Error("UTF-8 byte accounting rescanned retained output");
     }
-    return originalByteLength(value, encoding);
+    return originalByteLength(...args);
   };
   const byteLengthSpy = vi
     .spyOn(Buffer, "byteLength")
@@ -69,7 +67,7 @@ describe("HeadTailOutputBuffer", () => {
     const snapshot = buffer.snapshot();
     expect(snapshot.text.startsWith("abcd")).toBe(true);
     expect(snapshot.text.endsWith("😀")).toBe(true);
-    expect(snapshot.text.isWellFormed()).toBe(true);
+    expect(Buffer.from(snapshot.text, "utf8").toString("utf8")).toBe(snapshot.text);
     expect(snapshot).toMatchObject({ totalBytes: 10, omittedBytes: 2 });
   });
 
@@ -126,7 +124,7 @@ describe("HeadTailOutputBuffer", () => {
 
     expect(snapshot.text.startsWith("甲")).toBe(true);
     expect(snapshot.text.endsWith("🙂")).toBe(true);
-    expect(snapshot.text.isWellFormed()).toBe(true);
+    expect(Buffer.from(snapshot.text, "utf8").toString("utf8")).toBe(snapshot.text);
     expect(snapshot.totalBytes).toBe(Buffer.byteLength(source, "utf8"));
     expect(snapshot.omittedBytes).toBe(snapshot.totalBytes - Buffer.byteLength("甲🙂", "utf8"));
   });

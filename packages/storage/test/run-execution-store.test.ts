@@ -156,7 +156,7 @@ describe("SqliteRunExecutionStore", () => {
         ...(encoded.modelProjectionVersion === undefined
           ? {}
           : { modelProjectionVersion: encoded.modelProjectionVersion }),
-        sourceStepId: assistant.sourceStepId,
+        ...(assistant.sourceStepId === undefined ? {} : { sourceStepId: assistant.sourceStepId }),
         createdAt: assistant.createdAt,
         source: assistant.source,
         audience: assistant.audience,

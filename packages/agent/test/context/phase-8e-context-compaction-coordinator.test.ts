@@ -69,6 +69,7 @@ const plan = {
   estimatedTokensBefore: 80,
   selectedTokens: 60,
   retainedTokens: 20,
+  minimumRetainedTokens: 20,
   targetRecentTailTokens: 10,
   minRecentTailTokens: 5,
 } satisfies ContextCompactionPlan;

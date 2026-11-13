@@ -403,13 +403,23 @@ describe("OpenAI-compatible request golden: messages", () => {
     );
 
     const body = h.body();
-    expect(body.messages.map((message) => message.role)).toEqual([
+    const messages = body.messages;
+    if (!Array.isArray(messages)) throw new Error("captured request must contain messages");
+    expect(messages.map((message: { readonly role: string }) => message.role)).toEqual([
       "user",
       "assistant",
       "tool",
       "user",
     ]);
-    const replayedAssistant = body.messages[1];
+    const replayedAssistant = messages[1] as {
+      readonly role: string;
+      readonly content: string | null;
+      readonly reasoning_content?: string;
+      readonly tool_calls?: readonly {
+        readonly id: string;
+        readonly function: { readonly arguments: string };
+      }[];
+    };
     expect(
       replayedAssistant.role === "assistant" &&
         replayedAssistant.content === null &&
@@ -418,12 +428,12 @@ describe("OpenAI-compatible request golden: messages", () => {
         replayedAssistant.tool_calls?.[0]?.function.arguments ===
           '{"path":"src/a.ts", "patch":"add"}',
     ).toBe(true);
-    expect(body.messages[2]).toEqual({
+    expect(messages[2]).toEqual({
       role: "tool",
       tool_call_id: "call-raw",
       content: "applied",
     });
-    expect(body.messages[3]).toEqual({ role: "user", content: "continue" });
+    expect(messages[3]).toEqual({ role: "user", content: "continue" });
   });
 
   it("replays every selected historical Assistant in original Tool protocol order", async () => {

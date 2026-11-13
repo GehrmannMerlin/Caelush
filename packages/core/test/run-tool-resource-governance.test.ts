@@ -230,8 +230,8 @@ describe("Phase 3D resource admission", () => {
     expect(h.store.snapshot.state?.status).toBe("WAITING_RESOURCE");
     const continuation = h.store.snapshot.continuation;
     expect(continuation?.type).toBe("WAITING_RESOURCE");
-    if (continuation?.type === "WAITING_RESOURCE") {
-      expect(continuation.reason).toBe("NO_PROGRESS");
+    expect(continuation).toMatchObject({ type: "WAITING_RESOURCE", reason: "NO_PROGRESS" });
+    if (continuation?.type === "WAITING_RESOURCE" && continuation.reason === "NO_PROGRESS") {
       // The frozen `RESOURCE_WAIT` result carries a reason and nothing else, so the count comes
       // from the Core-private observation — the number the admission decision actually read.
       expect(continuation.replanCount).toBe(2);

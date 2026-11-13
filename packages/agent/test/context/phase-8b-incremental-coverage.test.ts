@@ -218,6 +218,7 @@ function planForRange(
     estimatedTokensBefore: 100,
     selectedTokens: 60,
     retainedTokens: 40,
+    minimumRetainedTokens: 40,
     targetRecentTailTokens: 40,
     minRecentTailTokens: 20,
   };

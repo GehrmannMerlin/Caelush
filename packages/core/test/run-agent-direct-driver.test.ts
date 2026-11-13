@@ -372,6 +372,13 @@ function turn(partial: Partial<AIModelTurnResult> = {}): AIModelTurnResult {
     providerId: "fixture",
     model: { provider: "fixture", model: "fixture-model" },
     text: partial.text ?? "candidate",
+    toolRequests:
+      partial.toolRequests ??
+      (partial.toolCalls ?? []).map((call, sourceOrdinal) => ({
+        kind: "EXECUTABLE" as const,
+        sourceOrdinal,
+        call,
+      })),
     toolCalls: partial.toolCalls ?? [],
     ...(partial.finishReason === undefined
       ? { finishReason: "STOP" as const }

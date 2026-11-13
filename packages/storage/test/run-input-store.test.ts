@@ -5,6 +5,7 @@ import {
   createTimestampMs,
   type RunId,
   type SessionId,
+  type StepId,
 } from "@caelush/protocol";
 import {
   agentAssistantTextPart,
@@ -396,7 +397,7 @@ function steeringMessage(runId: RunId, sessionId: SessionId, text: string) {
   };
 }
 
-function assistantMessage(runId: RunId, sessionId: SessionId, stepId: string, text: string) {
+function assistantMessage(runId: RunId, sessionId: SessionId, stepId: StepId, text: string) {
   const turns = createDeterministicConversationTurnIdFactory();
   const factory = createAgentMessageFactory({
     ids: createAgentMessageIdFactory(),
@@ -409,7 +410,7 @@ function assistantMessage(runId: RunId, sessionId: SessionId, stepId: string, te
     runId,
     sessionId,
     conversationTurnId: turns.forRun(runId),
-    sourceStepId: stepId as never,
+    sourceStepId: stepId,
     source: modelMessageSource("llm_final"),
     phase: "FINAL_ANSWER",
     content: [agentAssistantTextPart(text)],

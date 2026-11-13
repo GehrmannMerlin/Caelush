@@ -139,6 +139,7 @@ function scriptedGateway(scripts: readonly (readonly AIStreamEvent[])[]): {
         calls += 1;
         return Promise.resolve({
           callId: `llm_0195f3a0-0000-7000-8000-00000000000${calls}` as never,
+          takePrivateCompletion: () => undefined,
           events: (async function* generate(): AsyncGenerator<AIStreamEvent> {
             for (const event of script) yield event;
           })(),

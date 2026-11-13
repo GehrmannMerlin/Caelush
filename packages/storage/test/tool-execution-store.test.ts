@@ -329,7 +329,11 @@ describe("SqliteToolExecutionStore", () => {
           expectedRevision: 2,
           observation,
           extension: codingEffectsExtension([
-            { type: "FILE_CHANGE", summary: { path: "rollback.ts", changeType: "CREATED" } },
+            {
+              type: "FILE_CHANGE",
+              invocationId: invocation.id,
+              summary: { path: "rollback.ts", changeType: "CREATED" },
+            },
           ]),
           events: [duplicateEvent, duplicateEvent],
         }),
@@ -397,7 +401,7 @@ describe("SqliteToolExecutionStore", () => {
         expectedRevision: 2,
         observation,
         extension: codingEffectsExtension([
-          { type: "FILE_CHANGE", summary: event.payload.summary },
+          { type: "FILE_CHANGE", invocationId: invocation.id, summary: event.payload.summary },
         ]),
         events: [event],
       });

@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import {
   VerificationStageRunner,
   type VerificationCheckExecutor,
+  type VerificationExecutionStorePort,
   type VerificationExecutionRecoveryStorePort,
 } from "../src/index.js";
 

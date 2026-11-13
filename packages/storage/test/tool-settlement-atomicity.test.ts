@@ -7,6 +7,7 @@ import {
   type AgentRun,
   type AgentSession,
   type AgentStep,
+  type ToolInvocationId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
@@ -136,12 +137,16 @@ async function running(
   return started;
 }
 
-const EFFECTS: readonly ToolEffect[] = [
-  {
-    type: "FILE_CHANGE",
-    summary: { path: "src/a.ts", changeType: "MODIFIED", additions: 2, deletions: 1 },
-  },
-];
+const FILE_CHANGE_SUMMARY = {
+  path: "src/a.ts",
+  changeType: "MODIFIED" as const,
+  additions: 2,
+  deletions: 1,
+};
+
+function effectsFor(invocationId: ToolInvocationId): readonly ToolEffect[] {
+  return [{ type: "FILE_CHANGE", invocationId, summary: FILE_CHANGE_SUMMARY }];
+}
 
 describe("Phase 4C atomic Tool settlement", () => {
   it("settles the invocation, the observation, the state projection, the events and the budget together", async () => {
@@ -190,14 +195,14 @@ describe("Phase 4C atomic Tool settlement", () => {
         timestamp: createTimestampMs(130),
         visibility: "USER_VISIBLE" as const,
         durability: { kind: "DURABLE" as const, version: 1 as const },
-        payload: { summary: EFFECTS[0]!.type === "FILE_CHANGE" ? EFFECTS[0]!.summary : undefined },
+        payload: { summary: FILE_CHANGE_SUMMARY },
       };
       await storage.toolExecution.commit({
         sessionId: run.sessionId,
         invocation: completed,
         expectedRevision: 2,
         observation,
-        extension: codingEffectsExtension(EFFECTS),
+        extension: codingEffectsExtension(effectsFor(invocation.id)),
         events: [fileEvent as never],
       });
 
@@ -477,7 +482,7 @@ describe("Phase 4C atomic Tool settlement", () => {
           invocation: completed,
           expectedRevision: 2,
           observation,
-          extension: codingEffectsExtension(EFFECTS),
+          extension: codingEffectsExtension(effectsFor(invocation.id)),
           events: [],
         }),
       ).rejects.toBeTruthy();
@@ -519,7 +524,7 @@ describe("Phase 4C atomic Tool settlement", () => {
           invocation: completed,
           expectedRevision: 2,
           observation,
-          extension: codingEffectsExtension(EFFECTS),
+          extension: codingEffectsExtension(effectsFor(invocation.id)),
           events: [],
         }),
       ).rejects.toBeTruthy();

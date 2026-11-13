@@ -29,6 +29,7 @@ function turn(partial: Partial<AIModelTurnResult> = {}): AIModelTurnResult {
     providerId: MODEL.provider,
     model: MODEL,
     text: "",
+    toolRequests: [],
     toolCalls: [],
     finishReason: "STOP",
     resolution: RESOLUTION as never,

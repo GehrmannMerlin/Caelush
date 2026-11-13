@@ -215,7 +215,7 @@ describe("Phase 3F completion assembly", () => {
         },
       },
       git: {
-        async diff({ path }) {
+        async diff({ path }: { readonly path: string }) {
           expect(path).toBe("package.json");
           return {
             path,

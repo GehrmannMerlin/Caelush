@@ -82,7 +82,9 @@ const WORK_PROGRESS_SOURCE = "agent.work-progress";
 function workProgressProvider(): ContextSourceProvider {
   return Object.freeze({
     id: WORK_PROGRESS_SOURCE as never,
-    async collect(input): Promise<ContextSourceResult> {
+    async collect(
+      input: Parameters<ContextSourceProvider["collect"]>[0],
+    ): Promise<ContextSourceResult> {
       const text = `Settled through step ${String(input.turn.sequence)} of the current Run.`;
       return Object.freeze({
         providerId: WORK_PROGRESS_SOURCE as never,
@@ -336,7 +338,7 @@ describe("Context pressure preflight parity", () => {
     expect(
       report.effectiveInputLimitTokens +
         report.requestOverheadTokens +
-        prepared.requestBudget.outputReserveTokens +
+        outputBudgetTokens(prepared.requestBudget) +
         prepared.requestBudget.safetyReserveTokens,
     ).toBe(MODEL.limits.contextWindowTokens);
     expect(report.remainingTokens).toBe(
@@ -363,7 +365,7 @@ describe("Context pressure preflight parity", () => {
       folded.report.estimatedInputTokens +
       1 +
       replayed.report.requestOverheadTokens +
-      replayed.requestBudget.outputReserveTokens +
+      outputBudgetTokens(replayed.requestBudget) +
       replayed.requestBudget.safetyReserveTokens;
     const tightModel: ModelDescriptor = {
       ...MODEL,
@@ -408,3 +410,11 @@ describe("Context pressure preflight parity", () => {
     expect(retry.report.preflight?.matchesSentProjection).toBe(true);
   });
 });
+
+function outputBudgetTokens(
+  budget: import("../../src/loop/types.js").ContextRequestBudget,
+): number {
+  return budget.version === "TURN_BUDGET_V3"
+    ? budget.outputAllowanceTokens
+    : budget.outputReserveTokens;
+}

@@ -8,6 +8,7 @@ import {
   type ToolName,
 } from "@caelush/protocol";
 import { describe, expect, it, vi } from "vitest";
+import { isWellFormedUtf16 } from "./utf16.js";
 import { boundToolResultContent as boundToolResultContentFromSource } from "../src/tools/result/result-policy.js";
 import {
   boundToolResultContent,
@@ -539,7 +540,7 @@ describe("ToolResultLimits and the standalone helpers", () => {
     expect(scannedCodeUnits).toBeLessThanOrEqual(source.length * 2);
     expect(Buffer.byteLength(result!, "utf8")).toBeLessThanOrEqual(64 * 1024);
     expect(result!.endsWith(TOOL_RESULT_TRUNCATION_MARKER)).toBe(true);
-    expect(result!.isWellFormed()).toBe(true);
+    expect(isWellFormedUtf16(result!)).toBe(true);
     expect(source.startsWith(result!.slice(0, -TOOL_RESULT_TRUNCATION_MARKER.length))).toBe(true);
   });
 

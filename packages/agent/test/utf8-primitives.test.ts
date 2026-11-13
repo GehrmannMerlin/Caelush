@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isWellFormedUtf16 } from "./utf16.js";
 import {
   splitUtf8ByBytes,
   utf8ByteLength,
@@ -26,7 +27,7 @@ describe("Agent UTF-8 primitives", () => {
 
     expect(chunks).toEqual(["x".repeat(8 * 1024 - 1), "😀中中z"]);
     expect(chunks.every((chunk) => utf8ByteLength(chunk) <= 8 * 1024)).toBe(true);
-    expect(chunks.every((chunk) => chunk.isWellFormed())).toBe(true);
+    expect(chunks.every(isWellFormedUtf16)).toBe(true);
     expect(chunks.join("")).toBe(value);
   });
 

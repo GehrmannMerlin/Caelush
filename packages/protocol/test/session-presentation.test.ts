@@ -85,7 +85,8 @@ describe("session turn presentation protocol", () => {
       highWatermark: 12,
       nextCursor: "seq_12",
     });
-    expect(response.highWatermark).toBe(12);
+    expect("highWatermark" in response).toBe(true);
+    if ("highWatermark" in response) expect(response.highWatermark).toBe(12);
     expect(response.capabilityVersion).toBe(1);
   });
 

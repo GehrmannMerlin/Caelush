@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isWellFormedUtf16 } from "../utf16.js";
 
 import {
   AGENT_CONTEXT_SOURCE_IDS,
@@ -242,7 +243,7 @@ describe("Phase 7C Generic Source Providers", () => {
     expect(projected.kind).toBe("TEXT");
     if (projected.kind !== "TEXT") throw new Error("expected bounded text contribution");
     expect(Buffer.byteLength(projected.text, "utf8")).toBeLessThanOrEqual(16 * 1024);
-    expect(projected.text.isWellFormed()).toBe(true);
+    expect(isWellFormedUtf16(projected.text)).toBe(true);
     expect(content.startsWith(projected.text)).toBe(true);
     const nextCharacter = Array.from(content.slice(projected.text.length))[0];
     expect(nextCharacter).toBeDefined();

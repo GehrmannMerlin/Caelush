@@ -126,6 +126,39 @@ interface FrozenContextBuildReport {
   readonly compactionCount: number;
   readonly requestOverheadTokens: number;
   readonly contributions: readonly FrozenContextBuildContribution[];
+  readonly preflight?: FrozenContextPreflightReport;
+  readonly turnBudget?: FrozenTurnBudgetDecision;
+}
+
+interface FrozenContextPreflightReport {
+  readonly estimatedInputTokens: number;
+  readonly replayTokens: number;
+  readonly projectionFingerprint: string;
+  readonly sentFingerprint: string;
+  readonly compacted: boolean;
+  readonly matchesSentProjection?: boolean;
+}
+
+interface FrozenBoundedBudgetSources {
+  readonly window: "MODEL_LIMITS";
+  readonly output: "EXPLICIT_SETTING" | "PREFERRED_ALLOWANCE" | "AVAILABLE_ROOM";
+  readonly safety: "HEADROOM_V1_SAFETY";
+  readonly growth: "HEADROOM_V1_EXPECTED_GROWTH";
+}
+
+interface FrozenTurnBudgetDecision {
+  readonly version: "TURN_BUDGET_DECISION_V1";
+  readonly algorithm: "HEADROOM_V1";
+  readonly modelProfileRef: string;
+  readonly preparedSurfaceDigest: string;
+  readonly windowTokens: number;
+  readonly inputTokens: number;
+  readonly outputAllowanceTokens: number;
+  readonly safetyTokens: number;
+  readonly expectedGrowthTokens: number;
+  readonly remainingTokens: number;
+  readonly decision: "KEEP" | "ADJUST_OUTPUT" | "PREPARE_HISTORY";
+  readonly sources: FrozenBoundedBudgetSources;
 }
 
 interface FrozenToolObservationPolicySnapshot {
@@ -133,11 +166,19 @@ interface FrozenToolObservationPolicySnapshot {
   readonly maxObservationBatchTokens: number;
 }
 
-interface FrozenContextRequestBudget {
-  readonly version: "ADAPTIVE_V1" | "LEGACY_FULL_OUTPUT_V1";
-  readonly outputReserveTokens: number;
-  readonly safetyReserveTokens: number;
-}
+type FrozenContextRequestBudget =
+  | {
+      readonly version: "ADAPTIVE_V1" | "LEGACY_FULL_OUTPUT_V1";
+      readonly outputReserveTokens: number;
+      readonly safetyReserveTokens: number;
+    }
+  | {
+      readonly version: "TURN_BUDGET_V3";
+      readonly algorithm: "HEADROOM_V1";
+      readonly outputAllowanceTokens: number;
+      readonly safetyReserveTokens: number;
+      readonly expectedGrowthTokens: number;
+    };
 
 interface FrozenSelectedAssistantReplaySource {
   readonly messageId: string;
@@ -186,6 +227,7 @@ interface FrozenAgentLoopAdvanceInput {
   readonly tools: readonly AIToolSpec[];
   readonly modelSettings?: AIModelSettings;
   readonly signal: AbortSignal;
+  readonly privateCompletionSink?: (completion: import("@caelush/ai").AIPrivateCompletion) => void;
 }
 
 interface FrozenAgentLoopSuccessBase {
@@ -244,21 +286,31 @@ interface FrozenModelTurnBoundaryInput {
   readonly identity: FrozenAgentExecutionIdentity;
   readonly turn: FrozenAgentTurnRef;
   readonly model: ModelDescriptor["ref"];
+  readonly selectedMessageIds?: readonly string[];
 }
 
 interface FrozenModelTurnExecutionInput {
   readonly identity: FrozenAgentExecutionIdentity;
   readonly turn: FrozenAgentTurnRef;
   readonly request: AIModelRequest;
+  readonly model?: ModelDescriptor;
+  readonly selectedMessageIds?: readonly string[];
+  readonly selectedAssistantReplaySources?: readonly FrozenSelectedAssistantReplaySource[];
   readonly transportId?: string;
   readonly signal: AbortSignal;
   readonly streamSink?: import("@caelush/agent").ModelTurnStreamSink;
+  readonly privateCompletionSink?: (completion: import("@caelush/ai").AIPrivateCompletion) => void;
 }
 
 interface FrozenModelTurnExecutionError {
   readonly code: import("@caelush/agent").ModelTurnExecutionErrorCode;
   readonly message: string;
   readonly retryable: boolean;
+  readonly continuityReason?:
+    | "LEGACY_REPLAY_MISSING"
+    | "REPLAY_DATA_UNAVAILABLE"
+    | "PROVIDER_INCOMPATIBLE"
+    | "MODEL_INCOMPATIBLE";
   readonly retryAfterMs?: number;
 }
 
@@ -300,12 +352,20 @@ type TurnRefExact = Expect<Equal<AgentTurnRef, FrozenAgentTurnRef>>;
 type TurnRefKeys = Expect<Equal<Keys<AgentTurnRef>, "stepId" | "sequence">>;
 type TurnInputExact = Expect<Equal<AgentTurnInput, FrozenAgentTurnInput>>;
 
-/* The frozen advance input. `settings` and `streamSink` are the drift this catches. */
+/* The advance input carries the Core-private completion sideband. */
 type AdvanceInputExact = Expect<Equal<AgentLoopAdvanceInput, FrozenAgentLoopAdvanceInput>>;
 type AdvanceInputKeys = Expect<
   Equal<
     Keys<AgentLoopAdvanceInput>,
-    "identity" | "turn" | "conversation" | "input" | "model" | "tools" | "modelSettings" | "signal"
+    | "identity"
+    | "turn"
+    | "conversation"
+    | "input"
+    | "model"
+    | "tools"
+    | "modelSettings"
+    | "signal"
+    | "privateCompletionSink"
   >
 >;
 type ModelSettingsIsOptional = Expect<
@@ -314,7 +374,7 @@ type ModelSettingsIsOptional = Expect<
     : true
 >;
 
-/* The context receipt and the prepared context. `recovered` is the drift this catches. */
+/* The context receipt and prepared context carry the current preflight and budget reports. */
 type ContextReceiptExact = Expect<Equal<AgentLoopContextReceipt, FrozenAgentLoopContextReceipt>>;
 type ContextReceiptKeys = Expect<
   Equal<
@@ -344,7 +404,7 @@ type PreparedContextKeys = Expect<
   >
 >;
 
-/* The typed report. `Readonly<Record<string, unknown>>` is the drift this catches. */
+/* The typed report includes exact preflight and turn-budget facts. */
 type BuildReportExact = Expect<Equal<ContextBuildReport, FrozenContextBuildReport>>;
 type BuildReportKeys = Expect<
   Equal<
@@ -356,6 +416,8 @@ type BuildReportKeys = Expect<
     | "compactionCount"
     | "requestOverheadTokens"
     | "contributions"
+    | "preflight"
+    | "turnBudget"
   >
 >;
 type ContributionExact = Expect<Equal<ContextBuildContribution, FrozenContextBuildContribution>>;
@@ -422,17 +484,28 @@ type AllowedCarriesRequest = Expect<
   Equal<Extract<ModelRequestAdmissionDecision, { kind: "ALLOWED" }>["request"], AIModelRequest>
 >;
 
-/* The durable boundary. `request` and the full descriptor are the drift. */
+/* The durable boundary records selected durable message IDs with the resolved model identity. */
 type BoundaryInputExact = Expect<Equal<ModelTurnBoundaryInput, FrozenModelTurnBoundaryInput>>;
-type BoundaryInputKeys = Expect<Equal<Keys<ModelTurnBoundaryInput>, "identity" | "turn" | "model">>;
+type BoundaryInputKeys = Expect<
+  Equal<Keys<ModelTurnBoundaryInput>, "identity" | "turn" | "model" | "selectedMessageIds">
+>;
 type BoundaryModelIsRef = Expect<Equal<ModelTurnBoundaryInput["model"], ModelDescriptor["ref"]>>;
 
-/* The durable execution boundary carries host-selected transport and stream sink; the loop input does not. */
+/* The execution boundary carries replay selection and the private completion sideband. */
 type ExecutorInputExact = Expect<Equal<ModelTurnExecutionInput, FrozenModelTurnExecutionInput>>;
 type ExecutorInputKeys = Expect<
   Equal<
     Keys<ModelTurnExecutionInput>,
-    "identity" | "turn" | "request" | "transportId" | "signal" | "streamSink"
+    | "identity"
+    | "turn"
+    | "request"
+    | "model"
+    | "selectedMessageIds"
+    | "selectedAssistantReplaySources"
+    | "transportId"
+    | "signal"
+    | "streamSink"
+    | "privateCompletionSink"
   >
 >;
 type ExecutorResultExact = Expect<
@@ -444,10 +517,13 @@ type ExecutorResultExact = Expect<
   >
 >;
 
-/* The failure contract. `stage` and `cause` are the drift. */
+/* The failure contract includes its bounded continuity-compatibility reason. */
 type TurnErrorExact = Expect<Equal<ModelTurnExecutionError, FrozenModelTurnExecutionError>>;
 type TurnErrorKeys = Expect<
-  Equal<Keys<ModelTurnExecutionError>, "code" | "message" | "retryable" | "retryAfterMs">
+  Equal<
+    Keys<ModelTurnExecutionError>,
+    "code" | "message" | "retryable" | "continuityReason" | "retryAfterMs"
+  >
 >;
 
 /* The transient stream carries its correlation. */

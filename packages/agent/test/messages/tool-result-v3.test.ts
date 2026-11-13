@@ -82,7 +82,7 @@ function recordFor(
     conversationTurnId: value.conversationTurnId,
     messageType: "TOOL_RESULT",
     schemaVersion,
-    sourceStepId: value.sourceStepId,
+    ...(value.sourceStepId === undefined ? {} : { sourceStepId: value.sourceStepId }),
     createdAt: value.createdAt,
     source: value.source,
     audience: value.audience,
@@ -163,7 +163,16 @@ describe("TOOL_RESULT schema V3 preparation-failure facts", () => {
       AGENT_TOOL_RESULT_MESSAGE_CODEC_V3.decode(
         recordFor(
           original,
-          { ...encoded, preparationFailure: { ...parsingFact, classifierVersion: 1 } },
+          {
+            ...encoded,
+            preparationFailure: {
+              kind: "MODEL_ARGUMENT_PARSING",
+              code: "TOOL_ARGUMENTS_REJECTED",
+              issues: [{ keyword: "MALFORMED_JSON" }],
+              disposition: "SAFE_FAILURE",
+              classifierVersion: 1,
+            },
+          },
           3,
         ),
       ),

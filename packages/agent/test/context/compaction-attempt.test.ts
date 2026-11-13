@@ -3,28 +3,28 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
-  beginPersistedCompactionAttempt,
-  beginPersistedCompactionSubcall,
-  createPersistedCompactionAttemptTerminalArtifact,
   deriveCompactionRetryGeneration,
   deriveCompactionAttemptIdentity,
-  digestJsonValue,
   evaluateCompactionRetryEligibility,
-  finishPersistedCompactionSubcall,
-  finishPersistedCompactionAttempt,
   mayStartCompactionSubcall,
-  recordPersistedCompactionFailureBaseline,
-} from "@caelush/agent";
+} from "../../src/context/compaction/compaction-attempt.js";
 import type {
   ContextArtifact,
   ContextArtifactCreateInput,
   ContextArtifactStorePort,
-} from "@caelush/agent";
+} from "../../src/context/artifacts/context-artifact.js";
 import { createTimestampMs } from "@caelush/protocol";
 import {
+  beginPersistedCompactionAttempt,
+  beginPersistedCompactionSubcall,
   beginNextPersistedCompactionSubcall,
+  createPersistedCompactionAttemptTerminalArtifact,
+  finishPersistedCompactionAttempt,
+  finishPersistedCompactionSubcall,
   readPersistedAcceptedSummary,
+  recordPersistedCompactionFailureBaseline,
 } from "../../src/context/compaction/persisted-compaction-attempt.js";
+import { digestJsonValue } from "../../src/messages/canonical-json.js";
 
 const sessionId = "session:attempt-test" as never;
 

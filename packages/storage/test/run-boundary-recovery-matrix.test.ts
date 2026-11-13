@@ -406,7 +406,7 @@ describe("Phase 3F durable recovery boundaries", () => {
       const reloaded = await loadDurable(second, run.id);
       expect(reloaded.run.status).toBe("WAITING_RESOURCE");
       const continuation = reloaded.continuation;
-      if (continuation?.type !== "WAITING_RESOURCE") {
+      if (continuation?.type !== "WAITING_RESOURCE" || continuation.reason !== "NO_PROGRESS") {
         throw new Error("the WAITING_RESOURCE boundary must have survived the reopen");
       }
       expect(continuation.replanCount).toBe(2);

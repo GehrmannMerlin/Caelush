@@ -37,6 +37,13 @@ import { makeRun, makeSession, makeStep } from "./support/fixtures.js";
 const turns = createDeterministicConversationTurnIdFactory();
 const projectors = createStandardAgentMessageProjectorRegistry();
 const codecs = createStandardAgentMessageCodecRegistry((type) => projectors.currentVersion(type));
+
+function optionalModelProjectionVersion(
+  modelProjectionVersion: number | undefined,
+): Pick<AgentMessageRecordDraft, "modelProjectionVersion"> {
+  return modelProjectionVersion === undefined ? {} : { modelProjectionVersion };
+}
+
 let restartTestDirectory: string | undefined;
 let restartTestStorage: Awaited<ReturnType<typeof openCaelushStorage>> | undefined;
 
@@ -97,7 +104,7 @@ describe("interrupted Tool history closure", () => {
       conversationTurnId: assistant.conversationTurnId,
       messageType: assistant.type,
       schemaVersion: assistantEncoded.schemaVersion,
-      modelProjectionVersion: assistantEncoded.modelProjectionVersion,
+      ...optionalModelProjectionVersion(assistantEncoded.modelProjectionVersion),
       sourceStepId: step.id,
       createdAt: assistant.createdAt,
       source: assistant.source,
@@ -148,7 +155,7 @@ describe("interrupted Tool history closure", () => {
       conversationTurnId: resultMessage.conversationTurnId,
       messageType: resultMessage.type,
       schemaVersion: resultEncoded.schemaVersion,
-      modelProjectionVersion: resultEncoded.modelProjectionVersion,
+      ...optionalModelProjectionVersion(resultEncoded.modelProjectionVersion),
       sourceStepId: step.id,
       createdAt: resultMessage.createdAt,
       source: resultMessage.source,
@@ -270,7 +277,7 @@ describe("interrupted Tool history closure", () => {
         conversationTurnId: assistant.conversationTurnId,
         messageType: assistant.type,
         schemaVersion: assistantEncoding.schemaVersion,
-        modelProjectionVersion: assistantEncoding.modelProjectionVersion,
+        ...optionalModelProjectionVersion(assistantEncoding.modelProjectionVersion),
         sourceStepId: step.id,
         createdAt: assistant.createdAt,
         source: assistant.source,
@@ -394,7 +401,7 @@ describe("interrupted Tool history closure", () => {
       conversationTurnId: resultMessage.conversationTurnId,
       messageType: resultMessage.type,
       schemaVersion: resultEncoding.schemaVersion,
-      modelProjectionVersion: resultEncoding.modelProjectionVersion,
+      ...optionalModelProjectionVersion(resultEncoding.modelProjectionVersion),
       sourceStepId: step.id,
       createdAt: resultMessage.createdAt,
       source: resultMessage.source,
@@ -484,7 +491,7 @@ describe("interrupted Tool history closure", () => {
         conversationTurnId: assistant.conversationTurnId,
         messageType: assistant.type,
         schemaVersion: encoded.schemaVersion,
-        modelProjectionVersion: encoded.modelProjectionVersion,
+        ...optionalModelProjectionVersion(encoded.modelProjectionVersion),
         sourceStepId: step.id,
         createdAt: assistant.createdAt,
         source: assistant.source,
@@ -556,14 +563,14 @@ describe("interrupted Tool history closure", () => {
         conversationTurnId: resultMessage.conversationTurnId,
         messageType: resultMessage.type,
         schemaVersion: resultEncoding.schemaVersion,
-        modelProjectionVersion: resultEncoding.modelProjectionVersion,
+        ...optionalModelProjectionVersion(resultEncoding.modelProjectionVersion),
         sourceStepId: step.id,
         createdAt: resultMessage.createdAt,
         source: resultMessage.source,
         audience: resultMessage.audience,
         data: resultEncoding.data,
       },
-      messageEvent: { ...validEvent, visibility: "INVALID" } as typeof validEvent,
+      messageEvent: { ...validEvent, visibility: "INVALID" } as unknown as typeof validEvent,
     };
 
     await expect(storage.execution.commitInterruptedHistoryClosure(command)).rejects.toThrow();
@@ -652,7 +659,7 @@ async function seedInterruptedRun(
       conversationTurnId: assistant.conversationTurnId,
       messageType: assistant.type,
       schemaVersion: encoded.schemaVersion,
-      modelProjectionVersion: encoded.modelProjectionVersion,
+      ...optionalModelProjectionVersion(encoded.modelProjectionVersion),
       sourceStepId: step.id,
       createdAt: assistant.createdAt,
       source: assistant.source,
@@ -716,7 +723,7 @@ async function closureCommandFor(
     conversationTurnId: resultMessage.conversationTurnId,
     messageType: resultMessage.type,
     schemaVersion: encoded.schemaVersion,
-    modelProjectionVersion: encoded.modelProjectionVersion,
+    ...optionalModelProjectionVersion(encoded.modelProjectionVersion),
     sourceStepId: seeded.step.id,
     createdAt: resultMessage.createdAt,
     source: resultMessage.source,

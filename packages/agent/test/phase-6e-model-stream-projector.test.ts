@@ -4,6 +4,7 @@ import {
   createSessionId,
   createStepId,
   createTimestampMs,
+  type TransientRunEvent,
 } from "@caelush/protocol";
 import type { AIGateway, AIStreamEvent } from "@caelush/ai";
 import type { AgentExecutionIdentity, AgentTurnRef } from "../src/loop/types.js";
@@ -13,6 +14,7 @@ import {
 } from "../src/events/model-stream-signal-projector.js";
 import { createModelTurnExecutor } from "../src/loop/turn/model-turn-executor.js";
 import { describe, expect, it, vi } from "vitest";
+import { isWellFormedUtf16 } from "./utf16.js";
 
 const identity: AgentExecutionIdentity = {
   runId: createRunId(),
@@ -28,6 +30,29 @@ function projector(): ModelStreamSignalProjector {
   });
 }
 
+type OrderedModelTextDelta = Extract<TransientRunEvent, { readonly type: "model.text.delta" }> & {
+  readonly payload: { readonly text: string };
+  readonly durability: Extract<
+    TransientRunEvent["durability"],
+    { readonly kind: "EPHEMERAL"; readonly deliveryClass: "ORDERED" }
+  >;
+};
+
+function isOrderedModelTextDelta(event: TransientRunEvent): event is OrderedModelTextDelta {
+  return (
+    event.type === "model.text.delta" &&
+    "text" in event.payload &&
+    typeof event.payload.text === "string" &&
+    event.durability.kind === "EPHEMERAL" &&
+    event.durability.deliveryClass === "ORDERED" &&
+    "streamSequence" in event.durability
+  );
+}
+
+function textDeltas(events: readonly TransientRunEvent[]): readonly OrderedModelTextDelta[] {
+  return events.filter(isOrderedModelTextDelta);
+}
+
 describe("ModelStreamSignalProjector", () => {
   it("keeps a mixed Unicode delta intact across the exact 8 KiB boundary", () => {
     const source = `${"x".repeat(8 * 1024 - 1)}😀中文z`;
@@ -36,18 +61,19 @@ describe("ModelStreamSignalProjector", () => {
       stepId: turn.stepId,
       event: { type: "text.delta", payload: { text: source } },
     });
+    const deltas = textDeltas(events ?? []);
 
     expect(events).toHaveLength(2);
-    expect(events!.map((event) => event.payload.text)).toEqual([
+    expect(deltas.map((event) => event.payload.text)).toEqual([
       "x".repeat(8 * 1024 - 1),
       "😀中文z",
     ]);
-    expect(
-      events!.every((event) => Buffer.byteLength(event.payload.text, "utf8") <= 8 * 1024),
-    ).toBe(true);
-    expect(events!.every((event) => event.payload.text.isWellFormed())).toBe(true);
-    expect(events!.map((event) => event.durability.streamSequence)).toEqual([1, 2]);
-    expect(events!.map((event) => event.payload.text).join("")).toBe(source);
+    expect(deltas.every((event) => Buffer.byteLength(event.payload.text, "utf8") <= 8 * 1024)).toBe(
+      true,
+    );
+    expect(deltas.every((event) => isWellFormedUtf16(event.payload.text))).toBe(true);
+    expect(deltas.map((event) => event.durability.streamSequence)).toEqual([1, 2]);
+    expect(deltas.map((event) => event.payload.text).join("")).toBe(source);
   });
 
   it("splits a 1 MiB text delta linearly into ordered UTF-8 bounded events", () => {
@@ -57,7 +83,7 @@ describe("ModelStreamSignalProjector", () => {
     const originalEncode = TextEncoder.prototype.encode;
     let encodedBytes = 0;
     const encodeSpy = vi.spyOn(TextEncoder.prototype, "encode").mockImplementation(function (
-      this: TextEncoder,
+      this: InstanceType<typeof TextEncoder>,
       value?: string,
     ) {
       const encoded = originalEncode.call(this, value);
@@ -68,7 +94,7 @@ describe("ModelStreamSignalProjector", () => {
       return encoded;
     });
 
-    let events;
+    let events: readonly TransientRunEvent[] | undefined;
     try {
       events = project.projectMany?.({
         identity,
@@ -84,10 +110,11 @@ describe("ModelStreamSignalProjector", () => {
 
     expect(encodedBytes).toBeLessThanOrEqual(sourceBytes * 2);
     expect(events).toHaveLength(128);
-    const chunks = events!.map((event) => event.payload.text);
+    const deltas = textDeltas(events ?? []);
+    const chunks = deltas.map((event) => event.payload.text);
     expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 8 * 1024)).toBe(true);
     expect(chunks.join("")).toBe(source);
-    expect(events!.map((event) => event.durability.streamSequence)).toEqual(
+    expect(deltas.map((event) => event.durability.streamSequence)).toEqual(
       Array.from({ length: 128 }, (_, index) => index + 1),
     );
   });
@@ -251,6 +278,7 @@ describe("ModelStreamSignalProjector", () => {
     const gateway: AIGateway = {
       stream: async () => ({
         callId: "llm_0195f3a0-0000-7000-8000-000000000000" as never,
+        takePrivateCompletion: () => undefined,
         events: (async function* () {
           yield start;
           yield { type: "text.delta", payload: { text: "answer" } } satisfies AIStreamEvent;

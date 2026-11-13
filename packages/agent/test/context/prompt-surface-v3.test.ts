@@ -6,10 +6,17 @@ import {
   diffPromptSurfaceSections,
   renderPromptSurfaceRecord,
 } from "../../src/context/surface/prompt-surface-v3.js";
-import type { ContextDocument } from "../../src/context/document/context-document.js";
+import type {
+  ContextDocument,
+  ContextDocumentSection,
+} from "../../src/context/document/context-document.js";
+import type {
+  PromptSurfaceSectionState,
+  PromptSurfaceSectionUpdate,
+} from "../../src/context/surface/prompt-surface-v3.js";
 import { renderRuntimeContextSnapshot } from "../../src/context/surface/prompt-surface-renderer.js";
 
-const file = (text: string) => ({
+const file = (text: string): ContextDocumentSection => ({
   id: "coding.relevant-files:login.html",
   authority: "REFERENCE" as const,
   sourceRef: "coding.relevant-files@v1:file:login.html",
@@ -20,8 +27,13 @@ const file = (text: string) => ({
   text,
 });
 
-function document(...sections: ReturnType<typeof file>[]): ContextDocument {
+function document(...sections: ContextDocumentSection[]): ContextDocument {
   return { sections };
+}
+
+function setContent(update: PromptSurfaceSectionUpdate | undefined): string {
+  if (update?.op !== "SET") throw new Error("Expected a Prompt Surface SET update");
+  return update.content;
 }
 
 describe("Prompt Surface V3 semantic sections", () => {
@@ -47,7 +59,7 @@ describe("Prompt Surface V3 semantic sections", () => {
   it("does not re-emit an unchanged 10 KB file over eight steps", () => {
     const currentDocument = document(file("x".repeat(10_000)));
     const initial = createPromptSurfaceSectionStates(currentDocument);
-    const previous = [];
+    const previous: readonly PromptSurfaceSectionState[] = [];
     const emissions = [
       diffPromptSurfaceSections(previous, initial, true),
       ...Array.from({ length: 7 }, () => diffPromptSurfaceSections(initial, initial, false)),
@@ -56,7 +68,7 @@ describe("Prompt Surface V3 semantic sections", () => {
     expect(emissions[0]?.kind).toBe("BASELINE");
     expect(emissions.slice(1).map((entry) => entry.kind)).toEqual(Array(7).fill("NOOP"));
     expect(emissions.slice(1).flatMap((entry) => entry.updates)).toEqual([]);
-    expect(emissions[0]?.updates[0]?.content).toContain("x".repeat(10_000));
+    expect(setContent(emissions[0]?.updates[0])).toContain("x".repeat(10_000));
     expect(renderPromptSurfaceRecord("BASELINE", emissions[0]!.updates)).toContain(
       'authority="REFERENCE"',
     );
@@ -105,8 +117,8 @@ describe("Prompt Surface V3 semantic sections", () => {
     const diff = diffPromptSurfaceSections(previous, current, false);
     expect(diff.kind).toBe("DELTA");
     expect(diff.updates).toHaveLength(1);
-    expect(diff.updates[0]?.content).toContain("T2");
-    expect(diff.updates[0]?.content).not.toContain("same");
+    expect(setContent(diff.updates[0])).toContain("T2");
+    expect(setContent(diff.updates[0])).not.toContain("same");
   });
 
   it("updates one changed file while carrying the unchanged file state forward", () => {
@@ -126,7 +138,7 @@ describe("Prompt Surface V3 semantic sections", () => {
 
     expect(diff.kind).toBe("DELTA");
     expect(diff.updates).toHaveLength(1);
-    expect(diff.updates[0]?.content).toContain("login v2");
+    expect(setContent(diff.updates[0])).toContain("login v2");
     expect(applyPromptSurfaceSectionUpdates(previous, diff.kind, diff.updates)).toEqual(current);
   });
 
@@ -179,7 +191,7 @@ describe("Prompt Surface V3 semantic sections", () => {
     const diff = diffPromptSurfaceSections(previous, current, false);
 
     expect(diff.updates.map((entry) => entry.op)).toEqual(["SET", "CLEAR"]);
-    expect(diff.updates[0]?.content).toContain("new");
+    expect(setContent(diff.updates[0])).toContain("new");
     const rendered = renderPromptSurfaceRecord("DELTA", diff.updates);
     expect(rendered).toContain('version="3"');
     expect(rendered).toContain("does not claim that an underlying file or resource was deleted");
