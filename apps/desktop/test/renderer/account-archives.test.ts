@@ -44,6 +44,7 @@ describe.skipIf(!existsSync(chromium.executablePath()))("Desktop account archive
       platform: "browser",
       format: "iife",
       jsx: "automatic",
+      loader: { ".png": "dataurl" },
       define: { "process.env.NODE_ENV": JSON.stringify("production") },
     });
     bundle = output.outputFiles[0]!.text;

@@ -99,7 +99,7 @@ describe.skipIf(!existsSync(chromium.executablePath()))("Desktop account appeara
           <aside class="account-sidebar" id="theme-sidebar"></aside>
           <main class="account-content" id="theme-content">
             <section class="detail-panel" id="theme-card"></section>
-            <div class="update-history-menu" id="theme-menu"></div>
+            <div class="update-history-panel" id="theme-menu"></div>
             <div class="profile-crop-dialog" id="theme-crop-dialog"></div>
             <button class="revoke-button" id="theme-revoke">撤销</button>
             <section class="archive-page" id="theme-archive">

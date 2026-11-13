@@ -124,7 +124,7 @@ describe.skipIf(!existsSync(chromium.executablePath()))("account profile editing
       platform: "browser",
       format: "iife",
       jsx: "automatic",
-      loader: { ".svg": "dataurl" },
+      loader: { ".png": "dataurl", ".svg": "dataurl" },
       define: { "process.env.NODE_ENV": JSON.stringify("production") },
     });
     bundle = output.outputFiles[0]!.text;
