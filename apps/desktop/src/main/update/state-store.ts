@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, realpath, mkdir, open, rename, rm, readdir } from "node:fs/promises";
+import { lstat, mkdir, open, rename, rm, readdir } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import {
@@ -250,8 +250,9 @@ export async function assertSafePath(target: string, directory: boolean): Promis
         : !metadata.isFile() || metadata.nlink !== 1)
     )
       throw unsafe();
-    const canonical = await realpath(current);
-    if (canonical.toLowerCase() !== current.toLowerCase()) throw unsafe();
+    // Each existing path component is checked with lstat above. Do not compare its textual
+    // realpath: Windows may resolve an 8.3 short-name alias to a different spelling for the same
+    // directory, which is not a reparse point.
   }
 }
 async function ensureSafeDirectory(target: string): Promise<void> {

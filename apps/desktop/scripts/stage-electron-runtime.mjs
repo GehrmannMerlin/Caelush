@@ -97,8 +97,8 @@ export async function prepareElectronRuntime({ tempRoot = DEFAULT_STAGE_ROOT } =
 
 /** Keep a single verified development runtime; smoke-test staging remains disposable. */
 export async function cacheElectronRuntime(sourceDist, cacheRoot, expectedVersion) {
-  const source = await realpath(sourceDist);
-  const root = path.resolve(cacheRoot);
+  const source = await resolveThroughExistingAncestor(sourceDist);
+  const root = await resolveThroughExistingAncestor(cacheRoot);
   for (const [parent, child] of [
     [source, root],
     [root, source],
@@ -268,6 +268,22 @@ function assertInside(root, target) {
   const relative = path.relative(path.resolve(root), path.resolve(target));
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error("The staged Electron resource path escaped its runtime directory.");
+  }
+}
+
+async function resolveThroughExistingAncestor(target) {
+  let current = path.resolve(target);
+  const missingSegments = [];
+  for (;;) {
+    try {
+      return path.resolve(await realpath(current), ...missingSegments);
+    } catch (error) {
+      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") throw error;
+      const parent = path.dirname(current);
+      if (parent === current) throw error;
+      missingSegments.unshift(path.basename(current));
+      current = parent;
+    }
   }
 }
 

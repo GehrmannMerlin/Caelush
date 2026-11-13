@@ -281,12 +281,29 @@ async function verifyProfileBinding(
     throw new Error("profile");
   // Main resolves the OS-owned AppData redirect before selecting the profile.
   // Bind to that same physical managed root while rejecting substituted junctions.
-  const expectedRoot = path.join(await realpath(managedRoot), "profiles", profileId);
-  if (!samePath(absoluteRoot, expectedRoot)) throw new Error("profile");
+  const canonicalManagedRoot = await realpath(managedRoot);
+  const profilesDirectory = path.join(canonicalManagedRoot, "profiles");
+  const profilesMetadata = await lstat(profilesDirectory);
+  if (profilesMetadata.isSymbolicLink() || !profilesMetadata.isDirectory()) {
+    throw new Error("profile");
+  }
+  const expectedRoot = path.join(profilesDirectory, profileId);
+  const expectedMetadata = await lstat(expectedRoot);
+  if (expectedMetadata.isSymbolicLink() || !expectedMetadata.isDirectory()) {
+    throw new Error("profile");
+  }
   const metadata = await lstat(absoluteRoot);
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw new Error("profile");
   const canonicalRoot = await realpath(absoluteRoot);
-  if (!samePath(canonicalRoot, absoluteRoot)) throw new Error("profile");
+  const canonicalMetadata = await lstat(canonicalRoot);
+  if (
+    canonicalMetadata.isSymbolicLink() ||
+    !canonicalMetadata.isDirectory() ||
+    !sameFileIdentity(metadata, canonicalMetadata) ||
+    !sameFileIdentity(expectedMetadata, canonicalMetadata)
+  ) {
+    throw new Error("profile");
+  }
   const profileMetadataPath = path.join(canonicalRoot, "profile.json");
   const profileMetadata = await lstat(profileMetadataPath);
   if (
@@ -311,7 +328,8 @@ async function verifyProfileBinding(
     const directoryPath = path.join(canonicalRoot, name);
     const directory = await lstat(directoryPath);
     if (directory.isSymbolicLink() || !directory.isDirectory()) throw new Error("profile");
-    if (!samePath(await realpath(directoryPath), directoryPath)) throw new Error("profile");
+    const canonicalDirectory = await lstat(await realpath(directoryPath));
+    if (!sameFileIdentity(directory, canonicalDirectory)) throw new Error("profile");
   }
   const databasePath = path.join(canonicalRoot, "caelush.db");
   try {
@@ -319,7 +337,8 @@ async function verifyProfileBinding(
     if (database.isSymbolicLink() || !database.isFile() || database.nlink !== 1) {
       throw new Error("profile");
     }
-    if (!samePath(await realpath(databasePath), databasePath)) throw new Error("profile");
+    const canonicalDatabase = await lstat(await realpath(databasePath));
+    if (!sameFileIdentity(database, canonicalDatabase)) throw new Error("profile");
   } catch (error) {
     if (!isNodeError(error) || error.code !== "ENOENT") throw error;
   }
@@ -398,13 +417,11 @@ function isNodeError(value: unknown): value is NodeJS.ErrnoException {
   return typeof value === "object" && value !== null && "code" in value;
 }
 
-function samePath(left: string, right: string): boolean {
-  const normalize = (value: string) =>
-    path
-      .resolve(value)
-      .replace(/[\\/]+$/u, "")
-      .toLowerCase();
-  return normalize(left) === normalize(right);
+function sameFileIdentity(
+  left: { readonly dev: number; readonly ino: number },
+  right: { readonly dev: number; readonly ino: number },
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
 }
 
 function isCanonicalSecret(value: string): boolean {

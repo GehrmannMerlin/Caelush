@@ -638,12 +638,22 @@ async function realDirectory(directory: string): Promise<string | undefined> {
     const resolved = path.resolve(directory);
     const metadata = await lstat(resolved);
     if (metadata.isSymbolicLink() || !metadata.isDirectory()) return undefined;
+    if (!(await isReparseFreePath(resolved))) return undefined;
     const canonical = await realpath(resolved);
-    if (path.resolve(canonical) !== resolved) return undefined;
     return canonical;
   } catch {
     return undefined;
   }
+}
+
+async function isReparseFreePath(target: string): Promise<boolean> {
+  const resolved = path.resolve(target);
+  let current = path.parse(resolved).root;
+  for (const segment of resolved.slice(current.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    if ((await lstat(current)).isSymbolicLink()) return false;
+  }
+  return true;
 }
 
 function isFsError(value: unknown): value is NodeJS.ErrnoException {

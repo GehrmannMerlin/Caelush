@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import process from "node:process";
-import { lstat, readdir, realpath, stat } from "node:fs/promises";
+import { lstat, readdir, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { promisify } from "node:util";
 import path from "node:path";
@@ -14,7 +14,7 @@ const electronFs =
   process.versions.electron === undefined
     ? undefined
     : createRequire(process.execPath)("original-fs");
-const nodeFs = { lstat, readdir, realpath, stat, createReadStream };
+const nodeFs = { lstat, readdir, stat, createReadStream };
 const rawFs = electronFs
   ? {
       lstat: electronFs.promises?.lstat ?? promisify(electronFs.lstat),
@@ -272,8 +272,7 @@ async function collectDirectoryFiles(rootPath, options = {}, fileSystem = nodeFs
   if (!rootMetadata.isDirectory() || rootMetadata.isSymbolicLink()) {
     throw new Error("DESKTOP_RESOURCE_ROOT_UNSAFE");
   }
-  const canonicalRoot = await fileSystem.realpath(root);
-  if (normalizePath(canonicalRoot) !== normalizePath(root)) {
+  if (!(await isReparseFreePath(root, fileSystem))) {
     throw new Error("DESKTOP_RESOURCE_ROOT_UNSAFE");
   }
   const files = [];
@@ -298,22 +297,25 @@ async function collectDirectoryFiles(rootPath, options = {}, fileSystem = nodeFs
     const metadata = await fileSystem.lstat(absolutePath);
     if (metadata.isSymbolicLink()) throw new Error("DESKTOP_RESOURCE_REPARSE_POINT");
     if (metadata.isDirectory()) {
-      const canonicalPath = await fileSystem.realpath(absolutePath);
-      if (normalizePath(canonicalPath) !== normalizePath(absolutePath)) {
-        throw new Error("DESKTOP_RESOURCE_REPARSE_POINT");
-      }
       await enqueue(absolutePath, relativePath);
     } else if (metadata.isFile()) {
-      const canonicalPath = await fileSystem.realpath(absolutePath);
-      if (normalizePath(canonicalPath) !== normalizePath(absolutePath)) {
-        throw new Error("DESKTOP_RESOURCE_REPARSE_POINT");
-      }
       files.push({ path: relativePath, size: metadata.size, absolutePath });
     } else {
       throw new Error("DESKTOP_RESOURCE_FILE_TYPE_INVALID");
     }
   });
   return files.sort(compareResourcePath);
+}
+
+async function isReparseFreePath(target, fileSystem) {
+  const resolved = path.resolve(target);
+  let current = path.parse(resolved).root;
+  for (const segment of resolved.slice(current.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    const metadata = await fileSystem.lstat(current);
+    if (metadata.isSymbolicLink()) return false;
+  }
+  return true;
 }
 
 // Bound disk pressure and memory, and drain each batch before propagating failure.
@@ -503,13 +505,6 @@ function compareResourcePath(left, right) {
 
 function compareText(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function normalizePath(value) {
-  return path
-    .resolve(value)
-    .replace(/[\\/]+$/u, "")
-    .toLowerCase();
 }
 
 function invalidManifest() {

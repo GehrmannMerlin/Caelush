@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -35,7 +35,7 @@ describe("resolvePromptCacheArtifactDirectory", () => {
 
       await expect(
         resolvePromptCacheArtifactDirectory(repository, externalDirectory),
-      ).resolves.toBe(externalDirectory);
+      ).resolves.toBe(join(await realpath(join(root, "external")), "artifacts"));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

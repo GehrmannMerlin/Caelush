@@ -138,8 +138,7 @@ export class ProfileBackupStore {
       const sourceMetadata = await lstat(sourceRootDirectory);
       if (sourceMetadata.isSymbolicLink() || !sourceMetadata.isDirectory())
         throw backupUnavailable();
-      if (path.resolve(await realpath(sourceRootDirectory)) !== sourceRootDirectory)
-        throw backupUnavailable();
+      await assertNoReparsePath(sourceRootDirectory);
       await mkdir(stagingDirectory, { recursive: false, mode: 0o700 });
       await mkdir(path.join(stagingDirectory, "files"), { mode: 0o700 });
       await this.options.vault.set(keyReference, {
@@ -842,6 +841,16 @@ async function ensurePrivateDirectory(directory: string): Promise<void> {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const metadata = await lstat(directory);
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw backupUnavailable();
+}
+
+async function assertNoReparsePath(target: string): Promise<void> {
+  const resolved = path.resolve(target);
+  let current = path.parse(resolved).root;
+  for (const segment of resolved.slice(current.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    const metadata = await lstat(current);
+    if (metadata.isSymbolicLink()) throw backupUnavailable();
+  }
 }
 
 function assertContained(root: string, target: string): void {

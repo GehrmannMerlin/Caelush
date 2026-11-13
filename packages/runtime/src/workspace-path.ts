@@ -116,16 +116,31 @@ function classifyRelation(
 }
 
 interface CanonicalPolicyRoots {
-  readonly hostUserRoot: string;
-  readonly protectedRoots: readonly string[];
+  readonly hostUserRoot: CanonicalPolicyRoot;
+  readonly protectedRoots: readonly CanonicalPolicyRoot[];
+}
+
+interface CanonicalPolicyRoot {
+  readonly path: string;
+  readonly identity?: string;
 }
 
 async function resolveCanonicalPolicyRoots(
   filesystem: RuntimeFileSystem,
   policy: RuntimeFilesystemPolicy,
 ): Promise<CanonicalPolicyRoots> {
-  const resolveRoot = async (root: string) =>
-    path.normalize((await resolveExistingAncestor(filesystem, root, "READ")).canonicalPath);
+  const resolveRoot = async (root: string): Promise<CanonicalPolicyRoot> => {
+    const canonicalPath = path.normalize(
+      (await resolveExistingAncestor(filesystem, root, "READ")).canonicalPath,
+    );
+    const metadata = await filesystem.getMetadata(canonicalPath);
+    return {
+      path: canonicalPath,
+      ...(metadata?.kind === "DIRECTORY" && metadata.identity !== undefined
+        ? { identity: metadata.identity }
+        : {}),
+    };
+  };
   const [hostUserRoot, ...protectedRoots] = await Promise.all([
     resolveRoot(policy.hostUserRoot),
     ...policy.protectedRoots.map(resolveRoot),
@@ -144,23 +159,97 @@ function isProtectedTarget(
 ): boolean {
   if (
     path.normalize(candidate) === path.normalize(policy.hostUserRoot) ||
-    path.normalize(candidate) === canonicalRoots.hostUserRoot
+    path.normalize(candidate) === canonicalRoots.hostUserRoot.path
   ) {
     return true;
   }
   return (
     policy.protectedRoots.some((root) => isPathInsideOrEqual(root, candidate)) ||
-    canonicalRoots.protectedRoots.some((root) => isPathInsideOrEqual(root, candidate))
+    canonicalRoots.protectedRoots.some((root) => isPathInsideOrEqual(root.path, candidate))
   );
 }
 
-function assertTargetAllowed(
+async function isInsideRootByIdentity(
+  filesystem: RuntimeFileSystem,
+  rootIdentity: string | undefined,
+  candidate: string,
+): Promise<boolean> {
+  if (rootIdentity === undefined || process.platform !== "win32") return false;
+  let current = path.normalize(candidate);
+  for (;;) {
+    let metadata: RuntimeFileMetadata | null = null;
+    try {
+      metadata = await filesystem.getMetadata(current);
+    } catch {
+      // A metadata failure cannot establish that the target belongs to an allowed root.
+    }
+    if (metadata?.kind === "DIRECTORY" && metadata.identity === rootIdentity) return true;
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
+
+async function classifyRelationWithIdentity(
+  filesystem: RuntimeFileSystem,
+  policy: RuntimeFilesystemPolicy,
+  candidate: string,
+  workspaceAlias: string,
+  canonicalRoots: CanonicalPolicyRoots,
+): Promise<FilesystemTargetRelation | undefined> {
+  const direct = classifyRelation(
+    policy,
+    candidate,
+    workspaceAlias,
+    canonicalRoots.hostUserRoot.path,
+  );
+  if (direct !== undefined || process.platform !== "win32") return direct;
+
+  const workspaceMetadata = await filesystem.getMetadata(workspaceAlias).catch(() => null);
+  if (
+    (await isInsideRootByIdentity(filesystem, workspaceMetadata?.identity, candidate)) ||
+    (await isInsideRootByIdentity(
+      filesystem,
+      (await filesystem.getMetadata(policy.workspaceRoot).catch(() => null))?.identity,
+      candidate,
+    ))
+  ) {
+    return "WORKSPACE";
+  }
+  if (
+    policy.boundary === "HOST_USER_SCOPE" &&
+    (await isInsideRootByIdentity(filesystem, canonicalRoots.hostUserRoot.identity, candidate))
+  ) {
+    return "HOST_USER";
+  }
+  return undefined;
+}
+
+async function isProtectedTargetWithIdentity(
+  filesystem: RuntimeFileSystem,
+  policy: RuntimeFilesystemPolicy,
+  canonicalRoots: CanonicalPolicyRoots,
+  candidate: string,
+): Promise<boolean> {
+  if (isProtectedTarget(policy, canonicalRoots, candidate)) return true;
+  for (const root of canonicalRoots.protectedRoots) {
+    if (await isInsideRootByIdentity(filesystem, root.identity, candidate)) return true;
+  }
+  for (const root of policy.protectedRoots) {
+    const metadata = await filesystem.getMetadata(root).catch(() => null);
+    if (await isInsideRootByIdentity(filesystem, metadata?.identity, candidate)) return true;
+  }
+  return false;
+}
+
+async function assertTargetAllowed(
+  filesystem: RuntimeFileSystem,
   policy: RuntimeFilesystemPolicy,
   relation: FilesystemTargetRelation | undefined,
   operation: RuntimeFilesystemOperation,
   canonicalPath: string,
   canonicalRoots: CanonicalPolicyRoots,
-): FilesystemTargetRelation {
+): Promise<FilesystemTargetRelation> {
   if (relation === undefined) {
     throw new RuntimeBoundaryError("path resolves outside the active filesystem boundary");
   }
@@ -173,7 +262,7 @@ function assertTargetAllowed(
         "The active filesystem policy is workspace-bound.",
       );
     }
-    if (isProtectedTarget(policy, canonicalRoots, canonicalPath)) {
+    if (await isProtectedTargetWithIdentity(filesystem, policy, canonicalRoots, canonicalPath)) {
       throw new RuntimeProtectedRootMutationError();
     }
   }
@@ -252,11 +341,12 @@ export class WorkspacePathResolver {
     const absolutePath = path.normalize(
       absoluteInput ? normalized : path.resolve(this.scope.logicalRoot, normalized),
     );
-    const lexicalRelation = classifyRelation(
+    const lexicalRelation = await classifyRelationWithIdentity(
+      this.scope.filesystem,
       input.policy,
       absolutePath,
       this.scope.realRoot,
-      resolvedPolicyRoots.hostUserRoot,
+      resolvedPolicyRoots,
     );
     if (lexicalRelation === undefined) {
       throw new RuntimeBoundaryError("path resolves outside the active filesystem boundary");
@@ -287,14 +377,17 @@ export class WorkspacePathResolver {
       const canonicalMetadata = await this.scope.filesystem.getMetadata(canonicalPath);
       if (canonicalMetadata !== null) targetKind = canonicalMetadata.kind;
     }
-    const relation = assertTargetAllowed(
+    const canonicalRelation = await classifyRelationWithIdentity(
+      this.scope.filesystem,
       input.policy,
-      classifyRelation(
-        input.policy,
-        canonicalPath,
-        this.scope.realRoot,
-        resolvedPolicyRoots.hostUserRoot,
-      ),
+      canonicalPath,
+      this.scope.realRoot,
+      resolvedPolicyRoots,
+    );
+    const relation = await assertTargetAllowed(
+      this.scope.filesystem,
+      input.policy,
+      canonicalRelation,
       input.operation,
       canonicalPath,
       resolvedPolicyRoots,

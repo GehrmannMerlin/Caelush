@@ -203,17 +203,31 @@ async function verifyEditorExecutable(
   platform: NodeJS.Platform,
 ): Promise<string | null> {
   try {
-    const metadata = await lstat(candidate);
-    if (metadata.isSymbolicLink() || !metadata.isFile()) return null;
-    const canonical = await realpath(candidate);
     const implementation = platform === "win32" ? path.win32 : path.posix;
-    const parent = implementation.dirname(candidate);
-    const relative = implementation.relative(parent, canonical);
+    const resolvedCandidate = implementation.resolve(candidate);
+    if (!(await isReparseFreePath(resolvedCandidate, implementation))) return null;
+    const metadata = await lstat(resolvedCandidate);
+    if (metadata.isSymbolicLink() || !metadata.isFile()) return null;
+    const canonical = await realpath(resolvedCandidate);
+    const canonicalParent = await realpath(implementation.dirname(resolvedCandidate));
+    const relative = implementation.relative(canonicalParent, canonical);
     if (relative.startsWith("..") || implementation.isAbsolute(relative)) return null;
     return canonical;
   } catch {
     return null;
   }
+}
+
+async function isReparseFreePath(
+  target: string,
+  implementation: typeof path.win32 | typeof path.posix,
+): Promise<boolean> {
+  let current = implementation.parse(target).root;
+  for (const segment of target.slice(current.length).split(implementation.sep).filter(Boolean)) {
+    current = implementation.join(current, segment);
+    if ((await lstat(current)).isSymbolicLink()) return false;
+  }
+  return true;
 }
 
 function joinEnvironment(base: string | undefined, ...segments: string[]): string | undefined {
