@@ -1,9 +1,12 @@
+import { execFile } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { isValidSemVer } from "./contracts/semver.mjs";
 
+const execFileAsync = promisify(execFile);
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REQUIRED_PACKAGES = new Set([
   "@caelush/daemon",
@@ -119,6 +122,10 @@ export async function auditProductVersions(options = {}) {
   const releaseManifestPaths = await findReleaseManifests(path.join(root, "release-artifacts"));
   let releaseManifestCount = 0;
   for (const manifestPath of releaseManifestPaths) {
+    // Generated release bundles are ignored build outputs and may belong to an older release.
+    // Keep checking tracked manifests, but do not let a developer's stale local bundle make the
+    // current source-version contract fail.
+    if (await isGitIgnored(root, manifestPath)) continue;
     // Release bundles use the existing `caelush-v<version>-<platform>-<arch>` directory
     // name. Other manifest.json files in this tree include Sandbox Runner manifests.
     if (!path.basename(path.dirname(manifestPath)).startsWith("caelush-v")) continue;
@@ -200,6 +207,21 @@ async function findReleaseManifests(directory) {
     else if (entry.isFile() && entry.name === "manifest.json") manifests.push(entryPath);
   }
   return manifests;
+}
+
+/** @param {string} root @param {string} filePath */
+async function isGitIgnored(root, filePath) {
+  try {
+    await execFileAsync("git", ["check-ignore", "--quiet", "--", relative(root, filePath)], {
+      cwd: root,
+      windowsHide: true,
+    });
+    return true;
+  } catch {
+    // Exit code 1 means "not ignored". Missing Git metadata or executable also falls through to
+    // the existing manifest validation, which keeps isolated fixture roots deterministic.
+    return false;
+  }
 }
 
 /** @param {string} root @param {string} pathName */

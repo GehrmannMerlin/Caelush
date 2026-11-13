@@ -54,10 +54,10 @@ async function writeJson(filePath: string, value: unknown) {
 }
 
 describe("canonical product version authority", () => {
-  it("checks the current repository and existing release-version source", async () => {
+  it("checks the current repository without treating ignored release outputs as product source", async () => {
     const result = await auditProductVersions();
     expect(result.errors).toEqual([]);
-    expect(result.canonicalVersion).toBe("0.1.0");
+    expect(result.canonicalVersion).toBe("1.0.1");
     expect(result.checkedManifestCount).toBeGreaterThan(packageFiles.length);
   });
 
