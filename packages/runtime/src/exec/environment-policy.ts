@@ -1,4 +1,5 @@
 import process from "node:process";
+import path from "node:path";
 
 export type ChildEnvironmentPlatform = "posix" | "win32";
 
@@ -122,6 +123,23 @@ function createEnvironment(
     if (structured && (name === "HOME" || name === "USERPROFILE")) continue;
     result[originalName] = value;
     seen.add(name);
+  }
+  if (platform === "win32" && !structured) {
+    const systemRoot = Object.entries(source).find(
+      ([name]) => name.toUpperCase() === "SYSTEMROOT" || name.toUpperCase() === "WINDIR",
+    )?.[1];
+    const trustedSystemRoot =
+      systemRoot !== undefined && path.win32.isAbsolute(systemRoot) ? systemRoot : "C:\\Windows";
+    // PowerShell hangs before executing a command when PSModulePath is absent on hosted Windows
+    // runners. Recreate only its machine-owned built-in module directory; never inherit the host's
+    // per-user module search paths into an Agent child.
+    result.PSModulePath = path.win32.join(
+      trustedSystemRoot,
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "Modules",
+    );
   }
   return result;
 }
