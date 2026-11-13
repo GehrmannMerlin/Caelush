@@ -1134,6 +1134,8 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
             : { promptSurfaceEpochIdFactory: options.promptSurfaceEpochIdFactory }),
           tokenEstimator,
           clock: options.clock,
+          // Forced recovery remains provisional until the post-compaction guard accepts it.
+          persistPromptSurface: input.mode !== "FORCED_RECOVERY",
           recoveryPlan,
           sourceCriticality,
           atomicGroupByItemId,
@@ -1158,6 +1160,11 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
             // The effective message-input limit already subtracts stable request overhead.
             policy.effectiveInputLimitTokens - growthReserve
         ) {
+          await options.usageStore.upsert({
+            ...finalProjection.audit.usage,
+            lastBuildStatus: "CONTEXT_EXHAUSTED",
+            ...(recoveryStages.length === 0 ? {} : { lastRecoveryStages: recoveryStages }),
+          });
           throw new ContextExhaustedError();
         }
       }

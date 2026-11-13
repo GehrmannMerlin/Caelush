@@ -66,7 +66,7 @@ class OverflowRecoveryProvider implements ApiAdapter {
 }
 
 describe("Context Runtime production recovery E2E", () => {
-  it("reprojects a SQLite-backed raw Tool artifact after provider overflow", async () => {
+  it("fails closed on an uncompactable overflow and preserves the raw Tool artifact", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-context-recovery-e2e-"));
     const payload = Array.from(
       { length: 450 },
@@ -149,9 +149,9 @@ describe("Context Runtime production recovery E2E", () => {
         failureEvents,
         surfaceReadFailure,
       }),
-    ).toBe("COMPLETED");
+    ).toBe("FAILED");
     expect(contextUsage).toMatchObject({
-      lastBuildStatus: "SUCCESS",
+      lastBuildStatus: "CONTEXT_EXHAUSTED",
       lastRecoveryStages: [
         "DEFER_LOW_RETRIEVABLE",
         "REDUCE_OPTIONAL_SOURCES",
@@ -159,45 +159,25 @@ describe("Context Runtime production recovery E2E", () => {
         "COMPACTION_SKIP_NO_CLOSED_TURN",
       ],
     });
-    expect(provider.calls).toBe(3);
-    const firstToolRequest = provider.requests[1];
-    const recoveredRequest = provider.requests[2];
-    expect(firstToolRequest).toBeDefined();
-    expect(recoveredRequest).toBeDefined();
-    const firstSystemHead = firstToolRequest?.messages.find((message) => message.role === "system");
-    const recoveredSystemHead = recoveredRequest?.messages.find(
-      (message) => message.role === "system",
-    );
-    expect(
-      firstSystemHead !== undefined &&
-        recoveredSystemHead !== undefined &&
-        firstSystemHead.content === recoveredSystemHead.content,
-    ).toBe(true);
-    expect(firstToolRequest !== undefined && isToolBatchContiguous(firstToolRequest.messages)).toBe(
+    expect(provider.calls).toBe(2);
+    const overflowRequest = provider.requests[1];
+    expect(overflowRequest).toBeDefined();
+    expect(overflowRequest !== undefined && isToolBatchContiguous(overflowRequest.messages)).toBe(
       true,
     );
-    expect(recoveredRequest !== undefined && isToolBatchContiguous(recoveredRequest.messages)).toBe(
-      true,
-    );
-    const firstToolMessage = firstToolRequest?.messages.find((message) => message.role === "tool");
-    const recoveredToolMessage = recoveredRequest?.messages.find(
-      (message) => message.role === "tool",
-    );
-    expect(firstToolMessage).toBeDefined();
-    expect(recoveredToolMessage).toBeDefined();
-    // Phase 2C: the model-facing AI tool-result message carries exactly
-    // `{role, toolCallId, toolName, content, isError}`. `rawArtifactRef` is a durable
-    // recovery pointer and is deliberately dropped by the core's AI projection, so the
-    // recovered turn must be shown to reproject the *same* tool result through its
-    // identity rather than through a pointer the model never sees. The pointer itself
-    // is asserted on the durable observation below.
-    expect(firstToolMessage?.toolCallId).toBe("read_call");
-    expect(recoveredToolMessage?.toolCallId).toBe(firstToolMessage?.toolCallId);
-    expect(recoveredToolMessage?.toolName).toBe(firstToolMessage?.toolName);
-    expect(firstToolMessage?.content).toContain("[output omitted; see artifact]");
-    expect(recoveredToolMessage?.content).toContain("0-payload-");
-    expect(recoveredToolMessage?.content.length).toBeLessThan(
-      firstToolMessage?.content.length ?? 0,
+    const toolMessage = overflowRequest?.messages.find((message) => message.role === "tool");
+    expect(toolMessage?.toolCallId).toBe("read_call");
+    expect(toolMessage?.content).toContain("[output omitted; see artifact]");
+    expect(provider.requests[2]).toBeUndefined();
+    expect(failureEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "run.failed",
+          payload: expect.objectContaining({
+            error: expect.objectContaining({ code: "CONTEXT_EXHAUSTED" }),
+          }),
+        }),
+      ]),
     );
 
     await daemon.close();
@@ -207,9 +187,8 @@ describe("Context Runtime production recovery E2E", () => {
       const usage = await storage.contextUsage.getByRun(run.id);
       expect(usage?.compactionCount).toBe(0);
       const currentSurfaceEpoch = await storage.promptSurface.getCurrent(run.id);
-      // Provider overflow changes the request projection at this Step, so recovery closes the
-      // rejected projection and records a separately auditable forced-recovery baseline.
-      expect(currentSurfaceEpoch?.resetReason).toBe("FORCED_RECOVERY");
+      // No projection is persisted when this one-turn conversation has no safe compaction cut.
+      expect(currentSurfaceEpoch?.resetReason).toBe("INITIAL");
       const currentSurface =
         currentSurfaceEpoch === undefined
           ? undefined

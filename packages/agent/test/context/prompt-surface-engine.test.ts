@@ -10,6 +10,7 @@ import {
   createContextDocumentBuilder,
   createContextHistoryIndexer,
   createContextItemId,
+  ContextExhaustedError,
   createContextMaterializer,
   createContextPlanner,
   createContextReceiptBuilder,
@@ -424,7 +425,11 @@ describe("Prompt Surface Context Engine integration", () => {
     const cleared = value.store.inspect(value.runId)?.records?.at(-1);
     expect(cleared).toMatchObject({ ordinal: 3, sourceStepSequence: 3, kind: "DELTA" });
     expect(cleared?.updates).toEqual([expect.objectContaining({ op: "CLEAR" })]);
-    expect(third.messages.some((message) => message.content.includes("<clear key="))).toBe(true);
+    expect(
+      third.messages.some(
+        (message) => typeof message.content === "string" && message.content.includes("<clear key="),
+      ),
+    ).toBe(true);
 
     const fourthMessages = completeHistory.slice(0, 7);
     const fourth = await engine.prepare(
@@ -511,7 +516,7 @@ describe("Prompt Surface Context Engine integration", () => {
     expect(value.store.inspect(value.runId)?.resetReason).toBe("INITIAL");
   });
 
-  it("reprojects a failed same-Step context attempt into a new forced-recovery epoch", async () => {
+  it("rejects same-Step forced recovery when no compaction can reduce the request", async () => {
     const value = fixture();
     const engine = value.engine();
     const history = fullHistory(value.runId, value.sessionId, 2);
@@ -525,36 +530,17 @@ describe("Prompt Surface Context Engine integration", () => {
     ).toBe(true);
 
     value.state.dynamicText = "workspace state: recovered selection";
-    const recovered = await engine.prepare(
-      request(value.runId, value.sessionId, 1, history, { mode: "FORCED_RECOVERY" }),
-    );
+    await expect(
+      engine.prepare(
+        request(value.runId, value.sessionId, 1, history, { mode: "FORCED_RECOVERY" }),
+      ),
+    ).rejects.toBeInstanceOf(ContextExhaustedError);
 
-    const epochs = value.store.inspectEpochs(value.runId);
-    expect(epochs).toHaveLength(2);
-    expect(epochs[0]).toEqual(originalEpoch);
-    expect(epochs[1]?.resetReason).toBe("FORCED_RECOVERY");
-    expect(epochs[1]?.records).toHaveLength(1);
-    expect(
-      epochs[1]?.sectionStates?.some((state) =>
-        state.content.includes("workspace state: recovered selection"),
-      ),
-    ).toBe(false);
-    expect(
-      recovered.messages.some(
-        (message) =>
-          message.role === "system" &&
-          message.content.includes("workspace state: recovered selection"),
-      ),
-    ).toBe(false);
-    expect(
-      recovered.messages.every(
-        (message) =>
-          message.role !== "system" || !message.content.includes("workspace state: clean"),
-      ),
-    ).toBe(true);
+    expect(value.store.inspectEpochs(value.runId)).toEqual([originalEpoch]);
+    expect(value.store.inspect(value.runId)).toEqual(originalEpoch);
   });
 
-  it("preserves the previous Sections of a Context source that failed during forced recovery", async () => {
+  it("preserves the previous Sections when a source fails during uncompactable recovery", async () => {
     const value = fixture();
     const engine = value.engine();
     const history = fullHistory(value.runId, value.sessionId, 2);
@@ -567,22 +553,14 @@ describe("Prompt Surface Context Engine integration", () => {
     ).toBe(true);
 
     value.state.dynamicSourceFails = true;
-    await engine.prepare(
-      request(value.runId, value.sessionId, 1, history, { mode: "FORCED_RECOVERY" }),
-    );
-
-    const epochs = value.store.inspectEpochs(value.runId);
-    expect(epochs).toHaveLength(2);
-    expect(epochs[0]).toEqual(originalEpoch);
-    expect(epochs[1]?.resetReason).toBe("FORCED_RECOVERY");
-    expect(
-      epochs[1]?.sectionStates?.some((state) => state.content.includes("workspace state: clean")),
-    ).toBe(true);
-    expect(
-      epochs[1]?.records?.[0]?.updates.some(
-        (update) => update.op === "SET" && update.content.includes("workspace state: clean"),
+    await expect(
+      engine.prepare(
+        request(value.runId, value.sessionId, 1, history, { mode: "FORCED_RECOVERY" }),
       ),
-    ).toBe(true);
+    ).rejects.toBeInstanceOf(ContextExhaustedError);
+
+    expect(value.store.inspectEpochs(value.runId)).toEqual([originalEpoch]);
+    expect(value.store.inspect(value.runId)).toEqual(originalEpoch);
   });
 
   it("starts a new epoch for a changed stable prompt and preserves the old surface byte for byte", async () => {

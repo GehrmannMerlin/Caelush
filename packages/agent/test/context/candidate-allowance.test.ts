@@ -15,6 +15,7 @@ import {
   createContextRequestOverheadEstimator,
   createContextSourceRegistryBuilder,
   createConversationContextSourceProvider,
+  ContextExhaustedError,
   createCorePolicyContextSourceProvider,
   createStandardAgentMessageProjectorRegistry,
   createContextSummaryPromptVersion,
@@ -126,11 +127,14 @@ function checkpointCovering(message: StoredAgentMessage): ContextCheckpointRecor
 }
 
 function usageStore(
-  captured?: { lastRecoveryStages?: readonly string[] }[],
+  captured?: {
+    lastBuildStatus?: string;
+    lastRecoveryStages?: readonly string[];
+  }[],
 ): ContextUsageStorePort {
   return {
     async upsert(snapshot) {
-      captured?.push(snapshot as { lastRecoveryStages?: readonly string[] });
+      captured?.push(snapshot);
     },
     async getByRun() {
       return undefined;
@@ -275,13 +279,19 @@ describe("compaction skip trace", () => {
   it("records why a forced recovery could not plan a compaction", async () => {
     const assistant = assistantMessage({ text: "a".repeat(200), sequence: 1 });
     const user = userMessage({ text: "current intent", sequence: 2 });
-    const captured: { lastRecoveryStages?: readonly string[] }[] = [];
+    const captured: {
+      lastBuildStatus?: string;
+      lastRecoveryStages?: readonly string[];
+    }[] = [];
 
-    await prepare(createEngine({ captured }), [assistant, user], "FORCED_RECOVERY");
+    await expect(
+      prepare(createEngine({ captured }), [assistant, user], "FORCED_RECOVERY"),
+    ).rejects.toBeInstanceOf(ContextExhaustedError);
 
     const stages = captured.at(-1)?.lastRecoveryStages ?? [];
-    // Nothing is foldable in a single open turn with no closed protocol batch, and the reason now
-    // rides on the same durable channel as the recovery stages instead of vanishing.
+    expect(captured.at(-1)?.lastBuildStatus).toBe("CONTEXT_EXHAUSTED");
+    // Nothing is foldable in a single open turn with no closed protocol batch, and the failed
+    // recovery diagnosis is still persisted before the engine rejects the unchanged projection.
     expect(stages).toContain("COMPACTION_SKIP_NO_CLOSED_TURN");
     expect(stages).not.toContain("COMPACT_HISTORY");
   });
