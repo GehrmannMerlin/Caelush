@@ -148,7 +148,7 @@ describe("Desktop production release configuration", () => {
     if (process.platform === "win32") {
       const checkoutConfigPath = await writeConfig({
         ...RELEASE_CONFIG,
-        outputRoot: "D:\\Develop\\Caelush\\release-artifacts",
+        outputRoot: path.join(process.cwd(), "release-artifacts"),
       });
       await expect(loadDesktopReleaseConfiguration(checkoutConfigPath, {})).rejects.toThrow(
         "RELEASE_OUTPUT_ROOT_INVALID",

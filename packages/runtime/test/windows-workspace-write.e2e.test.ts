@@ -127,6 +127,9 @@ describeWindows("native Windows workspace-write E2E", () => {
     adapter.onOutput((event) => output.push(`${event.stream}:${event.text}`));
     const exit = await waitForAdapter(adapter);
 
+    if (exit.exitCode !== 0) {
+      throw new Error(`workspace write adapter failed: ${output.join("")}`);
+    }
     expect(exit).toMatchObject({ exitCode: 0 });
     if (!(await pathExists(workspaceCreated))) {
       throw new Error(`workspace payload output missing; child output: ${output.join("")}`);

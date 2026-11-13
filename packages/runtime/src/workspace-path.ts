@@ -384,6 +384,13 @@ export class WorkspacePathResolver {
       this.scope.realRoot,
       resolvedPolicyRoots,
     );
+    if (
+      isMutation(input.operation) &&
+      indirection !== "DIRECT" &&
+      canonicalRelation === undefined
+    ) {
+      throw new RuntimePatchError("SYMLINK_MUTATION_NOT_ALLOWED");
+    }
     const relation = await assertTargetAllowed(
       this.scope.filesystem,
       input.policy,
