@@ -33,12 +33,17 @@ describe("responsive workspace layout", () => {
     expect(shell).toMatch(
       /\.workspace-sidebar\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?overflow:\s*hidden;/,
     );
-    expect(shell).toMatch(
-      /\.workspace-sidebar-content\s*\{[\s\S]*?display:\s*flex;[\s\S]*?min-height:\s*0;[\s\S]*?flex:\s*1 1 auto;[\s\S]*?flex-direction:\s*column;[\s\S]*?overflow:\s*hidden;/,
-    );
-    expect(shell).toMatch(
-      /\.workspace-list\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?flex:\s*1 1 auto;[\s\S]*?overflow-y:\s*auto;/,
-    );
+    const sidebarContentRule =
+      shell.match(/(?:^|\n)\.workspace-sidebar-content\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(sidebarContentRule).toMatch(/display:\s*flex;/);
+    expect(sidebarContentRule).toMatch(/min-height:\s*0;/);
+    expect(sidebarContentRule).toMatch(/flex:\s*1 1 auto;/);
+    expect(sidebarContentRule).toMatch(/flex-direction:\s*column;/);
+    expect(sidebarContentRule).toMatch(/overflow-x:\s*hidden;/);
+    expect(sidebarContentRule).toMatch(/overflow-y:\s*auto;/);
+    const workspaceListRule = shell.match(/\.workspace-list\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(workspaceListRule).not.toMatch(/overflow-y:\s*auto/);
+    expect(styles).not.toContain(".workspace-list-viewport");
     expect(shell).toMatch(/\.workspace-sidebar-footer\s*\{[\s\S]*?flex:\s*0 0 auto;/);
     expect(shell).toMatch(
       /\.workspace-column\s*\{[\s\S]*?overflow-x:\s*hidden;[\s\S]*?overflow-y:\s*auto;/,
