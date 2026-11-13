@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -7,6 +8,8 @@ export interface CapturedProviderHttpRequest {
   readonly method: string;
   readonly receivedAt: number;
   readonly body: Readonly<Record<string, unknown>>;
+  readonly rawBodyByteLength: number;
+  readonly rawBodySha256: string;
   closedBeforeResponseEnded: boolean;
 }
 
@@ -33,13 +36,15 @@ export async function createControllableProviderServer(
   }> = [];
   const server: Server = createServer((incoming, response) => {
     void captureRequest(incoming)
-      .then(({ path, method, body }) => {
+      .then(({ path, method, body, rawBodyByteLength, rawBodySha256 }) => {
         const captured: CapturedProviderHttpRequest = {
           index: requests.length,
           path,
           method,
           receivedAt: Date.now(),
           body,
+          rawBodyByteLength,
+          rawBodySha256,
           closedBeforeResponseEnded: false,
         };
         requests.push(captured);
@@ -150,12 +155,15 @@ async function captureRequest(incoming: IncomingMessage): Promise<{
   readonly path: string;
   readonly method: string;
   readonly body: Readonly<Record<string, unknown>>;
+  readonly rawBodyByteLength: number;
+  readonly rawBodySha256: string;
 }> {
   const chunks: Buffer[] = [];
   for await (const chunk of incoming) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  const text = Buffer.concat(chunks).toString("utf8");
+  const rawBody = Buffer.concat(chunks);
+  const text = rawBody.toString("utf8");
   let body: unknown = {};
   if (text.length > 0) body = JSON.parse(text);
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -165,6 +173,8 @@ async function captureRequest(incoming: IncomingMessage): Promise<{
     path: incoming.url ?? "/",
     method: incoming.method ?? "GET",
     body: body as Readonly<Record<string, unknown>>,
+    rawBodyByteLength: rawBody.byteLength,
+    rawBodySha256: createHash("sha256").update(rawBody).digest("hex"),
   };
 }
 
