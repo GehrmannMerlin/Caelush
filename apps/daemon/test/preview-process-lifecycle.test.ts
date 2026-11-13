@@ -35,7 +35,7 @@ class PreviewProvider implements ApiAdapter {
         payload: {
           id: "preview",
           name: "exec_command",
-          input: { cmd: "node preview.mjs", yield_time_ms: 1000 },
+          input: { cmd: "node preview.mjs", yield_time_ms: 5000 },
         },
       };
       yield { type: "adapter.finish", payload: { finishReason: "TOOL_CALLS" } };
