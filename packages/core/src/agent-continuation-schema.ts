@@ -83,6 +83,7 @@ import {
   VerificationEvidenceIdSchema,
   VerificationPlanIdSchema,
 } from "@caelush/protocol";
+import type { AgentToolCallsDecision } from "@caelush/agent";
 import { z } from "zod";
 
 export const AgentModelTurnSchema = z
@@ -227,6 +228,17 @@ export const AgentToolCallsDecisionSchema = z
         return;
       }
     }
+  })
+  .transform((decision): AgentToolCallsDecision => {
+    const normalized = {
+      type: decision.type,
+      modelTurn: decision.modelTurn,
+      toolRequests: decision.toolRequests,
+    };
+    const rejectedToolRequests = decision.rejectedToolRequests;
+    return rejectedToolRequests === undefined
+      ? normalized
+      : { ...normalized, rejectedToolRequests };
   });
 
 export const AgentFinalCandidateDecisionSchema = z

@@ -7,6 +7,7 @@ import {
 } from "@caelush/protocol";
 import type { z } from "zod";
 import { describe, expect, expectTypeOf, it } from "vitest";
+import type { AgentToolCallsDecision } from "@caelush/agent";
 import type {
   ProviderRetryErrorCode,
   RetryErrorCode,
@@ -88,6 +89,30 @@ describe("durable continuation schemas", () => {
 
     expect(RunContinuationCheckpointSchema.parse(checkpoint)).toEqual(checkpoint);
     expect(AgentToolCallsDecisionSchema.parse(toolDecision)).toEqual(toolDecision);
+  });
+
+  it("normalizes an explicitly undefined rejected-request field to absence", () => {
+    const checkpoint = {
+      type: "WAITING_TOOL_RESULTS" as const,
+      runId,
+      sourceStepId,
+      pendingDecision: { ...toolDecision, rejectedToolRequests: undefined },
+      receivedResults: [
+        {
+          role: "tool" as const,
+          toolCallId: "call_a",
+          toolName: "read_file" as const,
+          content: "source",
+          isError: false,
+        },
+      ],
+    };
+
+    const parsed = RunContinuationCheckpointSchema.parse(checkpoint);
+    if (parsed.type !== "WAITING_TOOL_RESULTS") throw new Error("Expected a Tool checkpoint.");
+    expect(parsed.pendingDecision).not.toHaveProperty("rejectedToolRequests");
+    expect(parsed.pendingDecision).toEqual(toolDecision);
+    expectTypeOf(parsed.pendingDecision).toEqualTypeOf<AgentToolCallsDecision>();
   });
 
   it("validates a final candidate checkpoint without treating it as a completed run", () => {
