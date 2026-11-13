@@ -24,6 +24,6 @@ describe("product version ownership", () => {
         daemonManifest.version,
         rootManifest.version,
       ]),
-    ).toEqual(new Set(["0.1.0"]));
+    ).toEqual(new Set(["1.0.1"]));
   });
 });

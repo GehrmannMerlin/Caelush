@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { DaemonInfo, HealthResponse } from "@caelush/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveProductPaths } from "@caelush/daemon/paths";
+import { PRODUCT_VERSION } from "../src/version.js";
 import {
   ensureDaemon,
   type DaemonProbeClient,
@@ -20,7 +21,7 @@ const health: HealthResponse = {
 const info: DaemonInfo = {
   apiVersion: "v1",
   protocolVersion: 1,
-  daemonVersion: "0.1.0",
+  daemonVersion: PRODUCT_VERSION,
   capabilities: {
     runExecution: true,
     runRecovery: true,

@@ -172,7 +172,7 @@ describe("daemon production composition", () => {
     expect(composition.info).toEqual({
       apiVersion: "v1",
       protocolVersion: 1,
-      daemonVersion: "0.1.0",
+      daemonVersion: "1.0.1",
       capabilities: {
         runExecution: true,
         runRecovery: true,

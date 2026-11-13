@@ -330,7 +330,7 @@ describe("daemon WORKING_SET_V2 current-turn integration", () => {
       (event) => event.type === "context.compaction.completed",
     );
     expect(compactionEvents).toHaveLength(1);
-    expect(compactionEvents[0]?.schemaVersion).toBe(2);
+    expect(compactionEvents[0]?.schemaVersion).toBe(3);
     expect(compactionEvents[0]?.stepId).toBeUndefined();
     const checkpoint = candidates.records[0];
     if (checkpoint === undefined || checkpoint.schemaVersion !== 3) {

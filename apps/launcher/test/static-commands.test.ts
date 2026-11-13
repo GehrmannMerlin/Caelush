@@ -12,7 +12,7 @@ const execFileAsync = promisify(execFile);
 
 describe("static product commands", () => {
   it("uses package metadata as the product version", () => {
-    expect(PRODUCT_VERSION).toBe("0.1.0");
+    expect(PRODUCT_VERSION).toBe("1.0.1");
   });
 
   it("documents the product command and all supported launch forms", () => {

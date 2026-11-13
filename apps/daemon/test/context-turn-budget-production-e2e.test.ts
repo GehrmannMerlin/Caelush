@@ -124,9 +124,10 @@ describe("M2 — production turn budget under HEADROOM_V1", () => {
       expect(policy.preferredOutputTokens).toBe(16_384);
       expect(policy.minOutputTokens).toBe(2_048);
       expect(policy.deepCompaction).toEqual({
-        version: "DEEP_COMPACTION_V1",
+        version: "DEEP_COMPACTION_V2",
         triggerRatio: 0.9,
-        recentTokens: 20_000,
+        recentRatio: 0.08,
+        minimumReleaseRatio: 0.7,
         checkpointMaxTokens: 8_192,
         boundaryTokens: 4_096,
       });
