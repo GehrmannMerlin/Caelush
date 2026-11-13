@@ -446,7 +446,7 @@ jobs:
           - os: ubuntu-latest
             label: linux-x64
             nodeVersion: 24
-          - os: macos-14
+          - os: macos-15
             label: macos-arm64
             nodeVersion: 24
           - os: macos-15-intel
