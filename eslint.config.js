@@ -95,6 +95,7 @@ export default tseslint.config(
       "**/.stage/**",
       "coverage/**",
       "release-artifacts/**",
+      ".workbuddy/**",
     ],
   },
   js.configs.recommended,
