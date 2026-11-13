@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { verifyPrivateWindowsAcl } from "../../src/main/windows-private-acl.js";
 
 const userSid = "S-1-5-21-100-200-300-1001";
+const localAdministratorSid = "S-1-5-21-100-200-300-500";
 
 function snapshot(...aces: string[]) {
   return `D:P${aces.map((ace) => `(${ace})`).join("")}`;
@@ -22,6 +23,28 @@ it("accepts the Windows SYSTEM and Administrators principals alongside the curre
       userSid,
     ),
   ).not.toThrow();
+});
+
+it("resolves the Local Administrator SDDL alias to the current user's SID", () => {
+  expect(() =>
+    verifyPrivateWindowsAcl(snapshot(allow("LA")), localAdministratorSid, localAdministratorSid),
+  ).not.toThrow();
+});
+
+it("resolves the SYSTEM and Builtin Administrators SDDL aliases", () => {
+  expect(() =>
+    verifyPrivateWindowsAcl(
+      snapshot(allow(userSid), allow("SY"), allow("BA")),
+      userSid,
+      localAdministratorSid,
+    ),
+  ).not.toThrow();
+});
+
+it("does not treat the Local Administrator alias as another user's SID", () => {
+  expect(() =>
+    verifyPrivateWindowsAcl(snapshot(allow("LA")), userSid, localAdministratorSid),
+  ).toThrow();
 });
 
 it("requires trusted machine principals to have full control", () => {

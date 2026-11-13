@@ -1,19 +1,15 @@
-import { execFile as execFileCallback } from "node:child_process";
-import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import * as fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ProfileManager,
   profileIdForUser,
-  type ProfilePermissions,
   WindowsProfilePermissions,
 } from "../../src/main/profiles/profile-manager.js";
 
 const roots: string[] = [];
-const run = promisify(execFileCallback);
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -38,69 +34,6 @@ function manager(rootDirectory: string) {
     },
     now: () => new Date("2026-10-10T00:00:00.000Z"),
   });
-}
-
-async function windowsAclSummary(directory: string) {
-  const windowsDirectory = process.env.SystemRoot ?? "C:\\Windows";
-  const icacls = path.join(windowsDirectory, "System32", "icacls.exe");
-  const whoami = path.join(windowsDirectory, "System32", "whoami.exe");
-  const snapshotPath = path.join(tmpdir(), `caelush-profile-acl-diagnostic-${process.pid}.tmp`);
-  try {
-    const [{ stdout }] = await Promise.all([
-      run(whoami, ["/user", "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true }),
-      run(icacls, [directory, "/save", snapshotPath, "/C"], {
-        encoding: "utf8",
-        windowsHide: true,
-      }),
-    ]);
-    const userSid = stdout.match(/S-1-(?:[0-9]+-)+[0-9]+/u)?.[0];
-    const content = (await readFile(snapshotPath)).toString("utf16le").replace(/^\uFEFF/u, "");
-    const daclLine = content.split(/\r?\n/u).find((line) => /^D:/u.test(line));
-    const entries = [...(daclLine?.matchAll(/\(([^()]+)\)/gu) ?? [])].map((match) => {
-      const fields = match[1]?.split(";") ?? [];
-      return {
-        access: fields[0],
-        flags: fields[1],
-        rights: fields[2],
-        sid: fields[5] === userSid ? "CURRENT_USER" : fields[5],
-      };
-    });
-    return entries;
-  } finally {
-    await rm(snapshotPath, { force: true });
-  }
-}
-
-function reportWindowsAclFailures(delegate: ProfilePermissions, root: string): ProfilePermissions {
-  async function report(directory: string, error: unknown): Promise<never> {
-    console.error(
-      "[PROFILE_ACL_DIAGNOSTIC]",
-      JSON.stringify({
-        path: path.relative(root, directory),
-        entries: await windowsAclSummary(directory),
-      }),
-    );
-    throw error;
-  }
-
-  return {
-    secureDirectory: (directory) => delegate.secureDirectory(directory),
-    verifyDirectory: async (directory) => {
-      try {
-        await delegate.verifyDirectory(directory);
-      } catch (error) {
-        await report(directory, error);
-      }
-    },
-    secureFile: (filePath) => delegate.secureFile(filePath),
-    verifyFile: async (filePath) => {
-      try {
-        await delegate.verifyFile(filePath);
-      } catch (error) {
-        await report(filePath, error);
-      }
-    },
-  };
 }
 
 afterEach(async () => {
@@ -215,18 +148,10 @@ describe("Desktop account profile isolation", () => {
   it("creates profiles with the real current-Windows-user ACL policy", async () => {
     if (process.platform !== "win32") return;
     const localAppData = await createRoot();
-    await run(
-      path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe"),
-      [localAppData, "/grant", "*S-1-5-18:(OI)(CI)F", "/grant", "*S-1-5-32-544:(OI)(CI)F"],
-      { windowsHide: true },
-    );
     const profiles = new ProfileManager({
       localAppDataDirectory: localAppData,
       platform: "win32",
-      permissions: reportWindowsAclFailures(
-        new WindowsProfilePermissions("win32", process.env),
-        localAppData,
-      ),
+      permissions: new WindowsProfilePermissions("win32", process.env),
     });
 
     await expect(

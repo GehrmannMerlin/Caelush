@@ -2,7 +2,11 @@
 export const WINDOWS_PRIVILEGED_SIDS = ["S-1-5-18", "S-1-5-32-544"] as const;
 
 /** Verify the SID-based ACL snapshot produced by `icacls /save`, whose SDDL is locale-neutral. */
-export function verifyPrivateWindowsAcl(snapshot: string, userSid: string): void {
+export function verifyPrivateWindowsAcl(
+  snapshot: string,
+  userSid: string,
+  localAdministratorSid?: string,
+): void {
   const daclLine = snapshot.split(/\r?\n/u).find((line) => /^D:(?:(?:P|AI|AR))*\(/u.test(line));
   const dacl = daclLine?.match(/^D:(?:(?:P|AI|AR))*((?:\([^()]+\))+)/u)?.[1];
   if (dacl === undefined) throw new Error("Windows ACL is invalid.");
@@ -13,7 +17,7 @@ export function verifyPrivateWindowsAcl(snapshot: string, userSid: string): void
     return {
       access: fields[0],
       rights: fields[2],
-      sid: fields[5],
+      sid: normalizeWindowsSddlSid(fields[5], localAdministratorSid),
     };
   });
   const isFullControl = (rights: string | undefined) => rights === "FA" || rights === "0x10000000";
@@ -27,4 +31,17 @@ export function verifyPrivateWindowsAcl(snapshot: string, userSid: string): void
     return !isTrustedWindowsSid || !isFullControl(entry.rights);
   });
   if (!userFullControl || unsafeAccess) throw new Error("Windows ACL is not private.");
+}
+
+function normalizeWindowsSddlSid(sid: string | undefined, localAdministratorSid?: string) {
+  switch (sid) {
+    case "SY":
+      return "S-1-5-18";
+    case "BA":
+      return "S-1-5-32-544";
+    case "LA":
+      return localAdministratorSid;
+    default:
+      return sid;
+  }
 }

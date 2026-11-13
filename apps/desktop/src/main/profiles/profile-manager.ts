@@ -8,6 +8,8 @@ import { z } from "zod";
 import { verifyPrivateWindowsAcl } from "../windows-private-acl.js";
 
 const execFile = promisify(execFileCallback);
+const WINDOWS_SID_PATTERN = /^S-1-(?:[0-9]+-)+[0-9]+$/u;
+const WINDOWS_SID_MATCH_PATTERN = /S-1-(?:[0-9]+-)+[0-9]+/u;
 const USER_ID_SCHEMA = z.uuid();
 const PROFILE_ID_PATTERN = /^u_[0-9a-f]{64}$/u;
 const PROFILE_DIRECTORIES = ["runs", "logs", "backups", "browser", "downloads", "run"] as const;
@@ -233,6 +235,7 @@ export class ProfileManager {
  * managed profile entries are protected from inherited access by other Windows users. */
 export class WindowsProfilePermissions implements ProfilePermissions {
   private userSidPromise: Promise<string> | undefined;
+  private localAdministratorSidPromise: Promise<string> | undefined;
 
   constructor(
     private readonly platform: NodeJS.Platform = process.platform,
@@ -305,7 +308,10 @@ export class WindowsProfilePermissions implements ProfilePermissions {
         }
         const encodedSnapshot = await readFile(aclSnapshot);
         const snapshot = decodeWindowsAclSnapshot(encodedSnapshot);
-        verifyPrivateWindowsAcl(snapshot, sid);
+        const localAdministratorSid = snapshot.includes(";;;LA)")
+          ? await this.localAdministratorSid()
+          : undefined;
+        verifyPrivateWindowsAcl(snapshot, sid, localAdministratorSid);
       } finally {
         await rm(aclSnapshot, { force: true });
       }
@@ -323,11 +329,36 @@ export class WindowsProfilePermissions implements ProfilePermissions {
         timeout: 3000,
         windowsHide: true,
       });
-      const sid = stdout.match(/S-1-(?:[0-9]+-)+[0-9]+/u)?.[0];
+      const sid = stdout.match(WINDOWS_SID_MATCH_PATTERN)?.[0];
       if (sid === undefined) throw permissionError();
       return sid;
     })();
     return this.userSidPromise;
+  }
+
+  private async localAdministratorSid(): Promise<string> {
+    this.localAdministratorSidPromise ??= (async () => {
+      const windowsDirectory = this.environment.SystemRoot ?? "C:\\Windows";
+      const executable = path.join(
+        windowsDirectory,
+        "System32",
+        "WindowsPowerShell",
+        "v1.0",
+        "powershell.exe",
+      );
+      const command =
+        "$descriptor=[System.Security.AccessControl.RawSecurityDescriptor]::new('D:P(A;OICI;FA;;;LA)');" +
+        "[Console]::Out.WriteLine($descriptor.DiscretionaryAcl[0].SecurityIdentifier.Value)";
+      const { stdout } = await execFile(
+        executable,
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        { encoding: "utf8", timeout: 3000, windowsHide: true },
+      );
+      const sid = stdout.trim();
+      if (!WINDOWS_SID_PATTERN.test(sid)) throw permissionError();
+      return sid;
+    })();
+    return this.localAdministratorSidPromise;
   }
 
   private async runIcacls(args: readonly string[]): Promise<string> {
