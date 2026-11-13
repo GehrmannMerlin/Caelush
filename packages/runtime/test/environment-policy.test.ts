@@ -85,19 +85,24 @@ describe("child process environment policy", () => {
     expect(isCredentialBearingEnvironmentVariable("SYSTEMDRIVE")).toBe(false);
   });
 
-  it("uses only the Windows installation PowerShell modules for shell children", () => {
+  it("uses only machine-owned Windows PowerShell modules for shell children", () => {
     const result = createAgentProcessEnvironment(
       {
         SYSTEMROOT: "D:\\Windows",
+        ProgramFiles: "D:\\Program Files",
+        "ProgramFiles(x86)": "D:\\Program Files (x86)",
         Path: "D:\\Windows\\System32",
         PSModulePath:
-          "C:\\Users\\test\\Documents\\WindowsPowerShell\\Modules;C:\\Program Files\\WindowsPowerShell\\Modules;D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules",
+          "C:\\Users\\test\\Documents\\WindowsPowerShell\\Modules;D:\\Program Files\\WindowsPowerShell\\Modules;D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules;D:\\Program Files\\PowerShell\\7\\Modules;C:\\untrusted\\Modules",
       },
       "win32",
     );
 
-    expect(result.PSModulePath).toBe("D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules");
+    expect(result.PSModulePath).toBe(
+      "D:\\Program Files\\WindowsPowerShell\\Modules;D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules;D:\\Program Files\\PowerShell\\7\\Modules",
+    );
     expect(result.PSModulePath).not.toContain("C:\\Users\\test");
+    expect(result.PSModulePath).not.toContain("C:\\untrusted");
   });
 
   it("uses an even smaller structured-helper environment and removes rg configuration", () => {

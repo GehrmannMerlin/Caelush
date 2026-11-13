@@ -864,6 +864,30 @@ async function runPackagedPty(runtimeModule, protocolModule, workspace) {
 }
 
 async function runPackagedPtyDiagnostics(runtimeModule, workspace) {
+  const sourcePsModulePathName = Object.keys(process.env).find(
+    (name) => name.toUpperCase() === "PSMODULEPATH",
+  );
+  const sourcePsModulePath =
+    sourcePsModulePathName === undefined ? "" : (process.env[sourcePsModulePathName] ?? "");
+  const userModuleRoots = [process.env.USERPROFILE, process.env.APPDATA, process.env.LOCALAPPDATA]
+    .filter((value) => value !== undefined && value.length > 0)
+    .map((value) => value.replaceAll("/", "\\").replace(/\\+$/u, "").toLowerCase());
+  const isUnderUserModuleRoot = (candidate) => {
+    const normalized = candidate.replaceAll("/", "\\").replace(/\\+$/u, "").toLowerCase();
+    return userModuleRoots.some(
+      (root) => normalized === root || normalized.startsWith(`${root}\\`),
+    );
+  };
+  const sourceModuleEntries = sourcePsModulePath.split(";").filter(Boolean);
+  const modulePathCandidates = [
+    [
+      "filtered-plus-PSModulePath-without-profile-paths",
+      sourceModuleEntries.filter((entry) => !isUnderUserModuleRoot(entry)).join(";"),
+    ],
+    ...sourceModuleEntries
+      .slice(0, 4)
+      .map((entry, index) => [`filtered-plus-PSModulePath-entry-${index + 1}`, entry]),
+  ];
   const candidateGroups = [
     ["filtered-plus-PSModulePath", ["PSModulePath"]],
     ["filtered-plus-AppData", ["APPDATA", "LOCALAPPDATA"]],
@@ -884,6 +908,7 @@ async function runPackagedPtyDiagnostics(runtimeModule, workspace) {
   const source = [
     `const runtimeUrl = ${JSON.stringify(runtimeModule)};`,
     `const candidateGroups = ${JSON.stringify(candidateGroups)};`,
+    `const modulePathCandidates = ${JSON.stringify(modulePathCandidates)};`,
     'const { createRequire } = await import("node:module");',
     "const { createAgentProcessEnvironment, LocalShellResolver } = await import(runtimeUrl);",
     'const pty = createRequire(new URL(runtimeUrl))("node-pty");',
@@ -891,12 +916,13 @@ async function runPackagedPtyDiagnostics(runtimeModule, workspace) {
     'const marker = "CAELUSH_PACKAGED_PTY_DIAGNOSTIC";',
     'const filteredEnv = createAgentProcessEnvironment(process.env, "win32");',
     'const wrapper = new LocalShellResolver({ platform: "win32" }).resolve(`Write-Output ${marker}`);',
+    "function environmentWithModulePath(value) { return { ...filteredEnv, PSModulePath: value }; }",
     "function environmentWithExtras(names) {",
     "  const result = { ...filteredEnv };",
     "  for (const name of names) { const actualName = Object.keys(process.env).find(key => key.toUpperCase() === name.toUpperCase()); if (actualName !== undefined) result[actualName] = process.env[actualName]; }",
     "  return result;",
     "}",
-    'const ptyCases = [["full-environment-simple", "powershell.exe", ["-NoLogo", "-NoProfile", "-Command", `Write-Output ${marker}`], process.env], ["filtered-environment-simple", "powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `Write-Output ${marker}`], filteredEnv], ...candidateGroups.map(([label, names]) => [label, "powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `Write-Output ${marker}`], environmentWithExtras(names)]), ["filtered-environment-wrapper", wrapper.executable, wrapper.args, filteredEnv]];',
+    'const ptyCases = [["full-environment-simple", "powershell.exe", ["-NoLogo", "-NoProfile", "-Command", `Write-Output ${marker}`], process.env], ["filtered-environment-simple", "powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `Write-Output ${marker}`], filteredEnv], ...candidateGroups.map(([label, names]) => [label, "powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `Write-Output ${marker}`], environmentWithExtras(names)]), ...modulePathCandidates.map(([label, value]) => [label, "powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `Write-Output ${marker}`], environmentWithModulePath(value)]), ["filtered-environment-wrapper", wrapper.executable, wrapper.args, filteredEnv]];',
     "function probePty([label, executable, args, env]) {",
     "  return new Promise(resolve => {",
     '    const startedAt = Date.now(); let output = ""; let completed = false; let timer;',
@@ -922,7 +948,8 @@ async function runPackagedPtyDiagnostics(runtimeModule, workspace) {
     "}",
     'if (process.platform !== "win32") { console.log(JSON.stringify({ skipped: "Windows launch diagnostics only" })); process.exit(0); }',
     "const results = []; for (const testCase of ptyCases) results.push(await probePty(testCase)); results.push(await probePipe());",
-    'console.log(JSON.stringify({ availableCandidates: candidateGroups.flatMap(([, names]) => names).filter(name => Object.keys(process.env).some(key => key.toUpperCase() === name.toUpperCase())), environment: { hasPath: Object.keys(filteredEnv).some(key => key.toUpperCase() === "PATH"), hasTemp: Object.keys(filteredEnv).some(key => key.toUpperCase() === "TEMP"), hasTmp: Object.keys(filteredEnv).some(key => key.toUpperCase() === "TMP") }, results }));',
+    'const filteredModulePath = filteredEnv.PSModulePath ?? ""; const normalizedModulePath = filteredModulePath.replaceAll("/", "\\\\").toLowerCase(); const profile = process.env.USERPROFILE?.replaceAll("/", "\\\\").toLowerCase();',
+    'console.log(JSON.stringify({ availableCandidates: candidateGroups.flatMap(([, names]) => names).filter(name => Object.keys(process.env).some(key => key.toUpperCase() === name.toUpperCase())), environment: { hasPath: Object.keys(filteredEnv).some(key => key.toUpperCase() === "PATH"), hasTemp: Object.keys(filteredEnv).some(key => key.toUpperCase() === "TEMP"), hasTmp: Object.keys(filteredEnv).some(key => key.toUpperCase() === "TMP"), powerShellModulePath: { present: filteredModulePath.length > 0, segments: filteredModulePath.split(";").filter(Boolean).length, containsUserProfile: Boolean(profile && normalizedModulePath.includes(profile)), containsWindowsModules: normalizedModulePath.includes("windowspowershell") && normalizedModulePath.includes("v1.0") && normalizedModulePath.includes("modules"), containsProgramFiles: normalizedModulePath.includes("program files") } }, results }));',
     "process.exit(0);",
   ].join("\n");
   return await run(process.execPath, ["--input-type=module", "-e", source], {

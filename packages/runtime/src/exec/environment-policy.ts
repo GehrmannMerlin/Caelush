@@ -108,6 +108,65 @@ function isCompatibleName(name: string, platform: ChildEnvironmentPlatform): boo
   return names.has(name) || name.startsWith("LC_");
 }
 
+function sourceEnvironmentValue(source: NodeJS.ProcessEnv, name: string): string | undefined {
+  return Object.entries(source).find(([candidate]) => candidate.toUpperCase() === name)?.[1];
+}
+
+function isWithinWindowsDirectory(root: string, candidate: string): boolean {
+  const relative = path.win32.relative(root, candidate);
+  return (
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.win32.sep}`) &&
+      !path.win32.isAbsolute(relative))
+  );
+}
+
+function windowsPowerShellModulePath(source: NodeJS.ProcessEnv): string {
+  const sourceSystemRoot =
+    sourceEnvironmentValue(source, "SYSTEMROOT") ??
+    sourceEnvironmentValue(source, "WINDIR") ??
+    "C:\\Windows";
+  const userProfile = sourceEnvironmentValue(source, "USERPROFILE");
+  const trustedSystemRoot =
+    path.win32.isAbsolute(sourceSystemRoot) &&
+    (userProfile === undefined || !isWithinWindowsDirectory(userProfile, sourceSystemRoot))
+      ? sourceSystemRoot
+      : "C:\\Windows";
+  const machineRoots = [
+    trustedSystemRoot,
+    sourceEnvironmentValue(source, "PROGRAMFILES"),
+    sourceEnvironmentValue(source, "PROGRAMFILES(X86)"),
+  ].filter(
+    (root): root is string =>
+      root !== undefined &&
+      path.win32.isAbsolute(root) &&
+      (userProfile === undefined || !isWithinWindowsDirectory(userProfile, root)),
+  );
+  const modulePathEntries = new Map<string, string>();
+  const addMachineModulePath = (value: string) => {
+    const normalized = path.win32.normalize(value.trim());
+    if (
+      normalized.length === 0 ||
+      !path.win32.isAbsolute(normalized) ||
+      !machineRoots.some((root) => isWithinWindowsDirectory(root, normalized))
+    ) {
+      return;
+    }
+    const key = normalized.toLowerCase();
+    if (!modulePathEntries.has(key)) modulePathEntries.set(key, normalized);
+  };
+
+  const sourceModulePath = sourceEnvironmentValue(source, "PSMODULEPATH");
+  for (const entry of sourceModulePath?.split(path.win32.delimiter) ?? []) {
+    addMachineModulePath(entry);
+  }
+  addMachineModulePath(
+    path.win32.join(trustedSystemRoot, "System32", "WindowsPowerShell", "v1.0", "Modules"),
+  );
+  return [...modulePathEntries.values()].join(path.win32.delimiter);
+}
+
 function createEnvironment(
   source: NodeJS.ProcessEnv,
   platform: ChildEnvironmentPlatform,
@@ -125,21 +184,10 @@ function createEnvironment(
     seen.add(name);
   }
   if (platform === "win32" && !structured) {
-    const systemRoot = Object.entries(source).find(
-      ([name]) => name.toUpperCase() === "SYSTEMROOT" || name.toUpperCase() === "WINDIR",
-    )?.[1];
-    const trustedSystemRoot =
-      systemRoot !== undefined && path.win32.isAbsolute(systemRoot) ? systemRoot : "C:\\Windows";
     // PowerShell hangs before executing a command when PSModulePath is absent on hosted Windows
-    // runners. Recreate only its machine-owned built-in module directory; never inherit the host's
+    // runners. Keep only module paths under machine installation roots; never inherit the host's
     // per-user module search paths into an Agent child.
-    result.PSModulePath = path.win32.join(
-      trustedSystemRoot,
-      "System32",
-      "WindowsPowerShell",
-      "v1.0",
-      "Modules",
-    );
+    result.PSModulePath = windowsPowerShellModulePath(source);
   }
   return result;
 }
