@@ -435,8 +435,21 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $tempPath = node -e "const fs=require('node:fs'); const os=require('node:os'); process.stdout.write(fs.realpathSync(process.env.TEMP || os.tmpdir()))"
-          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tempPath)) { throw 'Could not resolve the Windows test temp path.' }
+          $sourcePath = if ([string]::IsNullOrWhiteSpace($env:TEMP)) { [System.IO.Path]::GetTempPath() } else { $env:TEMP }
+          $native = @'
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class CaelushWindowsPath
+          {
+              [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+              public static extern uint GetLongPathName(string shortPath, StringBuilder longPath, uint bufferLength);
+          }
+          '@
+          Add-Type -TypeDefinition $native
+          $buffer = [System.Text.StringBuilder]::new(32768)
+          $length = [CaelushWindowsPath]::GetLongPathName([System.IO.Path]::GetFullPath($sourcePath), $buffer, [uint32]$buffer.Capacity)
+          if ($length -eq 0 -or $length -ge $buffer.Capacity) { throw 'Could not resolve the Windows test temp path.' }
+          $tempPath = $buffer.ToString()
           "path=$tempPath" >> $env:GITHUB_OUTPUT
 
       - name: Run quality gate
@@ -504,8 +517,21 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $tempPath = node -e "const fs=require('node:fs'); const os=require('node:os'); process.stdout.write(fs.realpathSync(process.env.TEMP || os.tmpdir()))"
-          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tempPath)) { throw 'Could not resolve the Windows test temp path.' }
+          $sourcePath = if ([string]::IsNullOrWhiteSpace($env:TEMP)) { [System.IO.Path]::GetTempPath() } else { $env:TEMP }
+          $native = @'
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class CaelushWindowsPath
+          {
+              [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+              public static extern uint GetLongPathName(string shortPath, StringBuilder longPath, uint bufferLength);
+          }
+          '@
+          Add-Type -TypeDefinition $native
+          $buffer = [System.Text.StringBuilder]::new(32768)
+          $length = [CaelushWindowsPath]::GetLongPathName([System.IO.Path]::GetFullPath($sourcePath), $buffer, [uint32]$buffer.Capacity)
+          if ($length -eq 0 -or $length -ge $buffer.Capacity) { throw 'Could not resolve the Windows test temp path.' }
+          $tempPath = $buffer.ToString()
           "path=$tempPath" >> $env:GITHUB_OUTPUT
 
       - name: Run artifact-only E2E
