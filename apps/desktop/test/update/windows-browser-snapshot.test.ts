@@ -5,6 +5,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, expect, it } from "vitest";
 import { WindowsProfilePermissions } from "../../src/main/profiles/profile-manager.js";
+import { WINDOWS_PRIVILEGED_SIDS } from "../../src/main/windows-private-acl.js";
 import { digestBrowserProfile } from "../../src/main/update/profile-verification.js";
 
 const run = promisify(execFile);
@@ -41,7 +42,11 @@ async function capture(browser: string) {
     new URL("../../src/main/update/nsis-handoff.ts", import.meta.url),
     "utf8",
   );
-  const script = source.split("const HANDOFF_SCRIPT = String.raw`")[1]!.split("`;")[0]!;
+  const scriptTemplate = source.split("const HANDOFF_SCRIPT = String.raw`")[1]!.split("`;")[0]!;
+  const script = scriptTemplate.replace(
+    "${WINDOWS_PRIVILEGED_SIDS_PS}",
+    WINDOWS_PRIVILEGED_SIDS.map((sid) => `'${sid}'`).join(","),
+  );
   const pathChecks = script.slice(script.indexOf("$sid="), script.indexOf("$configPath="));
   const fingerprint = script.slice(
     script.indexOf("function FingerprintBrowserTree"),
@@ -74,6 +79,25 @@ it.skipIf(process.platform !== "win32")(
   "fingerprints Chromium AppContainer cache ACLs under the private Profile boundary",
   async () => {
     const f = await fixture();
+    expect(await capture(f.browser)).toEqual(await digestBrowserProfile(f.browser));
+  },
+);
+it.skipIf(process.platform !== "win32")(
+  "allows built-in SYSTEM and Administrators ACEs on the private Profile boundary",
+  async () => {
+    const f = await fixture();
+    await run(
+      path.join(process.env.SystemRoot!, "System32", "icacls.exe"),
+      [
+        path.dirname(f.browser),
+        "/grant",
+        "*S-1-5-18:(OI)(CI)F",
+        "/grant",
+        "*S-1-5-32-544:(OI)(CI)F",
+      ],
+      { windowsHide: true },
+    );
+
     expect(await capture(f.browser)).toEqual(await digestBrowserProfile(f.browser));
   },
 );

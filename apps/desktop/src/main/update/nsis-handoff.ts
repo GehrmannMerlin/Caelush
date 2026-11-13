@@ -6,6 +6,9 @@ import { z } from "zod";
 import { DesktopUpdateError } from "./error.js";
 import { UpdateStateStore, type PendingUpdateRecord } from "./state-store.js";
 import { verifyPolicyResponse, type UpdateTrust } from "../cloud/update-policy.js";
+import { WINDOWS_PRIVILEGED_SIDS } from "../windows-private-acl.js";
+
+const WINDOWS_PRIVILEGED_SIDS_PS = WINDOWS_PRIVILEGED_SIDS.map((sid) => `'${sid}'`).join(",");
 
 /** Fixed code runs in an independent Windows process; config is private Main-created data.
  * FileShare.Read denies both writes and deletion from final SHA-512 through NSIS exit.
@@ -27,10 +30,14 @@ function AssertPrivate([string]$p,[bool]$directory) {
   AssertPath $p $directory
   $acl=if($directory){[IO.Directory]::GetAccessControl($p)}else{[IO.File]::GetAccessControl($p)}
   $rules=$acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])
+  $privilegedSids=@(${WINDOWS_PRIVILEGED_SIDS_PS})
   $allowed=$false
   foreach($rule in $rules) {
-    if($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or $rule.IdentityReference.Value -ne $sid) {throw 'UNSAFE_ACL'}
-    if(($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq [Security.AccessControl.FileSystemRights]::FullControl) {$allowed=$true}
+    $ruleSid=$rule.IdentityReference.Value
+    if($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or ($ruleSid -ne $sid -and $privilegedSids -notcontains $ruleSid)) {throw 'UNSAFE_ACL'}
+    $fullControl=$rule.FileSystemRights -eq [Security.AccessControl.FileSystemRights]::FullControl
+    if($ruleSid -ne $sid -and -not $fullControl) {throw 'UNSAFE_ACL'}
+    if($ruleSid -eq $sid -and $fullControl) {$allowed=$true}
   }
   if(-not $allowed){throw 'UNSAFE_ACL'}
 }

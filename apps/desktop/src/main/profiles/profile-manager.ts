@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
+import { verifyPrivateWindowsAcl } from "../windows-private-acl.js";
 
 const execFile = promisify(execFileCallback);
 const USER_ID_SCHEMA = z.uuid();
@@ -350,33 +351,6 @@ function decodeWindowsAclSnapshot(value: Buffer): string {
   const snapshot = value.toString("utf16le").replace(/^\uFEFF/u, "");
   if (snapshot.includes("\uFFFD")) throw permissionError();
   return snapshot;
-}
-
-/** Verify the SID-based ACL snapshot produced by `icacls /save`, whose SDDL is locale-neutral. */
-function verifyPrivateWindowsAcl(snapshot: string, userSid: string): void {
-  const daclLine = snapshot.split(/\r?\n/u).find((line) => /^D:(?:(?:P|AI|AR))*\(/u.test(line));
-  const dacl = daclLine?.match(/^D:(?:(?:P|AI|AR))*((?:\([^()]+\))+)/u)?.[1];
-  if (dacl === undefined) throw permissionError();
-
-  const entries = [...dacl.matchAll(/\(([^()]+)\)/gu)].map((match) => {
-    const fields = match[1]?.split(";") ?? [];
-    if (fields.length !== 6) throw permissionError();
-    return {
-      access: fields[0],
-      rights: fields[2],
-      sid: fields[5],
-    };
-  });
-  const isFullControl = (rights: string | undefined) => rights === "FA" || rights === "0x10000000";
-  const userFullControl = entries.some(
-    (entry) => entry.access === "A" && entry.sid === userSid && isFullControl(entry.rights),
-  );
-  const unsafeAccess = entries.some(
-    (entry) =>
-      entry.access === "D" ||
-      (entry.access === "A" && entry.rights !== "" && entry.sid !== userSid),
-  );
-  if (!userFullControl || unsafeAccess) throw permissionError();
 }
 
 async function readProfileMetadata(
