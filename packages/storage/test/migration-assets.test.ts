@@ -31,5 +31,8 @@ describe("production migration assets", () => {
     expect(existsSync(path.join(folder, "20261114120000_skill_settings", "migration.sql"))).toBe(
       true,
     );
+    expect(
+      existsSync(path.join(folder, "20261115120000_run_workflow_resources", "migration.sql")),
+    ).toBe(true);
   });
 });

@@ -120,6 +120,54 @@ export const agentRuns = sqliteTable(
   ],
 );
 
+export const runWorkflowProfiles = sqliteTable(
+  "run_workflow_profiles",
+  {
+    runId: text("run_id")
+      .primaryKey()
+      .references(() => agentRuns.id),
+    profileVersion: integer("profile_version").notNull(),
+    dataJson: text("data_json").notNull(),
+  },
+  (table) => [check("run_workflow_profiles_version_check", sql.raw("profile_version = 1"))],
+);
+
+export const runPreparedResources = sqliteTable(
+  "run_prepared_resources",
+  {
+    bindingId: text("binding_id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => agentRuns.id),
+    resourceKind: text("resource_kind").notNull(),
+    resourceId: text("resource_id").notNull(),
+    resourceRevision: text("resource_revision").notNull(),
+    artifactRef: text("artifact_ref").notNull(),
+    sourceFingerprint: text("source_fingerprint").notNull(),
+    utf8Bytes: integer("utf8_bytes").notNull(),
+    tokenEstimate: integer("token_estimate").notNull(),
+    sourceToolInvocationId: text("source_tool_invocation_id"),
+    activationOrdinal: integer("activation_ordinal").notNull(),
+    dataJson: text("data_json").notNull(),
+  },
+  (table) => [
+    check("run_prepared_resources_kind_check", sql.raw("resource_kind = 'WORKFLOW_INSTRUCTION'")),
+    check("run_prepared_resources_utf8_bytes_check", sql.raw("utf8_bytes >= 0")),
+    check("run_prepared_resources_token_estimate_check", sql.raw("token_estimate >= 0")),
+    check("run_prepared_resources_activation_ordinal_check", sql.raw("activation_ordinal >= 0")),
+    uniqueIndex("run_prepared_resources_version_unique").on(
+      table.runId,
+      table.resourceId,
+      table.resourceRevision,
+    ),
+    uniqueIndex("run_prepared_resources_activation_unique").on(
+      table.runId,
+      table.activationOrdinal,
+    ),
+    index("run_prepared_resources_run_order_idx").on(table.runId, table.activationOrdinal),
+  ],
+);
+
 export const runCancellationRequests = sqliteTable(
   "run_cancellation_requests",
   {
@@ -886,6 +934,8 @@ export const storageSchema = {
   aiDefaultSelections,
   agentSessions,
   agentRuns,
+  runWorkflowProfiles,
+  runPreparedResources,
   runCancellationRequests,
   runBudgetEntries,
   providerInvocationUsage,

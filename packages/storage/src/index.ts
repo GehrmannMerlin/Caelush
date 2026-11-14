@@ -93,7 +93,9 @@ export {
   type WorkspaceRepository,
 } from "./repositories/workspace-repository.js";
 export type {
+  InsertRunWithPreparedResourcesInput,
   RecoverableRunQuery,
+  RunSubmissionIdentity,
   RunListOptions,
   RunRepository,
 } from "./repositories/run-repository.js";

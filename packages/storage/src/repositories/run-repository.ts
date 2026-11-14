@@ -1,11 +1,21 @@
 import {
+  AttachmentSha256Schema,
   AgentRunSchema,
   CurrentAgentRunSchema,
+  RunWorkflowExecutionProfileV1Schema,
+  SubmissionIdSchema,
+  WorkflowResourceBindingDraftV1Schema,
+  WorkflowResourceBindingV1Schema,
   type AgentRun,
   type RunId,
   type RunStatus,
   type SessionId,
+  type SubmissionRecord,
+  type RunWorkflowExecutionProfileV1,
+  type WorkflowResourceBindingDraftV1,
+  type WorkflowResourceBindingV1,
 } from "@caelush/protocol";
+import { randomUUID } from "node:crypto";
 import type { CaelushDatabase } from "../database.js";
 import {
   assertArchiveWritableInTransaction,
@@ -21,6 +31,22 @@ import {
 import type { DurableRunEvent, DurableRunEventDraft } from "@caelush/agent";
 import { appendDurableEventsInTransaction } from "../events/sqlite-durable-event-store.js";
 import { bindSubmissionRunInTransaction } from "../submission-repository.js";
+import {
+  decodePreparedResourceRecord,
+  decodeWorkflowExecutionProfile,
+  encodePreparedResourceRecord,
+  encodeWorkflowExecutionProfile,
+} from "../prepared-resource-records.js";
+
+export type RunSubmissionIdentity = Pick<SubmissionRecord, "submissionId" | "payloadHash">;
+
+export interface InsertRunWithPreparedResourcesInput {
+  readonly run: AgentRun;
+  readonly workflowProfile?: RunWorkflowExecutionProfileV1;
+  readonly resourcesInOrder: readonly WorkflowResourceBindingDraftV1[];
+  readonly events: readonly DurableRunEventDraft[];
+  readonly submissionIdentity?: RunSubmissionIdentity;
+}
 
 interface RunRow {
   id: string;
@@ -84,6 +110,11 @@ export interface RunRepository {
     run: AgentRun,
     events: readonly DurableRunEventDraft[],
   ): Promise<readonly DurableRunEvent[]>;
+  insertRunWithPreparedResources?(
+    input: InsertRunWithPreparedResourcesInput,
+  ): Promise<readonly DurableRunEvent[]>;
+  readPreparedResources?(runId: RunId): Promise<readonly WorkflowResourceBindingV1[]>;
+  readWorkflowProfile?(runId: RunId): Promise<RunWorkflowExecutionProfileV1 | null>;
   get(id: RunId): Promise<AgentRun | null>;
   update(run: AgentRun): Promise<void>;
   listBySession(sessionId: SessionId, options?: RunListOptions): Promise<AgentRun[]>;
@@ -243,6 +274,244 @@ export class SqliteRunRepository implements RunRepository {
         });
       }
       mapRepositoryError(error, "insert", run.id);
+    }
+  }
+
+  async insertRunWithPreparedResources(
+    input: InsertRunWithPreparedResourcesInput,
+  ): Promise<readonly DurableRunEvent[]> {
+    const currentRun = CurrentAgentRunSchema.parse(input.run);
+    const workflowProfile =
+      input.workflowProfile === undefined
+        ? undefined
+        : RunWorkflowExecutionProfileV1Schema.parse(input.workflowProfile);
+    if (workflowProfile !== undefined && workflowProfile.runId !== currentRun.id) {
+      throw new StorageError(
+        "Unable to insert AgentRun " + currentRun.id + ": workflow profile belongs to another Run",
+      );
+    }
+    const resources = input.resourcesInOrder.map((draft) =>
+      WorkflowResourceBindingDraftV1Schema.parse(draft),
+    );
+    if (
+      resources.some((resource) => resource.runId !== currentRun.id) ||
+      (resources.length > 0 && workflowProfile === undefined)
+    ) {
+      throw new StorageError(
+        "Unable to insert AgentRun " + currentRun.id + ": prepared resource identity is invalid",
+      );
+    }
+    if (input.events.some((event) => event.runId !== currentRun.id)) {
+      throw new StorageError(
+        "Unable to insert AgentRun " + currentRun.id + ": event belongs to another Run",
+      );
+    }
+
+    const submissionIdentity =
+      input.submissionIdentity === undefined
+        ? undefined
+        : {
+            submissionId: SubmissionIdSchema.parse(input.submissionIdentity.submissionId),
+            payloadHash: AttachmentSha256Schema.parse(input.submissionIdentity.payloadHash),
+          };
+    if (
+      (currentRun.submissionId === undefined) !== (submissionIdentity === undefined) ||
+      (submissionIdentity !== undefined &&
+        currentRun.submissionId !== submissionIdentity.submissionId)
+    ) {
+      throw new StorageConflictError(
+        "Run submission identity does not match the reserved submission.",
+      );
+    }
+
+    const dataJson = encodeProtocol(CurrentAgentRunSchema, currentRun, {
+      entityType: "AgentRun",
+      entityId: currentRun.id,
+      table: "agent_runs",
+    });
+    const client = this.database.client;
+    client.exec("BEGIN IMMEDIATE");
+    try {
+      assertArchiveWritableInTransaction(this.database, {
+        type: "SESSION",
+        sessionId: currentRun.sessionId,
+      });
+      assertArchiveWritableInTransaction(this.database, {
+        type: "WORKSPACE",
+        workspaceId: currentRun.workspace.id,
+      });
+      client
+        .prepare(
+          "INSERT INTO agent_runs " +
+            "(id, session_id, protocol_version, status, created_at_ms, started_at_ms, finished_at_ms, data_json) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          currentRun.id,
+          currentRun.sessionId,
+          1,
+          currentRun.status,
+          currentRun.createdAt,
+          nullableTimestamp(currentRun.startedAt),
+          nullableTimestamp(currentRun.finishedAt),
+          dataJson,
+        );
+
+      if (workflowProfile !== undefined) {
+        client
+          .prepare(
+            "INSERT INTO run_workflow_profiles (run_id, profile_version, data_json) VALUES (?, ?, ?)",
+          )
+          .run(
+            workflowProfile.runId,
+            workflowProfile.profileVersion,
+            encodeWorkflowExecutionProfile(workflowProfile),
+          );
+      }
+
+      const insertResource = client.prepare(
+        "INSERT INTO run_prepared_resources " +
+          "(binding_id, run_id, resource_kind, resource_id, resource_revision, artifact_ref, " +
+          "source_fingerprint, utf8_bytes, token_estimate, source_tool_invocation_id, " +
+          "activation_ordinal, data_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      resources.forEach((draft, activationOrdinal) => {
+        const record = WorkflowResourceBindingV1Schema.parse({
+          ...draft,
+          bindingId: randomUUID(),
+          activationOrdinal,
+        });
+        insertResource.run(
+          record.bindingId,
+          record.runId,
+          record.resourceKind,
+          record.resourceId,
+          record.resourceRevision,
+          record.artifactRef,
+          record.sourceFingerprint,
+          record.utf8Bytes,
+          record.tokenEstimate,
+          record.sourceToolInvocationId ?? null,
+          record.activationOrdinal,
+          encodePreparedResourceRecord(record),
+        );
+      });
+
+      if (submissionIdentity !== undefined) {
+        this.assertSubmissionIdentityInTransaction(submissionIdentity, currentRun);
+        bindSubmissionRunInTransaction(
+          this.database,
+          submissionIdentity.submissionId,
+          currentRun.id,
+        );
+      }
+
+      const committed = appendDurableEventsInTransaction(client, input.events);
+      client.exec("COMMIT");
+      return committed;
+    } catch (error) {
+      try {
+        client.exec("ROLLBACK");
+      } catch {
+        throw new StorageError(
+          "Unable to insert AgentRun " + currentRun.id + " after transaction failure",
+          { cause: error },
+        );
+      }
+      mapRepositoryError(error, "insert", currentRun.id);
+    }
+  }
+
+  private assertSubmissionIdentityInTransaction(
+    identity: RunSubmissionIdentity,
+    run: AgentRun,
+  ): void {
+    const stored = this.database.client
+      .prepare("SELECT payload_hash, session_id, run_id FROM submissions WHERE submission_id = ?")
+      .get(identity.submissionId) as
+      { payload_hash: string; session_id: string | null; run_id: string | null } | undefined;
+    if (stored === undefined) throw new StorageNotFoundError("Submission", identity.submissionId);
+    if (stored.payload_hash !== identity.payloadHash) {
+      throw new StorageConflictError("Submission ID was already used for a different payload.");
+    }
+    if (stored.session_id !== null && stored.session_id !== run.sessionId) {
+      throw new StorageConflictError("Submission is already bound to another Session.");
+    }
+    if (stored.run_id !== null && stored.run_id !== run.id) {
+      throw new StorageConflictError("Submission is already bound to another Run.");
+    }
+  }
+
+  async readPreparedResources(runId: RunId): Promise<readonly WorkflowResourceBindingV1[]> {
+    try {
+      const rows = this.database.client
+        .prepare(
+          "SELECT binding_id, run_id, resource_kind, resource_id, resource_revision, artifact_ref, " +
+            "source_fingerprint, utf8_bytes, token_estimate, source_tool_invocation_id, " +
+            "activation_ordinal, data_json FROM run_prepared_resources " +
+            "WHERE run_id = ? ORDER BY activation_ordinal ASC",
+        )
+        .all(runId) as Array<{
+        binding_id: string;
+        run_id: string;
+        resource_kind: string;
+        resource_id: string;
+        resource_revision: string;
+        artifact_ref: string;
+        source_fingerprint: string;
+        utf8_bytes: number;
+        token_estimate: number;
+        source_tool_invocation_id: string | null;
+        activation_ordinal: number;
+        data_json: string;
+      }>;
+      return rows.map((row) => {
+        const record = decodePreparedResourceRecord(row.data_json, {
+          bindingId: row.binding_id,
+          runId,
+        });
+        if (
+          record.runId !== row.run_id ||
+          record.resourceKind !== row.resource_kind ||
+          record.resourceId !== row.resource_id ||
+          record.resourceRevision !== row.resource_revision ||
+          record.artifactRef !== row.artifact_ref ||
+          record.sourceFingerprint !== row.source_fingerprint ||
+          record.utf8Bytes !== row.utf8_bytes ||
+          record.tokenEstimate !== row.token_estimate ||
+          (record.sourceToolInvocationId ?? null) !== row.source_tool_invocation_id ||
+          record.activationOrdinal !== row.activation_ordinal
+        ) {
+          throw new StorageDecodeError(
+            "WorkflowResourceBindingV1",
+            row.binding_id,
+            "run_prepared_resources",
+          );
+        }
+        return record;
+      });
+    } catch (error) {
+      mapRepositoryError(error, "read prepared resources for", runId);
+    }
+  }
+
+  async readWorkflowProfile(runId: RunId): Promise<RunWorkflowExecutionProfileV1 | null> {
+    try {
+      const row = this.database.client
+        .prepare("SELECT profile_version, data_json FROM run_workflow_profiles WHERE run_id = ?")
+        .get(runId) as { profile_version: number; data_json: string } | undefined;
+      if (row === undefined) return null;
+      const profile = decodeWorkflowExecutionProfile(row.data_json, runId);
+      if (profile.profileVersion !== row.profile_version) {
+        throw new StorageDecodeError(
+          "RunWorkflowExecutionProfileV1",
+          runId,
+          "run_workflow_profiles",
+        );
+      }
+      return profile;
+    } catch (error) {
+      mapRepositoryError(error, "read workflow profile for", runId);
     }
   }
 
