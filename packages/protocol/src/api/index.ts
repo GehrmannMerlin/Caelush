@@ -140,8 +140,25 @@ export {
   SkillCapabilityResponseSchema,
   SkillCatalogQuerySchema,
   SkillManagementQuerySchema,
+  SkillImportTargetSchema,
+  SkillImportFileManifestEntrySchema,
+  SkillImportManifestV1Schema,
+  SkillImportReceiptV1Schema,
+  SkillSettingsUpdateRequestSchema,
+  SkillSettingsUpdateResponseSchema,
+  SKILL_IMPORT_MAX_FILES,
 } from "./skills.js";
-export type { SkillCapabilityResponse, SkillCatalogQuery, SkillManagementQuery } from "./skills.js";
+export type {
+  SkillCapabilityResponse,
+  SkillCatalogQuery,
+  SkillManagementQuery,
+  SkillImportTarget,
+  SkillImportFileManifestEntry,
+  SkillImportManifestV1,
+  SkillImportReceiptV1,
+  SkillSettingsUpdateRequest,
+  SkillSettingsUpdateResponse,
+} from "./skills.js";
 export {
   SelectedSkillPresentationV1Schema,
   UserPresentationItemV4Schema,

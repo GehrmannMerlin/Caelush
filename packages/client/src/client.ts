@@ -48,6 +48,16 @@ import {
   SessionContinuityPreflightResponseSchema,
   SessionTurnPresentationQuerySchema,
   SessionTurnPresentationResponseSchema,
+  SkillCapabilityResponseSchema,
+  SkillCatalogQuerySchema,
+  SkillCatalogPageV1Schema,
+  SkillManagementQuerySchema,
+  SkillManagementPageV1Schema,
+  SkillImportManifestV1Schema,
+  SkillImportReceiptV1Schema,
+  SkillImportTargetSchema,
+  SkillSettingsUpdateRequestSchema,
+  SkillSettingsUpdateResponseSchema,
   UpdateAISelectionRequestSchema,
   UpdateSessionModelSelectionRequestSchema,
   WorkspaceListResponseSchema,
@@ -56,6 +66,7 @@ import {
   WorkspaceSecurityCapabilitiesResponseSchema,
   WorkspaceSessionListResponseSchema,
   WorkspaceIdSchema,
+  SkillIdSchema,
   type PublicRunEvent,
   type AttachmentDescriptor,
   type AttachmentDraft,
@@ -108,6 +119,15 @@ import {
   type WorkspaceSecurityCapabilitiesResponse,
   type WorkspaceSessionListResponse,
   type SecurityCapabilitiesResponse,
+  type SkillCapabilityResponse,
+  type SkillCatalogQuery,
+  type SkillCatalogPageV1,
+  type SkillManagementQuery,
+  type SkillManagementPageV1,
+  type SkillImportReceiptV1,
+  type SkillImportTarget,
+  type SkillSettingsUpdateRequest,
+  type SkillSettingsUpdateResponse,
   type SecurityPreparationResponse,
   type PermissionPresetSelection,
 } from "@caelush/protocol";
@@ -197,6 +217,17 @@ export interface AttachmentUploadOptions extends CaelushClientRequestOptions {
   readonly name: string;
   readonly mediaType: string;
   readonly onProgress?: (progress: AttachmentUploadProgress) => void;
+}
+
+export interface SkillImportFile {
+  readonly relativePath: string;
+  readonly file: Blob;
+}
+
+export interface SkillImportOptions extends CaelushClientRequestOptions {
+  readonly target: SkillImportTarget;
+  readonly files: readonly SkillImportFile[];
+  readonly expectedRevision?: string;
 }
 
 export interface AttachmentDraftWrite {
@@ -460,6 +491,106 @@ export class CaelushClient {
       throw new CaelushProtocolCompatibilityError();
     }
     throw new CaelushClientProtocolError("Daemon returned an invalid info response.");
+  }
+
+  async getSkillCapabilities(
+    options: CaelushClientRequestOptions = {},
+  ): Promise<SkillCapabilityResponse | null> {
+    try {
+      return await this.request(
+        "/api/v1/skills/capabilities",
+        { method: "GET" },
+        SkillCapabilityResponseSchema,
+        [200],
+        options,
+      );
+    } catch (error) {
+      if (error instanceof CaelushClientHttpError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  async listSkills(
+    workspaceId: WorkspaceId,
+    query: Partial<SkillCatalogQuery> = {},
+    options: CaelushClientRequestOptions = {},
+  ): Promise<SkillCatalogPageV1> {
+    const parsedWorkspaceId = WorkspaceIdSchema.parse(workspaceId);
+    const parsedQuery = SkillCatalogQuerySchema.parse(query);
+    return this.request(
+      `/api/v1/workspaces/${encodeURIComponent(parsedWorkspaceId)}/skills?${archiveQuery(parsedQuery)}`,
+      { method: "GET" },
+      SkillCatalogPageV1Schema,
+      [200],
+      options,
+    );
+  }
+
+  async listManagedSkills(
+    workspaceId: WorkspaceId,
+    query: Partial<SkillManagementQuery> = {},
+    options: CaelushClientRequestOptions = {},
+  ): Promise<SkillManagementPageV1> {
+    const parsedWorkspaceId = WorkspaceIdSchema.parse(workspaceId);
+    const parsedQuery = SkillManagementQuerySchema.parse(query);
+    return this.request(
+      `/api/v1/workspaces/${encodeURIComponent(parsedWorkspaceId)}/skills/management?${archiveQuery(parsedQuery)}`,
+      { method: "GET" },
+      SkillManagementPageV1Schema,
+      [200],
+      options,
+    );
+  }
+
+  async updateSkillSettings(
+    workspaceId: WorkspaceId,
+    skillId: string,
+    input: SkillSettingsUpdateRequest,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<SkillSettingsUpdateResponse> {
+    const parsedWorkspaceId = WorkspaceIdSchema.parse(workspaceId);
+    const parsedSkillId = SkillIdSchema.parse(skillId);
+    const body = SkillSettingsUpdateRequestSchema.parse(input);
+    return this.request(
+      `/api/v1/workspaces/${encodeURIComponent(parsedWorkspaceId)}/skills/${encodeURIComponent(parsedSkillId)}/settings`,
+      jsonRequest("PATCH", body),
+      SkillSettingsUpdateResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async importSkills(
+    workspaceId: WorkspaceId,
+    input: SkillImportOptions,
+  ): Promise<SkillImportReceiptV1> {
+    const parsedWorkspaceId = WorkspaceIdSchema.parse(workspaceId);
+    const target = SkillImportTargetSchema.parse(input.target);
+    if (input.files.length < 1 || input.files.length > 4096) {
+      throw new CaelushClientProtocolError(
+        "Skill import file count is outside the supported limit.",
+      );
+    }
+    const manifest = SkillImportManifestV1Schema.parse({
+      schemaVersion: 1,
+      files: input.files.map(({ relativePath }, index) => ({
+        field: `file-${index}`,
+        relativePath,
+      })),
+    });
+    const form = new FormData();
+    form.append("target", target);
+    form.append("manifest", JSON.stringify(manifest));
+    if (input.expectedRevision !== undefined)
+      form.append("expectedRevision", input.expectedRevision);
+    input.files.forEach(({ file }, index) => form.append(`file-${index}`, file, `file-${index}`));
+    return this.request(
+      `/api/v1/workspaces/${encodeURIComponent(parsedWorkspaceId)}/skills/import`,
+      { method: "POST", body: form },
+      SkillImportReceiptV1Schema,
+      [201],
+      input,
+    );
   }
 
   async listWorkspaces(options: CaelushClientRequestOptions = {}): Promise<WorkspaceListResponse> {
@@ -1198,7 +1329,7 @@ export class CaelushClient {
     let response: Response;
     try {
       const headers = this.requestHeaders();
-      if (init.body !== undefined) headers.set("content-type", "application/json");
+      if (typeof init.body === "string") headers.set("content-type", "application/json");
       response = await this.fetcher(this.url(path), {
         ...init,
         headers,
@@ -1423,6 +1554,6 @@ function validateCursor(value: number | undefined): number | undefined {
   return value;
 }
 
-function jsonRequest(method: "POST" | "PUT", body: unknown): RequestInit {
+function jsonRequest(method: "PATCH" | "POST" | "PUT", body: unknown): RequestInit {
   return { method, body: JSON.stringify(body) };
 }

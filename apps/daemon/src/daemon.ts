@@ -1,4 +1,5 @@
 import { dirname, join } from "node:path";
+import { mkdir } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { isTerminalRunStatus } from "@caelush/core";
 import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
@@ -10,6 +11,7 @@ import type {
 } from "@caelush/coding-agent";
 import {
   DaemonInfoSchema,
+  WorkspaceIdSchema,
   type ClientModelSelection,
   type ContextBudgetPolicySnapshot,
 } from "@caelush/protocol";
@@ -27,6 +29,9 @@ import {
   type GitToolAvailability,
 } from "@caelush/coding-agent";
 import { buildDaemonApp } from "./app.js";
+import { createFilesystemSkillProvider } from "./skills/filesystem-provider.js";
+import { createSkillImportService } from "./skills/bundle-import-service.js";
+import { resolveSkillFeatureEnabled } from "./skills/feature-policy.js";
 import { createAttachmentService } from "./attachments/attachment-service.js";
 import { createDocumentProcessor } from "./attachments/document-processor.js";
 import {
@@ -410,6 +415,24 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     sessions: storage.sessions,
     runs: storage.runs,
   });
+  const skillRoot = join(dirname(options.databasePath), "skills");
+  const builtinSkillRoot = join(dirname(daemonEntryPath), "builtin-skills");
+  try {
+    await mkdir(skillRoot, { recursive: true });
+  } catch {
+    // Discovery reports a safe incomplete root diagnostic if the configured profile is unreadable.
+  }
+  const skillProvider = createFilesystemSkillProvider({
+    userRoot: skillRoot,
+    builtinRoots: [builtinSkillRoot],
+    resolveWorkspaceRoot: async (workspaceId) =>
+      (await workspaceService.requireWorkspace(WorkspaceIdSchema.parse(workspaceId))).canonicalPath,
+  });
+  const skillImportService = createSkillImportService({
+    userRoot: skillRoot,
+    resolveWorkspaceRoot: async (workspaceId) =>
+      (await workspaceService.requireWorkspace(WorkspaceIdSchema.parse(workspaceId))).canonicalPath,
+  });
   let workspaceBackfill: WorkspaceBackfillSummary;
   const legacyArchiveReconciler = new LegacyArchiveReconciler(storage.archives);
   try {
@@ -533,6 +556,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   try {
     composition = await composeDaemon({
       storage,
+      skillProvider,
+      skillGlobalWatchRoots: [skillRoot, builtinSkillRoot],
+      skillFeatureEnabled: resolveSkillFeatureEnabled(options.environment ?? process.env),
       attachmentService,
       eventQueuePolicy: config.runEventQueuePolicy,
       providerStreamPolicy: config.providerStreamPolicy,
@@ -666,6 +692,11 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       contextBudgetPolicyResolver: composition.contextBudgetPolicyResolver,
       aiConfiguration,
       securityCapabilityService: composition.securityCapabilityService,
+      ...(composition.skillCatalog === undefined ? {} : { skillCatalog: composition.skillCatalog }),
+      skillSettings: storage.skillSettings,
+      skillImportService,
+      skillFeatureReadiness: composition.skillFeatureReadiness,
+      watchSkillWorkspace: composition.watchSkillWorkspace,
       providerUsage: storage.providerInvocationUsage,
       transcript: new SessionTranscriptService({
         sessions: storage.sessions,

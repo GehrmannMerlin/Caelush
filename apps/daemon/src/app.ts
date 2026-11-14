@@ -12,6 +12,7 @@ import type {
   RunRepository,
   SubmissionRepository,
   WorkspaceRepository,
+  SkillSettingsRepository,
 } from "@caelush/storage";
 import type { DaemonConfig } from "./config.js";
 import type { DaemonModelCanonicalizer } from "./providers/model-canonicalizer.js";
@@ -52,6 +53,10 @@ import {
 import { registerUsageActivityRoute } from "./routes/usage-activity.js";
 import { registerAttachmentRoutes } from "./routes/attachments.js";
 import type { AttachmentService } from "./attachments/attachment-service.js";
+import { registerSkillRoutes } from "./routes/skills.js";
+import type { SkillCatalogService } from "./skills/catalog-service.js";
+import type { SkillImportService } from "./skills/bundle-import-service.js";
+import type { SkillFeatureReadiness } from "./skills/feature-policy.js";
 
 export interface DaemonDependencies {
   readonly archiveService?: ArchiveService;
@@ -81,6 +86,11 @@ export interface DaemonDependencies {
   readonly aiConfiguration?: AIConfigurationService;
   readonly securityCapabilityService?: SecurityCapabilityService;
   readonly providerUsage?: ProviderUsageSummaryReader;
+  readonly skillCatalog?: SkillCatalogService;
+  readonly skillSettings?: Pick<SkillSettingsRepository, "get" | "compareAndSwap">;
+  readonly skillImportService?: Pick<SkillImportService, "import">;
+  readonly skillFeatureReadiness?: SkillFeatureReadiness;
+  readonly watchSkillWorkspace?: (workspaceId: string) => Promise<void>;
 }
 
 export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstance {
@@ -98,6 +108,22 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
     registerAttachmentRoutes(app, dependencies.attachmentService);
   }
   registerHealthRoute(app);
+  registerSkillRoutes(app, {
+    ...(dependencies.skillCatalog === undefined ? {} : { catalog: dependencies.skillCatalog }),
+    ...(dependencies.skillSettings === undefined ? {} : { settings: dependencies.skillSettings }),
+    ...(dependencies.skillImportService === undefined
+      ? {}
+      : { importer: dependencies.skillImportService }),
+    ...(dependencies.skillFeatureReadiness === undefined
+      ? {}
+      : { readiness: dependencies.skillFeatureReadiness }),
+    ...(dependencies.workspaceService === undefined
+      ? {}
+      : { workspaceService: dependencies.workspaceService }),
+    ...(dependencies.watchSkillWorkspace === undefined
+      ? {}
+      : { watchWorkspace: dependencies.watchSkillWorkspace }),
+  });
   if (dependencies.info !== undefined) registerInfoRoute(app, dependencies.info);
   if (dependencies.securityCapabilityService !== undefined) {
     registerSecurityRoutes(app, dependencies.securityCapabilityService, {

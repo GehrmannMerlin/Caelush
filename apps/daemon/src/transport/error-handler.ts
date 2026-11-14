@@ -31,6 +31,12 @@ import { ArchiveConfirmationError } from "../services/archive-confirmation.js";
 import { AttachmentServiceError } from "../attachments/attachment-service.js";
 import { RunInputRejectionError } from "../services/run-input-intake.js";
 import { SkillServiceError } from "../skills/feature-policy.js";
+import {
+  InvalidSkillCatalogCursorError,
+  StaleSkillCatalogCursorError,
+} from "../skills/catalog-service.js";
+import { SkillImportServiceError } from "../skills/bundle-import-service.js";
+import { SkillSettingsRevisionConflictError } from "../routes/skills.js";
 
 export class InvalidEventCursorError extends Error {
   constructor() {
@@ -96,6 +102,58 @@ function isEventCursorValidationError(error: unknown): boolean {
 }
 
 function mapError(error: unknown): MappedError {
+  if (
+    error instanceof StaleSkillCatalogCursorError ||
+    error instanceof SkillSettingsRevisionConflictError
+  ) {
+    return {
+      statusCode: 409,
+      code: "CONFLICT",
+      message: "Skill state changed; refresh the catalog and retry.",
+      details: {
+        reason:
+          error instanceof StaleSkillCatalogCursorError
+            ? "SKILL_CATALOG_STALE"
+            : "SKILL_SETTINGS_STALE",
+      },
+    };
+  }
+  if (error instanceof InvalidSkillCatalogCursorError) {
+    return {
+      statusCode: 400,
+      code: "INVALID_REQUEST",
+      message: "The Skill catalog cursor is invalid for this request.",
+      details: { reason: "SKILL_CATALOG_CURSOR_INVALID" },
+    };
+  }
+  if (error instanceof SkillImportServiceError) {
+    const statusCode =
+      error.code === "SKILL_IMPORT_STALE"
+        ? 409
+        : error.code === "SYMLINK_ESCAPE"
+          ? 403
+          : error.code === "SKILL_PACKAGE_TOO_LARGE" ||
+              error.code === "SKILL_RESOURCE_TOO_LARGE" ||
+              error.code === "SKILL_PACKAGE_FILE_LIMIT"
+            ? 413
+            : error.code === "SKILL_IMPORT_PUBLISH_FAILED"
+              ? 500
+              : error.code === "SKILL_IMPORT_INVALID"
+                ? 422
+                : 400;
+    return {
+      statusCode,
+      code:
+        statusCode === 500 ? "STORAGE_ERROR" : statusCode === 409 ? "CONFLICT" : "INVALID_REQUEST",
+      message:
+        statusCode === 500
+          ? "Skill import could not be published."
+          : statusCode === 409
+            ? "The Skill package changed; refresh it before importing an update."
+            : "Skill import could not be accepted.",
+      details: { reason: error.code },
+    };
+  }
   if (error instanceof SkillServiceError) {
     switch (error.reason) {
       case "SKILL_NOT_FOUND":

@@ -26,6 +26,8 @@ export type {
   AttachmentDraftWrite,
   AttachmentUploadOptions,
   AttachmentUploadProgress,
+  SkillImportFile,
+  SkillImportOptions,
   CaelushClientOptions,
   CaelushClientRequestOptions,
   WatchRunEventsOptions,
