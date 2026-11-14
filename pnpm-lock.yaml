@@ -378,6 +378,12 @@ importers:
 
   packages/shared: {}
 
+  packages/skills:
+    dependencies:
+      yaml:
+        specifier: 2.9.0
+        version: 2.9.0
+
   packages/storage:
     dependencies:
       '@caelush/agent':

@@ -111,7 +111,7 @@ describe("architecture v2 target allowlist derivation", () => {
     const forbidden = rules.deriveForbiddenTargetEdges();
     const forbiddenKeys = new Set(forbidden.map((edge) => `${edge.from}->${edge.to}`));
 
-    expect(targets).toHaveLength(7);
+    expect(targets).toHaveLength(8);
     expect(forbidden.length).toBeGreaterThan(0);
 
     for (const from of targets) {
@@ -129,10 +129,19 @@ describe("architecture v2 target allowlist derivation", () => {
       protocol: [],
       agent: ["ai", "protocol"],
       runtime: ["protocol"],
-      "coding-agent": ["ai", "protocol", "agent", "runtime"],
+      "coding-agent": ["ai", "protocol", "agent", "runtime", "skills"],
       storage: ["agent", "protocol"],
       client: ["protocol"],
+      skills: ["protocol"],
     });
+  });
+
+  it("keeps Skills downstream of Protocol and recognizes it as a target package", () => {
+    expect(rules.packageRole("skills")).toBe("target");
+    expect(rules.isAllowedTargetEdge("skills", "protocol")).toBe(true);
+    expect(rules.isAllowedTargetEdge("protocol", "skills")).toBe(false);
+    expect(rules.isAllowedTargetEdge("coding-agent", "skills")).toBe(true);
+    expect(rules.isAllowedTargetEdge("skills", "coding-agent")).toBe(false);
   });
 
   it("grants no target an implicit dependency on protocol", () => {
@@ -147,7 +156,7 @@ describe("architecture v2 target allowlist derivation", () => {
       expect(dependsOnProtocol, `${target}->protocol`).toBe(allowlist.includes("protocol"));
     }
 
-    // Exactly the frozen five may depend on protocol; ai and protocol may not.
+    // Only explicitly listed targets may depend on protocol; ai and protocol may not.
     const protocolConsumers = rules.V2_TARGET_PACKAGES.filter((target) =>
       rules.isAllowedTargetEdge(target, "protocol"),
     );
@@ -156,6 +165,7 @@ describe("architecture v2 target allowlist derivation", () => {
       "client",
       "coding-agent",
       "runtime",
+      "skills",
       "storage",
     ]);
   });

@@ -87,7 +87,9 @@ export const V2_ALLOWED_DEPENDENCIES = /** @type {Record<string, readonly string
 
   runtime: ["protocol"],
 
-  "coding-agent": ["ai", "protocol", "agent", "runtime"],
+  "coding-agent": ["ai", "protocol", "agent", "runtime", "skills"],
+
+  skills: ["protocol"],
 
   storage: ["agent", "protocol"],
 
@@ -101,6 +103,7 @@ export const V2_TARGET_PACKAGES = [
   "agent",
   "runtime",
   "coding-agent",
+  "skills",
   "storage",
   "client",
 ];

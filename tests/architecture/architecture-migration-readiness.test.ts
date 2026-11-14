@@ -108,8 +108,8 @@ describe("architecture v2 migration readiness gate", () => {
 
       expect(result.ready).toBe(true);
       expect(result.exitCode).toBe(0);
-      expect(result.summary.targetPackagesPresent).toBe(7);
-      expect(result.summary.targetPackages).toBe(7);
+      expect(result.summary.targetPackagesPresent).toBe(8);
+      expect(result.summary.targetPackages).toBe(8);
       expect(result.summary.legacyPackagesMapped).toBe(10);
       expect(result.summary.legacyPackages).toBe(10);
       expect(result.summary.baselineEntries).toBe(1);
@@ -601,7 +601,7 @@ describe("architecture v2 migration readiness on the real repository", () => {
 
       expect(result.ready).toBe(true);
       expect(result.exitCode).toBe(0);
-      expect(result.summary.targetPackagesPresent).toBe(7);
+      expect(result.summary.targetPackagesPresent).toBe(8);
       expect(result.summary.legacyPackagesMapped).toBe(10);
       expect(result.summary.baselineEntries).toBe(document.entryCount);
       expect(result.summary.privateImports).toBe(0);

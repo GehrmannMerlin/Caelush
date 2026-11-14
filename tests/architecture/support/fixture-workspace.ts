@@ -13,6 +13,7 @@ export const FIXTURE_PACKAGES = [
   "agent",
   "runtime",
   "coding-agent",
+  "skills",
   "storage",
   "client",
 ];
