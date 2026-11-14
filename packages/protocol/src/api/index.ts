@@ -42,6 +42,54 @@ export type {
   UsageActivityQuery,
   UsageActivityResponse,
 } from "./usage-activity.js";
+
+export {
+  SkillIdSchema,
+  SkillNameSchema,
+  SkillDescriptionSchema,
+  SkillSelectionV1Schema,
+  SkillDiagnosticV1Schema,
+  SkillCatalogItemV1Schema,
+  SkillCatalogPageV1Schema,
+  SkillManagementItemV1Schema,
+  SkillManagementPageV1Schema,
+  SkillBundleRefV1Schema,
+  RunSkillBindingV1Schema,
+  SkillFailureReasonSchema,
+} from "../skills.js";
+export type {
+  SkillId,
+  SkillName,
+  SkillDescription,
+  SkillSelectionV1,
+  SkillDiagnosticV1,
+  SkillCatalogItemV1,
+  SkillCatalogPageV1,
+  SkillManagementItemV1,
+  SkillManagementPageV1,
+  SkillBundleRefV1,
+  RunSkillBindingV1,
+  SkillFailureReason,
+} from "../skills.js";
+
+export {
+  WorkflowArtifactRefSchema,
+  WorkflowCatalogSnapshotRefV1Schema,
+  WorkflowResourceBindingDraftV1Schema,
+  WorkflowResourceBindingV1Schema,
+  PreparedWorkflowResourceRefV1Schema,
+  PreparedInputResourceReceiptV1Schema,
+  RunWorkflowExecutionProfileV1Schema,
+} from "../prepared-resources.js";
+export type {
+  WorkflowArtifactRef,
+  WorkflowCatalogSnapshotRefV1,
+  WorkflowResourceBindingDraftV1,
+  WorkflowResourceBindingV1,
+  PreparedWorkflowResourceRefV1,
+  PreparedInputResourceReceiptV1,
+  RunWorkflowExecutionProfileV1,
+} from "../prepared-resources.js";
 export {
   ClientModelSelectionSchema,
   ClientModelSelectionWithReasoningSchema,
@@ -88,6 +136,30 @@ export { ClientAgentRunSchema, ClientAgentSessionSchema } from "./public-entitie
 export type { ClientAgentRun, ClientAgentSession } from "./public-entities.js";
 export { DaemonInfoSchema, DefaultRunConfigurationSchema } from "./daemon-info.js";
 export type { DaemonCapabilities, DaemonInfo, DefaultRunConfiguration } from "./daemon-info.js";
+export {
+  SkillCapabilityResponseSchema,
+  SkillCatalogQuerySchema,
+  SkillManagementQuerySchema,
+} from "./skills.js";
+export type { SkillCapabilityResponse, SkillCatalogQuery, SkillManagementQuery } from "./skills.js";
+export {
+  SelectedSkillPresentationV1Schema,
+  UserPresentationItemV4Schema,
+  SkillPresentationStatusSchema,
+  SkillPresentationItemSchema,
+  TurnPresentationItemV4Schema,
+  SessionTurnPresentationTurnV4Schema,
+  SessionTurnPresentationResponseV4Schema,
+} from "./skill-presentation.js";
+export type {
+  SelectedSkillPresentationV1,
+  UserPresentationItemV4,
+  SkillPresentationStatus,
+  SkillPresentationItem,
+  TurnPresentationItemV4,
+  SessionTurnPresentationTurnV4,
+  SessionTurnPresentationResponseV4,
+} from "./skill-presentation.js";
 export {
   RunActionDispositionSchema,
   RunActionSchema,

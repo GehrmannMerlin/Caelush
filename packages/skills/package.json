@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@caelush/protocol": "workspace:*",
     "yaml": "2.9.0"
   }
 }

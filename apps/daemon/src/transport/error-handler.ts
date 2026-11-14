@@ -30,6 +30,7 @@ import { SecurityPolicyRequestError } from "../services/run-service.js";
 import { ArchiveConfirmationError } from "../services/archive-confirmation.js";
 import { AttachmentServiceError } from "../attachments/attachment-service.js";
 import { RunInputRejectionError } from "../services/run-input-intake.js";
+import { SkillServiceError } from "../skills/feature-policy.js";
 
 export class InvalidEventCursorError extends Error {
   constructor() {
@@ -95,6 +96,49 @@ function isEventCursorValidationError(error: unknown): boolean {
 }
 
 function mapError(error: unknown): MappedError {
+  if (error instanceof SkillServiceError) {
+    switch (error.reason) {
+      case "SKILL_NOT_FOUND":
+        return {
+          statusCode: 404,
+          code: "NOT_FOUND",
+          message: error.message,
+          details: { reason: error.reason },
+        };
+      case "SKILL_SELECTION_STALE":
+      case "SKILL_DISABLED":
+        return {
+          statusCode: 409,
+          code: "CONFLICT",
+          message: error.message,
+          details: { reason: error.reason },
+        };
+      case "SKILL_CORE_BUDGET_EXCEEDED":
+      case "SKILL_ARTIFACT_INVALID":
+        return {
+          statusCode: 422,
+          code: "INVALID_REQUEST",
+          message: error.message,
+          details: { reason: error.reason },
+        };
+      case "SKILL_RESOURCE_DENIED":
+        return {
+          statusCode: 403,
+          code: "INVALID_REQUEST",
+          message: error.message,
+          details: { reason: error.reason },
+        };
+      case "SKILLS_UNAVAILABLE":
+      case "SKILL_LOAD_FAILED":
+      case "SKILL_SCRIPT_UNAVAILABLE":
+        return {
+          statusCode: 503,
+          code: "LOCAL_AGENT_UNAVAILABLE",
+          message: error.message,
+          details: { reason: error.reason },
+        };
+    }
+  }
   if (error instanceof RunInputRejectionError) {
     // The refusal is a *state* answer, not a malformed request: the client keeps its draft and
     // shows the reason. The structured reason is what it switches on; the message is for humans.

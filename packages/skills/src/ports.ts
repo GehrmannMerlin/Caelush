@@ -1,3 +1,4 @@
+import type { SkillBundleRefV1 } from "@caelush/protocol";
 import type { SkillDiscoveryResult } from "./types.js";
 
 export interface SkillProviderPort {
@@ -7,11 +8,7 @@ export interface SkillProviderPort {
   }): Promise<SkillDiscoveryResult>;
 }
 
-export interface SkillBundlePortReference {
-  readonly bundleRevision: string;
-  readonly artifactRef: string;
-  readonly manifestFingerprint: string;
-}
+export type SkillBundlePortReference = SkillBundleRefV1;
 
 interface BoundedSkillResourceBase {
   readonly relativePath: string;

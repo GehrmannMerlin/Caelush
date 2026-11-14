@@ -1,6 +1,13 @@
 export { buildDaemonApp } from "./app.js";
 export type { DaemonDependencies } from "./app.js";
 export {
+  assertSkillCapabilityAvailable,
+  createSkillCapabilityResponse,
+  DEFAULT_SKILL_FEATURE_READINESS,
+  SkillServiceError,
+} from "./skills/feature-policy.js";
+export type { SkillFeatureName, SkillFeatureReadiness } from "./skills/feature-policy.js";
+export {
   EventCursorAheadError,
   RunEventHub,
   RunEventHubDisposedError,
