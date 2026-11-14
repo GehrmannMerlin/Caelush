@@ -144,24 +144,27 @@ describe("Run Skill catalog snapshots", () => {
       isReferenced: (artifactRef: string) =>
         storage!.runs.isWorkflowArtifactReferenced!(artifactRef),
     };
-    let restartedSnapshots: ReturnType<typeof createRunSkillCatalogSnapshotService> | undefined;
+    const restartedSnapshotHolder: {
+      current: ReturnType<typeof createRunSkillCatalogSnapshotService> | undefined;
+    } = { current: undefined };
     const restartedBundleStore = createFilesystemSkillBundleStore({
       rootDirectory: fixture.bundleRoot,
       references: {
         isReferenced: async (reference) => {
           if (await durableReferences.isReferenced(reference.artifactRef)) return true;
-          if (restartedSnapshots === undefined) return true;
-          return restartedSnapshots.isBundleArtifactReferenced(reference.artifactRef);
+          if (restartedSnapshotHolder.current === undefined) return true;
+          return restartedSnapshotHolder.current.isBundleArtifactReferenced(reference.artifactRef);
         },
       },
       resolveSource: fixture.resolveSource,
     });
-    restartedSnapshots = createRunSkillCatalogSnapshotService({
+    const restartedSnapshots = createRunSkillCatalogSnapshotService({
       rootDirectory: fixture.snapshotRoot,
       catalog: fixture.catalog,
       bundleStore: restartedBundleStore,
       referenceAuthority: durableReferences,
     });
+    restartedSnapshotHolder.current = restartedSnapshots;
 
     await restartedBundleStore.collectGarbage();
     await writeSkill(fixture.userRoot, "deferred-helper", "updated deferred body", "new guide");

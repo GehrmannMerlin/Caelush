@@ -129,7 +129,7 @@ export const runWorkflowProfiles = sqliteTable(
     profileVersion: integer("profile_version").notNull(),
     dataJson: text("data_json").notNull(),
   },
-  (table) => [check("run_workflow_profiles_version_check", sql.raw("profile_version = 1"))],
+  () => [check("run_workflow_profiles_version_check", sql.raw("profile_version = 1"))],
 );
 
 export const runPreparedResources = sqliteTable(

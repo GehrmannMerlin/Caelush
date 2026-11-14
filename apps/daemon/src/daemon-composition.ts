@@ -1476,7 +1476,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           isReferenced: (artifactRef: string) =>
             options.storage.runs.isWorkflowArtifactReferenced!(artifactRef),
         };
-  let runSkillCatalogSnapshots: RunSkillCatalogSnapshotService | undefined;
+  const runSkillCatalogSnapshotHolder: { current: RunSkillCatalogSnapshotService | undefined } = {
+    current: undefined,
+  };
   const skillBundleReferenceAuthority =
     workflowArtifactReferenceAuthority === undefined
       ? undefined
@@ -1485,8 +1487,10 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
             if (await workflowArtifactReferenceAuthority.isReferenced(reference.artifactRef)) {
               return true;
             }
-            if (runSkillCatalogSnapshots === undefined) return true;
-            return runSkillCatalogSnapshots.isBundleArtifactReferenced(reference.artifactRef);
+            if (runSkillCatalogSnapshotHolder.current === undefined) return true;
+            return runSkillCatalogSnapshotHolder.current.isBundleArtifactReferenced(
+              reference.artifactRef,
+            );
           },
         };
   const skillBundleStore =
@@ -1523,7 +1527,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
             };
           },
         });
-  runSkillCatalogSnapshots =
+  const runSkillCatalogSnapshots =
     skillCatalog === undefined || skillBundleStore === undefined
       ? undefined
       : createRunSkillCatalogSnapshotService({
@@ -1534,6 +1538,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
             ? {}
             : { referenceAuthority: workflowArtifactReferenceAuthority }),
         });
+  runSkillCatalogSnapshotHolder.current = runSkillCatalogSnapshots;
   const selectedSkillPreparer =
     skillCatalog === undefined ||
     skillBundleStore === undefined ||
