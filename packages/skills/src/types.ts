@@ -28,3 +28,16 @@ export interface SkillCandidate {
   readonly privateLocator: string;
   readonly bundleRevision?: string;
 }
+
+export interface EffectiveSkillCatalog {
+  readonly revision: string;
+  readonly entries: readonly SkillCandidate[];
+  readonly diagnostics: readonly SkillDiagnostic[];
+  readonly complete: boolean;
+}
+
+export interface SkillDiscoveryResult {
+  readonly candidates: readonly SkillCandidate[];
+  readonly diagnostics: readonly SkillDiagnostic[];
+  readonly complete: boolean;
+}
