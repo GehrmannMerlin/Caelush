@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { resolve as resolvePath } from "node:path";
 import {
   RunController,
   RunDeadlineRegistry,
@@ -210,6 +211,11 @@ import {
   type ProviderInvocationUsageRecord,
   type CaelushStorage,
 } from "@caelush/storage";
+import { createSkillCatalogService, type SkillCatalogService } from "./skills/catalog-service.js";
+import { createSkillCatalogWatcher, type SkillCatalogWatcher } from "./skills/catalog-watcher.js";
+import type { FilesystemSkillProvider } from "./skills/filesystem-provider.js";
+import { DEFAULT_SKILL_FILESYSTEM_POLICY } from "./skills/skill-policy.js";
+import type { SkillFeatureReadiness } from "./skills/feature-policy.js";
 import {
   SecurityCapabilityService,
   type WorkspacePreparationPort,
@@ -338,6 +344,9 @@ export type DaemonTurnIdentity = AgentExecutionIdentity;
 
 export interface DaemonCompositionOptions {
   readonly storage: CaelushStorage;
+  readonly skillProvider?: FilesystemSkillProvider;
+  readonly skillGlobalWatchRoots?: readonly string[];
+  readonly skillFeatureEnabled?: boolean;
   /** Verified attachment read capability used to materialize selected user references. */
   readonly attachmentService?: AttachmentService;
   /** Canonical daemon observation notifier. Production composition creates the RunEventHub when omitted. */
@@ -472,6 +481,9 @@ export interface DaemonComposition {
   readonly securityCapabilityService: SecurityCapabilityService;
   readonly runSecurityPromptProjector: RunSecurityPromptProjector;
   readonly info: DaemonInfo;
+  readonly skillCatalog: SkillCatalogService | undefined;
+  readonly skillFeatureReadiness: SkillFeatureReadiness;
+  readonly watchSkillWorkspace: (workspaceId: string) => Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -1435,6 +1447,64 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     defaultRunConfiguration: DEFAULT_RUN_CONFIGURATION,
   });
 
+  const skillCatalog =
+    options.skillProvider === undefined
+      ? undefined
+      : createSkillCatalogService({
+          provider: options.skillProvider,
+          settings: options.storage.skillSettings,
+        });
+  const globalSkillWatchRoots = Object.freeze([
+    ...new Set((options.skillGlobalWatchRoots ?? []).map((root) => resolvePath(root))),
+  ]);
+  const globalSkillWatcher =
+    skillCatalog === undefined
+      ? undefined
+      : createSkillCatalogWatcher({
+          roots: globalSkillWatchRoots,
+          debounceMs: DEFAULT_SKILL_FILESYSTEM_POLICY.watcherDebounceMs,
+          refresh: () => skillCatalog.invalidate(),
+        });
+  await globalSkillWatcher?.start();
+  const workspaceSkillWatchers = new Map<string, SkillCatalogWatcher>();
+  let skillRuntimeDisposed = false;
+  const watchSkillWorkspace = async (workspaceId: string): Promise<void> => {
+    if (skillRuntimeDisposed || skillCatalog === undefined || options.skillProvider === undefined) {
+      return;
+    }
+    const existing = workspaceSkillWatchers.get(workspaceId);
+    if (existing !== undefined) {
+      workspaceSkillWatchers.delete(workspaceId);
+      workspaceSkillWatchers.set(workspaceId, existing);
+      return;
+    }
+    const roots = await options.skillProvider.getWatchRoots(workspaceId);
+    const globalRootSet = new Set(globalSkillWatchRoots);
+    const projectRoots = roots.filter((root) => !globalRootSet.has(resolvePath(root)));
+    if (projectRoots.length === 0) return;
+    const watcher = createSkillCatalogWatcher({
+      roots: projectRoots,
+      debounceMs: DEFAULT_SKILL_FILESYSTEM_POLICY.watcherDebounceMs,
+      refresh: () => skillCatalog.invalidate(workspaceId),
+    });
+    await watcher.start();
+    workspaceSkillWatchers.set(workspaceId, watcher);
+    while (workspaceSkillWatchers.size > DEFAULT_SKILL_FILESYSTEM_POLICY.maxCachedCatalogs) {
+      const oldest = workspaceSkillWatchers.entries().next().value as
+        [string, SkillCatalogWatcher] | undefined;
+      if (oldest === undefined) break;
+      workspaceSkillWatchers.delete(oldest[0]);
+      await oldest[1].dispose();
+    }
+  };
+  const skillFeatureReadiness: SkillFeatureReadiness = Object.freeze({
+    enabled: options.skillFeatureEnabled ?? false,
+    catalogReady: skillCatalog !== undefined && globalSkillWatcher !== undefined,
+    invocationReady: false,
+    scriptExecutionReady: false,
+    presentationReady: false,
+  });
+
   let disposed = false;
   return {
     eventHub,
@@ -1540,9 +1610,16 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     securityCapabilityService,
     runSecurityPromptProjector,
     info,
+    skillCatalog,
+    skillFeatureReadiness,
+    watchSkillWorkspace,
     dispose: async () => {
       if (disposed) return;
       disposed = true;
+      skillRuntimeDisposed = true;
+      await Promise.all([...workspaceSkillWatchers.values()].map((watcher) => watcher.dispose()));
+      workspaceSkillWatchers.clear();
+      await globalSkillWatcher?.dispose();
       await Promise.all(supervisor.activeRunIds().map((runId) => controller.cancel(runId)));
       await supervisor.dispose();
       controller.dispose();

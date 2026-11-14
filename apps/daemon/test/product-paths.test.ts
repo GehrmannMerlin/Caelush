@@ -12,6 +12,7 @@ describe("product paths", () => {
 
     expect(paths).toEqual({
       rootDirectory: "C:/test/caelush",
+      skillsDirectory: join("C:/test/caelush", "skills"),
       databasePath: join("C:/test/caelush", "caelush.db"),
       runDirectory: join("C:/test/caelush", "run"),
       startupLockDirectory: join("C:/test/caelush", "run", "daemon-start.lock"),
@@ -21,8 +22,8 @@ describe("product paths", () => {
   });
 
   it("uses the supplied home directory when no override is present", () => {
-    expect(
-      resolveProductPaths({ environment: {}, homeDirectory: "C:/users/example" }).rootDirectory,
-    ).toBe(join("C:/users/example", ".caelush"));
+    const paths = resolveProductPaths({ environment: {}, homeDirectory: "C:/users/example" });
+    expect(paths.rootDirectory).toBe(join("C:/users/example", ".caelush"));
+    expect(paths.skillsDirectory).toBe(join("C:/users/example", ".caelush", "skills"));
   });
 });

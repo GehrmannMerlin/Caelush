@@ -34,6 +34,15 @@ describe("Skills V1 default-off feature policy", () => {
     });
   });
 
+  it("defaults the master switch OFF and fails closed on invalid values", () => {
+    const resolveEnabled = exportedFunction("resolveSkillFeatureEnabled") as (
+      environment: Readonly<Record<string, string | undefined>>,
+    ) => boolean;
+    expect(resolveEnabled({})).toBe(false);
+    expect(resolveEnabled({ CAELUSH_FEATURE_SKILLS_V1: "on" })).toBe(true);
+    expect(resolveEnabled({ CAELUSH_FEATURE_SKILLS_V1: "sometimes" })).toBe(false);
+  });
+
   it("derives advertised features from the master switch and component readiness", () => {
     const ready: SkillFeatureReadiness = {
       enabled: true,

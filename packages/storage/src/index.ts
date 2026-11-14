@@ -1,5 +1,12 @@
 export { openCaelushStorage } from "./storage.js";
 export type { CaelushStorage } from "./storage.js";
+export { SqliteSkillSettingsRepository } from "./skill-settings-repository.js";
+export type {
+  SkillSettingsPatch,
+  SkillSettingsRecord,
+  SkillSettingsRepository,
+  SkillSettingsUpdateResult,
+} from "./skill-settings-repository.js";
 export { SqliteContextCheckpointActivationReader } from "./context-checkpoint-activation-reader.js";
 export { SqliteAttachmentRepository } from "./attachment-repository.js";
 export type { AttachmentDraftInput, AttachmentRepository } from "./attachment-repository.js";

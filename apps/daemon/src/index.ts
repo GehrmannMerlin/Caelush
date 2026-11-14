@@ -5,8 +5,64 @@ export {
   createSkillCapabilityResponse,
   DEFAULT_SKILL_FEATURE_READINESS,
   SkillServiceError,
+  resolveSkillFeatureEnabled,
+  SKILL_FEATURE_ENVIRONMENT_KEY,
 } from "./skills/feature-policy.js";
 export type { SkillFeatureName, SkillFeatureReadiness } from "./skills/feature-policy.js";
+export {
+  createSkillSelectionTokenCodec,
+  createSkillCatalogService,
+  InvalidSkillCatalogCursorError,
+  StaleSkillCatalogCursorError,
+} from "./skills/catalog-service.js";
+export type {
+  SkillCatalogQueryInput,
+  SkillCatalogService,
+  SkillCatalogServiceOptions,
+  SkillManagementTarget,
+  SkillSelectionTokenCodec,
+  SkillSelectionTokenInput,
+} from "./skills/catalog-service.js";
+export { createSkillCatalogWatcher } from "./skills/catalog-watcher.js";
+export type {
+  SkillCatalogWatcher,
+  SkillCatalogWatcherOptions,
+  SkillCatalogWatchFactory,
+  SkillCatalogWatchHandle,
+} from "./skills/catalog-watcher.js";
+export { createFilesystemSkillProvider } from "./skills/filesystem-provider.js";
+export type {
+  FilesystemSkillProvider,
+  FilesystemSkillProviderOptions,
+  ResolvedSkillSourceLocator,
+} from "./skills/filesystem-provider.js";
+export { SkillBundleStoreError, createFilesystemSkillBundleStore } from "./skills/bundle-store.js";
+export type {
+  FilesystemSkillBundleStore,
+  FilesystemSkillBundleStoreOptions,
+  SkillBundleGarbageCollectionResult,
+  SkillBundleReferenceAuthority,
+  SkillBundleSource,
+} from "./skills/bundle-store.js";
+export {
+  SkillImportServiceError,
+  createSkillImportService,
+} from "./skills/bundle-import-service.js";
+export type {
+  SkillImportFile,
+  SkillImportReceipt,
+  SkillImportService,
+  SkillImportServiceOptions,
+  SkillImportTarget,
+} from "./skills/bundle-import-service.js";
+export { createSkillBundleGarbageCollector } from "./skills/bundle-gc.js";
+export type { SkillBundleGarbageCollector } from "./skills/bundle-gc.js";
+export {
+  DEFAULT_SKILL_FILESYSTEM_POLICY,
+  SkillFilesystemPolicySchema,
+  resolveSkillFilesystemPolicy,
+} from "./skills/skill-policy.js";
+export type { SkillFilesystemPolicy } from "./skills/skill-policy.js";
 export {
   EventCursorAheadError,
   RunEventHub,

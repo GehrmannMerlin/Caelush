@@ -7,6 +7,7 @@ export interface ProductPathEnvironment {
 
 export interface ProductPaths {
   readonly rootDirectory: string;
+  readonly skillsDirectory: string;
   readonly databasePath: string;
   readonly runDirectory: string;
   readonly startupLockDirectory: string;
@@ -23,10 +24,12 @@ export function resolveProductPaths(options: ProductPathOptions = {}): ProductPa
   const environment = options.environment ?? process.env;
   const homeDirectory = options.homeDirectory ?? homedir();
   const rootDirectory = environment.CAELUSH_HOME ?? join(homeDirectory, ".caelush");
+  const skillsDirectory = join(rootDirectory, "skills");
   const runDirectory = join(rootDirectory, "run");
   const logsDirectory = join(rootDirectory, "logs");
   return {
     rootDirectory,
+    skillsDirectory,
     databasePath: join(rootDirectory, "caelush.db"),
     runDirectory,
     startupLockDirectory: join(runDirectory, "daemon-start.lock"),

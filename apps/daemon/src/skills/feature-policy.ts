@@ -14,6 +14,10 @@ export interface SkillFeatureReadiness {
 
 export type SkillFeatureName = "catalog" | "invocation" | "scriptExecution";
 
+export const SKILL_FEATURE_ENVIRONMENT_KEY = "CAELUSH_FEATURE_SKILLS_V1";
+
+const ENABLED_VALUES = new Set(["1", "true", "yes", "on", "enabled"]);
+
 export const DEFAULT_SKILL_FEATURE_READINESS: SkillFeatureReadiness = Object.freeze({
   enabled: false,
   catalogReady: false,
@@ -21,6 +25,14 @@ export const DEFAULT_SKILL_FEATURE_READINESS: SkillFeatureReadiness = Object.fre
   scriptExecutionReady: false,
   presentationReady: false,
 });
+
+/** Skill V1 remains OFF unless a host explicitly enables its master switch. */
+export function resolveSkillFeatureEnabled(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  const value = environment[SKILL_FEATURE_ENVIRONMENT_KEY]?.trim().toLowerCase();
+  return value !== undefined && ENABLED_VALUES.has(value);
+}
 
 const SAFE_MESSAGES: Readonly<Record<SkillFailureReason, string>> = {
   SKILLS_UNAVAILABLE: "Skill features are unavailable.",

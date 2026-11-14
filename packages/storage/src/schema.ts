@@ -49,6 +49,25 @@ export const aiDefaultSelections = sqliteTable("ai_default_selections", {
   updatedAtMs: integer("updated_at_ms").notNull(),
 });
 
+export const skillSettings = sqliteTable(
+  "skill_settings",
+  {
+    skillId: text("skill_id").primaryKey(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    modelInvocable: integer("model_invocable", { mode: "boolean" }),
+    version: integer("version").notNull().default(0),
+    updatedAtMs: integer("updated_at_ms").notNull(),
+  },
+  (table) => [
+    check("skill_settings_enabled_check", sql`${table.enabled} IN (0, 1)`),
+    check("skill_settings_version_check", sql`${table.version} >= 0`),
+    check(
+      "skill_settings_model_invocable_check",
+      sql`${table.modelInvocable} IS NULL OR ${table.modelInvocable} IN (0, 1)`,
+    ),
+  ],
+);
+
 export const agentSessions = sqliteTable("agent_sessions", {
   id: text("id").primaryKey(),
   protocolVersion: integer("protocol_version").notNull(),
@@ -862,6 +881,7 @@ export const submissions = sqliteTable(
 
 export const storageSchema = {
   workspaces,
+  skillSettings,
   aiProviderCredentials,
   aiDefaultSelections,
   agentSessions,

@@ -98,6 +98,7 @@ import {
 } from "./repositories/ai-selection-repository.js";
 import { SqliteAttachmentRepository, type AttachmentRepository } from "./attachment-repository.js";
 import { SqliteSubmissionRepository, type SubmissionRepository } from "./submission-repository.js";
+import { SqliteSkillSettingsRepository } from "./skill-settings-repository.js";
 
 export interface CaelushStorage {
   readonly archives: ArchiveStore;
@@ -107,6 +108,7 @@ export interface CaelushStorage {
   readonly aiSelections: AISelectionRepository;
   readonly attachments: AttachmentRepository;
   readonly submissions: SubmissionRepository;
+  readonly skillSettings: SqliteSkillSettingsRepository;
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
   readonly steps: StepRepository;
@@ -175,6 +177,7 @@ export async function openCaelushStorage(options: {
       aiSelections: new SqliteAISelectionRepository(database),
       attachments: new SqliteAttachmentRepository(database),
       submissions: new SqliteSubmissionRepository(database),
+      skillSettings: new SqliteSkillSettingsRepository(database),
       sessions: new SqliteSessionRepository(database),
       runs: new SqliteRunRepository(database),
       steps: new SqliteStepRepository(database),

@@ -28,5 +28,8 @@ describe("production migration assets", () => {
     expect(
       existsSync(path.join(folder, "20261025120000_context_checkpoint_v3", "migration.sql")),
     ).toBe(true);
+    expect(existsSync(path.join(folder, "20261114120000_skill_settings", "migration.sql"))).toBe(
+      true,
+    );
   });
 });
