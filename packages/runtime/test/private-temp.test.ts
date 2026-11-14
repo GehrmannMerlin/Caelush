@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -27,6 +27,8 @@ describe("private Run temp directories", () => {
     try {
       const stale = await createPrivateRunTemp("run_stale" as never, { baseDirectory: base });
       const unmarked = await mkdtemp(path.join(base, "caelush-run-unmarked-"));
+      // Make staleness deterministic across filesystems that round marker mtimes into the future.
+      await utimes(stale.markerPath, new Date(0), new Date(0));
       await cleanupStalePrivateRunTemps({ baseDirectory: base, maxAgeMs: 0 });
       await expect(access(stale.root)).rejects.toThrow();
       await expect(access(unmarked)).resolves.toBeUndefined();
