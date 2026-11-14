@@ -17,7 +17,10 @@ import { makeSession, makeRun, makeState, makeStep } from "./support/fixtures.js
 
 describe("SqliteApprovalRepository", () => {
   it("persists approval and resolves it atomically with one approval.resolved event", async () => {
-    const storage = await openCaelushStorage({ path: ":memory:" });
+    const storage = await openCaelushStorage({
+      path: ":memory:",
+      approvalClock: { now: () => createTimestampMs(100) },
+    });
     try {
       const session = makeSession();
       const run = makeRun(session.id, { status: "RUNNING", startedAt: createTimestampMs(101) });
@@ -72,15 +75,14 @@ describe("SqliteApprovalRepository", () => {
       });
       expect(resolved.status).toBe("APPROVED");
       expect(resolved.grantedScope).toBe("RUN");
-      expect(
-        (
-          await storage.eventReader.replay(run.id, {
-            afterSequence: 0,
-            throughSequence: Number.MAX_SAFE_INTEGER,
-            limit: 1000,
-          })
-        ).map((item) => item.type),
-      ).toEqual(["tool.requested", "approval.resolved"]);
+      expect(resolved.resolvedAt).toBe(approval.createdAt);
+      const events = await storage.eventReader.replay(run.id, {
+        afterSequence: 0,
+        throughSequence: Number.MAX_SAFE_INTEGER,
+        limit: 1000,
+      });
+      expect(events.map((item) => item.type)).toEqual(["tool.requested", "approval.resolved"]);
+      expect(events[1]?.timestamp).toBe(resolved.resolvedAt);
       expect(
         await storage.approvals.resolve(approval.id, { action: "APPROVE", scope: "RUN" }),
       ).toEqual(resolved);

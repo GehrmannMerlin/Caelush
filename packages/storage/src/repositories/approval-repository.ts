@@ -380,11 +380,12 @@ export class SqliteApprovalRepository implements ApprovalRepository {
     grantedScope: ApprovalRequest["grantedScope"],
     resolvedAt: TimestampMs,
   ): ApprovalRequest {
+    const effectiveResolvedAt = resolvedAt < current.createdAt ? current.createdAt : resolvedAt;
     const candidate = ApprovalRequestSchema.parse({
       ...current,
       status,
       ...(grantedScope === undefined ? {} : { grantedScope }),
-      resolvedAt,
+      resolvedAt: effectiveResolvedAt,
     });
     client
       .prepare(
@@ -415,7 +416,7 @@ export class SqliteApprovalRepository implements ApprovalRepository {
       sessionId: invocation.session_id as SessionId,
       runId: candidate.runId,
       stepId: invocation.step_id as StepId,
-      timestamp: resolvedAt,
+      timestamp: effectiveResolvedAt,
       approvalId: candidate.id,
       status: candidate.status,
       ...(candidate.grantedScope === undefined ? {} : { grantedScope: candidate.grantedScope }),
