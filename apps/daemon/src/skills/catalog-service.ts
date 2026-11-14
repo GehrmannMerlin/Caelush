@@ -101,12 +101,29 @@ export interface SkillCatalogService {
   resolveUserSelections(
     input: SkillUserSelectionsInput,
   ): Promise<readonly SkillUserSelectionTarget[]>;
+  /** Internal, path-bearing source candidates for daemon snapshot capture. Never return over HTTP. */
+  getRunCatalogSourceSnapshot(input: {
+    readonly workspaceId: string;
+    readonly signal: AbortSignal;
+  }): Promise<SkillRunCatalogSourceSnapshot>;
   getManagementTarget(input: {
     readonly workspaceId: string;
     readonly skillId: string;
     readonly signal: AbortSignal;
   }): Promise<SkillManagementTarget>;
   invalidate(workspaceId?: string): void;
+}
+
+export interface SkillRunCatalogSourceEntry {
+  readonly candidate: SkillCandidate;
+  readonly enabled: boolean;
+  readonly modelInvocable: boolean;
+}
+
+export interface SkillRunCatalogSourceSnapshot {
+  readonly catalogRevision: string;
+  readonly complete: boolean;
+  readonly entries: readonly SkillRunCatalogSourceEntry[];
 }
 
 export interface SkillModelCatalogPage {
@@ -200,6 +217,30 @@ export function createSkillCatalogService(
     },
     async resolveUserSelections(input: SkillUserSelectionsInput) {
       return resolveUserSelectionsInternal(input);
+    },
+    async getRunCatalogSourceSnapshot(input: {
+      readonly workspaceId: string;
+      readonly signal: AbortSignal;
+    }) {
+      const snapshot = await getSnapshot(input.workspaceId, input.signal);
+      const settings = await options.settings.getMany(
+        snapshot.catalog.entries.map(({ skillId }) => skillId),
+      );
+      return Object.freeze({
+        catalogRevision: effectiveRevision(snapshot.catalog, settings),
+        complete: snapshot.catalog.complete,
+        entries: Object.freeze(
+          snapshot.catalog.entries.map((candidate) => {
+            const setting = settings.get(candidate.skillId);
+            return Object.freeze({
+              candidate,
+              enabled: setting?.enabled ?? true,
+              modelInvocable:
+                candidate.manifest.modelInvocable && setting?.modelInvocable !== false,
+            });
+          }),
+        ),
+      });
     },
     async getManagementTarget(input: {
       readonly workspaceId: string;

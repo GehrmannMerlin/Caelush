@@ -557,6 +557,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     composition = await composeDaemon({
       storage,
       skillProvider,
+      skillArtifactRoot: join(dirname(options.databasePath), "skill-artifacts"),
       skillGlobalWatchRoots: [skillRoot, builtinSkillRoot],
       skillFeatureEnabled: resolveSkillFeatureEnabled(options.environment ?? process.env),
       attachmentService,
@@ -693,6 +694,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       aiConfiguration,
       securityCapabilityService: composition.securityCapabilityService,
       ...(composition.skillCatalog === undefined ? {} : { skillCatalog: composition.skillCatalog }),
+      ...(composition.selectedSkillPreparer === undefined
+        ? {}
+        : { selectedSkillPreparer: composition.selectedSkillPreparer }),
+      ...(composition.submissionSkillView === undefined
+        ? {}
+        : { submissionSkillView: composition.submissionSkillView }),
       skillSettings: storage.skillSettings,
       skillImportService,
       skillFeatureReadiness: composition.skillFeatureReadiness,

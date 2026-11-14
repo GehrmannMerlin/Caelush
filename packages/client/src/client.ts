@@ -58,6 +58,7 @@ import {
   SkillImportTargetSchema,
   SkillSettingsUpdateRequestSchema,
   SkillSettingsUpdateResponseSchema,
+  SubmissionSkillPreparationV1Schema,
   UpdateAISelectionRequestSchema,
   UpdateSessionModelSelectionRequestSchema,
   WorkspaceListResponseSchema,
@@ -128,6 +129,7 @@ import {
   type SkillImportTarget,
   type SkillSettingsUpdateRequest,
   type SkillSettingsUpdateResponse,
+  type SubmissionSkillPreparationV1,
   type SecurityPreparationResponse,
   type PermissionPresetSelection,
 } from "@caelush/protocol";
@@ -1098,6 +1100,20 @@ export class CaelushClient {
       jsonRequest("POST", body),
       ClientAgentRunSchema,
       [201],
+      options,
+    );
+  }
+
+  async getSubmissionSkillPreparation(
+    sessionId: SessionId,
+    runId: RunId,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<SubmissionSkillPreparationV1> {
+    return this.request(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/skill-preparation`,
+      { method: "GET" },
+      SubmissionSkillPreparationV1Schema,
+      [200],
       options,
     );
   }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { resolve as resolvePath } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import {
   RunController,
   RunDeadlineRegistry,
@@ -214,6 +214,16 @@ import {
 import { createSkillCatalogService, type SkillCatalogService } from "./skills/catalog-service.js";
 import { createSkillCatalogWatcher, type SkillCatalogWatcher } from "./skills/catalog-watcher.js";
 import type { FilesystemSkillProvider } from "./skills/filesystem-provider.js";
+import { createFilesystemSkillBundleStore } from "./skills/bundle-store.js";
+import {
+  createRunSkillCatalogSnapshotService,
+  type RunSkillCatalogSnapshotService,
+} from "./skills/run-catalog-snapshot.js";
+import { createSelectedSkillPreparer } from "./skills/selected-skill-preparer.js";
+import {
+  createSubmissionSkillViewService,
+  type SubmissionSkillViewService,
+} from "./skills/submission-skill-view.js";
 import { DEFAULT_SKILL_FILESYSTEM_POLICY } from "./skills/skill-policy.js";
 import type { SkillFeatureReadiness } from "./skills/feature-policy.js";
 import {
@@ -345,6 +355,7 @@ export type DaemonTurnIdentity = AgentExecutionIdentity;
 export interface DaemonCompositionOptions {
   readonly storage: CaelushStorage;
   readonly skillProvider?: FilesystemSkillProvider;
+  readonly skillArtifactRoot?: string;
   readonly skillGlobalWatchRoots?: readonly string[];
   readonly skillFeatureEnabled?: boolean;
   /** Verified attachment read capability used to materialize selected user references. */
@@ -482,6 +493,10 @@ export interface DaemonComposition {
   readonly runSecurityPromptProjector: RunSecurityPromptProjector;
   readonly info: DaemonInfo;
   readonly skillCatalog: SkillCatalogService | undefined;
+  readonly selectedSkillPreparer:
+    import("./skills/selected-skill-preparer.js").SelectedSkillPreparer | undefined;
+  readonly runSkillCatalogSnapshots: RunSkillCatalogSnapshotService | undefined;
+  readonly submissionSkillView: SubmissionSkillViewService | undefined;
   readonly skillFeatureReadiness: SkillFeatureReadiness;
   readonly watchSkillWorkspace: (workspaceId: string) => Promise<void>;
   dispose(): Promise<void>;
@@ -1454,6 +1469,96 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           provider: options.skillProvider,
           settings: options.storage.skillSettings,
         });
+  const workflowArtifactReferenceAuthority =
+    options.storage.runs.isWorkflowArtifactReferenced === undefined
+      ? undefined
+      : {
+          isReferenced: (artifactRef: string) =>
+            options.storage.runs.isWorkflowArtifactReferenced!(artifactRef),
+        };
+  let runSkillCatalogSnapshots: RunSkillCatalogSnapshotService | undefined;
+  const skillBundleReferenceAuthority =
+    workflowArtifactReferenceAuthority === undefined
+      ? undefined
+      : {
+          isReferenced: async (reference: import("@caelush/protocol").SkillBundleRefV1) => {
+            if (await workflowArtifactReferenceAuthority.isReferenced(reference.artifactRef)) {
+              return true;
+            }
+            if (runSkillCatalogSnapshots === undefined) return true;
+            return runSkillCatalogSnapshots.isBundleArtifactReferenced(reference.artifactRef);
+          },
+        };
+  const skillBundleStore =
+    options.skillProvider === undefined ||
+    options.skillArtifactRoot === undefined ||
+    workflowArtifactReferenceAuthority === undefined
+      ? undefined
+      : createFilesystemSkillBundleStore({
+          rootDirectory: join(options.skillArtifactRoot, "bundles"),
+          ...(skillBundleReferenceAuthority === undefined
+            ? {}
+            : { references: skillBundleReferenceAuthority }),
+          resolveSource: async (skillId, workspaceId, candidateOverride, signal) => {
+            if (workspaceId === undefined) return null;
+            const candidate =
+              candidateOverride ??
+              (
+                await options.skillProvider!.discover({
+                  workspaceId,
+                  signal: signal ?? new AbortController().signal,
+                })
+              ).candidates.find((entry) => entry.skillId === skillId);
+            if (candidate === undefined || candidate.skillId !== skillId) return null;
+            const locator = await options.skillProvider!.resolveLocator(
+              candidate.privateLocator,
+              workspaceId,
+            );
+            if (locator === null) return null;
+            return {
+              candidate,
+              scopeId: candidate.providerId,
+              rootDirectory: locator.rootDirectory,
+              packageDirectory: locator.packageDirectory,
+            };
+          },
+        });
+  runSkillCatalogSnapshots =
+    skillCatalog === undefined || skillBundleStore === undefined
+      ? undefined
+      : createRunSkillCatalogSnapshotService({
+          rootDirectory: join(options.skillArtifactRoot!, "run-catalogs"),
+          catalog: skillCatalog,
+          bundleStore: skillBundleStore,
+          ...(workflowArtifactReferenceAuthority === undefined
+            ? {}
+            : { referenceAuthority: workflowArtifactReferenceAuthority }),
+        });
+  const selectedSkillPreparer =
+    skillCatalog === undefined ||
+    skillBundleStore === undefined ||
+    runSkillCatalogSnapshots === undefined
+      ? undefined
+      : createSelectedSkillPreparer({
+          catalog: skillCatalog,
+          bundleStore: skillBundleStore,
+          captureCatalogSnapshot: async (input) => {
+            const snapshot = await runSkillCatalogSnapshots.captureRunSkillCatalog(input);
+            return {
+              catalogRevision: snapshot.catalogRevision,
+              artifactRef: snapshot.artifactRef,
+              manifestFingerprint: snapshot.manifestFingerprint,
+            };
+          },
+        });
+  const submissionSkillView =
+    runSkillCatalogSnapshots === undefined
+      ? undefined
+      : createSubmissionSkillViewService({
+          runs: options.storage.runs,
+          readCatalogSnapshot: (reference) =>
+            runSkillCatalogSnapshots.readRunSkillCatalogSnapshot(reference),
+        });
   const globalSkillWatchRoots = Object.freeze([
     ...new Set((options.skillGlobalWatchRoots ?? []).map((root) => resolvePath(root))),
   ]);
@@ -1499,7 +1604,13 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   };
   const skillFeatureReadiness: SkillFeatureReadiness = Object.freeze({
     enabled: options.skillFeatureEnabled ?? false,
-    catalogReady: skillCatalog !== undefined && globalSkillWatcher !== undefined,
+    catalogReady:
+      skillCatalog !== undefined &&
+      globalSkillWatcher !== undefined &&
+      skillBundleStore !== undefined &&
+      runSkillCatalogSnapshots !== undefined &&
+      selectedSkillPreparer !== undefined &&
+      workflowArtifactReferenceAuthority !== undefined,
     invocationReady: false,
     scriptExecutionReady: false,
     presentationReady: false,
@@ -1611,6 +1722,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     runSecurityPromptProjector,
     info,
     skillCatalog,
+    selectedSkillPreparer,
+    runSkillCatalogSnapshots,
+    submissionSkillView,
     skillFeatureReadiness,
     watchSkillWorkspace,
     dispose: async () => {

@@ -21,6 +21,7 @@ interface PreparedResourceRunRepository {
   }): Promise<unknown>;
   readPreparedResources?(runId: RunId): Promise<readonly WorkflowResourceBindingV1[]>;
   readWorkflowProfile?(runId: RunId): Promise<RunWorkflowExecutionProfileV1 | null>;
+  isWorkflowArtifactReferenced?(artifactRef: string): Promise<boolean>;
 }
 
 function makeProfile(runId: RunId): RunWorkflowExecutionProfileV1 {
@@ -96,6 +97,16 @@ describe("prepared resource records", () => {
         ["resource-beta", 1],
       ]);
       expect(JSON.stringify(resources)).not.toContain("skillName");
+      expect(repository.isWorkflowArtifactReferenced).toBeTypeOf("function");
+      await expect(
+        repository.isWorkflowArtifactReferenced?.(profile!.catalogSnapshotRef.artifactRef),
+      ).resolves.toBe(true);
+      await expect(
+        repository.isWorkflowArtifactReferenced?.(resources![0]!.artifactRef),
+      ).resolves.toBe(true);
+      await expect(repository.isWorkflowArtifactReferenced?.("orphan_artifact")).resolves.toBe(
+        false,
+      );
     } finally {
       await database.close();
     }

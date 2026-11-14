@@ -4,6 +4,7 @@ import {
   CurrentAgentRunSchema,
   RunWorkflowExecutionProfileV1Schema,
   SubmissionIdSchema,
+  WorkflowArtifactRefSchema,
   WorkflowResourceBindingDraftV1Schema,
   WorkflowResourceBindingV1Schema,
   type AgentRun,
@@ -14,6 +15,7 @@ import {
   type RunWorkflowExecutionProfileV1,
   type WorkflowResourceBindingDraftV1,
   type WorkflowResourceBindingV1,
+  type WorkflowArtifactRef,
 } from "@caelush/protocol";
 import { randomUUID } from "node:crypto";
 import type { CaelushDatabase } from "../database.js";
@@ -115,6 +117,8 @@ export interface RunRepository {
   ): Promise<readonly DurableRunEvent[]>;
   readPreparedResources?(runId: RunId): Promise<readonly WorkflowResourceBindingV1[]>;
   readWorkflowProfile?(runId: RunId): Promise<RunWorkflowExecutionProfileV1 | null>;
+  /** Read-only artifact liveness across generic Run workflow profiles and bindings. */
+  isWorkflowArtifactReferenced?(artifactRef: WorkflowArtifactRef): Promise<boolean>;
   get(id: RunId): Promise<AgentRun | null>;
   update(run: AgentRun): Promise<void>;
   listBySession(sessionId: SessionId, options?: RunListOptions): Promise<AgentRun[]>;
@@ -512,6 +516,22 @@ export class SqliteRunRepository implements RunRepository {
       return profile;
     } catch (error) {
       mapRepositoryError(error, "read workflow profile for", runId);
+    }
+  }
+
+  async isWorkflowArtifactReferenced(artifactRef: WorkflowArtifactRef): Promise<boolean> {
+    const reference = WorkflowArtifactRefSchema.parse(artifactRef);
+    try {
+      const row = this.database.client
+        .prepare(
+          "SELECT 1 AS referenced FROM run_prepared_resources WHERE artifact_ref = ? " +
+            "UNION ALL SELECT 1 AS referenced FROM run_workflow_profiles " +
+            "WHERE json_extract(data_json, '$.catalogSnapshotRef.artifactRef') = ? LIMIT 1",
+        )
+        .get(reference, reference) as { referenced: number } | undefined;
+      return row !== undefined;
+    } catch (error) {
+      mapRepositoryError(error, "check workflow artifact reference", reference);
     }
   }
 

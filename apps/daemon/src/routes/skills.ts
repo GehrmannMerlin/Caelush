@@ -11,15 +11,23 @@ import {
   SkillManagementQuerySchema,
   SkillSettingsUpdateRequestSchema,
   SkillSettingsUpdateResponseSchema,
+  SubmissionSkillPreparationV1Schema,
+  RunIdSchema,
+  SessionIdSchema,
   WorkspaceIdParamSchema,
   type SkillImportFileManifestEntry,
   type SkillImportTarget,
   type WorkspaceId,
 } from "@caelush/protocol";
-import type { SkillSettingsRepository } from "@caelush/storage";
+import {
+  StorageNotFoundError,
+  type RunRepository,
+  type SkillSettingsRepository,
+} from "@caelush/storage";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { SkillCatalogService } from "../skills/catalog-service.js";
+import type { SubmissionSkillViewService } from "../skills/submission-skill-view.js";
 import {
   SkillImportServiceError,
   type SkillImportService,
@@ -44,6 +52,9 @@ const IMPORT_PARAMS_SCHEMA = z
 const SKILL_SETTINGS_PARAMS_SCHEMA = z
   .object({ workspaceId: WorkspaceIdParamSchema.shape.workspaceId, skillId: SkillIdSchema })
   .strict();
+const SUBMISSION_SKILL_PARAMS_SCHEMA = z
+  .object({ sessionId: SessionIdSchema, runId: RunIdSchema })
+  .strict();
 
 export interface SkillRouteDependencies {
   readonly catalog?: SkillCatalogService;
@@ -52,6 +63,8 @@ export interface SkillRouteDependencies {
   readonly readiness?: SkillFeatureReadiness;
   readonly workspaceService?: WorkspaceService;
   readonly watchWorkspace?: (workspaceId: string) => Promise<void>;
+  readonly runs?: Pick<RunRepository, "get">;
+  readonly submissionSkillView?: SubmissionSkillViewService;
 }
 
 export class SkillSettingsRevisionConflictError extends Error {
@@ -87,6 +100,26 @@ export function registerSkillRoutes(
     { schema: { response: { 200: SkillCapabilityResponseSchema } } },
     async () => createSkillCapabilityResponse(readiness),
   );
+
+  if (dependencies.runs !== undefined && dependencies.submissionSkillView !== undefined) {
+    app.get(
+      "/api/v1/sessions/:sessionId/runs/:runId/skill-preparation",
+      {
+        schema: {
+          params: SUBMISSION_SKILL_PARAMS_SCHEMA,
+          response: { 200: SubmissionSkillPreparationV1Schema },
+        },
+      },
+      async (request) => {
+        const { sessionId, runId } = SUBMISSION_SKILL_PARAMS_SCHEMA.parse(request.params);
+        const run = await dependencies.runs!.get(runId);
+        if (run === null || run.sessionId !== sessionId) {
+          throw new StorageNotFoundError("AgentRun", runId);
+        }
+        return dependencies.submissionSkillView!.getSubmissionSkillPreparation({ runId });
+      },
+    );
+  }
 
   app.get(
     "/api/v1/workspaces/:workspaceId/skills",

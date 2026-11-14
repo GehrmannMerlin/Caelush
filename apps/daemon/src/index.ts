@@ -62,6 +62,17 @@ export type {
   SkillBundleSource,
 } from "./skills/bundle-store.js";
 export {
+  createRunSkillCatalogSnapshotService,
+  RunSkillCatalogSnapshotSchema,
+} from "./skills/run-catalog-snapshot.js";
+export type {
+  RunSkillCatalogSnapshot,
+  RunSkillCatalogSnapshotService,
+  RunSkillCatalogSnapshotServiceOptions,
+} from "./skills/run-catalog-snapshot.js";
+export { createSubmissionSkillViewService } from "./skills/submission-skill-view.js";
+export type { SubmissionSkillViewService } from "./skills/submission-skill-view.js";
+export {
   SkillImportServiceError,
   createSkillImportService,
 } from "./skills/bundle-import-service.js";

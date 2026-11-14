@@ -55,6 +55,7 @@ export {
   SkillManagementPageV1Schema,
   SkillBundleRefV1Schema,
   RunSkillBindingV1Schema,
+  SubmissionSkillPreparationV1Schema,
   SkillFailureReasonSchema,
 } from "../skills.js";
 export type {
@@ -69,6 +70,7 @@ export type {
   SkillManagementPageV1,
   SkillBundleRefV1,
   RunSkillBindingV1,
+  SubmissionSkillPreparationV1,
   SkillFailureReason,
 } from "../skills.js";
 

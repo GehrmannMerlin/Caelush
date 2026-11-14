@@ -136,6 +136,28 @@ export const RunSkillBindingV1Schema = z
   .strict();
 export type RunSkillBindingV1 = z.infer<typeof RunSkillBindingV1Schema>;
 
+export const SubmissionSkillPreparationV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    runId: RunIdSchema,
+    userText: z.string().max(200_000),
+    preparationStatus: z.literal("CONTENT_READY"),
+    selectedSkills: z
+      .array(
+        z
+          .object({
+            skillId: SkillIdSchema,
+            name: SkillNameSchema,
+            displayName: DisplayNameSchema.optional(),
+          })
+          .strict(),
+      )
+      .max(4096)
+      .readonly(),
+  })
+  .strict();
+export type SubmissionSkillPreparationV1 = z.infer<typeof SubmissionSkillPreparationV1Schema>;
+
 export const SkillFailureReasonSchema = z.enum([
   "SKILLS_UNAVAILABLE",
   "SKILL_NOT_FOUND",

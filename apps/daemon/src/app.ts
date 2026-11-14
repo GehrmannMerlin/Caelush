@@ -58,6 +58,7 @@ import type { SkillCatalogService } from "./skills/catalog-service.js";
 import type { SkillImportService } from "./skills/bundle-import-service.js";
 import type { SkillFeatureReadiness } from "./skills/feature-policy.js";
 import type { SelectedSkillPreparer } from "./skills/selected-skill-preparer.js";
+import type { SubmissionSkillViewService } from "./skills/submission-skill-view.js";
 
 export interface DaemonDependencies {
   readonly archiveService?: ArchiveService;
@@ -79,6 +80,7 @@ export interface DaemonDependencies {
   readonly modelCanonicalizer?: DaemonModelCanonicalizer;
   readonly contextBudgetPolicyResolver?: RunContextBudgetPolicyResolver;
   readonly selectedSkillPreparer?: SelectedSkillPreparer;
+  readonly submissionSkillView?: SubmissionSkillViewService;
   readonly transcript?: SessionTranscriptService;
   readonly presentation?: SessionPresentationService;
   readonly logger?: boolean;
@@ -119,6 +121,10 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
     ...(dependencies.skillFeatureReadiness === undefined
       ? {}
       : { readiness: dependencies.skillFeatureReadiness }),
+    runs: dependencies.runs,
+    ...(dependencies.submissionSkillView === undefined
+      ? {}
+      : { submissionSkillView: dependencies.submissionSkillView }),
     ...(dependencies.workspaceService === undefined
       ? {}
       : { workspaceService: dependencies.workspaceService }),

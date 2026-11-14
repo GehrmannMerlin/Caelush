@@ -80,6 +80,11 @@ export interface SkillBundleGarbageCollectionResult {
 }
 
 export interface FilesystemSkillBundleStore extends SkillBundlePort {
+  captureCandidate(input: {
+    readonly candidate: SkillCandidate;
+    readonly workspaceId: string;
+    readonly signal: AbortSignal;
+  }): Promise<SkillBundleRefV1>;
   collectGarbage(): Promise<SkillBundleGarbageCollectionResult>;
   releasePreparingReference(artifactRef: string): void;
 }
@@ -89,6 +94,8 @@ export interface FilesystemSkillBundleStoreOptions {
   readonly resolveSource: (
     skillId: string,
     workspaceId?: string,
+    candidate?: SkillCandidate,
+    signal?: AbortSignal,
   ) => Promise<SkillBundleSource | null>;
   readonly references?: SkillBundleReferenceAuthority;
   readonly quotaBytes?: number;
@@ -188,84 +195,23 @@ export function createFilesystemSkillBundleStore(
   let writeQueue: Promise<void> = Promise.resolve();
 
   const store: FilesystemSkillBundleStore = {
-    async capture({ skillId, expectedRevision, signal, workspaceId }) {
-      return withWriteLock(async () => {
-        checkCancelled(signal);
-        let source: SkillBundleSource | null;
-        try {
-          source = await options.resolveSource(skillId, workspaceId);
-        } catch {
-          throw new SkillBundleStoreError("SKILL_SOURCE_UNAVAILABLE");
-        }
-        if (source === null || source.candidate.skillId !== skillId) {
-          throw new SkillBundleStoreError("SKILL_NOT_FOUND");
-        }
-        if (
-          expectedRevision !== undefined &&
-          source.candidate.bundleRevision !== undefined &&
-          expectedRevision !== source.candidate.bundleRevision
-        ) {
-          throw new SkillBundleStoreError("SKILL_SELECTION_STALE");
-        }
-        let files: SkillPackageFile[];
-        try {
-          files = await captureSourceFiles(
-            source,
-            signal,
-            policy,
-            options.beforeSourceStabilityCheck,
-          );
-        } catch (error) {
-          if (error instanceof SkillBundleStoreError) throw error;
-          if (signal.aborted || isAbortError(error)) {
-            throw new SkillBundleStoreError("SKILL_CAPTURE_CANCELLED");
-          }
-          if (error instanceof TypeError) throw new SkillBundleStoreError("SKILL_BUNDLE_INVALID");
-          if (isCode(error, "ELOOP")) throw new SkillBundleStoreError("SYMLINK_ESCAPE");
-          if (isCode(error, "ENOENT")) throw new SkillBundleStoreError("SKILL_SELECTION_STALE");
-          throw new SkillBundleStoreError("SKILL_SOURCE_UNAVAILABLE");
-        }
-        const bundleRevision = createSkillPackageFingerprint(files);
-        if (
-          (source.candidate.bundleRevision !== undefined &&
-            source.candidate.bundleRevision !== bundleRevision) ||
-          (expectedRevision !== undefined && expectedRevision !== bundleRevision)
-        ) {
-          throw new SkillBundleStoreError("SKILL_SOURCE_CHANGED");
-        }
-        const rawManifest = files.find((file) => file.relativePath === "SKILL.md");
-        if (rawManifest === undefined) throw new SkillBundleStoreError("SKILL_BUNDLE_INVALID");
-        const parsedManifest = parseSkillManifest(
-          new TextDecoder("utf-8", { fatal: true }).decode(rawManifest.bytes),
-        );
-        if (
-          !parsedManifest.ok ||
-          parsedManifest.manifest.name !== source.candidate.manifest.name ||
-          !SkillNameSchema.safeParse(parsedManifest.manifest.name).success
-        ) {
-          throw new SkillBundleStoreError("SKILL_BUNDLE_INVALID");
-        }
-        const manifestFingerprint = createSkillFileFingerprint(rawManifest.bytes);
-        const bundleManifest = makeBundleManifest(bundleRevision, manifestFingerprint, files);
-        await ensureDirectories();
-        const blobName = bundleRevision.slice("sha256:".length);
-        const blobPath = join(bundleDirectory, blobName);
-        const existing = await tryVerifyBundle(blobPath, bundleRevision);
-        if (existing === undefined) {
-          await collectGarbageUnsafe();
-          const usedBytes = await storedBytesUnsafe();
-          if (usedBytes > quotaBytes - bundleManifest.totalBytes) {
-            throw new SkillBundleStoreError("SKILLS_QUOTA_EXCEEDED");
-          }
-          await publishBundle(blobPath, bundleManifest, files, signal);
-        }
-        const reference = await getOrCreateScopedReference(source.scopeId, bundleManifest);
-        checkCancelled(signal);
-        lease(reference.artifactRef);
-        return SkillBundleRefV1Schema.parse(reference);
-      });
+    capture(input) {
+      return captureBundle(input);
     },
-
+    captureCandidate({ candidate, workspaceId, signal }) {
+      if (candidate.bundleRevision === undefined) {
+        return Promise.reject(new SkillBundleStoreError("SKILL_BUNDLE_INVALID"));
+      }
+      return captureBundle(
+        {
+          skillId: candidate.skillId,
+          expectedRevision: candidate.bundleRevision,
+          workspaceId,
+          signal,
+        },
+        candidate,
+      );
+    },
     async read({ bundle, relativePath, signal }): Promise<BoundedSkillResource> {
       return withWriteLock(async () => {
         checkCancelled(signal);
@@ -309,6 +255,101 @@ export function createFilesystemSkillBundleStore(
       preparingReferences.delete(artifactRef);
     },
   };
+
+  async function captureBundle(
+    input: {
+      readonly skillId: string;
+      readonly expectedRevision?: string;
+      readonly workspaceId?: string;
+      readonly signal: AbortSignal;
+    },
+    candidateOverride?: SkillCandidate,
+  ): Promise<SkillBundleRefV1> {
+    const { skillId, expectedRevision, signal, workspaceId } = input;
+    return withWriteLock(async () => {
+      checkCancelled(signal);
+      let source: SkillBundleSource | null;
+      try {
+        source = await options.resolveSource(skillId, workspaceId, candidateOverride, signal);
+      } catch {
+        throw new SkillBundleStoreError("SKILL_SOURCE_UNAVAILABLE");
+      }
+      if (source === null || source.candidate.skillId !== skillId) {
+        throw new SkillBundleStoreError("SKILL_NOT_FOUND");
+      }
+      if (
+        candidateOverride !== undefined &&
+        (source.candidate.privateLocator !== candidateOverride.privateLocator ||
+          source.candidate.providerId !== candidateOverride.providerId ||
+          source.candidate.bundleRevision !== candidateOverride.bundleRevision)
+      ) {
+        throw new SkillBundleStoreError("SKILL_SELECTION_STALE");
+      }
+      if (
+        expectedRevision !== undefined &&
+        source.candidate.bundleRevision !== undefined &&
+        expectedRevision !== source.candidate.bundleRevision
+      ) {
+        throw new SkillBundleStoreError("SKILL_SELECTION_STALE");
+      }
+      let files: SkillPackageFile[];
+      try {
+        files = await captureSourceFiles(
+          source,
+          signal,
+          policy,
+          options.beforeSourceStabilityCheck,
+        );
+      } catch (error) {
+        if (error instanceof SkillBundleStoreError) throw error;
+        if (signal.aborted || isAbortError(error)) {
+          throw new SkillBundleStoreError("SKILL_CAPTURE_CANCELLED");
+        }
+        if (error instanceof TypeError) throw new SkillBundleStoreError("SKILL_BUNDLE_INVALID");
+        if (isCode(error, "ELOOP")) throw new SkillBundleStoreError("SYMLINK_ESCAPE");
+        if (isCode(error, "ENOENT")) throw new SkillBundleStoreError("SKILL_SELECTION_STALE");
+        throw new SkillBundleStoreError("SKILL_SOURCE_UNAVAILABLE");
+      }
+      const bundleRevision = createSkillPackageFingerprint(files);
+      if (
+        (source.candidate.bundleRevision !== undefined &&
+          source.candidate.bundleRevision !== bundleRevision) ||
+        (expectedRevision !== undefined && expectedRevision !== bundleRevision)
+      ) {
+        throw new SkillBundleStoreError("SKILL_SOURCE_CHANGED");
+      }
+      const rawManifest = files.find((file) => file.relativePath === "SKILL.md");
+      if (rawManifest === undefined) throw new SkillBundleStoreError("SKILL_BUNDLE_INVALID");
+      const parsedManifest = parseSkillManifest(
+        new TextDecoder("utf-8", { fatal: true }).decode(rawManifest.bytes),
+      );
+      if (
+        !parsedManifest.ok ||
+        parsedManifest.manifest.name !== source.candidate.manifest.name ||
+        !SkillNameSchema.safeParse(parsedManifest.manifest.name).success
+      ) {
+        throw new SkillBundleStoreError("SKILL_BUNDLE_INVALID");
+      }
+      const manifestFingerprint = createSkillFileFingerprint(rawManifest.bytes);
+      const bundleManifest = makeBundleManifest(bundleRevision, manifestFingerprint, files);
+      await ensureDirectories();
+      const blobName = bundleRevision.slice("sha256:".length);
+      const blobPath = join(bundleDirectory, blobName);
+      const existing = await tryVerifyBundle(blobPath, bundleRevision);
+      if (existing === undefined) {
+        await collectGarbageUnsafe();
+        const usedBytes = await storedBytesUnsafe();
+        if (usedBytes > quotaBytes - bundleManifest.totalBytes) {
+          throw new SkillBundleStoreError("SKILLS_QUOTA_EXCEEDED");
+        }
+        await publishBundle(blobPath, bundleManifest, files, signal);
+      }
+      const reference = await getOrCreateScopedReference(source.scopeId, bundleManifest);
+      checkCancelled(signal);
+      lease(reference.artifactRef);
+      return SkillBundleRefV1Schema.parse(reference);
+    });
+  }
 
   function withWriteLock<T>(operation: () => Promise<T>): Promise<T> {
     const result = writeQueue.then(operation, operation);
