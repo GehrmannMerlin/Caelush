@@ -43,8 +43,11 @@ import { WorkspaceOwnershipError } from "../workspaces/workspace-errors.js";
 import type { WorkspaceService } from "../workspaces/workspace-service.js";
 import { ModelSelectionError } from "../providers/model-directory.js";
 import type { SecurityCapabilityService } from "./security-capability-service.js";
-import { hashSubmissionPayload } from "./submission-payload.js";
+import { hashSubmissionPayload, normalizeSkillSelectionIdentity } from "./submission-payload.js";
 import type { AttachmentService } from "../attachments/attachment-service.js";
+import type { SkillFeatureReadiness } from "../skills/feature-policy.js";
+import { SkillServiceError } from "../skills/feature-policy.js";
+import type { SelectedSkillPreparer } from "../skills/selected-skill-preparer.js";
 
 export class SecurityPolicyRequestError extends Error {
   constructor(
@@ -78,6 +81,8 @@ export interface RunServiceOptions {
   readonly workspaceService?: WorkspaceService;
   readonly securityCapabilityService?: Pick<SecurityCapabilityService, "getWorkspaceCapabilities">;
   readonly contextBudgetPolicyResolver?: RunContextBudgetPolicyResolver;
+  readonly selectedSkillPreparer?: SelectedSkillPreparer;
+  readonly skillFeatureReadiness?: SkillFeatureReadiness;
   readonly eventNotifier?: Pick<RunEventNotifierPort, "notifyCommitted">;
   readonly eventFactory?: RunEventFactory;
   readonly eventIdFactory?: { readonly create: () => import("@caelush/protocol").EventId };
@@ -110,19 +115,39 @@ export class RunService {
     this.eventIdFactory = options.eventIdFactory ?? { create: createEventId };
   }
 
-  async createRun(sessionId: SessionId, input: CreateRunRequest): Promise<AgentRun> {
-    await requireUnarchivedTarget(this.options.archives, { type: "SESSION", sessionId });
-    const session = await this.requireSession(sessionId);
+  async createRun(
+    sessionId: SessionId,
+    input: CreateRunRequest,
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<AgentRun> {
     let submissionId: SubmissionId | undefined;
+    let submissionPayloadHash: string | undefined;
     if (input.submissionId !== undefined) {
       if (this.options.submissions === undefined) {
         throw new StorageError("Run submission idempotency is unavailable.");
       }
       const { submissionId: _ignored, ...payload } = input;
       void _ignored;
-      const reserved = await this.options.submissions.reserve(
+      submissionPayloadHash = hashSubmissionPayload({
+        sessionId,
+        payload: normalizeSkillSelectionIdentity(payload),
+      });
+      const existing = await this.options.submissions.get(input.submissionId);
+      if (existing !== null) {
+        const reserved = await this.options.submissions.reserve(
+          input.submissionId,
+          submissionPayloadHash,
+        );
+        if (reserved.runId !== undefined) return this.getRun(reserved.runId);
+        submissionId = input.submissionId;
+      }
+    }
+    await requireUnarchivedTarget(this.options.archives, { type: "SESSION", sessionId });
+    const session = await this.requireSession(sessionId);
+    if (input.submissionId !== undefined && submissionId === undefined) {
+      const reserved = await this.options.submissions!.reserve(
         input.submissionId,
-        hashSubmissionPayload({ sessionId, payload }),
+        submissionPayloadHash!,
       );
       if (reserved.runId !== undefined) return this.getRun(reserved.runId);
       submissionId = input.submissionId;
@@ -161,10 +186,40 @@ export class RunService {
       );
     }
     const workspace = await this.resolveWorkspace(session, input.workspace);
-    const { preset, acceptanceRequirements, ...clientFields } = input;
+    const selections = input.skillSelections ?? [];
+    const skillFeatureReadiness = this.options.skillFeatureReadiness;
+    const skillPreparationRequired =
+      skillFeatureReadiness?.enabled === true || selections.length > 0;
+    if (skillPreparationRequired) {
+      if (
+        skillFeatureReadiness?.enabled !== true ||
+        skillFeatureReadiness.catalogReady !== true ||
+        this.options.selectedSkillPreparer === undefined
+      ) {
+        throw new SkillServiceError("SKILLS_UNAVAILABLE");
+      }
+    }
+    const {
+      preset,
+      acceptanceRequirements,
+      skillSelections: _skillSelections,
+      ...clientFields
+    } = input;
+    void _skillSelections;
+    const runId = this.createId();
+    const canonicalModel = this.modelCanonicalizer.canonicalize(modelSelection);
+    const skillPreparation = skillPreparationRequired
+      ? await this.options.selectedSkillPreparer!.prepare({
+          runId,
+          workspaceId: workspace.id,
+          selections,
+          model: canonicalModel,
+          signal,
+        })
+      : undefined;
     const securityPolicy = await this.resolveSecurityPolicy(workspace.id, preset);
     const runDraft = AgentRunSchema.parse({
-      id: this.createId(),
+      id: runId,
       sessionId,
       ...clientFields,
       ...(acceptanceRequirements === undefined
@@ -178,7 +233,7 @@ export class RunService {
       workspace,
       limits: input.limits ?? compatibilityLimitsForResourcePolicy(resourcePolicy),
       resourcePolicy,
-      model: this.modelCanonicalizer.canonicalize(modelSelection),
+      model: canonicalModel,
       securityPolicy,
       permissionProfile: securityPolicy.permissionProfile,
       approvalPolicy: securityPolicy.approvalPolicy,
@@ -198,7 +253,11 @@ export class RunService {
       this.eventIdFactory.create(),
       run.createdAt,
     );
-    if (this.options.runs.insertWithEvents === undefined) {
+    if (
+      (skillPreparation === undefined && this.options.runs.insertWithEvents === undefined) ||
+      (skillPreparation !== undefined &&
+        this.options.runs.insertRunWithPreparedResources === undefined)
+    ) {
       throw new SecurityPolicyRequestError(
         "PERSISTENCE_UNAVAILABLE",
         "Atomic Run security policy persistence is unavailable; the Run was not created.",
@@ -206,7 +265,25 @@ export class RunService {
     }
     let committedEvents: readonly DurableRunEvent[];
     try {
-      committedEvents = await this.options.runs.insertWithEvents(run, [policyEvent]);
+      if (skillPreparation !== undefined) {
+        if (this.options.runs.insertRunWithPreparedResources === undefined) {
+          throw new SecurityPolicyRequestError(
+            "PERSISTENCE_UNAVAILABLE",
+            "Atomic Run workflow resource persistence is unavailable; the Run was not created.",
+          );
+        }
+        committedEvents = await this.options.runs.insertRunWithPreparedResources({
+          run,
+          workflowProfile: skillPreparation.workflowProfile,
+          resourcesInOrder: skillPreparation.bindingsInSelectionOrder,
+          events: [policyEvent],
+          ...(submissionId === undefined || submissionPayloadHash === undefined
+            ? {}
+            : { submissionIdentity: { submissionId, payloadHash: submissionPayloadHash } }),
+        });
+      } else {
+        committedEvents = await this.options.runs.insertWithEvents!(run, [policyEvent]);
+      }
     } catch (error) {
       if (submissionId !== undefined) {
         const winner = await this.options.submissions?.get(submissionId);

@@ -24,6 +24,8 @@ export type BoundedSkillResource =
 
 export interface SkillBundlePort {
   capture(input: {
+    /** Workspace scope for resolving a project-scoped Skill source. */
+    readonly workspaceId?: string;
     readonly skillId: string;
     readonly expectedRevision?: string;
     readonly signal: AbortSignal;

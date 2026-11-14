@@ -16,8 +16,19 @@ export function registerRunRoutes(app: FastifyInstance, service: RunService): vo
     { schema: { body: CreateRunRequestSchema, response: { 201: ClientAgentRunSchema } } },
     async (request, reply) => {
       const { sessionId } = request.params as { sessionId: string };
-      const run = await service.createRun(sessionId as never, request.body as CreateRunRequest);
-      return reply.code(201).send(toClientAgentRun(run));
+      const abortController = new AbortController();
+      const onAborted = () => abortController.abort();
+      request.raw.once("aborted", onAborted);
+      try {
+        const run = await service.createRun(
+          sessionId as never,
+          request.body as CreateRunRequest,
+          abortController.signal,
+        );
+        return reply.code(201).send(toClientAgentRun(run));
+      } finally {
+        request.raw.removeListener("aborted", onAborted);
+      }
     },
   );
 

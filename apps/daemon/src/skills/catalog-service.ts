@@ -6,6 +6,7 @@ import {
   type SkillCatalogPageV1,
   type SkillManagementItemV1,
   type SkillManagementPageV1,
+  type SkillSelectionV1,
 } from "@caelush/protocol";
 import {
   resolveSkillDiscovery,
@@ -16,6 +17,7 @@ import {
 } from "@caelush/skills";
 import type { SkillSettingsRecord, SkillSettingsRepository } from "@caelush/storage";
 import { resolveSkillFilesystemPolicy } from "./skill-policy.js";
+import { SkillServiceError } from "./feature-policy.js";
 
 type CatalogAudience = "USER" | "MANAGEMENT" | "MODEL";
 
@@ -95,6 +97,10 @@ export interface SkillCatalogService {
   listUserCatalog(input: SkillCatalogQueryInput): Promise<SkillCatalogPageV1>;
   listManagementCatalog(input: SkillCatalogQueryInput): Promise<SkillManagementPageV1>;
   listModelCatalog(input: SkillCatalogQueryInput): Promise<SkillModelCatalogPage>;
+  resolveUserSelection(input: SkillUserSelectionInput): Promise<SkillUserSelectionTarget>;
+  resolveUserSelections(
+    input: SkillUserSelectionsInput,
+  ): Promise<readonly SkillUserSelectionTarget[]>;
   getManagementTarget(input: {
     readonly workspaceId: string;
     readonly skillId: string;
@@ -121,6 +127,28 @@ export interface SkillManagementTarget {
   readonly item?: SkillManagementItemV1;
   /** Immutable manifest policy before a user settings override. */
   readonly modelInvocableAllowed: boolean;
+}
+
+/** Exact, safe metadata for a user-selected catalog identity after its token is verified. */
+export interface SkillUserSelectionTarget {
+  readonly skillId: string;
+  readonly name: string;
+  readonly displayName?: string;
+  readonly catalogRevision: string;
+  readonly bundleRevision: string;
+}
+
+export interface SkillUserSelectionInput {
+  readonly workspaceId: string;
+  readonly skillId: string;
+  readonly selectionToken: string;
+  readonly signal: AbortSignal;
+}
+
+export interface SkillUserSelectionsInput {
+  readonly workspaceId: string;
+  readonly selections: readonly SkillSelectionV1[];
+  readonly signal: AbortSignal;
 }
 
 interface CatalogSnapshot {
@@ -161,6 +189,18 @@ export function createSkillCatalogService(
       (await listPage("MANAGEMENT", input)) as SkillManagementPageV1,
     listModelCatalog: async (input: SkillCatalogQueryInput) =>
       (await listPage("MODEL", input)) as SkillModelCatalogPage,
+    async resolveUserSelection(input: SkillUserSelectionInput) {
+      const [target] = await resolveUserSelectionsInternal({
+        workspaceId: input.workspaceId,
+        selections: [input],
+        signal: input.signal,
+      });
+      if (target === undefined) throw new SkillServiceError("SKILL_NOT_FOUND");
+      return target;
+    },
+    async resolveUserSelections(input: SkillUserSelectionsInput) {
+      return resolveUserSelectionsInternal(input);
+    },
     async getManagementTarget(input: {
       readonly workspaceId: string;
       readonly skillId: string;
@@ -321,6 +361,52 @@ export function createSkillCatalogService(
       }
     }
     return snapshot;
+  }
+
+  async function resolveUserSelectionsInternal(
+    input: SkillUserSelectionsInput,
+  ): Promise<readonly SkillUserSelectionTarget[]> {
+    const snapshot = await getSnapshot(input.workspaceId, input.signal);
+    const settings = await options.settings.getMany(
+      snapshot.catalog.entries.map(({ skillId }) => skillId),
+    );
+    const catalogRevision = effectiveRevision(snapshot.catalog, settings);
+    const candidatesById = new Map(
+      snapshot.catalog.entries.map((candidate) => [candidate.skillId, candidate] as const),
+    );
+    return Object.freeze(
+      input.selections.map((selection) => {
+        const candidate = candidatesById.get(selection.skillId);
+        if (candidate === undefined) throw new SkillServiceError("SKILL_NOT_FOUND");
+        const setting = settings.get(candidate.skillId);
+        if (setting?.enabled === false || candidate.manifest.userInvocable !== true) {
+          throw new SkillServiceError("SKILL_DISABLED");
+        }
+        const bundleRevision = candidate.bundleRevision;
+        if (bundleRevision === undefined) throw new SkillServiceError("SKILL_LOAD_FAILED");
+        if (
+          !selectionTokens.verify(
+            {
+              workspaceId: input.workspaceId,
+              skillId: candidate.skillId,
+              bundleRevision,
+              catalogRevision,
+            },
+            selection.selectionToken,
+          )
+        ) {
+          throw new SkillServiceError("SKILL_SELECTION_STALE");
+        }
+        const displayName = candidate.manifest.metadata?.["displayName"];
+        return Object.freeze({
+          skillId: candidate.skillId,
+          name: candidate.manifest.name,
+          ...(displayName === undefined ? {} : { displayName }),
+          catalogRevision,
+          bundleRevision,
+        });
+      }),
+    );
   }
 }
 

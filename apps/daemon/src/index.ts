@@ -22,6 +22,9 @@ export type {
   SkillManagementTarget,
   SkillSelectionTokenCodec,
   SkillSelectionTokenInput,
+  SkillUserSelectionInput,
+  SkillUserSelectionsInput,
+  SkillUserSelectionTarget,
 } from "./skills/catalog-service.js";
 export { createSkillCatalogWatcher } from "./skills/catalog-watcher.js";
 export type {
@@ -30,6 +33,20 @@ export type {
   SkillCatalogWatchFactory,
   SkillCatalogWatchHandle,
 } from "./skills/catalog-watcher.js";
+export {
+  createSelectedSkillPreparer,
+  MAX_ACTIVE_SKILL_CORE_UTF8_BYTES,
+  MAX_SKILL_CORE_UTF8_BYTES,
+  WORKFLOW_RENDERER_VERSION,
+} from "./skills/selected-skill-preparer.js";
+export type {
+  PreparedSelectedSkills,
+  PreparedSkillDisplayMetadata,
+  RenderedSkillCoreBudget,
+  SelectedSkillPreparationInput,
+  SelectedSkillPreparer,
+  SelectedSkillPreparerOptions,
+} from "./skills/selected-skill-preparer.js";
 export { createFilesystemSkillProvider } from "./skills/filesystem-provider.js";
 export type {
   FilesystemSkillProvider,

@@ -86,7 +86,10 @@ export interface FilesystemSkillBundleStore extends SkillBundlePort {
 
 export interface FilesystemSkillBundleStoreOptions {
   readonly rootDirectory: string;
-  readonly resolveSource: (skillId: string) => Promise<SkillBundleSource | null>;
+  readonly resolveSource: (
+    skillId: string,
+    workspaceId?: string,
+  ) => Promise<SkillBundleSource | null>;
   readonly references?: SkillBundleReferenceAuthority;
   readonly quotaBytes?: number;
   readonly policy?: Partial<typeof DEFAULT_SKILL_FILESYSTEM_POLICY>;
@@ -185,12 +188,12 @@ export function createFilesystemSkillBundleStore(
   let writeQueue: Promise<void> = Promise.resolve();
 
   const store: FilesystemSkillBundleStore = {
-    async capture({ skillId, expectedRevision, signal }) {
+    async capture({ skillId, expectedRevision, signal, workspaceId }) {
       return withWriteLock(async () => {
         checkCancelled(signal);
         let source: SkillBundleSource | null;
         try {
-          source = await options.resolveSource(skillId);
+          source = await options.resolveSource(skillId, workspaceId);
         } catch {
           throw new SkillBundleStoreError("SKILL_SOURCE_UNAVAILABLE");
         }

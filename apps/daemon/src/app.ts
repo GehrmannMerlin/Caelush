@@ -57,6 +57,7 @@ import { registerSkillRoutes } from "./routes/skills.js";
 import type { SkillCatalogService } from "./skills/catalog-service.js";
 import type { SkillImportService } from "./skills/bundle-import-service.js";
 import type { SkillFeatureReadiness } from "./skills/feature-policy.js";
+import type { SelectedSkillPreparer } from "./skills/selected-skill-preparer.js";
 
 export interface DaemonDependencies {
   readonly archiveService?: ArchiveService;
@@ -77,6 +78,7 @@ export interface DaemonDependencies {
   readonly info?: DaemonInfo;
   readonly modelCanonicalizer?: DaemonModelCanonicalizer;
   readonly contextBudgetPolicyResolver?: RunContextBudgetPolicyResolver;
+  readonly selectedSkillPreparer?: SelectedSkillPreparer;
   readonly transcript?: SessionTranscriptService;
   readonly presentation?: SessionPresentationService;
   readonly logger?: boolean;
@@ -181,6 +183,12 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
       ...(dependencies.contextBudgetPolicyResolver === undefined
         ? {}
         : { contextBudgetPolicyResolver: dependencies.contextBudgetPolicyResolver }),
+      ...(dependencies.selectedSkillPreparer === undefined
+        ? {}
+        : { selectedSkillPreparer: dependencies.selectedSkillPreparer }),
+      ...(dependencies.skillFeatureReadiness === undefined
+        ? {}
+        : { skillFeatureReadiness: dependencies.skillFeatureReadiness }),
       ...(dependencies.workspaceService === undefined
         ? {}
         : { workspaceService: dependencies.workspaceService }),
