@@ -2,6 +2,7 @@ import {
   AttachmentSha256Schema,
   AgentRunSchema,
   CurrentAgentRunSchema,
+  PreparedInputResourceReceiptV1Schema,
   RunWorkflowExecutionProfileV1Schema,
   SubmissionIdSchema,
   WorkflowArtifactRefSchema,
@@ -9,6 +10,7 @@ import {
   WorkflowResourceBindingV1Schema,
   type AgentRun,
   type RunId,
+  type PreparedInputResourceReceiptV1,
   type RunStatus,
   type SessionId,
   type SubmissionRecord,
@@ -116,6 +118,7 @@ export interface RunRepository {
     input: InsertRunWithPreparedResourcesInput,
   ): Promise<readonly DurableRunEvent[]>;
   readPreparedResources?(runId: RunId): Promise<readonly WorkflowResourceBindingV1[]>;
+  readPreparedInputReceipts?(runId: RunId): Promise<readonly PreparedInputResourceReceiptV1[]>;
   readWorkflowProfile?(runId: RunId): Promise<RunWorkflowExecutionProfileV1 | null>;
   /** Read-only artifact liveness across generic Run workflow profiles and bindings. */
   isWorkflowArtifactReferenced?(artifactRef: WorkflowArtifactRef): Promise<boolean>;
@@ -496,6 +499,67 @@ export class SqliteRunRepository implements RunRepository {
       });
     } catch (error) {
       mapRepositoryError(error, "read prepared resources for", runId);
+    }
+  }
+
+  async readPreparedInputReceipts(
+    runId: RunId,
+  ): Promise<readonly PreparedInputResourceReceiptV1[]> {
+    try {
+      const rows = this.database.client
+        .prepare(
+          `SELECT receipt.run_id, receipt.step_id, receipt.binding_id,
+                  receipt.projection_fingerprint, receipt.renderer_version,
+                  step.run_id AS step_run_id, binding.run_id AS binding_run_id
+           FROM prepared_input_resource_receipts AS receipt
+           JOIN agent_steps AS step ON step.id = receipt.step_id
+           JOIN run_prepared_resources AS binding ON binding.binding_id = receipt.binding_id
+           WHERE receipt.run_id = ?
+           ORDER BY step.sequence ASC, receipt.binding_id ASC`,
+        )
+        .all(runId) as Array<{
+        readonly run_id: string;
+        readonly step_id: string;
+        readonly binding_id: string;
+        readonly projection_fingerprint: string;
+        readonly renderer_version: string;
+        readonly step_run_id: string;
+        readonly binding_run_id: string;
+      }>;
+      return rows.map((row) => {
+        let receipt: PreparedInputResourceReceiptV1;
+        try {
+          receipt = PreparedInputResourceReceiptV1Schema.parse({
+            runId: row.run_id,
+            stepId: row.step_id,
+            bindingId: row.binding_id,
+            projectionFingerprint: row.projection_fingerprint,
+            rendererVersion: row.renderer_version,
+          });
+        } catch (error) {
+          throw new StorageDecodeError(
+            "PreparedInputResourceReceiptV1",
+            row.binding_id,
+            "prepared_input_resource_receipts",
+            { cause: error },
+          );
+        }
+        if (
+          row.run_id !== runId ||
+          row.step_run_id !== runId ||
+          row.binding_run_id !== runId ||
+          !/^sha256:[a-f0-9]{64}$/u.test(receipt.projectionFingerprint)
+        ) {
+          throw new StorageDecodeError(
+            "PreparedInputResourceReceiptV1",
+            row.binding_id,
+            "prepared_input_resource_receipts",
+          );
+        }
+        return receipt;
+      });
+    } catch (error) {
+      mapRepositoryError(error, "read prepared input receipts for", runId);
     }
   }
 

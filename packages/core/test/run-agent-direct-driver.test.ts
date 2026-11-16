@@ -79,6 +79,28 @@ const clock = {
   now: () => createTimestampMs(10),
 };
 
+const WORKFLOW_HASH = `sha256:${"e".repeat(64)}`;
+const WORKFLOW_RESOURCE = {
+  bindingId: "binding_review_helper",
+  artifactRef: "bundle_review_helper_revision_1",
+  projectionFingerprint: WORKFLOW_HASH,
+  rendererVersion: "workflow-resource@1",
+  fragmentAnchor: WORKFLOW_HASH,
+  utf8Bytes: 512,
+  tokenEstimate: 171,
+} as const;
+
+function workflowContextEngine() {
+  const context = fakeContextEngine();
+  const prepare = context.prepare.bind(context);
+  context.prepare = async (input) => ({
+    ...(await prepare(input)),
+    preparedResourceRefs: [WORKFLOW_RESOURCE],
+    toolCatalogFingerprint: WORKFLOW_HASH,
+  });
+  return context;
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -799,6 +821,21 @@ describe("production ADVANCE_AGENT settlement", () => {
     ]);
   });
 
+  it("commits the Context resource refs and actual Tool fingerprint with the Step before Provider I/O", async () => {
+    const call = fakeFrozenModelTurnExecutor(async () => turn());
+    const h = harness({ executor: call, contextEngine: workflowContextEngine() });
+
+    await h.controller.start(h.store.snapshot.run.id);
+
+    const opening = h.store.commits.find((commit) => commit.preparedInput !== undefined);
+    expect(opening?.stepWrites.map(({ step }) => step.status)).toEqual(["RUNNING"]);
+    expect(opening?.preparedInput).toEqual({
+      toolCatalogFingerprint: WORKFLOW_HASH,
+      preparedResourceRefs: [WORKFLOW_RESOURCE],
+    });
+    expect(call.callCount()).toBe(1);
+  });
+
   it("costs no durable Step and no provider call when the context cannot be prepared", async () => {
     const call = fakeFrozenModelTurnExecutor(async () => turn());
     const contextEngine = fakeContextEngine();
@@ -816,6 +853,7 @@ describe("production ADVANCE_AGENT settlement", () => {
     expect(h.observed).toHaveLength(0);
     expect(h.store.snapshot.activeStep).toBeUndefined();
     expect(h.store.snapshot.state?.currentStepId).toBeUndefined();
+    expect(h.store.commits.some((commit) => commit.preparedInput !== undefined)).toBe(false);
   });
 
   it("refuses the turn at admission with zero boundary calls and zero durable Steps", async () => {
@@ -823,6 +861,7 @@ describe("production ADVANCE_AGENT settlement", () => {
     let admissions = 0;
     const h = harness({
       executor: call,
+      contextEngine: workflowContextEngine(),
       extra: {
         budget: {
           admitLLM: async () => {
@@ -847,8 +886,29 @@ describe("production ADVANCE_AGENT settlement", () => {
     expect(call.callCount()).toBe(0);
     expect(h.store.steps.size).toBe(0);
     expect(h.store.commits.flatMap((commit) => commit.stepWrites)).toHaveLength(0);
+    expect(h.store.commits.some((commit) => commit.preparedInput !== undefined)).toBe(false);
     expect(result.run.status).toBe("BUDGET_EXCEEDED");
     expect(h.store.snapshot.state?.currentStepId).toBeUndefined();
+  });
+
+  it("does not call Provider or leave a receipt when the Step transaction fails", async () => {
+    const call = fakeFrozenModelTurnExecutor(async () => turn());
+    const contextEngine = workflowContextEngine();
+    const h = harness({ executor: call, contextEngine });
+    const prepare = contextEngine.prepare.bind(contextEngine);
+    contextEngine.prepare = async (input) => {
+      const prepared = await prepare(input);
+      h.store.failNextCommit = new Error("injected Step commit failure");
+      return prepared;
+    };
+
+    await expect(h.controller.start(h.store.snapshot.run.id)).rejects.toThrow(
+      /Unable to durably open the model turn/,
+    );
+
+    expect(call.callCount()).toBe(0);
+    expect(h.store.steps.size).toBe(0);
+    expect(h.store.commits.some((commit) => commit.preparedInput !== undefined)).toBe(false);
   });
 
   it("refuses to open a turn whose effect-start snapshot is no longer durable", async () => {

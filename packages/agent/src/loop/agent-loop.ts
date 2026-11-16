@@ -186,6 +186,12 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
             ...(context.selectedMessageIds === undefined
               ? {}
               : { selectedMessageIds: context.selectedMessageIds }),
+            ...(context.preparedResourceRefs === undefined
+              ? {}
+              : { preparedResourceRefs: context.preparedResourceRefs }),
+            ...(context.toolCatalogFingerprint === undefined
+              ? {}
+              : { toolCatalogFingerprint: context.toolCatalogFingerprint }),
           });
         } catch {
           return failed(input.turn, toInternalFailure(), appended, receipt(context, recovery));

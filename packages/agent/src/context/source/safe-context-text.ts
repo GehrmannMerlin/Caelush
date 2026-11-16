@@ -1,4 +1,5 @@
-const HOST_PATH = /(?:[A-Za-z]:[\\/]{1,2}|\\\\[^\s\\/]+[\\/]|\/(?:Users|home|root|var|etc|opt|tmp)\/)/;
+const HOST_PATH =
+  /(?:[A-Za-z]:[\\/]{1,2}|\\\\[^\s\\/]+[\\/]|\/(?:Users|home|root|var|etc|opt|tmp)\/)/;
 
 /** Apply the Context's existing credential redaction and host-path rejection to model input text. */
 export function safeContextText(value: string): string {

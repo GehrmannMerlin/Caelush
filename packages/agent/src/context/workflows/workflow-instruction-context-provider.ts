@@ -29,13 +29,14 @@ export function createWorkflowInstructionContextSourceProvider(
   return Object.freeze({
     id,
     async collect(input: Parameters<ContextSourceProvider["collect"]>[0]) {
-      const resources = await options.reader.load({ runId: input.identity.runId, signal: input.signal });
-      if (resources.length === 0) return createSourceResult(id, WORKFLOW_INSTRUCTION_PROVIDER_VERSION, []);
+      const resources = await options.reader.load({
+        runId: input.identity.runId,
+        signal: input.signal,
+      });
+      if (resources.length === 0)
+        return createSourceResult(id, WORKFLOW_INSTRUCTION_PROVIDER_VERSION, []);
       const versions = new Set(resources.map(({ rendererVersion }) => rendererVersion));
-      if (
-        versions.size !== 1 ||
-        !versions.has(WORKFLOW_INSTRUCTION_RENDERER_VERSION)
-      ) {
+      if (versions.size !== 1 || !versions.has(WORKFLOW_INSTRUCTION_RENDERER_VERSION)) {
         throw new TypeError("Active workflow renderer version is unsupported.");
       }
       for (const resource of resources) {

@@ -71,7 +71,10 @@ export type {
   RunSkillCatalogSnapshotServiceOptions,
 } from "./skills/run-catalog-snapshot.js";
 export { createSubmissionSkillViewService } from "./skills/submission-skill-view.js";
-export type { SubmissionSkillViewService } from "./skills/submission-skill-view.js";
+export type {
+  SubmissionSkillViewService,
+  WorkflowSkillLoadFact,
+} from "./skills/submission-skill-view.js";
 export {
   SkillImportServiceError,
   createSkillImportService,

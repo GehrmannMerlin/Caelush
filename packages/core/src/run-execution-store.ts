@@ -39,6 +39,7 @@ export type {
   RunExecutionCommitResult,
   RunExecutionContinuationWrite,
   RunExecutionMessageAppend,
+  RunPreparedInputBoundary,
   RunExecutionSnapshot,
   RunExecutionStepWrite,
   RunExecutionStorePort,

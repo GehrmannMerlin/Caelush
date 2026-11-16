@@ -310,6 +310,16 @@ describe("Phase 2C package edges", () => {
         "freezeContextSourceResult",
         "planContext",
         "promptSurfaceAnchorsAreAvailable",
+        // Phase 04 publishes the bounded, provider-neutral workflow instruction projection through
+        // the Agent Context root. Daemon supplies fixed resources; this surface owns only rendering
+        // and projection, never Skill discovery, authorization, or execution.
+        "WORKFLOW_INSTRUCTION_BASE_POLICY",
+        "WORKFLOW_INSTRUCTION_RENDERER_VERSION",
+        "assertWorkflowInstructionFragment",
+        "createWorkflowInputProjector",
+        "createWorkflowInstructionContextSourceProvider",
+        "createWorkflowInstructionContextSourceResult",
+        "renderWorkflowInstructionFragment",
         // Phase 6F: the generic Control Hook runner and bounded Context Contribution pipeline are
         // public Agent contracts; their concrete Context projection remains outside this package.
         "ContextContributionPipelineError",

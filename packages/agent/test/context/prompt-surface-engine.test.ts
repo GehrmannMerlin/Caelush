@@ -323,12 +323,20 @@ describe("Prompt Surface Context Engine integration", () => {
     );
     const current = value.store.inspect(value.runId)!;
     const identity = {
+      formatVersion: current.formatVersion,
       stableHeadFingerprint: current.stableHeadFingerprint,
       toolSchemaFingerprint: current.toolSchemaFingerprint,
       cacheSettingsFingerprint: current.cacheSettingsFingerprint,
     };
 
     expect(promptSurfaceReplayIdentityMatches({ current, model: MODEL, identity })).toBe(true);
+    expect(
+      promptSurfaceReplayIdentityMatches({
+        current,
+        model: MODEL,
+        identity: { ...identity, formatVersion: 4 },
+      }),
+    ).toBe(false);
     expect(
       promptSurfaceReplayIdentityMatches({
         current,
@@ -355,6 +363,7 @@ describe("Prompt Surface Context Engine integration", () => {
       checkpointId: "checkpoint:new",
     });
     const current = {
+      formatVersion: 3 as const,
       modelRef: MODEL.ref,
       stableHeadFingerprint: oldCheckpointHead,
       toolSchemaFingerprint: `sha256:${"b".repeat(64)}`,
@@ -367,6 +376,7 @@ describe("Prompt Surface Context Engine integration", () => {
         current,
         model: MODEL,
         identity: {
+          formatVersion: 3,
           stableHeadFingerprint: newCheckpointHead,
           toolSchemaFingerprint: current.toolSchemaFingerprint,
           cacheSettingsFingerprint: current.cacheSettingsFingerprint,

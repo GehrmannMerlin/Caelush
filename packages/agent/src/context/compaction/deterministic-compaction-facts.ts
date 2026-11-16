@@ -81,15 +81,15 @@ export function createDeterministicCompactionFacts(value: unknown): Deterministi
 }
 
 /** Stable, content-free checkpoint reference for an active Run-bound workflow fragment. */
-export function workflowRecoveryReference(
-  resource: PreparedWorkflowResourceRefV1,
-): string {
+export function workflowRecoveryReference(resource: PreparedWorkflowResourceRefV1): string {
   return `workflow-resource:v1:${JSON.stringify(
     PreparedWorkflowResourceRefV1Schema.parse(resource),
   )}`;
 }
 
-function normalizeActiveWorkflowResources(value: unknown): readonly PreparedWorkflowResourceRefV1[] {
+function normalizeActiveWorkflowResources(
+  value: unknown,
+): readonly PreparedWorkflowResourceRefV1[] {
   if (value === undefined) return Object.freeze([]);
   if (!Array.isArray(value) || value.length > MAX_ACTIVE_WORKFLOW_RESOURCES) {
     throw new TypeError("Deterministic active workflow resources exceed their item bound.");

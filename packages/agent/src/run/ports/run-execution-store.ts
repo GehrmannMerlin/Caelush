@@ -7,6 +7,7 @@ import type {
   RunId,
   TimestampMs,
   AttachmentId,
+  PreparedWorkflowResourceRefV1,
 } from "@caelush/protocol";
 
 import type { RunContinuationCheckpoint } from "../continuation/continuation.js";
@@ -128,7 +129,17 @@ export interface RunExecutionCommit {
    * without its input mapping, and an input mapping can never claim a step that was not opened.
    */
   readonly runInputs?: RunInputCommit;
+  /**
+   * Safe evidence of the model input prepared for the Step being opened.
+   * Storage derives body-free receipts from these refs in the same transaction as the Step.
+   */
+  readonly preparedInput?: RunPreparedInputBoundary;
   readonly events: readonly DurableEventDraft[];
+}
+
+export interface RunPreparedInputBoundary {
+  readonly toolCatalogFingerprint: string;
+  readonly preparedResourceRefs: readonly PreparedWorkflowResourceRefV1[];
 }
 
 export interface RunExecutionCommitResult {

@@ -1,6 +1,7 @@
 import {
   SubmissionSkillPreparationV1Schema,
   type RunId,
+  type PreparedInputResourceReceiptV1,
   type SubmissionSkillPreparationV1,
   type WorkflowResourceBindingV1,
   type RunWorkflowExecutionProfileV1,
@@ -16,10 +17,21 @@ export interface SubmissionSkillViewService {
   getSubmissionSkillPreparation(input: {
     readonly runId: RunId;
   }): Promise<SubmissionSkillPreparationV1>;
+  getSkillLoadFacts(input: { readonly runId: RunId }): Promise<readonly WorkflowSkillLoadFact[]>;
+}
+
+export interface WorkflowSkillLoadFact {
+  readonly skillId: string;
+  readonly name: string;
+  readonly displayName?: string;
+  readonly status: "CONTENT_READY" | "LOADED";
 }
 
 export function createSubmissionSkillViewService(options: {
-  readonly runs: Pick<RunRepository, "get" | "readWorkflowProfile" | "readPreparedResources">;
+  readonly runs: Pick<
+    RunRepository,
+    "get" | "readWorkflowProfile" | "readPreparedResources" | "readPreparedInputReceipts"
+  >;
   readonly readCatalogSnapshot: RunSkillCatalogSnapshotService["readRunSkillCatalogSnapshot"];
 }): SubmissionSkillViewService {
   return Object.freeze({
@@ -46,7 +58,63 @@ export function createSubmissionSkillViewService(options: {
         selectedSkills,
       });
     },
+    async getSkillLoadFacts({ runId }: { readonly runId: RunId }) {
+      const run = await options.runs.get(runId);
+      if (run === null) throw new StorageNotFoundError("AgentRun", runId);
+      const profile = await requireWorkflowProfile(options.runs, runId);
+      const snapshot = await options.readCatalogSnapshot(profile.catalogSnapshotRef);
+      if (
+        snapshot.workspaceId !== run.workspace.id ||
+        snapshot.catalogRevision !== profile.catalogSnapshotRef.catalogRevision
+      ) {
+        throw new SkillServiceError("SKILL_ARTIFACT_INVALID");
+      }
+      if (options.runs.readPreparedInputReceipts === undefined) {
+        throw new SkillServiceError("SKILLS_UNAVAILABLE");
+      }
+      const [resources, receipts] = await Promise.all([
+        readResources(options.runs, runId),
+        options.runs.readPreparedInputReceipts(runId),
+      ]);
+      validateReceipts(runId, profile, resources, receipts);
+      const selected = resources.filter(
+        ({ sourceToolInvocationId }) => sourceToolInvocationId === undefined,
+      );
+      return Object.freeze(
+        selected.map((binding) => {
+          const metadata = selectedDisplayMetadata(binding, snapshot.skills);
+          const loaded = receipts.some((receipt) => receipt.bindingId === binding.bindingId);
+          return Object.freeze({
+            ...metadata,
+            status: loaded ? ("LOADED" as const) : ("CONTENT_READY" as const),
+          });
+        }),
+      );
+    },
   });
+}
+
+function validateReceipts(
+  runId: RunId,
+  profile: RunWorkflowExecutionProfileV1,
+  bindings: readonly WorkflowResourceBindingV1[],
+  receipts: readonly PreparedInputResourceReceiptV1[],
+): void {
+  const bindingById = new Map(bindings.map((binding) => [binding.bindingId, binding] as const));
+  const seen = new Set<string>();
+  for (const receipt of receipts) {
+    const binding = bindingById.get(receipt.bindingId);
+    if (
+      receipt.runId !== runId ||
+      binding === undefined ||
+      receipt.rendererVersion !== profile.workflowRendererVersion ||
+      !/^sha256:[a-f0-9]{64}$/u.test(receipt.projectionFingerprint) ||
+      seen.has(`${receipt.stepId}\0${receipt.bindingId}`)
+    ) {
+      throw new SkillServiceError("SKILL_ARTIFACT_INVALID");
+    }
+    seen.add(`${receipt.stepId}\0${receipt.bindingId}`);
+  }
 }
 
 async function requireWorkflowProfile(

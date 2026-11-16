@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { createPromptSurfaceEpoch, createPromptSurfaceSnapshot } from "../../src/context/surface/prompt-surface.js";
+import {
+  createPromptSurfaceEpoch,
+  createPromptSurfaceSnapshot,
+} from "../../src/context/surface/prompt-surface.js";
 import {
   createPromptSurfaceSectionStates,
   diffPromptSurfaceSections,
@@ -106,6 +109,8 @@ describe("Prompt Surface workflow compatibility", () => {
       createdAt: 1 as never,
     });
 
-    expect(snapshot.content).toBe("<runtime_context_snapshot>legacy bytes</runtime_context_snapshot>");
+    expect(snapshot.content).toBe(
+      "<runtime_context_snapshot>legacy bytes</runtime_context_snapshot>",
+    );
   });
 });

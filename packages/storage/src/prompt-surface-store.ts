@@ -9,6 +9,7 @@ import {
   createPromptSurfaceEpochId,
   createPromptSurfaceSnapshot,
   createPromptSurfaceRecord,
+  createPromptSurfaceFingerprint,
   PROMPT_SURFACE_LIMITS,
   PromptSurfaceRolloverConflictError,
   type PromptSurfaceAppendResult,
@@ -749,25 +750,23 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
         )
         .all(runId, epochId) as unknown as SnapshotRow[];
       const snapshots = Object.freeze(rows.map(decodeSnapshot));
-      const records =
-        isRecordSurfaceFormat(epoch.formatVersion)
-          ? Object.freeze(
-              (
-                this.database.client
-                  .prepare(
-                    `SELECT run_id, epoch_id, ordinal, anchor_message_sequence, anchor_message_id, anchor_run_id,
+      const records = isRecordSurfaceFormat(epoch.formatVersion)
+        ? Object.freeze(
+            (
+              this.database.client
+                .prepare(
+                  `SELECT run_id, epoch_id, ordinal, anchor_message_sequence, anchor_message_id, anchor_run_id,
                     anchor_conversation_turn_id, source_step_sequence, kind, updates_json, decision_fingerprint,
                     content_hash, byte_length, created_at_ms
              FROM prompt_surface_records WHERE run_id = ? AND epoch_id = ? ORDER BY ordinal ASC`,
-                  )
-                  .all(runId, epochId) as unknown as RecordRow[]
-              ).map(decodeRecord),
-            )
-          : undefined;
-      const sectionStates =
-        isRecordSurfaceFormat(epoch.formatVersion)
-          ? this.readSectionStates(runId, epochId, records ?? [])
-          : undefined;
+                )
+                .all(runId, epochId) as unknown as RecordRow[]
+            ).map(decodeRecord),
+          )
+        : undefined;
+      const sectionStates = isRecordSurfaceFormat(epoch.formatVersion)
+        ? this.readSectionStates(runId, epochId, records ?? [])
+        : undefined;
       const surface: PromptSurfaceEpochWithSnapshots = Object.freeze({
         ...epoch,
         snapshots,
@@ -904,6 +903,34 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
     }
     assertPromptSurfaceSectionStates(states);
     return states;
+  }
+}
+
+/** Read the current Prompt Surface tool hash while the caller owns the Run write transaction. */
+export function readCurrentPromptSurfaceToolCatalogIdentityInTransaction(
+  database: CaelushDatabase,
+  runId: RunId,
+): { readonly formatVersion: 2 | 3 | 4; readonly toolCatalogFingerprint: string } | undefined {
+  const row = database.client
+    .prepare(
+      `SELECT format_version, tool_schema_fingerprint FROM prompt_surface_epochs
+       WHERE run_id = ? ORDER BY created_step_sequence DESC, rowid DESC LIMIT 1`,
+    )
+    .get(runId) as
+    { readonly format_version: number; readonly tool_schema_fingerprint: string } | undefined;
+  if (row === undefined) return undefined;
+  try {
+    if (row.format_version !== 2 && row.format_version !== 3 && row.format_version !== 4) {
+      throw new TypeError("Prompt Surface format version is unsupported.");
+    }
+    return {
+      formatVersion: row.format_version,
+      toolCatalogFingerprint: createPromptSurfaceFingerprint(row.tool_schema_fingerprint),
+    };
+  } catch (error) {
+    throw new StorageDecodeError("PromptSurfaceEpoch", runId, "prompt_surface_epochs", {
+      cause: error,
+    });
   }
 }
 

@@ -153,6 +153,7 @@ describe("committed storage migrations", () => {
         "event_sequences",
         "memory_extraction_jobs",
         "memory_records",
+        "prepared_input_resource_receipts",
         "private_replays",
         "prompt_surface_epochs",
         "prompt_surface_records",
@@ -176,10 +177,10 @@ describe("committed storage migrations", () => {
         "workspace_archives",
         "workspaces",
       ]);
-      // Message V2, Workspace Registry, Runtime AI Management, durable archives, and conversation
-      // attachment metadata are in the published migration ledger.
+      // Message V2, Workspace Registry, Runtime AI Management, durable archives, conversation
+      // attachment metadata, Prompt Surface V4, and workflow receipts are published migrations.
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 32,
+        count: 34,
       });
 
       const providerUsageColumns = sqlite
@@ -276,7 +277,8 @@ describe("committed storage migrations", () => {
         entry.name === "20261020100000_resource_correction_recovery" ||
         entry.name === "20261025120000_context_checkpoint_v3" ||
         entry.name === "20261114120000_skill_settings" ||
-        entry.name === "20261115120000_run_workflow_resources"
+        entry.name === "20261115120000_run_workflow_resources" ||
+        entry.name === "20261116140000_prepared_input_resource_receipts"
       )
         continue;
       await cp(
@@ -365,6 +367,7 @@ describe("committed storage migrations", () => {
           "attachment_drafts",
           "attachment_references",
           "attachments",
+          "prepared_input_resource_receipts",
           "session_archives",
           "workspace_archives",
           "submissions",
@@ -377,7 +380,7 @@ describe("committed storage migrations", () => {
         ]),
       );
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 32,
+        count: 34,
       });
       expect(
         sqlite

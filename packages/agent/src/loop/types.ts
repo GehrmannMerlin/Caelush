@@ -6,7 +6,13 @@ import type {
   ModelDescriptor,
   ModelUsage,
 } from "@caelush/ai";
-import type { AgentError, RunId, SessionId, StepId } from "@caelush/protocol";
+import type {
+  AgentError,
+  PreparedWorkflowResourceRefV1,
+  RunId,
+  SessionId,
+  StepId,
+} from "@caelush/protocol";
 
 import type {
   AgentFinalCandidateDecision,
@@ -332,6 +338,12 @@ export type { ContextCheckpointRef } from "../context/compaction/context-compact
  */
 export interface PreparedModelContext {
   readonly messages: readonly AIMessage[];
+
+  /** Actual safe workflow resource projections that this Context materialized. */
+  readonly preparedResourceRefs?: readonly PreparedWorkflowResourceRefV1[];
+
+  /** Fingerprint of the exact model-visible Tool catalog used by Context and the request. */
+  readonly toolCatalogFingerprint?: string;
 
   /** The policy used to prepare this context and bound its model request. */
   readonly requestBudget: ContextRequestBudget;

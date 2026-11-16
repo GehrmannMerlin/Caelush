@@ -690,6 +690,66 @@ describe("AgentLoop.advance() admission and boundary inputs", () => {
     expect(Object.keys(seen[0] ?? {}).sort()).toEqual(["identity", "model", "turn"]);
     expect(seen[0]).not.toHaveProperty("request");
   });
+
+  it("carries actual prepared resource fingerprints through admission to the durable boundary", async () => {
+    const hash = `sha256:${"d".repeat(64)}`;
+    const preparedResources = [
+      {
+        bindingId: "binding_review_helper",
+        artifactRef: "bundle_review_helper_revision_1",
+        projectionFingerprint: hash,
+        rendererVersion: "workflow-resource@1",
+        fragmentAnchor: hash,
+        utf8Bytes: 512,
+        tokenEstimate: 170,
+      },
+    ];
+    const order: string[] = [];
+    const seen: ModelTurnBoundaryInput[] = [];
+    const context = contextEngine({
+      onPrepare: () => {
+        order.push("context");
+        return prepared({
+          preparedResourceRefs: preparedResources,
+          toolCatalogFingerprint: hash,
+        } as unknown as Partial<PreparedModelContext>);
+      },
+    });
+    const turns = modelTurns([{ kind: "COMPLETED", result: turnResult({ text: "answer" }) }]);
+
+    const result = await loopWith({
+      context,
+      turns,
+      admission: {
+        admit: (input) => {
+          order.push("admission");
+          expect(input.request.messages).toEqual([{ role: "user", content: "prepared" }]);
+          return Promise.resolve(allowedModelAdmission(input.request));
+        },
+      },
+      boundary: {
+        beforeExecute: (input) => {
+          order.push("boundary");
+          seen.push(input);
+          return Promise.resolve();
+        },
+      },
+    }).advance(advanceInput());
+
+    expect(result.kind).toBe("FINAL_CANDIDATE");
+    expect(order).toEqual(["context", "admission", "boundary"]);
+    const boundary = seen[0] as
+      | (ModelTurnBoundaryInput & {
+          readonly preparedResourceRefs: readonly unknown[];
+          readonly toolCatalogFingerprint: string;
+        })
+      | undefined;
+    expect(boundary?.preparedResourceRefs).toEqual(preparedResources);
+    expect(boundary?.toolCatalogFingerprint).toBe(hash);
+    expect(JSON.stringify(boundary)).not.toContain("private workflow body");
+    expect(boundary).not.toHaveProperty("request");
+    expect(turns.callCount()).toBe(1);
+  });
 });
 
 describe("AgentLoop.advance() context overflow recovery", () => {

@@ -1,7 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { AIMessage, AIModelSettings, ModelDescriptor } from "@caelush/ai";
-import type { EventId, StepId, TimestampMs, TransientRunEvent } from "@caelush/protocol";
+import type {
+  EventId,
+  PreparedWorkflowResourceRefV1,
+  StepId,
+  TimestampMs,
+  TransientRunEvent,
+} from "@caelush/protocol";
 
 import type { RunEventNotifierPort } from "../../events/notifier-port.js";
 import type { DurableRunEventDraft } from "../../events/durable-run-event-draft.js";
@@ -1229,6 +1235,8 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       throwIfAborted(input.signal);
       return Object.freeze({
         messages: finalProjection.materializedMessages,
+        preparedResourceRefs: finalProjection.preparedResourceRefs,
+        toolCatalogFingerprint: finalProjection.promptSurface.epoch.toolSchemaFingerprint,
         requestBudget,
         selectedMessageIds: Object.freeze(
           finalProjection.selectedMessages.map(({ message }) => String(message.id)),
@@ -1288,6 +1296,7 @@ interface ContextBuildProjection {
   readonly materializedMessages: readonly AIMessage[];
   readonly audit: ContextReceiptBuilderResult;
   readonly promptSurface: PromptSurfacePreparationResult;
+  readonly preparedResourceRefs: readonly PreparedWorkflowResourceRefV1[];
 }
 
 async function buildPreparedProjectionWithoutCompaction(input: {
@@ -1437,7 +1446,22 @@ async function buildPreparedProjectionWithoutCompaction(input: {
     ...(input.lastCompactionAt === undefined ? {} : { lastCompactionAt: input.lastCompactionAt }),
     promptSurface: promptSurface.receipt,
   });
-  return Object.freeze({ plan, selectedMessages, materializedMessages, audit, promptSurface });
+  const preparedResourceRefs = Object.freeze(
+    input.sourceResults.flatMap(
+      (result) =>
+        result.preparedWorkflowProjection?.resources.map((resource) =>
+          Object.freeze({ ...resource }),
+        ) ?? [],
+    ),
+  );
+  return Object.freeze({
+    plan,
+    selectedMessages,
+    materializedMessages,
+    audit,
+    promptSurface,
+    preparedResourceRefs,
+  });
 }
 
 function assertActiveWorkflowInstructionsSelected(
@@ -1627,9 +1651,7 @@ function createCompactionComposition(input: CompactionCompositionInput): Compact
     (result) => result.preparedWorkflowProjection?.resources ?? [],
   );
   const factsProvider: DeterministicCompactionFactsProvider = Object.freeze({
-    async collect(
-      factsInput: Parameters<DeterministicCompactionFactsProvider["collect"]>[0],
-    ) {
+    async collect(factsInput: Parameters<DeterministicCompactionFactsProvider["collect"]>[0]) {
       const facts = await baseFactsProvider.collect(factsInput);
       return createDeterministicCompactionFacts({
         ...facts,
@@ -2945,6 +2967,7 @@ export function promptSurfaceStableHeadFingerprint(input: {
 /** Internal predicate shared by replay selection and focused identity tests. */
 export function promptSurfaceReplayIdentityMatches(input: {
   readonly current: {
+    readonly formatVersion: 2 | 3 | 4;
     readonly modelRef: { readonly provider: string; readonly model: string };
     readonly stableHeadFingerprint: string;
     readonly toolSchemaFingerprint: string;
@@ -2956,6 +2979,7 @@ export function promptSurfaceReplayIdentityMatches(input: {
   return (
     input.current.modelRef.provider === input.model.ref.provider &&
     input.current.modelRef.model === input.model.ref.model &&
+    input.current.formatVersion === input.identity.formatVersion &&
     input.current.stableHeadFingerprint === input.identity.stableHeadFingerprint &&
     input.current.toolSchemaFingerprint === input.identity.toolSchemaFingerprint &&
     input.current.cacheSettingsFingerprint === input.identity.cacheSettingsFingerprint
@@ -3139,32 +3163,31 @@ function preparedSurface(
     input.tokenEstimator.estimateText(stableHead, input.contextInput.model),
     "stable head",
   );
-  const snapshotTokens =
-    isRecordSurfaceFormat(surface.formatVersion)
-      ? (surface.records ?? []).reduce((sum, record) => {
-          if (record.kind === "NOOP") return sum;
-          const content = renderPromptSurfaceRecord(
-            record.kind,
-            record.updates,
-            surface.formatVersion,
-          );
-          return (
-            sum +
-            estimatePromptSurfaceTokens(
-              input.tokenEstimator.estimateText(content, input.contextInput.model),
-              "runtime context record",
-            )
-          );
-        }, 0)
-      : surface.snapshots.reduce(
-          (sum, snapshot) =>
-            sum +
-            estimatePromptSurfaceTokens(
-              input.tokenEstimator.estimateText(snapshot.content, input.contextInput.model),
-              "snapshot",
-            ),
-          0,
+  const snapshotTokens = isRecordSurfaceFormat(surface.formatVersion)
+    ? (surface.records ?? []).reduce((sum, record) => {
+        if (record.kind === "NOOP") return sum;
+        const content = renderPromptSurfaceRecord(
+          record.kind,
+          record.updates,
+          surface.formatVersion,
         );
+        return (
+          sum +
+          estimatePromptSurfaceTokens(
+            input.tokenEstimator.estimateText(content, input.contextInput.model),
+            "runtime context record",
+          )
+        );
+      }, 0)
+    : surface.snapshots.reduce(
+        (sum, snapshot) =>
+          sum +
+          estimatePromptSurfaceTokens(
+            input.tokenEstimator.estimateText(snapshot.content, input.contextInput.model),
+            "snapshot",
+          ),
+        0,
+      );
   const expectedReusablePrefixTokens = estimatePromptSurfaceTokens(
     stableHeadTokens + snapshotTokens,
     "reusable prefix",
@@ -3177,21 +3200,20 @@ function preparedSurface(
       stableHeadFingerprint: surface.stableHeadFingerprint,
       toolSchemaFingerprint: surface.toolSchemaFingerprint,
       cacheSettingsFingerprint: surface.cacheSettingsFingerprint,
-      runtimeRecords:
-        isRecordSurfaceFormat(surface.formatVersion)
-          ? (surface.records ?? [])
-              .filter((record) => record.kind !== "NOOP")
-              .map((record) => ({
-                ordinal: record.ordinal,
-                kind: record.kind,
-                anchor: record.anchor,
-                contentHash: record.contentHash,
-              }))
-          : surface.snapshots.map((snapshot) => ({
-              ordinal: snapshot.ordinal,
-              anchor: snapshot.anchor,
-              contentHash: snapshot.contentHash,
-            })),
+      runtimeRecords: isRecordSurfaceFormat(surface.formatVersion)
+        ? (surface.records ?? [])
+            .filter((record) => record.kind !== "NOOP")
+            .map((record) => ({
+              ordinal: record.ordinal,
+              kind: record.kind,
+              anchor: record.anchor,
+              contentHash: record.contentHash,
+            }))
+        : surface.snapshots.map((snapshot) => ({
+            ordinal: snapshot.ordinal,
+            anchor: snapshot.anchor,
+            contentHash: snapshot.contentHash,
+          })),
     }),
   );
   return Object.freeze({

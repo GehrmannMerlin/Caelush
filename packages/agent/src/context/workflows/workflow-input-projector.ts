@@ -8,7 +8,11 @@ import {
 
 import type { ModelDescriptor } from "@caelush/ai";
 
-import { createContextItem, createContextItemId, createContextSourceId } from "../item/context-item.js";
+import {
+  createContextItem,
+  createContextItemId,
+  createContextSourceId,
+} from "../item/context-item.js";
 import { createSourceResult } from "../source/generic-provider-helpers.js";
 import type { ContextSourceResult } from "../source/context-source.js";
 import { safeContextText } from "../source/safe-context-text.js";
@@ -77,7 +81,9 @@ export function createWorkflowInputProjector(
         const rendered = renderWorkflowInstructionFragment({
           binding,
           body: safeBody,
-          ...(options.rendererVersion === undefined ? {} : { rendererVersion: options.rendererVersion }),
+          ...(options.rendererVersion === undefined
+            ? {}
+            : { rendererVersion: options.rendererVersion }),
         });
         const tokenEstimate = Math.max(
           1,
@@ -85,7 +91,9 @@ export function createWorkflowInputProjector(
             Math.ceil(Buffer.byteLength(rendered.text, "utf8") / 3),
         );
         if (totalTokens > totalTokenBudget - tokenEstimate) {
-          throw new RangeError("Active workflow instructions exceed their independent token budget.");
+          throw new RangeError(
+            "Active workflow instructions exceed their independent token budget.",
+          );
         }
         totalTokens += tokenEstimate;
         resources.push(
@@ -122,7 +130,8 @@ export function createWorkflowInstructionContextSourceResult(
   const providerId = createContextSourceId(WORKFLOW_INSTRUCTION_SOURCE_ID);
   const items = projection.fragments.map((fragment) => {
     const resource = projection.resources.find(({ bindingId }) => bindingId === fragment.bindingId);
-    if (resource === undefined) throw new TypeError("Workflow projection has no matching resource ref.");
+    if (resource === undefined)
+      throw new TypeError("Workflow projection has no matching resource ref.");
     return createContextItem({
       id: createContextItemId(`agent.workflow-instruction:${fragment.bindingId}`),
       type: "agent.workflow-instruction",

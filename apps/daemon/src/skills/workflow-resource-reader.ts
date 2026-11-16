@@ -25,8 +25,12 @@ export function createWorkflowResourceReader(
       input: Parameters<ActiveWorkflowResourceReader["load"]>[0],
     ): Promise<readonly ActiveWorkflowResource[]> {
       const run = await options.runs.get(input.runId);
-      if (run === null || input.signal.aborted) throw new TypeError("Workflow Run binding is unavailable.");
-      if (options.runs.readPreparedResources === undefined || options.runs.readWorkflowProfile === undefined) {
+      if (run === null || input.signal.aborted)
+        throw new TypeError("Workflow Run binding is unavailable.");
+      if (
+        options.runs.readPreparedResources === undefined ||
+        options.runs.readWorkflowProfile === undefined
+      ) {
         throw new TypeError("Workflow resource persistence is unavailable.");
       }
       const [profile, storedBindings] = await Promise.all([
@@ -34,7 +38,8 @@ export function createWorkflowResourceReader(
         options.runs.readPreparedResources(input.runId),
       ]);
       if (profile === null) {
-        if (storedBindings.length > 0) throw new TypeError("Workflow profile is missing for bound resources.");
+        if (storedBindings.length > 0)
+          throw new TypeError("Workflow profile is missing for bound resources.");
         return Object.freeze([]);
       }
       const frozenProfile = RunWorkflowExecutionProfileV1Schema.parse(profile);
@@ -44,7 +49,9 @@ export function createWorkflowResourceReader(
       ) {
         throw new TypeError("Workflow profile identity or renderer is unsupported.");
       }
-      const bindings = storedBindings.map((binding) => WorkflowResourceBindingV1Schema.parse(binding));
+      const bindings = storedBindings.map((binding) =>
+        WorkflowResourceBindingV1Schema.parse(binding),
+      );
       if (bindings.some((binding) => binding.runId !== input.runId)) {
         throw new TypeError("Workflow resource belongs to another Run.");
       }
@@ -63,7 +70,8 @@ export function createWorkflowResourceReader(
 
       const active: ActiveWorkflowResource[] = [];
       for (const binding of bindings) {
-        if (input.signal.aborted) throw input.signal.reason ?? new DOMException("Aborted", "AbortError");
+        if (input.signal.aborted)
+          throw input.signal.reason ?? new DOMException("Aborted", "AbortError");
         const skill = snapshot.skills.find((candidate) => candidate.skillId === binding.resourceId);
         if (
           skill === undefined ||
@@ -84,7 +92,9 @@ export function createWorkflowResourceReader(
           resource.relativePath !== "SKILL.md" ||
           resource.fingerprint !== binding.sourceFingerprint
         ) {
-          throw new TypeError("Run workflow core artifact failed its fixed reference integrity check.");
+          throw new TypeError(
+            "Run workflow core artifact failed its fixed reference integrity check.",
+          );
         }
         const manifest = parseSkillManifest(resource.text);
         if (

@@ -354,7 +354,8 @@ function assertPromptSurfaceV3Records(
     if (
       epoch.formatVersion < 4 &&
       record.updates.some(
-        (update) => update.op === "SET" && / authority="WORKFLOW_INSTRUCTION" /.test(update.content),
+        (update) =>
+          update.op === "SET" && / authority="WORKFLOW_INSTRUCTION" /.test(update.content),
       )
     ) {
       throw new PromptSurfaceIntegrityError("Workflow instructions require Prompt Surface V4.");

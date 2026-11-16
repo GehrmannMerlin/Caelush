@@ -45,7 +45,13 @@ import type {
   PreparedModelContext,
   ToolObservationPolicySnapshot,
 } from "@caelush/agent";
-import type { AgentError, RunId, SessionId, StepId } from "@caelush/protocol";
+import type {
+  AgentError,
+  PreparedWorkflowResourceRefV1,
+  RunId,
+  SessionId,
+  StepId,
+} from "@caelush/protocol";
 
 /**
  * Phase 3A frozen contract exactness.
@@ -198,6 +204,8 @@ interface FrozenContextSourceItemSelection {
 
 interface FrozenPreparedModelContext {
   readonly messages: readonly AIMessage[];
+  readonly preparedResourceRefs?: readonly PreparedWorkflowResourceRefV1[];
+  readonly toolCatalogFingerprint?: string;
   readonly requestBudget: FrozenContextRequestBudget;
   readonly selectedMessageIds?: readonly string[];
   readonly selectedAssistantReplaySources?: readonly FrozenSelectedAssistantReplaySource[];
@@ -287,6 +295,8 @@ interface FrozenModelTurnBoundaryInput {
   readonly turn: FrozenAgentTurnRef;
   readonly model: ModelDescriptor["ref"];
   readonly selectedMessageIds?: readonly string[];
+  readonly preparedResourceRefs?: readonly PreparedWorkflowResourceRefV1[];
+  readonly toolCatalogFingerprint?: string;
 }
 
 interface FrozenModelTurnExecutionInput {
@@ -392,6 +402,8 @@ type PreparedContextKeys = Expect<
   Equal<
     Keys<PreparedModelContext>,
     | "messages"
+    | "preparedResourceRefs"
+    | "toolCatalogFingerprint"
     | "requestBudget"
     | "selectedMessageIds"
     | "selectedAssistantReplaySources"
@@ -487,7 +499,15 @@ type AllowedCarriesRequest = Expect<
 /* The durable boundary records selected durable message IDs with the resolved model identity. */
 type BoundaryInputExact = Expect<Equal<ModelTurnBoundaryInput, FrozenModelTurnBoundaryInput>>;
 type BoundaryInputKeys = Expect<
-  Equal<Keys<ModelTurnBoundaryInput>, "identity" | "turn" | "model" | "selectedMessageIds">
+  Equal<
+    Keys<ModelTurnBoundaryInput>,
+    | "identity"
+    | "turn"
+    | "model"
+    | "selectedMessageIds"
+    | "preparedResourceRefs"
+    | "toolCatalogFingerprint"
+  >
 >;
 type BoundaryModelIsRef = Expect<Equal<ModelTurnBoundaryInput["model"], ModelDescriptor["ref"]>>;
 

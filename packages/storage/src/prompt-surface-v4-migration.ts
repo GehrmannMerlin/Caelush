@@ -8,10 +8,14 @@ const MIGRATION_NAME = "20261116120000_prompt_surface_v4";
 /** Rebuild Prompt Surface epoch metadata so existing V2/V3 rows remain byte-for-byte intact. */
 export function migratePromptSurfaceV4(database: CaelushDatabase, migrationsFolder: string): void {
   const schema = database.client
-    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'prompt_surface_epochs'")
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'prompt_surface_epochs'",
+    )
     .get() as { sql: string } | undefined;
   if (schema?.sql === undefined) {
-    throw new StorageMigrationError("Prompt Surface epoch table is missing before its V4 migration");
+    throw new StorageMigrationError(
+      "Prompt Surface epoch table is missing before its V4 migration",
+    );
   }
   if (/format_version[^)]*IN\s*\(\s*2\s*,\s*3\s*,\s*4\s*\)/u.test(schema.sql)) return;
 

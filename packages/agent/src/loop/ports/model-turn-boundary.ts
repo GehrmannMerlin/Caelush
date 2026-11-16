@@ -1,5 +1,7 @@
 import type { ModelDescriptor } from "@caelush/ai";
 
+import type { PreparedWorkflowResourceRefV1 } from "@caelush/protocol";
+
 import type { AgentExecutionIdentity, AgentTurnRef } from "../types.js";
 
 /**
@@ -58,4 +60,10 @@ export interface ModelTurnBoundaryInput {
    * selected nothing, which is a different and equally truthful fact.
    */
   readonly selectedMessageIds?: readonly string[];
+
+  /** Safe references for workflow instructions present in this concrete prepared request. */
+  readonly preparedResourceRefs?: readonly PreparedWorkflowResourceRefV1[];
+
+  /** Fingerprint of the exact model-visible Tool catalog used by this request. */
+  readonly toolCatalogFingerprint?: string;
 }

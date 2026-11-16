@@ -3,6 +3,7 @@ import {
   RunExecutionConflictError,
   RunExecutionInvariantError,
   RunInputPendingError,
+  WORKFLOW_INSTRUCTION_RENDERER_VERSION,
   type RunExecutionCommitResult,
   type RunExecutionStorePort,
   deriveInterruptedToolResultMessageId,
@@ -29,6 +30,8 @@ import type {
 import {
   AgentRunSchema,
   CurrentAgentRunSchema,
+  PreparedInputResourceReceiptV1Schema,
+  PreparedWorkflowResourceRefV1Schema,
   ObservationSchema,
   AgentStateSchema,
   AgentStepSchema,
@@ -40,6 +43,7 @@ import {
   type RunId,
   type RunCancellationIntent,
   type ResourceProgressBoundary,
+  type PreparedInputResourceReceiptV1,
   type VerificationPlan,
   type VerificationPlanId,
   type ToolInvocation,
@@ -48,7 +52,7 @@ import {
 import type { CaelushDatabase } from "./database.js";
 import type { ResourceGovernanceState } from "./resource-governance-repository.js";
 import { decodeProtocol, encodeProtocol } from "./codec.js";
-import { StorageConflictError, StorageError } from "./errors.js";
+import { StorageConflictError, StorageDecodeError, StorageError } from "./errors.js";
 import {
   appendAgentMessageRecordsInTransaction,
   listAgentMessageRecordsByRunInTransaction,
@@ -78,6 +82,12 @@ import {
   loadVerificationPlanInTransaction,
   writeVerificationPlanInTransaction,
 } from "./repositories/verification-repository.js";
+import {
+  decodePreparedResourceRecord,
+  decodeWorkflowExecutionProfile,
+  encodeWorkflowExecutionProfile,
+} from "./prepared-resource-records.js";
+import { readCurrentPromptSurfaceToolCatalogIdentityInTransaction } from "./prompt-surface-store.js";
 
 export type InterruptedHistoryClosureKind =
   "NOT_STARTED" | "OBSERVATION_COMMITTED" | "CANCELLED_CONFIRMED" | "OUTCOME_UNKNOWN";
@@ -461,6 +471,138 @@ function writeStep(
       parsed.id,
     );
   if (result.changes === 0) throw new StorageError(`AgentStep ${parsed.id} was not found`);
+}
+
+function writePreparedInputInTransaction(input: {
+  readonly database: CaelushDatabase;
+  readonly runId: RunId;
+  readonly step: AgentStep;
+  readonly preparedInput: NonNullable<RunExecutionCommitView["preparedInput"]>;
+}): void {
+  const { database, runId, step, preparedInput } = input;
+  const client = database.client;
+  if (
+    !/^sha256:[a-f0-9]{64}$/u.test(preparedInput.toolCatalogFingerprint) ||
+    preparedInput.preparedResourceRefs.length > 4_096
+  ) {
+    throw new RunExecutionInvariantError("Prepared input boundary is invalid.");
+  }
+
+  const profileRow = client
+    .prepare("SELECT profile_version, data_json FROM run_workflow_profiles WHERE run_id = ?")
+    .get(runId) as { readonly profile_version: number; readonly data_json: string } | undefined;
+  if (profileRow === undefined) {
+    if (preparedInput.preparedResourceRefs.length > 0) {
+      throw new RunExecutionInvariantError(
+        "Workflow receipts cannot be committed for a Run without a workflow profile.",
+      );
+    }
+    return;
+  }
+
+  const profile = decodeWorkflowExecutionProfile(profileRow.data_json, runId);
+  if (profile.profileVersion !== profileRow.profile_version) {
+    throw new StorageDecodeError("RunWorkflowExecutionProfileV1", runId, "run_workflow_profiles");
+  }
+  const currentSurface = readCurrentPromptSurfaceToolCatalogIdentityInTransaction(database, runId);
+  if (
+    currentSurface === undefined ||
+    currentSurface.toolCatalogFingerprint !== preparedInput.toolCatalogFingerprint ||
+    (preparedInput.preparedResourceRefs.length > 0 && currentSurface.formatVersion !== 4)
+  ) {
+    throw new RunExecutionConflictError(
+      "Prepared input Tool catalog does not match the current Prompt Surface.",
+    );
+  }
+  if (
+    profile.toolCatalogFingerprint !== undefined &&
+    profile.toolCatalogFingerprint !== preparedInput.toolCatalogFingerprint
+  ) {
+    throw new RunExecutionConflictError("Run Tool catalog fingerprint changed after first use.");
+  }
+  if (profile.toolCatalogFingerprint === undefined) {
+    const nextProfile = {
+      ...profile,
+      toolCatalogFingerprint: preparedInput.toolCatalogFingerprint,
+    };
+    const result = client
+      .prepare(
+        "UPDATE run_workflow_profiles SET data_json = ? WHERE run_id = ? AND profile_version = ?",
+      )
+      .run(encodeWorkflowExecutionProfile(nextProfile), runId, profileRow.profile_version);
+    if (Number(result.changes) !== 1) {
+      throw new RunExecutionConflictError("Run workflow profile changed before Step commit.");
+    }
+  }
+
+  const seenBindings = new Set<string>();
+  for (const value of preparedInput.preparedResourceRefs) {
+    let ref: ReturnType<typeof PreparedWorkflowResourceRefV1Schema.parse>;
+    try {
+      ref = PreparedWorkflowResourceRefV1Schema.parse(value);
+    } catch {
+      throw new RunExecutionInvariantError("Prepared workflow resource reference is invalid.");
+    }
+    if (
+      seenBindings.has(ref.bindingId) ||
+      !/^sha256:[a-f0-9]{64}$/u.test(ref.projectionFingerprint) ||
+      ref.rendererVersion !== WORKFLOW_INSTRUCTION_RENDERER_VERSION ||
+      ref.rendererVersion !== profile.workflowRendererVersion
+    ) {
+      throw new RunExecutionInvariantError("Prepared workflow resource reference is invalid.");
+    }
+    seenBindings.add(ref.bindingId);
+
+    const bindingRow = client
+      .prepare("SELECT run_id, data_json FROM run_prepared_resources WHERE binding_id = ?")
+      .get(ref.bindingId) as { readonly run_id: string; readonly data_json: string } | undefined;
+    if (bindingRow === undefined || bindingRow.run_id !== runId) {
+      throw new RunExecutionConflictError("Prepared workflow resource is not bound to this Run.");
+    }
+    const binding = decodePreparedResourceRecord(bindingRow.data_json, {
+      bindingId: ref.bindingId,
+      runId,
+    });
+    if (
+      binding.resourceKind !== "WORKFLOW_INSTRUCTION" ||
+      binding.artifactRef !== ref.artifactRef
+    ) {
+      throw new RunExecutionConflictError("Prepared workflow resource does not match its binding.");
+    }
+
+    const receipt: PreparedInputResourceReceiptV1 = PreparedInputResourceReceiptV1Schema.parse({
+      runId,
+      stepId: step.id,
+      bindingId: ref.bindingId,
+      projectionFingerprint: ref.projectionFingerprint,
+      rendererVersion: ref.rendererVersion,
+    });
+    client
+      .prepare(
+        `INSERT INTO prepared_input_resource_receipts
+         (run_id, step_id, binding_id, projection_fingerprint, renderer_version)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        receipt.runId,
+        receipt.stepId,
+        receipt.bindingId,
+        receipt.projectionFingerprint,
+        receipt.rendererVersion,
+      );
+  }
+
+  const boundRows = client
+    .prepare("SELECT binding_id, data_json FROM run_prepared_resources WHERE run_id = ?")
+    .all(runId) as Array<{ readonly binding_id: string; readonly data_json: string }>;
+  const requiredWorkflowBindings = boundRows
+    .map((row) => decodePreparedResourceRecord(row.data_json, { bindingId: row.binding_id, runId }))
+    .filter((binding) => binding.resourceKind === "WORKFLOW_INSTRUCTION");
+  if (requiredWorkflowBindings.some((binding) => !seenBindings.has(binding.bindingId))) {
+    throw new RunExecutionInvariantError(
+      "Prepared input did not include every bound workflow instruction.",
+    );
+  }
 }
 
 export class SqliteRunExecutionStore
@@ -1034,6 +1176,31 @@ export class SqliteRunExecutionStore
             throw new RunExecutionInvariantError("execution Step does not belong to the Run");
           }
           writeStep(client, stepWrite.step, stepWrite.operation);
+        }
+        const openedSteps = command.stepWrites.filter(
+          (write) => write.operation === "INSERT" && write.step.status === "RUNNING",
+        );
+        const hasWorkflowProfile =
+          client
+            .prepare("SELECT 1 AS found FROM run_workflow_profiles WHERE run_id = ?")
+            .get(command.run.id) !== undefined;
+        if (hasWorkflowProfile && openedSteps.length > 0 && command.preparedInput === undefined) {
+          throw new RunExecutionInvariantError(
+            "A workflow Run Step cannot open without its prepared-input receipt boundary.",
+          );
+        }
+        if (command.preparedInput !== undefined) {
+          if (openedSteps.length !== 1) {
+            throw new RunExecutionInvariantError(
+              "Prepared input receipts require exactly one Step opened by this transaction.",
+            );
+          }
+          writePreparedInputInTransaction({
+            database: this.database,
+            runId: command.run.id,
+            step: openedSteps[0]!.step,
+            preparedInput: command.preparedInput,
+          });
         }
         if (command.events.some((event) => event.runId !== command.run.id)) {
           throw new RunExecutionInvariantError("execution Event does not belong to the Run");

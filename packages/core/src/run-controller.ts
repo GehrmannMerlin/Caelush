@@ -2960,6 +2960,14 @@ export class RunController {
               },
             },
           }),
+      ...(selection.toolCatalogFingerprint === undefined
+        ? {}
+        : {
+            preparedInput: {
+              toolCatalogFingerprint: selection.toolCatalogFingerprint,
+              preparedResourceRefs: selection.preparedResourceRefs ?? [],
+            },
+          }),
       ...(consumption === "CONSUME" ? { continuation: { operation: "CLEAR" as const } } : {}),
       events: [
         ...(consumption === "CONSUME" && current.continuation?.type === "WAITING_RETRY"

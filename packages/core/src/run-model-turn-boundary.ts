@@ -3,6 +3,7 @@ import { RunExecutionInvariantError } from "@caelush/agent";
 import type { ModelTurnBoundaryInput, ModelTurnBoundaryPort } from "@caelush/agent";
 import type { AIPrivateCompletion } from "@caelush/ai";
 import type { ModelRef, StepId } from "@caelush/protocol";
+import { PreparedWorkflowResourceRefV1Schema } from "@caelush/protocol";
 
 import type { AgentBudgetBlock } from "./agent-errors.js";
 import type { AgentProviderTurnState } from "./run-agent-types.js";
@@ -155,6 +156,8 @@ export interface AgentModelTurnBoundaryOptions {
 /** What the prepared request reports about the durable messages it carries. */
 export interface TurnBoundarySelection {
   readonly selectedMessageIds?: readonly string[] | undefined;
+  readonly preparedResourceRefs?: readonly import("@caelush/protocol").PreparedWorkflowResourceRefV1[];
+  readonly toolCatalogFingerprint?: string;
 }
 
 /**
@@ -176,10 +179,17 @@ export function createAgentModelTurnBoundary(
         // is a replay, and replaying it would open a second Step and emit a second `llm.started`.
         if (observation.boundaryCommitted) return;
         assertBoundaryMatchesPendingTurn(input, options.pendingTurn());
+        assertPreparedWorkflowBoundary(input);
         await options.openTurn(options.pendingTurn(), {
           ...(input.selectedMessageIds === undefined
             ? {}
             : { selectedMessageIds: input.selectedMessageIds }),
+          ...(input.preparedResourceRefs === undefined
+            ? {}
+            : { preparedResourceRefs: input.preparedResourceRefs }),
+          ...(input.toolCatalogFingerprint === undefined
+            ? {}
+            : { toolCatalogFingerprint: input.toolCatalogFingerprint }),
         });
         observation.boundaryCommitted = true;
       } catch (error) {
@@ -190,6 +200,40 @@ export function createAgentModelTurnBoundary(
       }
     },
   };
+}
+
+function assertPreparedWorkflowBoundary(input: ModelTurnBoundaryInput): void {
+  if (
+    input.toolCatalogFingerprint !== undefined &&
+    !/^sha256:[a-f0-9]{64}$/u.test(input.toolCatalogFingerprint)
+  ) {
+    throw new RunExecutionInvariantError(
+      "Model turn boundary tool catalog fingerprint is invalid.",
+    );
+  }
+  if (input.preparedResourceRefs === undefined) return;
+  if (
+    input.preparedResourceRefs.length > 4_096 ||
+    (input.preparedResourceRefs.length > 0 && input.toolCatalogFingerprint === undefined)
+  ) {
+    throw new RunExecutionInvariantError("Model turn boundary workflow resource refs are invalid.");
+  }
+  const bindings = new Set<string>();
+  for (const value of input.preparedResourceRefs) {
+    let resource: ReturnType<typeof PreparedWorkflowResourceRefV1Schema.parse>;
+    try {
+      resource = PreparedWorkflowResourceRefV1Schema.parse(value);
+    } catch {
+      throw new RunExecutionInvariantError("Model turn boundary workflow resource ref is invalid.");
+    }
+    if (
+      bindings.has(resource.bindingId) ||
+      !/^sha256:[a-f0-9]{64}$/u.test(resource.projectionFingerprint)
+    ) {
+      throw new RunExecutionInvariantError("Model turn boundary workflow resource ref is invalid.");
+    }
+    bindings.add(resource.bindingId);
+  }
 }
 
 /**

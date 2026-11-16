@@ -168,6 +168,27 @@ export const runPreparedResources = sqliteTable(
   ],
 );
 
+export const preparedInputResourceReceipts = sqliteTable(
+  "prepared_input_resource_receipts",
+  {
+    runId: text("run_id")
+      .notNull()
+      .references(() => agentRuns.id),
+    stepId: text("step_id")
+      .notNull()
+      .references(() => agentSteps.id),
+    bindingId: text("binding_id")
+      .notNull()
+      .references(() => runPreparedResources.bindingId),
+    projectionFingerprint: text("projection_fingerprint").notNull(),
+    rendererVersion: text("renderer_version").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runId, table.stepId, table.bindingId] }),
+    index("prepared_input_resource_receipts_run_step_idx").on(table.runId, table.stepId),
+  ],
+);
+
 export const runCancellationRequests = sqliteTable(
   "run_cancellation_requests",
   {

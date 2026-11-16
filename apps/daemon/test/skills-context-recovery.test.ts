@@ -63,12 +63,14 @@ const profile = {
   },
 };
 
-function fixedReader(options: {
-  readonly body?: string;
-  readonly rendererVersion?: string;
-  readonly bindingRunId?: ReturnType<typeof createRunId>;
-  readonly resourceFingerprint?: string;
-} = {}) {
+function fixedReader(
+  options: {
+    readonly body?: string;
+    readonly rendererVersion?: string;
+    readonly bindingRunId?: ReturnType<typeof createRunId>;
+    readonly resourceFingerprint?: string;
+  } = {},
+) {
   const body = options.body ?? "Complete original workflow instructions.";
   const manifest = `---\nname: repair\ndescription: Repair workflow\nuser-invocable: true\n---\n${body}`;
   return createWorkflowResourceReader({
@@ -264,6 +266,8 @@ describe("Phase 04 fixed workflow Context recovery", () => {
   });
 });
 
-function workflowAnchor(states: readonly { readonly stateKey: string; readonly content: string }[]) {
+function workflowAnchor(
+  states: readonly { readonly stateKey: string; readonly content: string }[],
+) {
   return states.find((state) => state.content.includes("workflow_instruction"))?.stateKey;
 }

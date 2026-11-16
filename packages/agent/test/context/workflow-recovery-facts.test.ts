@@ -127,8 +127,6 @@ describe("deterministic workflow recovery facts", () => {
       } as never,
     });
 
-    expect(fitted.criticalReferences).toEqual([
-      `workflow-resource:v1:${JSON.stringify(resource)}`,
-    ]);
+    expect(fitted.criticalReferences).toEqual([`workflow-resource:v1:${JSON.stringify(resource)}`]);
   });
 });

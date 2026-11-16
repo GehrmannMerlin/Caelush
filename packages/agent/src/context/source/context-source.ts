@@ -99,7 +99,9 @@ export function assertContextSourceResult(
   }
   if (preparedWorkflowProjection !== undefined) {
     if (candidate.items.length !== preparedWorkflowProjection.fragments.length) {
-      throw new TypeError("Prepared workflow projection does not match its selected Context items.");
+      throw new TypeError(
+        "Prepared workflow projection does not match its selected Context items.",
+      );
     }
     for (let index = 0; index < candidate.items.length; index += 1) {
       const item = candidate.items[index] as ContextItem;
@@ -124,7 +126,9 @@ export function assertContextSourceResult(
   for (const diagnostic of candidate.diagnostics) assertDiagnostic(diagnostic);
 }
 
-function assertPreparedWorkflowProjection(value: unknown): asserts value is PreparedWorkflowProjection {
+function assertPreparedWorkflowProjection(
+  value: unknown,
+): asserts value is PreparedWorkflowProjection {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError("Prepared workflow projection must be an object.");
   }
@@ -161,7 +165,12 @@ function assertPreparedWorkflowProjection(value: unknown): asserts value is Prep
     } catch {
       throw new TypeError("Prepared workflow resource reference is invalid.");
     }
-    assertExactKeys(fragmentValue, ["bindingId", "projectionFingerprint", "rendererVersion", "text"]);
+    assertExactKeys(fragmentValue, [
+      "bindingId",
+      "projectionFingerprint",
+      "rendererVersion",
+      "text",
+    ]);
     if (
       typeof resourceValue.bindingId !== "string" ||
       typeof resourceValue.projectionFingerprint !== "string" ||
