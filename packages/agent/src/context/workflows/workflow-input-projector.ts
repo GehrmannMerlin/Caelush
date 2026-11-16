@@ -12,7 +12,11 @@ import { createContextItem, createContextItemId, createContextSourceId } from ".
 import { createSourceResult } from "../source/generic-provider-helpers.js";
 import type { ContextSourceResult } from "../source/context-source.js";
 import { safeContextText } from "../source/safe-context-text.js";
-import { renderWorkflowInstructionFragment, WORKFLOW_INSTRUCTION_RENDERER_VERSION } from "./workflow-instruction-renderer.js";
+import {
+  renderWorkflowInstructionFragment,
+  workflowInstructionFragmentAnchor,
+  WORKFLOW_INSTRUCTION_RENDERER_VERSION,
+} from "./workflow-instruction-renderer.js";
 import {
   MAX_ACTIVE_WORKFLOW_INSTRUCTION_TOKENS,
   MAX_WORKFLOW_INSTRUCTION_BYTES,
@@ -90,6 +94,7 @@ export function createWorkflowInputProjector(
             artifactRef: binding.artifactRef,
             projectionFingerprint: rendered.projectionFingerprint,
             rendererVersion: options.rendererVersion ?? WORKFLOW_INSTRUCTION_RENDERER_VERSION,
+            fragmentAnchor: workflowInstructionFragmentAnchor(binding.bindingId),
             utf8Bytes: rendered.utf8Bytes,
             tokenEstimate,
           }),

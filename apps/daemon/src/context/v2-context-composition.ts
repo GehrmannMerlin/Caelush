@@ -13,6 +13,7 @@ import {
   createConversationContextSourceProvider,
   createCorePolicyContextSourceProvider,
   createExtensionContributionContextSourceProvider,
+  createWorkflowInstructionContextSourceProvider,
   createMemoryContextSourceProvider,
   createToolObservationBatchProjector,
   createV2ContextEngine,
@@ -28,6 +29,7 @@ import {
   type ContextSessionCheckpointResolverPort,
   type ContextSummarizationInput,
   type ContextTokenEstimatorPort,
+  type ActiveWorkflowResourceReader,
   type PromptSurfaceStorePort,
   type RunEventNotifierPort,
   type StoredAgentMessage,
@@ -77,6 +79,7 @@ export interface DaemonV2ContextCompositionOptions {
   readonly contributionPipeline: ContextContributionPipeline;
   readonly clock: { now(): TimestampMs };
   readonly activeToolNames: readonly ToolName[];
+  readonly activeWorkflowResourceReader?: ActiveWorkflowResourceReader;
 }
 /**
  * Compose the production Context Engine for one Run.
@@ -186,6 +189,9 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
       ? {}
       : { workingSet: input.run.contextBudgetPolicy.workingSet }),
     sourceRegistry: sources,
+    ...(options.activeWorkflowResourceReader === undefined
+      ? {}
+      : { activeWorkflowResourceReader: options.activeWorkflowResourceReader }),
     checkpointRepository: options.storage.contextCheckpointsV2,
     sessionCheckpointResolver: createSessionCheckpointResolver(options.storage),
     authorityProvider,
@@ -360,6 +366,7 @@ function createSourceRegistry(options: {
   readonly contributionPipeline: ContextContributionPipeline;
   readonly clock: { now(): TimestampMs };
   readonly activeToolNames: readonly ToolName[];
+  readonly activeWorkflowResourceReader?: ActiveWorkflowResourceReader;
 }) {
   const builder = createContextSourceRegistryBuilder();
   const register = (
@@ -406,6 +413,16 @@ function createSourceRegistry(options: {
     20,
     "REQUIRED",
   );
+  if (options.activeWorkflowResourceReader !== undefined) {
+    register(
+      createWorkflowInstructionContextSourceProvider({
+        reader: options.activeWorkflowResourceReader,
+        estimateTokens: (text, model) => options.tokenEstimator.estimateText(text, model),
+      }),
+      22,
+      "REQUIRED",
+    );
+  }
   register(
     createToolGuidanceContextSourceProvider({
       activeToolNames: options.activeToolNames,

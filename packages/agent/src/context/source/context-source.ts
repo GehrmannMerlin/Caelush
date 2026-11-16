@@ -11,6 +11,7 @@ import type { ContextPolicy } from "../policy/context-policy.js";
 import type { PreparedWorkflowProjection } from "../workflows/workflow-instruction.js";
 import {
   assertWorkflowInstructionFragment,
+  workflowInstructionFragmentAnchor,
   WORKFLOW_INSTRUCTION_RENDERER_VERSION,
 } from "../workflows/workflow-instruction-renderer.js";
 import { assertContextItem, type ContextItem, type ContextSourceId } from "../item/context-item.js";
@@ -165,6 +166,7 @@ function assertPreparedWorkflowProjection(value: unknown): asserts value is Prep
       typeof resourceValue.bindingId !== "string" ||
       typeof resourceValue.projectionFingerprint !== "string" ||
       typeof resourceValue.rendererVersion !== "string" ||
+      typeof resourceValue.fragmentAnchor !== "string" ||
       typeof resourceValue.artifactRef !== "string" ||
       typeof resourceValue.utf8Bytes !== "number" ||
       typeof resourceValue.tokenEstimate !== "number" ||
@@ -174,6 +176,7 @@ function assertPreparedWorkflowProjection(value: unknown): asserts value is Prep
       typeof fragmentValue.text !== "string" ||
       !/^sha256:[a-f0-9]{64}$/.test(resourceValue.projectionFingerprint) ||
       resourceValue.rendererVersion !== WORKFLOW_INSTRUCTION_RENDERER_VERSION ||
+      resourceValue.fragmentAnchor !== workflowInstructionFragmentAnchor(resourceValue.bindingId) ||
       bindingIds.has(resourceValue.bindingId)
     ) {
       throw new TypeError("Prepared workflow projection entry identity is invalid.");

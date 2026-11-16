@@ -5,6 +5,7 @@ import {
 import { createHistorySourceRef } from "../../messages/history-lookup-port.js";
 import type { ContextMessageRange } from "./context-compaction-contracts.js";
 import type { DeterministicCompactionFacts } from "./deterministic-compaction-facts.js";
+import { workflowRecoveryReference } from "./deterministic-compaction-facts.js";
 
 export interface DeterministicCheckpointBuilder {
   build(input: {
@@ -33,6 +34,10 @@ export function createDeterministicCheckpointBuilder(): DeterministicCheckpointB
       });
       const criticalReferences = [...(previous?.criticalReferences ?? [])];
       if (!criticalReferences.includes(sourceRef)) criticalReferences.push(sourceRef);
+      for (const resource of input.facts.activeWorkflowResources ?? []) {
+        const reference = workflowRecoveryReference(resource);
+        if (!criticalReferences.includes(reference)) criticalReferences.push(reference);
+      }
       return createStructuredCheckpoint({
         version: 1,
         goal: input.goal,

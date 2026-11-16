@@ -1,4 +1,8 @@
 import type { AgentExecutionIdentity } from "../../loop/types.js";
+import {
+  PreparedWorkflowResourceRefV1Schema,
+  type PreparedWorkflowResourceRefV1,
+} from "@caelush/protocol";
 import type { ContextMessageRange } from "./context-compaction-contracts.js";
 
 export interface DeterministicCompactionFacts {
@@ -9,6 +13,7 @@ export interface DeterministicCompactionFacts {
   readonly activeProcesses: readonly string[];
   readonly pendingApprovals: readonly string[];
   readonly resourceGovernance: string;
+  readonly activeWorkflowResources?: readonly PreparedWorkflowResourceRefV1[];
 }
 
 export interface DeterministicCompactionFactsProvider {
@@ -27,10 +32,12 @@ const FACT_KEYS = [
   "activeProcesses",
   "pendingApprovals",
   "resourceGovernance",
+  "activeWorkflowResources",
 ] as const satisfies readonly (keyof DeterministicCompactionFacts)[];
 
 const MAX_FACT_ITEMS = 512;
 const MAX_FACT_STRING_CHARS = 4_096;
+const MAX_ACTIVE_WORKFLOW_RESOURCES = 100;
 
 /** Validate and deeply freeze facts at the Agent boundary. */
 export function createDeterministicCompactionFacts(value: unknown): DeterministicCompactionFacts {
@@ -43,7 +50,9 @@ export function createDeterministicCompactionFacts(value: unknown): Deterministi
     if (!expected.has(key)) throw new TypeError(`Unknown deterministic fact: ${key}.`);
   }
   for (const key of FACT_KEYS) {
-    if (!(key in candidate)) throw new TypeError(`Missing deterministic fact: ${key}.`);
+    if (key !== "activeWorkflowResources" && !(key in candidate)) {
+      throw new TypeError(`Missing deterministic fact: ${key}.`);
+    }
   }
   for (const key of [
     "readFiles",
@@ -56,6 +65,9 @@ export function createDeterministicCompactionFacts(value: unknown): Deterministi
   }
   assertBoundedString(candidate.verificationState, "verificationState");
   assertBoundedString(candidate.resourceGovernance, "resourceGovernance");
+  const activeWorkflowResources = normalizeActiveWorkflowResources(
+    candidate.activeWorkflowResources,
+  );
   return deepFreeze({
     readFiles: [...(candidate.readFiles as string[])],
     changedFiles: [...(candidate.changedFiles as string[])],
@@ -64,7 +76,37 @@ export function createDeterministicCompactionFacts(value: unknown): Deterministi
     activeProcesses: [...(candidate.activeProcesses as string[])],
     pendingApprovals: [...(candidate.pendingApprovals as string[])],
     resourceGovernance: candidate.resourceGovernance,
+    activeWorkflowResources,
   });
+}
+
+/** Stable, content-free checkpoint reference for an active Run-bound workflow fragment. */
+export function workflowRecoveryReference(
+  resource: PreparedWorkflowResourceRefV1,
+): string {
+  return `workflow-resource:v1:${JSON.stringify(
+    PreparedWorkflowResourceRefV1Schema.parse(resource),
+  )}`;
+}
+
+function normalizeActiveWorkflowResources(value: unknown): readonly PreparedWorkflowResourceRefV1[] {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > MAX_ACTIVE_WORKFLOW_RESOURCES) {
+    throw new TypeError("Deterministic active workflow resources exceed their item bound.");
+  }
+  const resources = value.map((resource) => PreparedWorkflowResourceRefV1Schema.parse(resource));
+  const bindingIds = new Set<string>();
+  for (const resource of resources) {
+    if (
+      !/^sha256:[a-f0-9]{64}$/u.test(resource.projectionFingerprint) ||
+      resource.rendererVersion !== "workflow-resource@1" ||
+      bindingIds.has(resource.bindingId)
+    ) {
+      throw new TypeError("Deterministic active workflow resource identity is invalid.");
+    }
+    bindingIds.add(resource.bindingId);
+  }
+  return Object.freeze(resources);
 }
 
 function assertBoundedString(value: unknown, field: string): asserts value is string {

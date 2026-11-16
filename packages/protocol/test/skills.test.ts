@@ -130,6 +130,7 @@ describe("Skill V1 protocol contracts", () => {
       artifactRef,
       projectionFingerprint: bundleRevision,
       rendererVersion: "workflow-renderer-v1",
+      fragmentAnchor: `sha256:${"a".repeat(64)}`,
       utf8Bytes: 48,
       tokenEstimate: 12,
     };

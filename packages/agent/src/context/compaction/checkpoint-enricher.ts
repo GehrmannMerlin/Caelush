@@ -4,6 +4,7 @@ import {
 } from "../checkpoint/structured-checkpoint.js";
 import type { ContextMessageRange } from "./context-compaction-contracts.js";
 import type { DeterministicCompactionFacts } from "./deterministic-compaction-facts.js";
+import { workflowRecoveryReference } from "./deterministic-compaction-facts.js";
 import type { SemanticCheckpointDraft } from "./semantic-checkpoint-draft.js";
 
 export interface ContextCheckpointEnricher {
@@ -18,6 +19,11 @@ export interface ContextCheckpointEnricher {
 export function createContextCheckpointEnricher(): ContextCheckpointEnricher {
   const enricher: ContextCheckpointEnricher = {
     enrich(input: Parameters<ContextCheckpointEnricher["enrich"]>[0]) {
+      const criticalReferences = [...input.semantic.criticalReferences];
+      for (const resource of input.facts.activeWorkflowResources ?? []) {
+        const reference = workflowRecoveryReference(resource);
+        if (!criticalReferences.includes(reference)) criticalReferences.push(reference);
+      }
       return createStructuredCheckpoint({
         version: 1,
         goal: input.identity.goal,
@@ -34,7 +40,7 @@ export function createContextCheckpointEnricher(): ContextCheckpointEnricher {
         activeProcesses: input.facts.activeProcesses,
         pendingApprovals: input.facts.pendingApprovals,
         resourceGovernance: input.facts.resourceGovernance,
-        criticalReferences: input.semantic.criticalReferences,
+        criticalReferences,
         nextIntent: input.semantic.nextIntent,
         sourceRange: {
           from: input.sourceRange.firstSequence,

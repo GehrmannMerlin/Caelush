@@ -45,6 +45,13 @@ export function renderWorkflowInstructionFragment(input: {
   });
 }
 
+/** Stable Prompt Surface identity for one Run-bound instruction fragment. */
+export function workflowInstructionFragmentAnchor(bindingId: string): string {
+  return `sha256:${createHash("sha256")
+    .update(`${"agent.workflow-instructions"}\0agent.workflow-instruction:${bindingId}`, "utf8")
+    .digest("hex")}`;
+}
+
 export function assertWorkflowInstructionFragment(value: string): void {
   const match =
     /^<workflow_instruction binding_id="([^"]+)" resource_ref="([^"]+)" renderer_version="([^"]+)" utf8_bytes="(0|[1-9][0-9]*)" projection_fingerprint="([a-f0-9]{64})"><!\[CDATA\[([\s\S]*)\]\]><\/workflow_instruction>$/.exec(value);

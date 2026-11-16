@@ -132,7 +132,7 @@ export function createPromptSurfaceMemoryStore(): PromptSurfaceMemoryStore {
         Object.freeze({
           ...epoch,
           snapshots: Object.freeze([]),
-          ...(epoch.formatVersion === 3
+          ...([3, 4].includes(epoch.formatVersion)
             ? { records: Object.freeze([]), sectionStates: Object.freeze([]) }
             : {}),
         }),
@@ -180,7 +180,7 @@ export function createPromptSurfaceMemoryStore(): PromptSurfaceMemoryStore {
       const current = byRun.get(record.runId)?.at(-1);
       if (
         current === undefined ||
-        current.formatVersion !== 3 ||
+        ![3, 4].includes(current.formatVersion) ||
         current.epochId !== expectedCurrentEpoch.epochId ||
         current.epochId !== record.epochId ||
         current.records === undefined ||

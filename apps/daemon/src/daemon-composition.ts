@@ -220,6 +220,7 @@ import {
   type RunSkillCatalogSnapshotService,
 } from "./skills/run-catalog-snapshot.js";
 import { createSelectedSkillPreparer } from "./skills/selected-skill-preparer.js";
+import { createWorkflowResourceReader } from "./skills/workflow-resource-reader.js";
 import {
   createSubmissionSkillViewService,
   type SubmissionSkillViewService,
@@ -1307,6 +1308,15 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
             notifier: eventNotifier,
             clock,
             activeToolNames,
+            ...(skillBundleStore === undefined || runSkillCatalogSnapshots === undefined
+              ? {}
+              : {
+                  activeWorkflowResourceReader: createWorkflowResourceReader({
+                    runs: options.storage.runs,
+                    snapshots: runSkillCatalogSnapshots,
+                    bundles: skillBundleStore,
+                  }),
+                }),
           }),
       });
     },

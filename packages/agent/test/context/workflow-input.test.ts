@@ -1,4 +1,21 @@
 import { describe, expect, it } from "vitest";
+import {
+  createConversationContextSourceProvider,
+  createCorePolicyContextSourceProvider,
+  createContextSourceRegistryBuilder,
+} from "../../src/context/index.js";
+import { createV2ContextEngine } from "../../src/context/engine/context-engine.js";
+import {
+  createContextHistoryIndexer,
+  createContextReceiptBuilder,
+} from "../../src/context/index.js";
+import { createContextMaterializer } from "../../src/context/materializer/context-materializer.js";
+import { createPromptSurfaceMemoryStore } from "./support/prompt-surface-memory-store.js";
+import { snapshot, turn, userMessage } from "../messages/fixtures.js";
+import {
+  createStandardAgentMessageProjectorRegistry,
+  createUtf8HeuristicTokenEstimator,
+} from "@caelush/agent";
 
 import { createContextDocumentBuilder } from "../../src/context/document/context-document.js";
 import {
@@ -17,6 +34,7 @@ import {
   createWorkflowInputProjector,
   createWorkflowInstructionContextSourceResult,
 } from "../../src/context/workflows/workflow-input-projector.js";
+import { createWorkflowInstructionContextSourceProvider } from "../../src/context/workflows/workflow-instruction-context-provider.js";
 import type { ModelDescriptor } from "@caelush/ai";
 import { createRunId } from "@caelush/protocol";
 import type { ContextDocumentSection } from "../../src/context/document/context-document.js";
@@ -199,5 +217,131 @@ describe("workflow instruction Context projection", () => {
     };
 
     expect(() => createPromptSurfaceSectionStates({ sections: [oversized] })).toThrow(/64 KiB/i);
+  });
+
+  it("keeps one complete fragment in real materialized model input across marker compression and anchor loss", async () => {
+    const runId = createRunId();
+    const sessionId = "session:workflow-materializer" as never;
+    const body = "Original immutable workflow body with every required step.";
+    const binding = {
+      runId,
+      resourceKind: "WORKFLOW_INSTRUCTION" as const,
+      resourceId: "skill-materializer",
+      resourceRevision: "bundle-v1",
+      artifactRef: "skillbundle:materializer-v1",
+      sourceFingerprint: "sha256:materializer-v1",
+      utf8Bytes: Buffer.byteLength(body, "utf8"),
+      tokenEstimate: Math.ceil(Buffer.byteLength(body, "utf8") / 3),
+      bindingId: "binding-materializer",
+      activationOrdinal: 1,
+    };
+    const reader = {
+      async load() {
+        return [{ binding, rendererVersion: "workflow-resource@1", body }];
+      },
+    };
+    const tokenEstimator = createUtf8HeuristicTokenEstimator();
+    const engineWithStore = (promptSurfaceStore = createPromptSurfaceMemoryStore()) => {
+      const registry = createContextSourceRegistryBuilder()
+        .register({
+          id: "agent.core-policy" as never,
+          priority: 0,
+          criticality: "REQUIRED",
+          provider: createCorePolicyContextSourceProvider({ text: "Stable base policy." }),
+        })
+        .register({
+          id: "agent.conversation" as never,
+          priority: 10,
+          criticality: "REQUIRED",
+          provider: createConversationContextSourceProvider(),
+        })
+        .register({
+          id: "agent.workflow-instructions" as never,
+          priority: 20,
+          criticality: "REQUIRED",
+          provider: createWorkflowInstructionContextSourceProvider({ reader }),
+        })
+        .build();
+      return {
+        promptSurfaceStore,
+        engine: createV2ContextEngine({
+          promptSurfaceStore,
+          sourceRegistry: registry,
+          checkpointRepository: {
+            async create() { throw new Error("no checkpoint expected"); },
+            async getLatestByRun() { return undefined; },
+            async getById() { return undefined; },
+            async listByRun() { return []; },
+          },
+          authorityProvider: { async snapshot() { return { goal: "Use the fixed workflow." }; } },
+          usageStore: { async upsert() {}, async getByRun() { return undefined; } },
+          historyIndexer: createContextHistoryIndexer(),
+          materializer: createContextMaterializer({
+            projectors: createStandardAgentMessageProjectorRegistry(),
+            tokenEstimator,
+          }),
+          receiptBuilder: createContextReceiptBuilder({ now: () => 2_000 as never, tokenEstimator }),
+          clock: { now: () => 2_000 as never },
+        }),
+      };
+    };
+    const first = userMessage({ runId, sessionId, sequence: 1, text: "Use the selected workflow." });
+    const makeInput = (
+      engine: ReturnType<typeof createV2ContextEngine>,
+      stored: (typeof first)[],
+      sequence: number,
+    ) => {
+      const current = stored.at(-1)!;
+      return engine.prepare({
+        identity: { runId, sessionId, goal: "Use the fixed workflow." },
+        turn: { stepId: `step:workflow-materializer-${sequence}` as never, sequence },
+        conversation: snapshot([turn(stored, { runId, sessionId })], { runId, sessionId }),
+        input: { kind: "USER_INPUT" as const, userMessageId: current.message.id },
+        model: MODEL,
+        tools: [],
+        mode: "NORMAL",
+        signal: new AbortController().signal,
+      });
+    };
+    const firstSetup = engineWithStore();
+    const firstPrepared = await makeInput(firstSetup.engine, [first], 1);
+    const firstSurface = await firstSetup.promptSurfaceStore.getCurrent(runId);
+    const anchor = firstSurface === undefined ? undefined :
+      await firstSetup.promptSurfaceStore.readEpoch(runId, firstSurface.epochId);
+    const second = userMessage({ runId, sessionId, sequence: 2, text: "Continue without a Tool marker." });
+    const secondPrepared = await makeInput(firstSetup.engine, [first, second], 2);
+    const afterMarkerCompression = firstSurface === undefined
+      ? undefined
+      : await firstSetup.promptSurfaceStore.readEpoch(runId, firstSurface.epochId);
+    const rebuiltSetup = engineWithStore();
+    const rebuiltPrepared = await makeInput(rebuiltSetup.engine, [first, second], 2);
+    const rebuiltSurfaceIdentity = await rebuiltSetup.promptSurfaceStore.getCurrent(runId);
+    const rebuiltSurface = rebuiltSurfaceIdentity === undefined
+      ? undefined
+      : await rebuiltSetup.promptSurfaceStore.readEpoch(runId, rebuiltSurfaceIdentity.epochId);
+    const countBody = (messages: typeof firstPrepared.messages) =>
+      messages
+        .map((message) => (typeof message.content === "string" ? message.content : ""))
+        .join("\n")
+        .match(/Original immutable workflow body with every required step\./gu)?.length ?? 0;
+    const workflowSurface = (messages: typeof firstPrepared.messages) =>
+      messages.find(
+        (message) =>
+          typeof message.content === "string" &&
+          message.content.includes("<workflow_instruction "),
+      )?.content;
+
+    expect(anchor?.formatVersion).toBe(4);
+    expect(afterMarkerCompression?.records?.map((record) => record.kind)).toEqual([
+      "BASELINE",
+      "NOOP",
+    ]);
+    expect(rebuiltSurface?.records?.[0]?.kind).toBe("BASELINE");
+    expect(countBody(firstPrepared.messages)).toBe(1);
+    expect(countBody(secondPrepared.messages)).toBe(1);
+    expect(countBody(rebuiltPrepared.messages)).toBe(1);
+    expect(secondPrepared.messages.at(-1)?.content).toBe("Continue without a Tool marker.");
+    expect(workflowSurface(firstPrepared.messages)).toBe(workflowSurface(secondPrepared.messages));
+    expect(workflowSurface(rebuiltPrepared.messages)).toBe(workflowSurface(firstPrepared.messages));
   });
 });

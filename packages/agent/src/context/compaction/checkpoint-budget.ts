@@ -78,6 +78,16 @@ export function fitStructuredCheckpointToBudget(input: {
   ] as const;
   for (const field of compactable) {
     while (current[field].length > 0 && estimate(current) > input.maxTokens) {
+      if (field === "criticalReferences") {
+        const removableIndex = current.criticalReferences.findIndex(
+          (reference) => !reference.startsWith("workflow-resource:v1:"),
+        );
+        if (removableIndex < 0) break;
+        const criticalReferences = [...current.criticalReferences];
+        criticalReferences.splice(removableIndex, 1);
+        current = freeze({ ...current, criticalReferences });
+        continue;
+      }
       current = freeze({ ...current, [field]: current[field].slice(1) });
     }
     if (estimate(current) <= input.maxTokens) return current;

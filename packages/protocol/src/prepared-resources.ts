@@ -50,6 +50,7 @@ export const PreparedWorkflowResourceRefV1Schema = z
     artifactRef: WorkflowArtifactRefSchema,
     projectionFingerprint: FingerprintSchema,
     rendererVersion: RendererVersionSchema,
+    fragmentAnchor: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
     utf8Bytes: SafeCountSchema,
     tokenEstimate: SafeCountSchema,
   })

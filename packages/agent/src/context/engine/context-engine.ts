@@ -76,7 +76,10 @@ import {
   createDeterministicCheckpointBuilder,
   type DeterministicCheckpointBuilder,
 } from "../compaction/deterministic-checkpoint-builder.js";
-import type { DeterministicCompactionFactsProvider } from "../compaction/deterministic-compaction-facts.js";
+import {
+  createDeterministicCompactionFacts,
+  type DeterministicCompactionFactsProvider,
+} from "../compaction/deterministic-compaction-facts.js";
 import {
   createContextCompactionCoverage,
   createContextCompactionCoverageForRange,
@@ -1335,6 +1338,7 @@ async function buildPreparedProjectionWithoutCompaction(input: {
             ? {}
             : { atomicGroupByItemId: input.atomicGroupByItemId }),
         });
+  assertActiveWorkflowInstructionsSelected(input.sourceResults, plan);
   const rehydrated = await input.rehydrator.rehydrate({
     ...(input.activeCheckpoint === undefined
       ? {}
@@ -1434,6 +1438,20 @@ async function buildPreparedProjectionWithoutCompaction(input: {
     promptSurface: promptSurface.receipt,
   });
   return Object.freeze({ plan, selectedMessages, materializedMessages, audit, promptSurface });
+}
+
+function assertActiveWorkflowInstructionsSelected(
+  sourceResults: readonly ContextSourceResult[],
+  plan: ContextPlan,
+): void {
+  const selectedIds = new Set(plan.selectedItems.map((item) => String(item.id)));
+  for (const result of sourceResults) {
+    for (const resource of result.preparedWorkflowProjection?.resources ?? []) {
+      if (!selectedIds.has(`agent.workflow-instruction:${resource.bindingId}`)) {
+        throw new ContextExhaustedError();
+      }
+    }
+  }
 }
 
 interface CompactionCompositionInput {
@@ -1598,13 +1616,27 @@ function createCompactionComposition(input: CompactionCompositionInput): Compact
       throw new ContextExhaustedError();
     },
   };
-  const factsProvider =
+  const baseFactsProvider =
     input.options.deterministicFactsProvider ??
     ({
       async collect() {
         throw new ContextExhaustedError();
       },
     } satisfies DeterministicCompactionFactsProvider);
+  const activeWorkflowResources = input.collected.flatMap(
+    (result) => result.preparedWorkflowProjection?.resources ?? [],
+  );
+  const factsProvider: DeterministicCompactionFactsProvider = Object.freeze({
+    async collect(
+      factsInput: Parameters<DeterministicCompactionFactsProvider["collect"]>[0],
+    ) {
+      const facts = await baseFactsProvider.collect(factsInput);
+      return createDeterministicCompactionFacts({
+        ...facts,
+        activeWorkflowResources,
+      });
+    },
+  });
   const dependencies: ContextCompactionDependencies = {
     planner: input.compactionPlanner,
     incrementalResolver: input.incrementalCompactionResolver,
