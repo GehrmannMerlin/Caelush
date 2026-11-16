@@ -63,6 +63,19 @@ export type {
   ReadFileOperations,
   SearchTextOperations,
 } from "./operations/operations.js";
+export type {
+  SkillOperations,
+  SkillReadOperationInput,
+  SkillReadOperationResult,
+  SkillSearchOperationInput,
+  SkillScriptOperationInput,
+  SkillScriptOperationUnavailable,
+  SkillOperationErrorCode,
+} from "./operations/skill-operations.js";
+export {
+  SkillOperationError,
+  unavailableSkillScriptAdapter,
+} from "./operations/skill-operations.js";
 export { AttachmentReadOperationError } from "./operations/attachment-read-operations.js";
 export type { AttachmentReadOperationErrorCode } from "./operations/attachment-read-operations.js";
 export {
@@ -98,6 +111,16 @@ export type {
 export { createReadAttachmentTool, readAttachmentInputSchema } from "./builtins/read-attachment.js";
 export { createReadFileTool, readFileInputSchema } from "./builtins/read-file.js";
 export { createReadHistoryTool } from "./builtins/read-history.js";
+export { createSearchSkillsTool, searchSkillsInputSchema } from "./builtins/search-skills.js";
+export {
+  createReadSkillTool,
+  readSkillInputSchema,
+  MAX_SKILL_SUPPLEMENTAL_TEXT_BYTES,
+} from "./builtins/read-skill.js";
+export {
+  createRunSkillScriptTool,
+  runSkillScriptInputSchema,
+} from "./builtins/run-skill-script.js";
 export { createListDirectoryTool, listDirectoryInputSchema } from "./builtins/list-directory.js";
 export { createFindFilesTool, findFilesInputSchema } from "./builtins/find-files.js";
 export { createSearchTextTool, searchTextInputSchema } from "./builtins/search-text.js";
@@ -160,6 +183,7 @@ export { createGitDiffTool, gitDiffInputSchema } from "./builtins/git-diff.js";
 export {
   createDefaultCodingTools,
   DEFAULT_CODING_TOOL_ORDER,
+  SKILL_TOOL_ORDER,
   GIT_TOOL_NAMES,
   withoutGitTools,
 } from "./builtins/default-tools.js";
@@ -212,6 +236,9 @@ export {
   projectReadFileSecurityFacts,
   projectReadAttachmentSecurityFacts,
   projectReadHistorySecurityFacts,
+  projectSearchSkillsSecurityFacts,
+  projectReadSkillSecurityFacts,
+  projectRunSkillScriptSecurityFacts,
   projectSearchTextSecurityFacts,
   projectStopProcessSecurityFacts,
   projectWriteStdinSecurityFacts,
@@ -295,6 +322,9 @@ export type {
   promptSnippetFor,
   READ_ATTACHMENT_PROMPT_SNIPPET,
   READ_FILE_PROMPT_SNIPPET,
+  READ_SKILL_PROMPT_SNIPPET,
+  RUN_SKILL_SCRIPT_PROMPT_SNIPPET,
+  SEARCH_SKILLS_PROMPT_SNIPPET,
   SEARCH_TEXT_PROMPT_SNIPPET,
   STOP_PROCESS_PROMPT_SNIPPET,
   UPDATE_PLAN_PROMPT_SNIPPET,

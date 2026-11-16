@@ -75,6 +75,16 @@ export type {
 
 /* The executable Tool contract. */
 export type { AgentTool } from "./types/agent-tool.js";
+export {
+  AgentToolExecutionOutputError,
+  TOOL_SETTLEMENT_OUTPUT_CAPABILITIES,
+} from "./types/tool-execution-output.js";
+export type {
+  AgentToolExecutionOutput,
+  AgentToolExecutionOutputErrorCode,
+  AgentToolExecutionReturn,
+  AgentToolSettlementOutputCapability,
+} from "./types/tool-execution-output.js";
 
 /* Canonical schema runtime, policy and JSON helpers. */
 export { ToolSchemaRuntime, containsForbiddenSchemaFeature } from "./schema/schema-runtime.js";

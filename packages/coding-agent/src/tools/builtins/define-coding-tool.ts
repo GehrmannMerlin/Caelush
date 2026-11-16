@@ -56,6 +56,8 @@ export interface CodingToolDefinitionInput {
    * earlier failure in the same batch.
    */
   readonly scheduling?: ToolSchedulingFacts | undefined;
+  /** Static permission to return one separately validated settlement sidecar. */
+  readonly settlementOutputCapabilities?: AgentTool["settlementOutputCapabilities"] | undefined;
 }
 
 /**
@@ -73,6 +75,9 @@ export function defineCodingTool(input: CodingToolDefinitionInput): AgentTool {
     resultDetailsSchema: input.resultDetailsSchema,
     executionMode: input.executionMode ?? "SEQUENTIAL",
     scheduling: input.scheduling ?? DEFAULT_TOOL_SCHEDULING_FACTS,
+    ...(input.settlementOutputCapabilities === undefined
+      ? {}
+      : { settlementOutputCapabilities: input.settlementOutputCapabilities }),
     ...(input.prepareArguments === undefined ? {} : { prepareArguments: input.prepareArguments }),
     execute: input.execute,
   });

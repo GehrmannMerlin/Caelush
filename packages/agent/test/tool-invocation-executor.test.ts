@@ -163,7 +163,9 @@ describe("ToolInvocationExecutor", () => {
       signal,
     });
 
-    expect(result).toEqual({ content: "ok", details: { echoed: "ok" }, isError: false });
+    expect(result).toEqual({
+      result: { content: "ok", details: { echoed: "ok" }, isError: false },
+    });
     expect(seen.identity).toEqual(identity);
     expect(seen.args).toEqual({ text: "hello" });
     expect(seen.environment).toEqual(environment);
@@ -191,8 +193,8 @@ describe("ToolInvocationExecutor", () => {
       signal: new AbortController().signal,
     });
 
-    expect(result.isError).toBe(true);
-    expect(result.content).toBe("FILE_NOT_FOUND");
+    expect(result.result.isError).toBe(true);
+    expect(result.result.content).toBe("FILE_NOT_FOUND");
   });
 
   it("maps an unexpected throw to an EXECUTION infrastructure failure", async () => {
@@ -434,7 +436,7 @@ describe("ToolInvocationExecutor transient updates", () => {
       signal: new AbortController().signal,
     });
 
-    expect(result.isError).toBe(false);
+    expect(result.result.isError).toBe(false);
     expect(toolFinished).toBe(true);
     expect(delivered).toEqual([]);
     expect(drops).toEqual(["SANITIZER_FAILED"]);
@@ -716,7 +718,7 @@ describe("ToolInvocationExecutor transient updates", () => {
     });
 
     // A transient consumer failure is observational: the Tool result is unaffected.
-    expect(result.isError).toBe(false);
+    expect(result.result.isError).toBe(false);
     expect(deliveryFailures).toHaveLength(2);
   });
 
@@ -743,6 +745,6 @@ describe("ToolInvocationExecutor transient updates", () => {
         environment,
         signal: new AbortController().signal,
       }),
-    ).resolves.toMatchObject({ isError: false });
+    ).resolves.toMatchObject({ result: { isError: false } });
   });
 });

@@ -184,6 +184,33 @@ const SNIPPET_SOURCE: Readonly<Record<string, SnippetSource>> = {
     safety: "Scoped to this session; private provider state and secrets are never returned.",
     resultHandling: "Read the items and continue with the next cursor until it is absent.",
   },
+  search_skills: {
+    purpose: "Find Skills available for automatic use in this Run.",
+    whenToUse: "Discover a matching workflow before choosing an approach.",
+    whenNotToUse: "User-only Skills or Skills outside this Run's frozen catalog.",
+    argumentNotes: "Query names, descriptions, or search terms; continue with the returned cursor.",
+    sideEffects: "Read-only metadata search.",
+    safety: "Disabled and manual-only Skills are excluded from MODEL results.",
+    resultHandling: "Inspect matches and inventory completeness before reading a Skill.",
+  },
+  read_skill: {
+    purpose: "Verify a complete Skill core for later Context preparation.",
+    whenToUse: "A discovered Skill matches the current task.",
+    whenNotToUse: "A Skill not found by automatic search or partial core reads.",
+    argumentNotes: "Use the exact skillId from search; supplemental paths stay within its bundle.",
+    sideEffects: "Read-only; a verified core becomes eligible for a later Context step.",
+    safety: "The body is not returned in Tool output; complete integrity and budgets are required.",
+    resultHandling: "CONTENT_READY means Context preparation may project the frozen body later.",
+  },
+  run_skill_script: {
+    purpose: "Run an approved script from an active Skill binding when available.",
+    whenToUse: "Only when the host advertises script execution as available.",
+    whenNotToUse: "This phase, where script execution is unavailable.",
+    argumentNotes: "Requires an active binding, relative resource path, and argv array.",
+    sideEffects: "Unavailable in this phase.",
+    safety: "No process is started by this definition.",
+    resultHandling: "Expect SCRIPT_EXECUTION_UNAVAILABLE until the host enables a later phase.",
+  },
 };
 
 /** Render one Tool's guidance into its bounded context block. */
@@ -228,6 +255,15 @@ export const READ_HISTORY_PROMPT_SNIPPET = renderSnippet(
   "read_history",
   SNIPPET_SOURCE.read_history!,
 );
+export const SEARCH_SKILLS_PROMPT_SNIPPET = renderSnippet(
+  "search_skills",
+  SNIPPET_SOURCE.search_skills!,
+);
+export const READ_SKILL_PROMPT_SNIPPET = renderSnippet("read_skill", SNIPPET_SOURCE.read_skill!);
+export const RUN_SKILL_SCRIPT_PROMPT_SNIPPET = renderSnippet(
+  "run_skill_script",
+  SNIPPET_SOURCE.run_skill_script!,
+);
 
 /** Every Coding snippet by Tool name, for a provider that selects by the active tool set. */
 export const CODING_TOOL_PROMPT_SNIPPETS: Readonly<Record<string, string>> = Object.freeze({
@@ -244,6 +280,9 @@ export const CODING_TOOL_PROMPT_SNIPPETS: Readonly<Record<string, string>> = Obj
   git_diff: GIT_DIFF_PROMPT_SNIPPET,
   read_attachment: READ_ATTACHMENT_PROMPT_SNIPPET,
   read_history: READ_HISTORY_PROMPT_SNIPPET,
+  search_skills: SEARCH_SKILLS_PROMPT_SNIPPET,
+  read_skill: READ_SKILL_PROMPT_SNIPPET,
+  run_skill_script: RUN_SKILL_SCRIPT_PROMPT_SNIPPET,
 });
 
 /**

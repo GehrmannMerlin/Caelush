@@ -21,6 +21,16 @@ export type {
   ReadFileOperations,
   SearchTextOperations,
 } from "./operations.js";
+export type {
+  SkillOperations,
+  SkillReadOperationInput,
+  SkillReadOperationResult,
+  SkillSearchOperationInput,
+  SkillScriptOperationInput,
+  SkillScriptOperationUnavailable,
+  SkillOperationErrorCode,
+} from "./skill-operations.js";
+export { SkillOperationError, unavailableSkillScriptAdapter } from "./skill-operations.js";
 
 export {
   createRuntimeGitOperations,

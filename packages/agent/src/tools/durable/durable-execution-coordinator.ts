@@ -14,6 +14,7 @@ import type {
 import type { AgentBudgetBlock } from "../../loop/ports/model-request-admission.js";
 import type { PreparedToolCall } from "../call/tool-call-preparer.js";
 import type { AgentToolResult } from "../types/tool-result.js";
+import type { AgentToolExecutionOutput } from "../types/tool-execution-output.js";
 import { ToolExecutionInfrastructureError } from "../types/errors.js";
 import type { ToolExecutionEnvironment } from "../types/execution-environment.js";
 import type { ToolExecutionIdentity } from "../types/execution-identity.js";
@@ -557,9 +558,9 @@ export function createDurableToolExecutionCoordinator(
       updateSanitizer: input.updateSanitizer,
     });
 
-    let rawResult: AgentToolResult;
+    let executionOutput: AgentToolExecutionOutput;
     try {
-      rawResult = await executor.execute({
+      executionOutput = await executor.execute({
         call: execution.call,
         identity,
         environment: execution.environment,
@@ -589,6 +590,7 @@ export function createDurableToolExecutionCoordinator(
         content: RUNTIME_CONTENT,
       });
     }
+    const rawResult: AgentToolResult = executionOutput.result;
 
     // The raw archive, between execution and result processing: it carries the complete pre-projection
     // output, exactly as it always has, and it is written before the pipeline bounds anything. The
@@ -632,9 +634,17 @@ export function createDurableToolExecutionCoordinator(
       });
     }
 
+    const settlement =
+      executionOutput.preparedResourceBindings === undefined
+        ? processed.settlement
+        : Object.freeze({
+            ...processed.settlement,
+            preparedResourceBindings: executionOutput.preparedResourceBindings,
+          });
+
     const settledSnapshot = await settlementCoordinator.settle({
       snapshot,
-      settlement: processed.settlement,
+      settlement,
       now: finishedAt,
     });
     rawArtifact.clear();

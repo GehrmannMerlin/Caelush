@@ -2,6 +2,7 @@ import type { ToolName } from "@caelush/protocol";
 import type { HistoryLookupOperations } from "@caelush/agent";
 
 import type { CodingToolDefinition } from "../coding-tool-definition.js";
+import type { SkillOperations } from "../operations/skill-operations.js";
 import type {
   AttachmentReadOperations,
   ExecOperations,
@@ -24,6 +25,9 @@ import { createStopProcessTool } from "./stop-process.js";
 import { createWriteStdinTool } from "./write-stdin.js";
 import { createReadAttachmentTool } from "./read-attachment.js";
 import { createReadHistoryTool } from "./read-history.js";
+import { createSearchSkillsTool } from "./search-skills.js";
+import { createReadSkillTool } from "./read-skill.js";
+import { createRunSkillScriptTool } from "./run-skill-script.js";
 
 /**
  * The default Coding Tool set.
@@ -83,6 +87,13 @@ export const DEFAULT_CODING_TOOL_ORDER = Object.freeze([
   "read_history",
 ] as const satisfies readonly ToolName[]);
 
+/** Fixed Phase 05 Skill Tool suffix used only by an explicitly Skill-enabled composition. */
+export const SKILL_TOOL_ORDER = Object.freeze([
+  "search_skills",
+  "read_skill",
+  "run_skill_script",
+] as const satisfies readonly ToolName[]);
+
 /** The Operations the default twelve need, one port per capability family. */
 export interface DefaultCodingToolOperations {
   /**
@@ -118,6 +129,8 @@ export interface DefaultCodingToolOperations {
    * catalog while a checkpoint still points at it.
    */
   readonly historyLookup?: HistoryLookupOperations | undefined;
+  /** Absent keeps the Phase 4F thirteen-Tool catalog and prompt bytes unchanged. */
+  readonly skills?: SkillOperations | undefined;
 }
 
 /**
@@ -129,7 +142,7 @@ export interface DefaultCodingToolOperations {
 export function createDefaultCodingTools(
   operations: DefaultCodingToolOperations,
 ): readonly CodingToolDefinition[] {
-  return Object.freeze([
+  const definitions: CodingToolDefinition[] = [
     createReadFileTool(operations.readFile),
     createListDirectoryTool(operations.readOnly),
     createFindFilesTool(operations.readOnly),
@@ -151,7 +164,16 @@ export function createDefaultCodingTools(
       },
     ),
     createReadHistoryTool(operations.historyLookup),
-  ]);
+  ];
+  if (operations.skills === undefined) {
+    return Object.freeze(definitions.map((definition) => Object.freeze(definition)));
+  }
+  definitions.push(
+    createSearchSkillsTool(operations.skills),
+    createReadSkillTool(operations.skills),
+    createRunSkillScriptTool(),
+  );
+  return Object.freeze(definitions.map((definition) => Object.freeze(definition)));
 }
 
 /** The Git Tools a host without a usable repository must not expose. */

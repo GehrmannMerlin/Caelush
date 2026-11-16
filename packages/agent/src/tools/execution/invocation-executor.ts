@@ -1,7 +1,10 @@
 import type { ToolInvocation } from "@caelush/protocol";
 
 import type { PreparedToolCall } from "../call/tool-call-preparer.js";
-import type { AgentToolResult } from "../types/tool-result.js";
+import {
+  normalizeAgentToolExecutionOutput,
+  type AgentToolExecutionOutput,
+} from "../types/tool-execution-output.js";
 import type { ToolExecutionEnvironment } from "../types/execution-environment.js";
 import type { ToolExecutionIdentity } from "../types/execution-identity.js";
 import type { ToolSecurityContext } from "../admission/security-context.js";
@@ -28,7 +31,7 @@ import {
  *     readonly identity: ToolExecutionIdentity;
  *     readonly environment: ToolExecutionEnvironment;
  *     readonly signal: AbortSignal;
- *   }): Promise<AgentToolResult>;
+ *   }): Promise<AgentToolExecutionOutput>;
  * }
  * ```
  *
@@ -72,7 +75,7 @@ export interface ToolInvocationExecutor {
     readonly environment: ToolExecutionEnvironment;
     readonly securityContext?: ToolSecurityContext | undefined;
     readonly signal: AbortSignal;
-  }): Promise<AgentToolResult>;
+  }): Promise<AgentToolExecutionOutput>;
 }
 
 /** How to bind an executor to the invocation whose updates it will sanitize and publish. */
@@ -107,7 +110,7 @@ export function createToolInvocationExecutor(
   const diagnostics = options.diagnostics;
 
   return {
-    async execute(input): Promise<AgentToolResult> {
+    async execute(input): Promise<AgentToolExecutionOutput> {
       assertIdentityMatchesInvocation(input.identity, invocation);
 
       const updater = createUpdatePipeline({
@@ -132,7 +135,11 @@ export function createToolInvocationExecutor(
         });
         updater.close();
         await updater.drain();
-        return result;
+        return normalizeAgentToolExecutionOutput({
+          value: result,
+          tool: input.call.resolved.tool,
+          identity: input.identity,
+        });
       } catch (error) {
         updater.close();
         await updater.drain();

@@ -209,6 +209,58 @@ export function projectReadHistorySecurityFacts(args: Readonly<JsonObject>): Too
   };
 }
 
+/** Skill search receives free-form query text; only fixed digests enter Security facts. */
+export function projectSearchSkillsSecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
+  const query = typeof args["query"] === "string" ? args["query"] : "INVALID";
+  const cursor = typeof args["cursor"] === "string" ? args["cursor"] : "";
+  const pageSize = typeof args["pageSize"] === "number" ? args["pageSize"] : 20;
+  return {
+    resourceAccesses: [],
+    secretScanInputs: [],
+    structuralPreview: {
+      kind: "SKILL_SEARCH",
+      queryDigest: digestText(query),
+      cursorDigest: digestText(cursor),
+      pageSize,
+    },
+  };
+}
+
+/** Skill identity, cursor, and bundle path stay opaque to generic Security receipts. */
+export function projectReadSkillSecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
+  const skillId = typeof args["skillId"] === "string" ? args["skillId"] : "INVALID";
+  const resourcePath = typeof args["resourcePath"] === "string" ? args["resourcePath"] : "";
+  const cursor = typeof args["cursor"] === "string" ? args["cursor"] : "";
+  return {
+    resourceAccesses: [],
+    secretScanInputs: [],
+    structuralPreview: {
+      kind: "SKILL_READ",
+      skillIdDigest: digestText(skillId),
+      resourcePathDigest: digestText(resourcePath),
+      cursorDigest: digestText(cursor),
+    },
+  };
+}
+
+/** The Phase 05 unavailable script Tool exposes no raw argv or path through Guard facts. */
+export function projectRunSkillScriptSecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
+  return {
+    resourceAccesses: [],
+    secretScanInputs: [],
+    structuralPreview: {
+      kind: "SKILL_SCRIPT_UNAVAILABLE",
+      bindingDigest: digestText(
+        typeof args["bindingId"] === "string" ? args["bindingId"] : "INVALID",
+      ),
+      resourcePathDigest: digestText(
+        typeof args["resourcePath"] === "string" ? args["resourcePath"] : "INVALID",
+      ),
+      argumentCount: Array.isArray(args["args"]) ? args["args"].length : 0,
+    },
+  };
+}
+
 export function projectListDirectorySecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
   const path = pathOf(args.path, "path");
   return {

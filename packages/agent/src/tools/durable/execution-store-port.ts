@@ -8,6 +8,7 @@ import type {
   ToolInvocation,
   ToolInvocationId,
   ToolObservation,
+  WorkflowResourceBindingDraftV1,
 } from "@caelush/protocol";
 
 import type { DurableRunEventDraft } from "../../events/durable-run-event-draft.js";
@@ -62,6 +63,8 @@ export interface ToolExecutionSnapshot {
   readonly invocation: ToolInvocation;
   readonly revision: number;
   readonly observation?: ToolObservation | undefined;
+  /** Generic, bounded content identities committed with invocation truth. */
+  readonly preparedResourceBindings?: readonly WorkflowResourceBindingDraftV1[] | undefined;
   readonly approval?: ApprovalRequest | undefined;
 }
 /**

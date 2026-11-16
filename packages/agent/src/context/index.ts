@@ -561,6 +561,10 @@ export type {
   WorkflowInstructionFragmentV1,
 } from "./workflows/workflow-instruction.js";
 export {
+  MAX_ACTIVE_WORKFLOW_INSTRUCTION_TOKENS,
+  MAX_WORKFLOW_INSTRUCTION_BYTES,
+} from "./workflows/workflow-instruction.js";
+export {
   CORE_POLICY_CONTEXT_SOURCE_ID,
   createCorePolicyContextSourceProvider,
 } from "./source/core-policy-provider.js";

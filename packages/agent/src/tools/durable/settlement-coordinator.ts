@@ -169,6 +169,9 @@ export function createToolSettlementCoordinator(
         terminal,
         observation,
         result,
+        ...(settlement.preparedResourceBindings === undefined
+          ? {}
+          : { preparedResourceBindings: settlement.preparedResourceBindings }),
         extension: settlement.effects,
         now,
       });
@@ -242,11 +245,13 @@ async function commitTerminal(
     readonly terminal: ToolInvocation;
     readonly observation: ToolObservation;
     readonly result: AgentToolResult;
+    readonly preparedResourceBindings?: readonly import("@caelush/protocol").WorkflowResourceBindingDraftV1[];
     readonly extension: ToolSettlementExtension | undefined;
     readonly now: TimestampMs;
   },
 ): Promise<{ readonly snapshot: ToolExecutionSnapshot }> {
-  const { snapshot, terminal, observation, result, extension, now } = input;
+  const { snapshot, terminal, observation, result, preparedResourceBindings, extension, now } =
+    input;
   const events: DurableToolEventDraft[] = [
     // Whatever durable events the host's settlement extension contributed — a Tool effect projected into
     // a host-domain event — travel in this same commit, ahead of the terminal event, so the chronology
@@ -283,6 +288,7 @@ async function commitTerminal(
       expectedRevision: snapshot.revision,
       observation,
       events,
+      ...(preparedResourceBindings === undefined ? {} : { preparedResourceBindings }),
       // The extension is forwarded exactly as the result pipeline produced it. This layer never reads
       // its `kind`, never interprets its payload and never imports a Coding effect type.
       ...(extension === undefined ? {} : { extension }),

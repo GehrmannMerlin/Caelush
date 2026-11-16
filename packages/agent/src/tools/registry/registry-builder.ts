@@ -3,6 +3,7 @@ import { ToolNameSchema, type ToolName } from "@caelush/protocol";
 import { AgentToolRegistrationError, AgentToolRegistryStateError } from "../types/errors.js";
 import type { AgentTool } from "../types/agent-tool.js";
 import { assertToolSchedulingFacts } from "../types/scheduling.js";
+import { assertAgentToolSettlementOutputCapabilities } from "../types/tool-execution-output.js";
 import { cloneJsonValue, deepFreezeJson } from "../schema/json-canonical.js";
 import {
   DEFAULT_TOOL_REGISTRY_OPTIONS,
@@ -122,6 +123,17 @@ export class DefaultAgentToolRegistryBuilder implements AgentToolRegistryBuilder
         });
       }
     }
+    let settlementOutputCapabilities: AgentTool["settlementOutputCapabilities"];
+    try {
+      settlementOutputCapabilities = assertAgentToolSettlementOutputCapabilities(
+        tool.settlementOutputCapabilities,
+      );
+    } catch {
+      throw new AgentToolRegistrationError(
+        `Tool "${name}" declared invalid settlement output capabilities.`,
+        { reason: "INVALID_DEFINITION", toolName: name },
+      );
+    }
     const clonedTool: AgentTool = Object.freeze({
       name: spec.name,
       description: spec.description,
@@ -132,6 +144,7 @@ export class DefaultAgentToolRegistryBuilder implements AgentToolRegistryBuilder
       ...(tool.scheduling === undefined
         ? {}
         : { scheduling: Object.freeze({ class: tool.scheduling.class }) }),
+      ...(settlementOutputCapabilities === undefined ? {} : { settlementOutputCapabilities }),
       ...(tool.prepareArguments === undefined ? {} : { prepareArguments: tool.prepareArguments }),
       execute: tool.execute,
     });

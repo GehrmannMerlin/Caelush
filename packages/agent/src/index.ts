@@ -211,6 +211,8 @@ export {
   assertWorkflowInstructionFragment,
   WORKFLOW_INSTRUCTION_BASE_POLICY,
   WORKFLOW_INSTRUCTION_RENDERER_VERSION,
+  MAX_ACTIVE_WORKFLOW_INSTRUCTION_TOKENS,
+  MAX_WORKFLOW_INSTRUCTION_BYTES,
 } from "./context/index.js";
 export type {
   WorkflowInputProjector,
@@ -872,6 +874,7 @@ export type {
  */
 export {
   AgentToolRegistrationError,
+  AgentToolExecutionOutputError,
   AgentToolRegistryStateError,
   AgentToolResultBatchError,
   AgentToolSchemaCompileError,
@@ -960,6 +963,7 @@ export {
   TOOL_EXECUTION_MODES,
   TOOL_SCHEDULING_CLASSES,
   TOOL_RESULT_TRUNCATION_MARKER,
+  TOOL_SETTLEMENT_OUTPUT_CAPABILITIES,
   ToolArgumentPreparationError,
   ToolBatchInfrastructureError,
   ToolBatchInputError,
@@ -986,7 +990,11 @@ export {
 } from "./tools/index.js";
 export type {
   AgentTool,
+  AgentToolExecutionOutput,
+  AgentToolExecutionOutputErrorCode,
+  AgentToolExecutionReturn,
   AgentToolExecutionInput,
+  AgentToolSettlementOutputCapability,
   AgentToolRegistrationErrorMetadata,
   AgentToolRegistrationErrorReason,
   AgentToolRegistry,

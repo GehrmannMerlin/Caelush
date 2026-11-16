@@ -58,6 +58,16 @@ export type { ExecOperations } from "./exec-operations.js";
 export type { ProcessOperations } from "./process-operations.js";
 export type { GitOperations } from "./git-operations.js";
 export type { AttachmentReadOperations } from "./attachment-read-operations.js";
+export type {
+  SkillOperations,
+  SkillReadOperationInput,
+  SkillReadOperationResult,
+  SkillSearchOperationInput,
+  SkillScriptOperationInput,
+  SkillScriptOperationUnavailable,
+  SkillOperationErrorCode,
+} from "./skill-operations.js";
+export { SkillOperationError, unavailableSkillScriptAdapter } from "./skill-operations.js";
 
 /**
  * Every Operations interface name, in canonical order.

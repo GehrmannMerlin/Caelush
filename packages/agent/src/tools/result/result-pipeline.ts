@@ -1,4 +1,8 @@
-import type { TimestampMs, ToolInvocation } from "@caelush/protocol";
+import type {
+  TimestampMs,
+  ToolInvocation,
+  WorkflowResourceBindingDraftV1,
+} from "@caelush/protocol";
 import type { JsonObject } from "@caelush/ai";
 
 import type { PreparedToolCall } from "../call/tool-call-preparer.js";
@@ -40,6 +44,7 @@ import type {
  */
 export interface PreparedToolSettlement {
   readonly result: AgentToolResult;
+  readonly preparedResourceBindings?: readonly WorkflowResourceBindingDraftV1[] | undefined;
   readonly effects?: ToolSettlementExtension | undefined;
 }
 

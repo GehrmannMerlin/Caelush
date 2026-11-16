@@ -4,6 +4,10 @@ import type { AgentToolExecutionInput } from "./execution-input.js";
 import type { ToolExecutionMode } from "./execution-mode.js";
 import type { ToolSchedulingFacts } from "./scheduling.js";
 import type { AgentToolResult } from "./tool-result.js";
+import type {
+  AgentToolExecutionReturn,
+  AgentToolSettlementOutputCapability,
+} from "./tool-execution-output.js";
 
 /**
  * A general, executable Agent Tool.
@@ -17,7 +21,9 @@ import type { AgentToolResult } from "./tool-result.js";
  *   readonly resultDetailsSchema: JsonObject;
  *   readonly executionMode: ToolExecutionMode;
  *   readonly prepareArguments?: (rawArgs: Readonly<JsonObject>) => TArgs;
- *   readonly execute: (input: AgentToolExecutionInput<TArgs>) => Promise<AgentToolResult<TDetails>>;
+ *   readonly execute: (input: AgentToolExecutionInput<TArgs>) => Promise<
+ *     AgentToolResult<TDetails> | AgentToolExecutionOutput
+ *   >;
  * }
  * ```
  *
@@ -83,7 +89,12 @@ export interface AgentTool<
    * batch may execute or run concurrently.
    */
   readonly scheduling?: ToolSchedulingFacts | undefined;
+  /** Static permission to return one separately validated settlement sidecar. */
+  readonly settlementOutputCapabilities?:
+    readonly AgentToolSettlementOutputCapability[] | undefined;
   /** Optional pure compatibility normalization applied before schema validation. */
   readonly prepareArguments?: ((rawArgs: Readonly<JsonObject>) => TArgs) | undefined;
-  readonly execute: (input: AgentToolExecutionInput<TArgs>) => Promise<AgentToolResult<TDetails>>;
+  readonly execute: (
+    input: AgentToolExecutionInput<TArgs>,
+  ) => Promise<AgentToolResult<TDetails> | AgentToolExecutionReturn>;
 }
