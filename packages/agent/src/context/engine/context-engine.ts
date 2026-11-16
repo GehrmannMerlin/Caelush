@@ -2061,7 +2061,7 @@ async function preparePromptSurface(
       runId: input.contextInput.identity.runId,
       epochId: createPromptSurfaceEpochId(input.epochIdFactory?.create() ?? randomUUID()),
       modelRef: input.contextInput.model.ref,
-      formatVersion: 3,
+      formatVersion: identity.formatVersion,
       stableHeadFingerprint: identity.stableHeadFingerprint,
       toolSchemaFingerprint: identity.toolSchemaFingerprint,
       cacheSettingsFingerprint: identity.cacheSettingsFingerprint,
@@ -2088,7 +2088,7 @@ async function preparePromptSurface(
     throw new PromptSurfaceIntegrityError("Prompt Surface preparation has no complete epoch.");
   }
 
-  if (surface.formatVersion !== 3) {
+  if (!isRecordSurfaceFormat(surface.formatVersion)) {
     throw new PromptSurfaceIntegrityError(
       "V2 Prompt Surface must be reset before a new Step executes.",
     );
@@ -2127,7 +2127,7 @@ async function preparePromptSurface(
       runId: input.contextInput.identity.runId,
       epochId: createPromptSurfaceEpochId(input.epochIdFactory?.create() ?? randomUUID()),
       modelRef: input.contextInput.model.ref,
-      formatVersion: 3,
+      formatVersion: identity.formatVersion,
       stableHeadFingerprint: identity.stableHeadFingerprint,
       toolSchemaFingerprint: identity.toolSchemaFingerprint,
       cacheSettingsFingerprint: identity.cacheSettingsFingerprint,
@@ -2175,7 +2175,7 @@ function preparePreviewSurface(
       : undefined;
   const epoch = createPromptSurfaceEpoch({
     runId,
-    formatVersion: 3,
+    formatVersion: identity.formatVersion,
     epochId:
       compactionOperationId === undefined
         ? `preview-${previewKey}`
@@ -2301,7 +2301,7 @@ function decidePromptSurface(input: {
       "V3 Prompt Surface is missing its durable Section state.",
     );
   }
-  if (surface.formatVersion !== 3) {
+  if (!isRecordSurfaceFormat(surface.formatVersion)) {
     throw new PromptSurfaceIntegrityError("V3 preparation received a legacy Prompt Surface.");
   }
   const stepSequence = input.contextInput.turn.sequence;
@@ -2395,7 +2395,7 @@ function decidePromptSurface(input: {
     targetSectionStates: targetStates,
   });
   const nextEpoch = createPromptSurfaceEpoch({
-    formatVersion: 3,
+    formatVersion: surface.formatVersion,
     runId: surface.runId,
     epochId: `rollover-${operationId}`,
     modelRef: surface.modelRef,
@@ -2540,7 +2540,7 @@ async function projectPromptSurface(
         { cause: error },
       );
     }
-    if (loaded.formatVersion !== 3 || loaded.records === undefined) {
+    if (!isRecordSurfaceFormat(loaded.formatVersion) || loaded.records === undefined) {
       throw new PromptSurfaceIntegrityError(
         "Compaction activation requires a complete V3 Prompt Surface.",
       );
@@ -2786,7 +2786,7 @@ async function preparePromptSurfaceReplay(
   }
 
   const targetSequence = input.contextInput.turn.sequence;
-  if (surface.formatVersion === 3) {
+  if (isRecordSurfaceFormat(surface.formatVersion)) {
     const records = surface.records;
     if (records === undefined || surface.sectionStates === undefined) {
       throw new PromptSurfaceIntegrityError("V3 replay is missing durable Section state.");
@@ -2846,6 +2846,7 @@ async function preparePromptSurfaceReplay(
 }
 
 interface PromptSurfaceIdentity {
+  readonly formatVersion: 2 | 3 | 4;
   readonly stableHeadFingerprint: string;
   readonly toolSchemaFingerprint: string;
   readonly cacheSettingsFingerprint: string;
@@ -2853,11 +2854,17 @@ interface PromptSurfaceIdentity {
 
 function promptSurfaceIdentity(
   input: PromptSurfacePreparationInput,
-  formatVersion: 2 | 3 = 3,
+  formatVersion?: 2 | 3 | 4,
 ): PromptSurfaceIdentity {
+  const format = input.document.sections.some(
+    (section) => section.authority === "WORKFLOW_INSTRUCTION",
+  )
+    ? 4
+    : (formatVersion ?? 3);
   return {
+    formatVersion: format,
     stableHeadFingerprint: promptSurfaceStableHeadFingerprint({
-      stableHead: renderStableContextHead(input.document, formatVersion),
+      stableHead: renderStableContextHead(input.document, format),
       ...(input.checkpointId === undefined ? {} : { checkpointId: input.checkpointId }),
     }),
     toolSchemaFingerprint: fingerprint(stableJson(input.tools)),
@@ -2872,6 +2879,10 @@ function promptSurfaceIdentity(
       }),
     ),
   };
+}
+
+function isRecordSurfaceFormat(formatVersion: 2 | 3 | 4): boolean {
+  return formatVersion === 3 || formatVersion === 4;
 }
 
 function promptCacheSettings(
@@ -2995,7 +3006,7 @@ function resetReasonFor(
   ) {
     return "COMPACTION_COMMITTED";
   }
-  if (current.formatVersion !== 3) {
+  if (current.formatVersion !== identity.formatVersion) {
     return "RECOVERY_INCOMPATIBLE";
   }
   if (
@@ -3049,7 +3060,7 @@ function samePromptSurfaceIdentity(left: PromptSurfaceEpoch, right: PromptSurfac
 function promptSurfaceAnchors(
   surface: PromptSurfaceEpochWithSnapshots,
 ): readonly PromptSurfaceAnchor[] {
-  return surface.formatVersion === 3
+  return isRecordSurfaceFormat(surface.formatVersion)
     ? (surface.records ?? []).map((record) => record.anchor)
     : surface.snapshots.map((snapshot) => snapshot.anchor);
 }
@@ -3097,10 +3108,14 @@ function preparedSurface(
     "stable head",
   );
   const snapshotTokens =
-    surface.formatVersion === 3
+    isRecordSurfaceFormat(surface.formatVersion)
       ? (surface.records ?? []).reduce((sum, record) => {
           if (record.kind === "NOOP") return sum;
-          const content = renderPromptSurfaceRecord(record.kind, record.updates);
+          const content = renderPromptSurfaceRecord(
+            record.kind,
+            record.updates,
+            surface.formatVersion,
+          );
           return (
             sum +
             estimatePromptSurfaceTokens(
@@ -3131,7 +3146,7 @@ function preparedSurface(
       toolSchemaFingerprint: surface.toolSchemaFingerprint,
       cacheSettingsFingerprint: surface.cacheSettingsFingerprint,
       runtimeRecords:
-        surface.formatVersion === 3
+        isRecordSurfaceFormat(surface.formatVersion)
           ? (surface.records ?? [])
               .filter((record) => record.kind !== "NOOP")
               .map((record) => ({

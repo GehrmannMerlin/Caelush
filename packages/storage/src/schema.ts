@@ -581,7 +581,7 @@ export const promptSurfaceEpochs = sqliteTable(
     primaryKey({ columns: [table.runId, table.epochId] }),
     check("prompt_surface_epochs_created_step_check", sql`${table.createdStepSequence} >= 1`),
     check("prompt_surface_epochs_created_at_check", sql`${table.createdAtMs} >= 0`),
-    check("prompt_surface_epochs_format_version_check", sql`${table.formatVersion} IN (2, 3)`),
+    check("prompt_surface_epochs_format_version_check", sql`${table.formatVersion} IN (2, 3, 4)`),
   ],
 );
 

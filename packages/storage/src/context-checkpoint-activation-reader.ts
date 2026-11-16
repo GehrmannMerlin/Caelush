@@ -103,7 +103,7 @@ export class SqliteContextCheckpointActivationReader implements ContextCheckpoin
     const epoch = await this.promptSurface.getCurrent(checkpoint.runId);
     if (
       epoch === undefined ||
-      epoch.formatVersion !== 3 ||
+      (epoch.formatVersion !== 3 && epoch.formatVersion !== 4) ||
       epoch.resetReason !== "COMPACTION_COMMITTED" ||
       epoch.createdStepSequence !== step.sequence
     ) {
@@ -166,7 +166,7 @@ export class SqliteContextCheckpointActivationReader implements ContextCheckpoin
           : undefined;
       return (
         epoch !== undefined &&
-        epoch.formatVersion === 3 &&
+        (epoch.formatVersion === 3 || epoch.formatVersion === 4) &&
         String(epoch.runId) === String(checkpoint.ownerRunId) &&
         String(epoch.epochId) === proof.epoch_id &&
         epoch.resetReason === "COMPACTION_COMMITTED" &&

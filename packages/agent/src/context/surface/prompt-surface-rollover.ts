@@ -82,7 +82,7 @@ export async function rolloverPromptSurface(
       targetSectionStates: expectedStates,
     });
     const newEpoch = createPromptSurfaceEpoch({
-      formatVersion: 3,
+      formatVersion: input.epoch.formatVersion,
       runId: input.epoch.runId,
       epochId: `rollover-${operationId}`,
       modelRef: input.epoch.modelRef,

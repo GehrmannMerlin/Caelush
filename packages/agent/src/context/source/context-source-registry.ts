@@ -64,6 +64,9 @@ export async function collectContextSources(
           ...result,
           items: Object.freeze([...result.items]),
           diagnostics: Object.freeze([...result.diagnostics]),
+          ...(result.preparedWorkflowProjection === undefined
+            ? {}
+            : { preparedWorkflowProjection: result.preparedWorkflowProjection }),
         }),
       );
     } catch (error) {

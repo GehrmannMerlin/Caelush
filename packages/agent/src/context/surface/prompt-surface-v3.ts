@@ -3,6 +3,7 @@ import {
   PromptSurfaceIntegrityError,
   hashPromptSurfaceContent,
 } from "./prompt-surface-integrity.js";
+import { assertWorkflowInstructionFragment } from "../workflows/workflow-instruction-renderer.js";
 
 export interface PromptSurfaceSectionState {
   readonly stateKey: string;
@@ -85,7 +86,11 @@ export function diffPromptSurfaceSections(
 export function renderPromptSurfaceRecord(
   kind: "BASELINE" | "DELTA",
   updates: readonly PromptSurfaceSectionUpdate[],
+  formatVersion?: 2 | 3 | 4,
 ): string {
+  if (formatVersion !== undefined && ![2, 3, 4].includes(formatVersion)) {
+    throw new PromptSurfaceIntegrityError("Prompt Surface format version is unsupported.");
+  }
   if (kind === "BASELINE" && updates.some((update) => update.op !== "SET")) {
     throw new PromptSurfaceIntegrityError("Prompt Surface baseline cannot contain CLEAR updates.");
   }
@@ -94,6 +99,13 @@ export function renderPromptSurfaceRecord(
   }
   const entries: string[] = [];
   const contributionEntries: string[] = [];
+  const workflowEntries: string[] = [];
+  const hasWorkflowInstructions = updates.some(
+    (update) => update.op === "SET" && / authority="WORKFLOW_INSTRUCTION" /.test(update.content),
+  );
+  if (hasWorkflowInstructions && formatVersion !== undefined && formatVersion < 4) {
+    throw new PromptSurfaceIntegrityError("Workflow instructions require Prompt Surface V4.");
+  }
   for (const update of updates) {
     assertSectionUpdate(update);
     if (update.op === "CLEAR") {
@@ -101,6 +113,12 @@ export function renderPromptSurfaceRecord(
       continue;
     }
     const attributes = sectionAttributes(update.content);
+    if (attributes.authority === "WORKFLOW_INSTRUCTION") {
+      const fragment = unwrapWorkflowSectionText(attributes.text);
+      assertWorkflowInstructionFragment(fragment);
+      workflowEntries.push(fragment);
+      continue;
+    }
     if (attributes.label === "context contribution") {
       contributionEntries.push(
         `  <contribution source_ref="${escapeXmlAttribute(update.stateKey)}">${attributes.text}</contribution>`,
@@ -129,7 +147,23 @@ export function renderPromptSurfaceRecord(
     "CLEAR changes only the active Context view; it does not claim that an underlying file or resource was deleted.",
     ...entries,
     `</runtime_context_${mode}>`,
+    ...(workflowEntries.length === 0
+      ? []
+      : [
+          "<workflow_instructions>",
+          "These complete, bounded task instructions are active for this Run; obey the stable workflow instruction policy.",
+          ...workflowEntries,
+          "</workflow_instructions>",
+        ]),
   ].join("\n");
+}
+
+function unwrapWorkflowSectionText(value: string): string {
+  const match = /^<!\[CDATA\[([\s\S]*)\]\]>$/.exec(value);
+  if (match?.[1] === undefined) {
+    throw new PromptSurfaceIntegrityError("Workflow instruction Section encoding is invalid.");
+  }
+  return match[1].replaceAll("]]]]><![CDATA[>", "]]>");
 }
 
 export function assertPromptSurfaceSectionStates(
@@ -222,6 +256,12 @@ export function assertSectionUpdate(value: unknown): asserts value is PromptSurf
 }
 
 function sectionState(section: ContextDocumentSection): PromptSurfaceSectionState {
+  if (section.authority === "WORKFLOW_INSTRUCTION") {
+    if (Buffer.byteLength(section.text, "utf8") > 64 * 1024) {
+      throw new RangeError("A workflow instruction exceeds the 64 KiB core limit.");
+    }
+    assertWorkflowInstructionFragment(section.text);
+  }
   const providerId = sectionProviderNamespace(section);
   const stateKey = `sha256:${hashPromptSurfaceContent(`${providerId}\0${section.id}`)}`;
   const label = modelLabel(section.id);
@@ -295,7 +335,7 @@ function sectionAttributes(content: string): {
   readonly text: string;
 } {
   const match =
-    /^<section(?: provider="([^"]+)")? authority="(CORE_POLICY|GLOBAL_INSTRUCTION|PROJECT_INSTRUCTION|RUNTIME_FACT|RECOVERY_RECORD|REFERENCE|DIAGNOSTIC)" stability="(SEMI_STABLE|DYNAMIC)" sensitivity="(PUBLIC|INTERNAL)" priority="(CRITICAL|HIGH|NORMAL|LOW)" freshness="(CURRENT|STALE|UNKNOWN)" label="([^"]*)">(<!\[CDATA\[[\s\S]*\]\]>)<\/section>$/.exec(
+    /^<section(?: provider="([^"]+)")? authority="(CORE_POLICY|GLOBAL_INSTRUCTION|PROJECT_INSTRUCTION|WORKFLOW_INSTRUCTION|RUNTIME_FACT|RECOVERY_RECORD|REFERENCE|DIAGNOSTIC)" stability="(SEMI_STABLE|DYNAMIC)" sensitivity="(PUBLIC|INTERNAL)" priority="(CRITICAL|HIGH|NORMAL|LOW)" freshness="(CURRENT|STALE|UNKNOWN)" label="([^"]*)">(<!\[CDATA\[[\s\S]*\]\]>)<\/section>$/.exec(
       content,
     );
   if (

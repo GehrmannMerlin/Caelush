@@ -11,13 +11,12 @@ import {
   mapLegacyPriority,
 } from "./generic-provider-helpers.js";
 import { utf8ByteLength, utf8PrefixByBytes } from "../../utils/utf8.js";
+import { safeContextText } from "./safe-context-text.js";
 
 const PROVIDER_VERSION = "extension-contributions-v1";
 const MAX_ITEM_BYTES = 16 * 1024;
 const MAX_SOURCE_BYTES = 512;
 const MAX_WHY_LOADED_BYTES = 2 * 1024;
-const HOST_PATH =
-  /(?:[A-Za-z]:[\\/]{1,2}|\\\\[^\s\\/]+[\\/]|\/(?:Users|home|root|var|etc|opt|tmp)\/)/;
 
 export interface ContextContributionLoader {
   load(input: {
@@ -90,9 +89,5 @@ function boundedSafeText(value: string, maxBytes: number): string {
 }
 
 function safeContributionText(value: string): string {
-  const redacted = value
-    .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]")
-    .replace(/\b(?:sk|rk)-[A-Za-z0-9_-]+/g, "[REDACTED_TOKEN]")
-    .replace(/\b(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*\S+/gi, "$1=[REDACTED]");
-  return HOST_PATH.test(redacted) ? "[REDACTED:HOST_PATH]" : redacted;
+  return safeContextText(value);
 }

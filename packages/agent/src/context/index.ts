@@ -539,6 +539,30 @@ export type {
 } from "./source/extension-contribution-provider.js";
 export { createBranchContextSourceProvider } from "./source/branch-context-provider.js";
 export {
+  createWorkflowInputProjector,
+  createWorkflowInstructionContextSourceResult,
+} from "./workflows/workflow-input-projector.js";
+export type {
+  WorkflowInputProjector,
+  WorkflowInputProjectorOptions,
+} from "./workflows/workflow-input-projector.js";
+export { createWorkflowInstructionContextSourceProvider } from "./workflows/workflow-instruction-context-provider.js";
+export type {
+  WorkflowInstructionContextSourceProviderOptions,
+} from "./workflows/workflow-instruction-context-provider.js";
+export {
+  WORKFLOW_INSTRUCTION_BASE_POLICY,
+  WORKFLOW_INSTRUCTION_RENDERER_VERSION,
+  renderWorkflowInstructionFragment,
+  assertWorkflowInstructionFragment,
+} from "./workflows/workflow-instruction-renderer.js";
+export type {
+  ActiveWorkflowResource,
+  ActiveWorkflowResourceReader,
+  PreparedWorkflowProjection,
+  WorkflowInstructionFragmentV1,
+} from "./workflows/workflow-instruction.js";
+export {
   CORE_POLICY_CONTEXT_SOURCE_ID,
   createCorePolicyContextSourceProvider,
 } from "./source/core-policy-provider.js";

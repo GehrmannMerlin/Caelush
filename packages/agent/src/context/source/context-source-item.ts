@@ -20,6 +20,9 @@ export function freezeContextSourceResult(result: ContextSourceResult): ContextS
     providerVersion: result.providerVersion,
     items,
     diagnostics,
+    ...(result.preparedWorkflowProjection === undefined
+      ? {}
+      : { preparedWorkflowProjection: result.preparedWorkflowProjection }),
   });
   assertContextSourceResult(frozen, frozen.providerId);
   return frozen;

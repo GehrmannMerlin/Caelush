@@ -283,6 +283,9 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
     try {
       assertPromptSurfaceRecord(record);
       assertPromptSurfaceEpoch(expectedCurrentEpoch);
+      if (expectedCurrentEpoch.formatVersion < 4 && hasWorkflowInstructionUpdate(record.updates)) {
+        throw new TypeError("Workflow instructions require Prompt Surface V4.");
+      }
       if (!Number.isSafeInteger(expectedRecordOrdinal) || expectedRecordOrdinal < 0) {
         throw new TypeError("Prompt Surface expected record ordinal is invalid.");
       }
@@ -297,11 +300,11 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
         const current = this.readCurrentRow(record.runId);
         if (
           current === undefined ||
-          current.format_version !== 3 ||
+          !isRecordSurfaceFormat(current.format_version) ||
           record.runId !== expectedCurrentEpoch.runId ||
           record.epochId !== expectedCurrentEpoch.epochId ||
           current.epoch_id !== expectedCurrentEpoch.epochId ||
-          expectedCurrentEpoch.formatVersion !== 3
+          expectedCurrentEpoch.formatVersion !== current.format_version
         ) {
           throw new StorageConflictError(
             "Prompt Surface V3 record does not target the expected current epoch.",
@@ -445,7 +448,7 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
           );
         }
         const source = this.readEpochSync(newEpoch.runId, command.expectedCurrentEpoch.epochId);
-        if (source === undefined || source.formatVersion !== 3) {
+        if (source === undefined || !isRecordSurfaceFormat(source.formatVersion)) {
           throw new PromptSurfaceRolloverConflictError(
             "Prompt Surface rollover source epoch is not a V3 epoch.",
           );
@@ -463,7 +466,9 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
         }
         if (
           newEpoch.createdStepSequence < command.expectedCurrentEpoch.createdStepSequence ||
-          newEpoch.formatVersion !== 3 ||
+          !isRecordSurfaceFormat(newEpoch.formatVersion) ||
+          newEpoch.formatVersion !== command.expectedCurrentEpoch.formatVersion ||
+          (newEpoch.formatVersion < 4 && hasWorkflowInstructionUpdate(baseline.updates)) ||
           newEpoch.resetReason !== "CAPACITY_ROLLOVER"
         ) {
           throw new PromptSurfaceRolloverConflictError(
@@ -492,7 +497,7 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
           );
         }
         const verified = this.readEpochSync(newEpoch.runId, newEpoch.epochId);
-        if (verified === undefined || verified.formatVersion !== 3) {
+        if (verified === undefined || verified.formatVersion !== newEpoch.formatVersion) {
           throw new StorageDecodeError(
             "PromptSurfaceEpoch",
             epochKey(newEpoch.runId, newEpoch.epochId),
@@ -522,8 +527,10 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
       assertPromptSurfaceSectionStates(command.expectedSectionStates);
       if (
         command.operationId.trim().length === 0 ||
-        command.newEpoch.formatVersion !== 3 ||
+        !isRecordSurfaceFormat(command.newEpoch.formatVersion) ||
         command.newEpoch.resetReason !== "COMPACTION_COMMITTED" ||
+        (command.newEpoch.formatVersion < 4 &&
+          hasWorkflowInstructionUpdate(command.baseline.updates)) ||
         command.baseline.epochId !== command.newEpoch.epochId ||
         command.baseline.runId !== command.newEpoch.runId ||
         command.baseline.ordinal !== 1 ||
@@ -601,7 +608,7 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
       const records = source?.records;
       if (
         source === undefined ||
-        source.formatVersion !== 3 ||
+        !isRecordSurfaceFormat(source.formatVersion) ||
         records === undefined ||
         records.length !== expected.recordOrdinal ||
         (records.at(-1)?.decisionFingerprint ?? null) !== expected.decisionFingerprint
@@ -743,7 +750,7 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
         .all(runId, epochId) as unknown as SnapshotRow[];
       const snapshots = Object.freeze(rows.map(decodeSnapshot));
       const records =
-        epoch.formatVersion === 3
+        isRecordSurfaceFormat(epoch.formatVersion)
           ? Object.freeze(
               (
                 this.database.client
@@ -758,7 +765,7 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
             )
           : undefined;
       const sectionStates =
-        epoch.formatVersion === 3
+        isRecordSurfaceFormat(epoch.formatVersion)
           ? this.readSectionStates(runId, epochId, records ?? [])
           : undefined;
       const surface: PromptSurfaceEpochWithSnapshots = Object.freeze({
@@ -904,7 +911,7 @@ function decodeEpoch(row: EpochRow): PromptSurfaceEpoch {
   try {
     const input: PromptSurfaceEpochInput = {
       runId: row.run_id as RunId,
-      formatVersion: row.format_version as 2 | 3,
+      formatVersion: row.format_version as 2 | 3 | 4,
       epochId: row.epoch_id,
       modelRef: { provider: row.model_provider, model: row.model_id },
       stableHeadFingerprint: row.stable_head_fingerprint,
@@ -1069,6 +1076,18 @@ function withImmediateTransaction<T>(database: CaelushDatabase, operation: () =>
 
 function epochKey(runId: RunId, epochId: PromptSurfaceEpochId): string {
   return `${runId}:${epochId}`;
+}
+
+function isRecordSurfaceFormat(formatVersion: number): boolean {
+  return formatVersion === 3 || formatVersion === 4;
+}
+
+function hasWorkflowInstructionUpdate(
+  updates: readonly import("@caelush/agent").PromptSurfaceSectionUpdate[],
+): boolean {
+  return updates.some(
+    (update) => update.op === "SET" && / authority="WORKFLOW_INSTRUCTION" /.test(update.content),
+  );
 }
 
 function stableJson(value: unknown): string {

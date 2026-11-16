@@ -28,14 +28,18 @@ export function projectPromptSurface(
   if (surface === undefined) return EMPTY_PROJECTION;
   assertPromptSurfaceEpochWithSnapshots(surface);
 
-  if (surface.formatVersion === 3) {
+  if (surface.formatVersion === 3 || surface.formatVersion === 4) {
     return Object.freeze(
       (surface.records ?? [])
         .filter((record) => record.kind !== "NOOP")
         .map((record) =>
           Object.freeze({
             role: "user" as const,
-            content: renderPromptSurfaceRecord(record.kind as "BASELINE" | "DELTA", record.updates),
+            content: renderPromptSurfaceRecord(
+              record.kind as "BASELINE" | "DELTA",
+              record.updates,
+              surface.formatVersion,
+            ),
             source: Object.freeze({
               kind:
                 record.kind === "BASELINE"

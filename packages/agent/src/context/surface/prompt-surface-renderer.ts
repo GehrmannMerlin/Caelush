@@ -1,4 +1,5 @@
 import type { ContextDocument, ContextDocumentSection } from "../document/context-document.js";
+import { WORKFLOW_INSTRUCTION_BASE_POLICY } from "../workflows/workflow-instruction-renderer.js";
 
 const DELTA_POLICY = [
   '<runtime_context_state_policy version="3">',
@@ -26,7 +27,7 @@ export const CLEARED_RUNTIME_CONTEXT_SNAPSHOT = [
 /** Render only invariant Context sections into the byte-stable system head. */
 export function renderStableContextHead(
   document: ContextDocument,
-  formatVersion: 2 | 3 = 3,
+  formatVersion: 2 | 3 | 4 = 3,
 ): string {
   const sections = document.sections.filter(
     (section) =>
@@ -36,7 +37,11 @@ export function renderStableContextHead(
   );
   const body = renderSections(sections);
   const policy = formatVersion === 2 ? SNAPSHOT_POLICY : DELTA_POLICY;
-  return `<context_document>\n${body}\n</context_document>\n${policy}`;
+  return [
+    `<context_document>\n${body}\n</context_document>`,
+    policy,
+    ...(formatVersion === 4 ? [WORKFLOW_INSTRUCTION_BASE_POLICY] : []),
+  ].join("\n");
 }
 
 /** Render the complete current semi-stable and dynamic Context as one replaceable snapshot. */

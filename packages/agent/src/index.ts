@@ -204,6 +204,25 @@ export {
 } from "./context/index.js";
 
 export {
+  createWorkflowInputProjector,
+  createWorkflowInstructionContextSourceResult,
+  createWorkflowInstructionContextSourceProvider,
+  renderWorkflowInstructionFragment,
+  assertWorkflowInstructionFragment,
+  WORKFLOW_INSTRUCTION_BASE_POLICY,
+  WORKFLOW_INSTRUCTION_RENDERER_VERSION,
+} from "./context/index.js";
+export type {
+  WorkflowInputProjector,
+  WorkflowInputProjectorOptions,
+  WorkflowInstructionContextSourceProviderOptions,
+  ActiveWorkflowResource,
+  ActiveWorkflowResourceReader,
+  PreparedWorkflowProjection,
+  WorkflowInstructionFragmentV1,
+} from "./context/index.js";
+
+export {
   createCompactionSourceCoverageDigest,
   beginPersistedCompactionSubcall,
   beginPersistedCompactionAttempt,

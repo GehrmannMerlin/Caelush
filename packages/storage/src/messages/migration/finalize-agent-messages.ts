@@ -6,6 +6,7 @@ import { backfillLegacyAgentMessages } from "../legacy/backfill.js";
 import { parseHistoricalLegacyMessage } from "./legacy-parser.js";
 
 const FINAL_MIGRATION_NAME = "20260924120000_message_system_v2_final";
+const PROMPT_SURFACE_V4_MIGRATION_NAME = "20261116120000_prompt_surface_v4";
 const POST_MESSAGE_V2_MIGRATION_NAMES = new Set([
   "20261008120000_private_replay",
   // The Run input ledger references `agent_messages(message_id)`, so it must be created after the
@@ -24,6 +25,7 @@ export function migratePublishedStorage(database: CaelushDatabase, migrationsFol
     migrations.filter(
       (migration) =>
         migration.name !== FINAL_MIGRATION_NAME &&
+        migration.name !== PROMPT_SURFACE_V4_MIGRATION_NAME &&
         !POST_MESSAGE_V2_MIGRATION_NAMES.has(migration.name),
     ),
     database.drizzle._.session,

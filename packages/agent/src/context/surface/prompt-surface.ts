@@ -94,7 +94,7 @@ export interface PromptSurfaceModelRef {
 }
 
 export interface PromptSurfaceEpoch {
-  readonly formatVersion: 2 | 3;
+  readonly formatVersion: 2 | 3 | 4;
   readonly runId: RunId;
   readonly epochId: PromptSurfaceEpochId;
   readonly modelRef: PromptSurfaceModelRef;
@@ -114,7 +114,7 @@ export interface PromptSurfaceEpochInput extends Omit<
   | "toolSchemaFingerprint"
   | "cacheSettingsFingerprint"
 > {
-  readonly formatVersion?: 2 | 3;
+  readonly formatVersion?: 2 | 3 | 4;
   readonly epochId: string;
   readonly stableHeadFingerprint: string;
   readonly toolSchemaFingerprint: string;
@@ -223,7 +223,8 @@ export function assertPromptSurfaceEpoch(value: unknown): asserts value is Promp
   if (
     candidate["formatVersion"] !== undefined &&
     candidate["formatVersion"] !== 2 &&
-    candidate["formatVersion"] !== 3
+    candidate["formatVersion"] !== 3 &&
+    candidate["formatVersion"] !== 4
   ) {
     throw new TypeError("Prompt Surface format version is invalid.");
   }
@@ -262,7 +263,7 @@ export function assertPromptSurfaceEpochWithSnapshots(
     throw new PromptSurfaceIntegrityError("Prompt Surface snapshots must be an ordered list.");
   }
 
-  if (candidate.formatVersion === 3) {
+  if (candidate.formatVersion === 3 || candidate.formatVersion === 4) {
     if (snapshots.length !== 0 || !Array.isArray(records) || !Array.isArray(sectionStates)) {
       throw new PromptSurfaceIntegrityError(
         "Prompt Surface V3 records or Section state are missing.",
@@ -350,6 +351,14 @@ function assertPromptSurfaceV3Records(
       );
     }
     state = applyPromptSurfaceSectionUpdates(state, record.kind, record.updates);
+    if (
+      epoch.formatVersion < 4 &&
+      record.updates.some(
+        (update) => update.op === "SET" && / authority="WORKFLOW_INSTRUCTION" /.test(update.content),
+      )
+    ) {
+      throw new PromptSurfaceIntegrityError("Workflow instructions require Prompt Surface V4.");
+    }
     if (record.kind !== "NOOP") visibleCount += 1;
     totalBytes += record.byteLength;
     if (totalBytes > PROMPT_SURFACE_LIMITS.maxEpochUtf8Bytes) {

@@ -12,6 +12,7 @@ export type ContextSectionAuthority =
   | "CORE_POLICY"
   | "GLOBAL_INSTRUCTION"
   | "PROJECT_INSTRUCTION"
+  | "WORKFLOW_INSTRUCTION"
   | "RUNTIME_FACT"
   | "RECOVERY_RECORD"
   | "REFERENCE"
@@ -97,6 +98,7 @@ function authorityForType(type: string): ContextSectionAuthority {
     return "CORE_POLICY";
   if (type === "agent.checkpoint") return "RECOVERY_RECORD";
   if (type === "coding.project_instruction") return "PROJECT_INSTRUCTION";
+  if (type === "agent.workflow-instruction") return "WORKFLOW_INSTRUCTION";
   if (
     type === "coding.workspace" ||
     type === "coding.runtime_fact" ||

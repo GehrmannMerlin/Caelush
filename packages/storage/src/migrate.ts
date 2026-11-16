@@ -7,6 +7,7 @@ import {
   migratePublishedStorage,
 } from "./messages/migration/finalize-agent-messages.js";
 import { finalizeRunSecurityPolicies } from "./security-policy-migration.js";
+import { migratePromptSurfaceV4 } from "./prompt-surface-v4-migration.js";
 
 export function getCaelushMigrationsFolder(): string {
   return fileURLToPath(new URL("../drizzle", import.meta.url));
@@ -16,6 +17,7 @@ export async function migrateCaelushDatabase(database: CaelushDatabase): Promise
   try {
     const migrationsFolder = getCaelushMigrationsFolder();
     migratePublishedStorage(database, migrationsFolder);
+    migratePromptSurfaceV4(database, migrationsFolder);
     finalizeAgentMessages(database, migrationsFolder);
     migratePostMessageV2Storage(database, migrationsFolder);
     finalizeRunSecurityPolicies(database);
