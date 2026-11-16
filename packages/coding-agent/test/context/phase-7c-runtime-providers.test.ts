@@ -121,39 +121,50 @@ describe("Phase 7C Coding runtime/context providers", () => {
     await expect(provider.collect(sourceInput)).rejects.toThrow(/12 file/i);
   });
 
-  it("provides a real NoOp Skill Catalog and projects only opaque entry metadata", async () => {
+  it("provides an empty NoOp catalog and projects a bounded Run catalog without resource refs", async () => {
     const noOp = createSkillCatalogContextSourceProvider();
     expect((await noOp.collect(sourceInput)).items).toEqual([]);
 
     const provider = createSkillCatalogContextSourceProvider({
-      projectId: "project_1",
       port: {
         async list() {
-          return [
-            {
-              name: "typescript-guidance",
-              description: "TypeScript conventions",
-              resourceRef: "skill://catalog/typescript-guidance",
-              version: "1",
-            },
-          ];
+          return {
+            revision: "skill-catalog-v1",
+            complete: true,
+            diagnostics: [],
+            entries: [
+              {
+                skillId: "skill-id-typescript",
+                name: "typescript-guidance",
+                description: "TypeScript conventions",
+                searchTerms: ["typescript"],
+                enabled: true,
+                userInvocable: true,
+                modelInvocable: true,
+              },
+            ],
+          };
         },
       },
     });
-    const result = await provider.collect(sourceInput);
+    const result = await provider.collect({
+      ...sourceInput,
+      policy: { effectiveInputLimitTokens: 20_000 } as never,
+    });
 
     expect(result.items).toMatchObject([
       {
-        id: "coding.skill-catalog:typescript-guidance:1",
+        id: "coding.skill-catalog:model",
         type: "coding.skill_catalog",
         retention: "RETRIEVABLE",
         priorityClass: "LOW",
         payload: {
           kind: "TEXT",
-          text: expect.stringContaining('"resourceRef":"skill://catalog/typescript-guidance"'),
+          text: expect.stringContaining('"name":"typescript-guidance"'),
         },
       },
     ]);
+    expect(JSON.stringify(result.items)).not.toContain("resourceRef");
   });
 
   it("projects bounded Git branch and changed-path facts without spawning Git", async () => {

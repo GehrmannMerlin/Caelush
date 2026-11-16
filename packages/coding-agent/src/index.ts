@@ -101,7 +101,6 @@ export type {
   RelevantFileSectionProjection,
   RuntimeFactsContextSourceProviderOptions,
   SkillCatalogContextSourceProviderOptions,
-  SkillCatalogEntry,
   SkillCatalogPort,
   TemporalContextSourceProviderOptions,
   ToolGuidanceContextSourceProviderOptions,

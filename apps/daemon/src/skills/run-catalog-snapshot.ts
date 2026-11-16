@@ -11,7 +11,7 @@ import {
   type SkillBundleRefV1,
   type WorkflowCatalogSnapshotRefV1,
 } from "@caelush/protocol";
-import type { SkillCandidate } from "@caelush/skills";
+import { parseExplicitSkillSearchTerms, type SkillCandidate } from "@caelush/skills";
 import { z } from "zod";
 import type { SkillCatalogService, SkillRunCatalogSourceSnapshot } from "./catalog-service.js";
 import type { FilesystemSkillBundleStore } from "./bundle-store.js";
@@ -31,6 +31,7 @@ const runCatalogSkillSchema = z
     enabled: z.boolean(),
     userInvocable: z.boolean(),
     modelInvocable: z.boolean(),
+    searchTerms: z.array(z.string().min(1).max(512)).max(64).optional(),
     bundle: SkillBundleRefV1Schema,
   })
   .strict();
@@ -296,6 +297,7 @@ function toSnapshotSkill(
     enabled: entry.enabled,
     userInvocable: entry.candidate.manifest.userInvocable,
     modelInvocable: entry.modelInvocable,
+    searchTerms: parseExplicitSkillSearchTerms(entry.candidate.manifest.metadata),
     bundle,
   });
 }

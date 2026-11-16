@@ -48,6 +48,7 @@ import {
   createWorkspaceContextSourceProvider,
   createLocalCodingContextPorts,
   type LocalCodingContextPorts,
+  type SkillCatalogPort,
 } from "@caelush/coding-agent";
 import type { RunAgentContextEngineInput } from "@caelush/core";
 import type { ContextContribution, ContextMemoryProjection } from "@caelush/agent";
@@ -80,6 +81,7 @@ export interface DaemonV2ContextCompositionOptions {
   readonly clock: { now(): TimestampMs };
   readonly activeToolNames: readonly ToolName[];
   readonly activeWorkflowResourceReader?: ActiveWorkflowResourceReader;
+  readonly modelSkillCatalog?: SkillCatalogPort;
 }
 /**
  * Compose the production Context Engine for one Run.
@@ -135,6 +137,12 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
     contributionPipeline: options.contributionPipeline,
     clock: options.clock,
     activeToolNames: options.activeToolNames,
+    ...(options.modelSkillCatalog === undefined
+      ? {}
+      : { modelSkillCatalog: options.modelSkillCatalog }),
+    ...(options.activeWorkflowResourceReader === undefined
+      ? {}
+      : { activeWorkflowResourceReader: options.activeWorkflowResourceReader }),
   });
   const authorityProvider = createAuthorityProvider({
     input,
@@ -366,6 +374,7 @@ function createSourceRegistry(options: {
   readonly contributionPipeline: ContextContributionPipeline;
   readonly clock: { now(): TimestampMs };
   readonly activeToolNames: readonly ToolName[];
+  readonly modelSkillCatalog?: SkillCatalogPort;
   readonly activeWorkflowResourceReader?: ActiveWorkflowResourceReader;
 }) {
   const builder = createContextSourceRegistryBuilder();
@@ -555,8 +564,7 @@ function createSourceRegistry(options: {
   register(createBranchContextSourceProvider(), 110, "OPTIONAL");
   register(
     createSkillCatalogContextSourceProvider({
-      port: createNoOpSkillCatalogPort(),
-      projectId: options.input.run.workspace.id,
+      port: options.modelSkillCatalog ?? createNoOpSkillCatalogPort(),
       tokenEstimator: options.tokenEstimator,
     }),
     120,

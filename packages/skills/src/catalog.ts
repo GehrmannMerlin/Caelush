@@ -4,13 +4,15 @@ import {
   createSkillIdentity,
   hashSkillData,
 } from "./identity.js";
-import { isSkillInvocable } from "./policy.js";
 import type {
+  SkillCatalogSearchEntry,
+  SkillCatalogSearchSource,
   EffectiveSkillCatalog,
   SkillCandidate,
   SkillDiagnostic,
   SkillDiscoveryResult,
 } from "./types.js";
+import { parseExplicitSkillSearchTerms } from "./search-terms.js";
 
 const SAFE_MESSAGES = {
   SKILL_CANDIDATE_INVALID: "A discovered Skill entry is invalid and was skipped.",
@@ -106,13 +108,58 @@ export function resolveSkillDiscovery(discovery: SkillDiscoveryResult): Effectiv
   };
 }
 
-export function catalogPresentationHash(catalog: EffectiveSkillCatalog): string {
-  const modelVisibleEntries = catalog.entries
-    .filter((candidate) => isSkillInvocable(candidate.manifest, "MODEL"))
-    .map(({ manifest }) => ({ name: manifest.name, description: manifest.description }));
-  return `sha256:${hashSkillData(
-    JSON.stringify(["caelush.skills.catalog-presentation.v1", modelVisibleEntries]),
-  )}`;
+export function catalogPresentationHash(catalog: SkillCatalogSearchSource): string {
+  const modelVisibleEntries = searchEntries(catalog)
+    .filter((entry) => entry.enabled && entry.modelInvocable)
+    .map(({ name, description, displayName }) => ({
+      name,
+      description,
+      ...(displayName === undefined ? {} : { displayName }),
+    }))
+    .sort(
+      (left, right) =>
+        compareSkillCodePoints(left.name, right.name) ||
+        compareSkillCodePoints(left.displayName ?? "", right.displayName ?? "") ||
+        compareSkillCodePoints(left.description, right.description),
+    );
+  return (
+    "sha256:" +
+    hashSkillData(
+      JSON.stringify([
+        "caelush.skills.catalog-presentation.v2",
+        catalog.complete,
+        modelVisibleEntries,
+      ]),
+    )
+  );
+}
+
+export function projectSkillCatalogSearchEntries(
+  catalog: SkillCatalogSearchSource,
+): readonly SkillCatalogSearchEntry[] {
+  return Object.freeze(searchEntries(catalog).map((entry) => Object.freeze({ ...entry })));
+}
+
+function searchEntries(catalog: SkillCatalogSearchSource): readonly SkillCatalogSearchEntry[] {
+  if (!isEffectiveSkillCatalog(catalog)) return catalog.entries;
+  return catalog.entries.map((candidate) => ({
+    skillId: candidate.skillId,
+    name: candidate.manifest.name,
+    description: candidate.manifest.description,
+    ...(candidate.manifest.metadata?.["displayName"] === undefined
+      ? {}
+      : { displayName: candidate.manifest.metadata["displayName"] }),
+    searchTerms: parseExplicitSkillSearchTerms(candidate.manifest.metadata),
+    enabled: true,
+    userInvocable: candidate.manifest.userInvocable,
+    modelInvocable: candidate.manifest.modelInvocable,
+  }));
+}
+
+function isEffectiveSkillCatalog(
+  catalog: SkillCatalogSearchSource,
+): catalog is EffectiveSkillCatalog {
+  return catalog.entries.every((entry) => "manifest" in entry);
 }
 
 function isCandidate(value: unknown): value is SkillCandidate {

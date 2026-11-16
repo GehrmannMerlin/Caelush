@@ -15,7 +15,6 @@ export type {
   RelevantFileContextPort,
   RelevantFileProjection,
   RelevantFileSectionProjection,
-  SkillCatalogEntry,
   SkillCatalogPort,
   GitStateContextPort,
   GitStateProjection,

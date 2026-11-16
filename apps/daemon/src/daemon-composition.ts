@@ -219,6 +219,7 @@ import {
   createRunSkillCatalogSnapshotService,
   type RunSkillCatalogSnapshotService,
 } from "./skills/run-catalog-snapshot.js";
+import { createRunSkillModelCatalogService } from "./skills/run-skill-search.js";
 import { createSelectedSkillPreparer } from "./skills/selected-skill-preparer.js";
 import { createWorkflowResourceReader } from "./skills/workflow-resource-reader.js";
 import {
@@ -516,6 +517,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   if (eventNotifier === undefined) {
     throw new Error("Daemon composition requires a RunEventNotifierPort.");
   }
+  const runSkillCatalogSnapshotHolder: { current: RunSkillCatalogSnapshotService | undefined } = {
+    current: undefined,
+  };
   const providers = [...(options.providers ?? [])];
   const startupCredentials = new Map(
     providers.flatMap((provider) =>
@@ -1317,6 +1321,14 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
                     bundles: skillBundleStore,
                   }),
                 }),
+            ...(runSkillCatalogSnapshotHolder.current === undefined
+              ? {}
+              : {
+                  modelSkillCatalog: createRunSkillModelCatalogService({
+                    runs: options.storage.runs,
+                    snapshots: runSkillCatalogSnapshotHolder.current,
+                  }),
+                }),
           }),
       });
     },
@@ -1486,9 +1498,6 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           isReferenced: (artifactRef: string) =>
             options.storage.runs.isWorkflowArtifactReferenced!(artifactRef),
         };
-  const runSkillCatalogSnapshotHolder: { current: RunSkillCatalogSnapshotService | undefined } = {
-    current: undefined,
-  };
   const skillBundleReferenceAuthority =
     workflowArtifactReferenceAuthority === undefined
       ? undefined

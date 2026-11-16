@@ -311,6 +311,9 @@ importers:
       '@caelush/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@caelush/skills':
+        specifier: workspace:*
+        version: link:../skills
 
   packages/context:
     dependencies:

@@ -36,6 +36,28 @@ export interface EffectiveSkillCatalog {
   readonly complete: boolean;
 }
 
+/** Safe, body-free metadata copied from one fixed catalog snapshot. */
+export interface SkillCatalogSearchEntry {
+  readonly skillId: string;
+  readonly name: string;
+  readonly description: string;
+  readonly displayName?: string;
+  readonly searchTerms: readonly string[];
+  readonly enabled: boolean;
+  readonly userInvocable: boolean;
+  readonly modelInvocable: boolean;
+}
+
+/** Safe catalog view used by search and the bounded model presentation. */
+export interface SkillSearchCatalog {
+  readonly revision: string;
+  readonly entries: readonly SkillCatalogSearchEntry[];
+  readonly diagnostics: readonly SkillDiagnostic[];
+  readonly complete: boolean;
+}
+
+export type SkillCatalogSearchSource = EffectiveSkillCatalog | SkillSearchCatalog;
+
 export interface SkillDiscoveryResult {
   readonly candidates: readonly SkillCandidate[];
   readonly diagnostics: readonly SkillDiagnostic[];

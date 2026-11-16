@@ -1,4 +1,5 @@
 import type { AgentExecutionIdentity } from "@caelush/agent";
+import type { SkillSearchCatalog } from "@caelush/skills";
 
 export interface CodingWorkspaceDescriptor {
   readonly workspaceId: string;
@@ -90,18 +91,11 @@ export interface RelevantFileContextPort {
   }): Promise<RelevantFileProjection>;
 }
 
-export interface SkillCatalogEntry {
-  readonly name: string;
-  readonly description: string;
-  readonly resourceRef: string;
-  readonly version: string;
-}
-
 export interface SkillCatalogPort {
   list(input: {
-    readonly projectId?: string;
+    readonly runId: AgentExecutionIdentity["runId"];
     readonly signal: AbortSignal;
-  }): Promise<readonly SkillCatalogEntry[]>;
+  }): Promise<SkillSearchCatalog>;
 }
 
 export interface GitStateProjection {
