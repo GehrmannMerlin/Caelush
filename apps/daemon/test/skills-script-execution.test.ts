@@ -289,6 +289,7 @@ describe("frozen Skill script execution resources", () => {
           runtimeResolver,
           securityCapabilityService: additionalSecurity,
         });
+        let runScopedCancellationVerified = false;
         additionalScriptExecutor.run = async (activeBindingId) => {
           const context = lastScriptContext;
           if (context === undefined)
@@ -328,16 +329,31 @@ describe("frozen Skill script execution resources", () => {
                 "The script process session could not be polled through write_stdin.",
               );
             }
-            const stopped = await processOperations.terminate({
-              environment: context.environment,
-              securityContext: context.securityContext,
-              ownerRunId: context.identity.runId,
-              sessionId: result.sessionId,
-            });
-            if (stopped.status !== "EXITED" || stopped.signal !== "KILLED") {
-              throw new Error(
-                "The script process session could not be stopped through stop_process.",
-              );
+            if (!runScopedCancellationVerified) {
+              const activeRuntime = runtime;
+              if (activeRuntime === undefined) {
+                throw new Error("The Skill script Runtime was not available for Run cleanup.");
+              }
+              const cancellation = await activeRuntime.cancelOwnedResources(context.identity.runId);
+              if (
+                !cancellation.confirmed ||
+                !cancellation.stoppedResourceIds.includes(result.sessionId)
+              ) {
+                throw new Error("Run cancellation did not stop its owned Skill script process.");
+              }
+              runScopedCancellationVerified = true;
+            } else {
+              const stopped = await processOperations.terminate({
+                environment: context.environment,
+                securityContext: context.securityContext,
+                ownerRunId: context.identity.runId,
+                sessionId: result.sessionId,
+              });
+              if (stopped.status !== "EXITED" || stopped.signal !== "KILLED") {
+                throw new Error(
+                  "The script process session could not be stopped through stop_process.",
+                );
+              }
             }
           }
         };
@@ -490,6 +506,7 @@ describe("frozen Skill script execution resources", () => {
         expect(controlledProvider.requests).toHaveLength(3);
         expect(processObservations).toHaveLength(1);
         expect(additionalProcessObservations).toHaveLength(2);
+        expect(runScopedCancellationVerified).toBe(true);
         const { spec, scriptSource } = processObservations[0]!;
         expect(spec.launch.executable).toBe(process.execPath);
         expect(spec.launch.args.slice(1)).toEqual(scriptArgs);
