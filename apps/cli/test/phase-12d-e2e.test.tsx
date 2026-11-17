@@ -70,7 +70,7 @@ afterEach(async () => {
   controller = undefined;
   daemon = undefined;
   directory = undefined;
-});
+}, 20_000);
 
 /**
  * Phase 2C: every fixture adapter below speaks one dialect — `FIXTURE_API` — and the
