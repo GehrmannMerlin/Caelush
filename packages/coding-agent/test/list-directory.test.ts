@@ -5,6 +5,7 @@ import {
   RuntimePathNotFoundError,
 } from "@caelush/runtime";
 import { describe, expect, it } from "vitest";
+import { executeAgentToolResult } from "./support/agent-tool-result.js";
 
 import {
   ENVIRONMENT,
@@ -109,7 +110,10 @@ describe("list_directory target builtin", () => {
       }),
     );
 
-    const result = await tool.execute(executionInput({ path: "src", offset: 2, limit: 2 }));
+    const result = await executeAgentToolResult(
+      tool,
+      executionInput({ path: "src", offset: 2, limit: 2 }),
+    );
 
     // The probe asks for 2 - 1 + 2 + 1 = 4 entries; the window after the offset has 3, so the Tool can
     // prove one more follows.
@@ -126,7 +130,10 @@ describe("list_directory target builtin", () => {
       listDirectoryAnswer({ entries: [entry("a"), entry("b"), entry("c")] }),
     );
 
-    const result = await tool.execute(executionInput({ path: "src", offset: 2, limit: 2 }));
+    const result = await executeAgentToolResult(
+      tool,
+      executionInput({ path: "src", offset: 2, limit: 2 }),
+    );
 
     expect(result).toMatchObject({
       isError: false,
@@ -211,7 +218,7 @@ describe("list_directory target builtin", () => {
       { path: ".", limit: 2.5 },
       { offset: 1 },
     ]) {
-      const result = await tool.execute(executionInput(value));
+      const result = await executeAgentToolResult(tool, executionInput(value));
       expect(result.isError).toBe(true);
       expect(result.details).toMatchObject({ ok: false, error: "INVALID_RANGE" });
     }

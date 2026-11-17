@@ -294,7 +294,7 @@ describe("production Tool composition delegation", () => {
       updateSanitizer: new CaelushToolExecutionUpdateSanitizer(),
     });
 
-    const result = await executor.execute({
+    const { result } = await executor.execute({
       call: {
         request: { externalCallId: "call-1", toolName: "list_directory", args: { path: "." } },
         resolved,

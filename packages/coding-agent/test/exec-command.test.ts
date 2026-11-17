@@ -7,6 +7,7 @@ import {
   RuntimeProcessUncertainError,
 } from "@caelush/runtime";
 import { describe, expect, it } from "vitest";
+import { executeAgentToolResult } from "./support/agent-tool-result.js";
 
 import {
   ENVIRONMENT,
@@ -133,7 +134,7 @@ describe("exec_command target builtin", () => {
       }),
     );
 
-    const result = await tool.execute(executionInput({ cmd: "sleep 30" }));
+    const result = await executeAgentToolResult(tool, executionInput({ cmd: "sleep 30" }));
 
     expect(result).toMatchObject({
       isError: false,

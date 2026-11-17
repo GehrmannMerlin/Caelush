@@ -63,8 +63,6 @@ export interface ToolExecutionSnapshot {
   readonly invocation: ToolInvocation;
   readonly revision: number;
   readonly observation?: ToolObservation | undefined;
-  /** Generic, bounded content identities committed with invocation truth. */
-  readonly preparedResourceBindings?: readonly WorkflowResourceBindingDraftV1[] | undefined;
   readonly approval?: ApprovalRequest | undefined;
 }
 /**
@@ -121,6 +119,9 @@ export interface ToolExecutionCommit {
   readonly expectedRevision: number | null;
 
   readonly observation?: ToolObservation | undefined;
+
+  /** Generic bounded content identities committed with terminal invocation truth. */
+  readonly preparedResourceBindings?: readonly WorkflowResourceBindingDraftV1[] | undefined;
 
   /** A durable approval to create *in the same transaction* as the waiting invocation. */
   readonly approval?: ApprovalRequest | undefined;

@@ -40,3 +40,11 @@ export class ToolExecutionInvariantError extends Error {
     this.name = "ToolExecutionInvariantError";
   }
 }
+
+/** A validated read was real, but its generic durable resource binding cannot be admitted. */
+export class ToolResourceBindingRejectedError extends Error {
+  constructor(options?: { readonly cause?: unknown }) {
+    super("Tool resource binding was rejected safely.", options);
+    this.name = "ToolResourceBindingRejectedError";
+  }
+}

@@ -27,6 +27,7 @@ import {
   RESTRICTED_SECURITY_CONTEXT,
 } from "./support/operations-fixtures.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { executeAgentToolResult } from "./support/agent-tool-result.js";
 
 /**
  * The Runtime Operations adapters, driven against a real filesystem and a real ripgrep.
@@ -277,7 +278,7 @@ describe("search_text Runtime adapter", () => {
     if (!(await ripgrepWorks())) return;
     const tool = createSearchTextTool(readOnly).tool;
 
-    const result = await tool.execute({
+    const result = await executeAgentToolResult(tool, {
       identity: {
         runId: createRunId(),
         sessionId: createRunId() as never,
@@ -402,7 +403,7 @@ describe("search_text Runtime adapter", () => {
     if (!(await ripgrepWorks())) return;
     const tool = createSearchTextTool(readOnly).tool;
 
-    const result = await tool.execute({
+    const result = await executeAgentToolResult(tool, {
       identity: {
         runId: createRunId(),
         sessionId: createRunId() as never,

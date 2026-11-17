@@ -121,6 +121,8 @@ describe("package boundaries", () => {
       "@caelush/ai",
       "@caelush/protocol",
       "@caelush/runtime",
+      // Phase 05 derives Skill discovery Tools from this provider-neutral catalog package.
+      "@caelush/skills",
     ]);
 
     const kernelSource = executableSource(await packageSource("agent"));

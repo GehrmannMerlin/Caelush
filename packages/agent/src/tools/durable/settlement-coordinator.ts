@@ -24,7 +24,11 @@ import type {
   ToolExecutionSnapshot,
   ToolExecutionStorePort,
 } from "./execution-store-port.js";
-import { ToolExecutionConflictError, ToolExecutionInvariantError } from "./durable-errors.js";
+import {
+  ToolExecutionConflictError,
+  ToolExecutionInvariantError,
+  ToolResourceBindingRejectedError,
+} from "./durable-errors.js";
 import type { RunEventNotifierPort } from "../../events/notifier-port.js";
 
 /**
@@ -296,6 +300,7 @@ async function commitTerminal(
   } catch (error) {
     if (error instanceof ToolExecutionConflictError) throw error;
     if (error instanceof ToolExecutionInvariantError) throw error;
+    if (error instanceof ToolResourceBindingRejectedError) throw error;
     throw new ToolExecutionInfrastructureError("SETTLEMENT", "Tool settlement commit failed.", {
       cause: error,
     });

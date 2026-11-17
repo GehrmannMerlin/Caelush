@@ -284,6 +284,7 @@ export type { CreateToolObservationInput } from "./durable/observation.js";
 export {
   ToolExecutionConflictError,
   ToolExecutionInvariantError,
+  ToolResourceBindingRejectedError,
 } from "./durable/durable-errors.js";
 export type {
   DurableToolEvent,

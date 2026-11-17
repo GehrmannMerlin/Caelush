@@ -269,14 +269,15 @@ describe("independent use of the general Agent Tool framework", () => {
       invocationExecutorFactory: () => ({
         async execute({ call, identity, environment }) {
           // The real §4B executor shape: it calls the registered `AgentTool.execute` with the frozen
-          // identity and input, and nothing else.
-          return await call.resolved.tool.execute({
+          // identity and input, then returns the canonical internal execution envelope.
+          const output = await call.resolved.tool.execute({
             identity,
             args: call.args,
             environment,
             signal: new AbortController().signal,
             updates: DISCARDING_TOOL_EXECUTION_UPDATE_SINK,
           });
+          return { result: "result" in output ? output.result : output };
         },
       }),
       updateSanitizer: { sanitize: () => null },

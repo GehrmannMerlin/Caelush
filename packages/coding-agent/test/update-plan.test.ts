@@ -13,6 +13,7 @@ import {
   validatePlanSteps,
 } from "@caelush/coding-agent";
 import { describe, expect, it } from "vitest";
+import { executeAgentToolResult } from "./support/agent-tool-result.js";
 
 /**
  * `update_plan` — the milestones the model maintains, the working record it keeps beside them, and the
@@ -243,7 +244,7 @@ describe("a refused plan is actionable", () => {
   it("names the field to change, says nothing was recorded, and never echoes the payload", async () => {
     const tool = createUpdatePlanTool();
     const sentinel = "/home/private/sentinel.txt";
-    const result = await tool.tool.execute({
+    const result = await executeAgentToolResult(tool.tool, {
       args: { plan: [{ id: "editor", step: `read ${sentinel}`, status: "pending" }] },
     } as never);
 

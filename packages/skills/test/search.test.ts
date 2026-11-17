@@ -143,7 +143,7 @@ describe("Skill catalog search", () => {
       search({
         catalog,
         query: "skill",
-        cursor: first.nextCursor,
+        cursor: first.nextCursor!,
         pageSize: 1,
         audience: "MODEL",
         cursorBinding: "run_two",
@@ -153,7 +153,7 @@ describe("Skill catalog search", () => {
       search({
         catalog,
         query: "different",
-        cursor: first.nextCursor,
+        cursor: first.nextCursor!,
         pageSize: 1,
         audience: "MODEL",
         cursorBinding: "run_one",
@@ -163,7 +163,7 @@ describe("Skill catalog search", () => {
       search({
         catalog,
         query: "skill",
-        cursor: first.nextCursor,
+        cursor: first.nextCursor!,
         pageSize: 1,
         audience: "USER",
         cursorBinding: "run_one",

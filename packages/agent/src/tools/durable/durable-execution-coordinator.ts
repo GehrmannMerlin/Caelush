@@ -54,7 +54,11 @@ import {
   createToolRequestedEvent,
   createToolStartedEvent,
 } from "./durable-events.js";
-import { ToolExecutionConflictError, ToolExecutionInvariantError } from "./durable-errors.js";
+import {
+  ToolExecutionConflictError,
+  ToolExecutionInvariantError,
+  ToolResourceBindingRejectedError,
+} from "./durable-errors.js";
 import type {
   ToolExecutionCommitResult,
   ToolExecutionSnapshot,
@@ -322,6 +326,8 @@ const RUNTIME_CONTENT =
   "Tool execution failed because the tool runtime encountered an internal error.";
 const UNCERTAIN_CONTENT =
   "Tool execution side effects could not be verified safely. Do not automatically repeat the operation.";
+const RESOURCE_BINDING_REJECTED_CONTENT =
+  "The Skill content could not be activated within the Run's content budget. Choose a smaller Skill or another approach.";
 
 const BUDGET_CONTENT = "Tool execution budget is exhausted.";
 const DENIED_CONTENT = "Tool execution was denied by the active execution policy.";
@@ -642,11 +648,25 @@ export function createDurableToolExecutionCoordinator(
             preparedResourceBindings: executionOutput.preparedResourceBindings,
           });
 
-    const settledSnapshot = await settlementCoordinator.settle({
-      snapshot,
-      settlement,
-      now: finishedAt,
-    });
+    let settledSnapshot: ToolExecutionSnapshot;
+    try {
+      settledSnapshot = await settlementCoordinator.settle({
+        snapshot,
+        settlement,
+        now: finishedAt,
+      });
+    } catch (error) {
+      rawArtifact.clear();
+      if (!(error instanceof ToolResourceBindingRejectedError)) throw error;
+      return await settleDurableFailure({
+        snapshot,
+        code: "TOOL_EXECUTION_ERROR",
+        phase: "TOOL",
+        message: "Tool resource binding was rejected safely.",
+        content: RESOURCE_BINDING_REJECTED_CONTENT,
+        details: { reason: "RESOURCE_BINDING_REJECTED" },
+      });
+    }
     rawArtifact.clear();
     const observation = settledSnapshot.observation;
     if (observation === undefined) {

@@ -973,6 +973,7 @@ export {
   ToolExecutionConflictError,
   ToolExecutionInfrastructureError,
   ToolExecutionInvariantError,
+  ToolResourceBindingRejectedError,
   ToolExecutionUncertainError,
   ToolPreparationInfrastructureError,
   ToolResultLimitError,

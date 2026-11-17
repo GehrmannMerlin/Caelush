@@ -5,6 +5,7 @@ import {
   RuntimeSearchUnavailableError,
 } from "@caelush/runtime";
 import { describe, expect, it } from "vitest";
+import { executeAgentToolResult } from "./support/agent-tool-result.js";
 
 import {
   ENVIRONMENT,
@@ -160,7 +161,7 @@ describe("search_text target builtin", () => {
       }),
     });
 
-    const result = await tool.execute(executionInput({ pattern: "x" }));
+    const result = await executeAgentToolResult(tool, executionInput({ pattern: "x" }));
 
     const match = (result.details.matches as { text: string }[])[0]!;
     expect(match.text).toHaveLength(1000 + "... [match truncated]".length);

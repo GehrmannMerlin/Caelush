@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { createUtf8HeuristicTokenEstimator, type ContextSourceInput } from "@caelush/agent";
-import { createSkillCatalogContextSourceProvider } from "@caelush/coding-agent";
+import {
+  createSkillCatalogContextSourceProvider,
+  type SkillCatalogPort,
+} from "@caelush/coding-agent";
 import type { ModelDescriptor } from "@caelush/ai";
 import type { SkillSearchCatalog } from "@caelush/skills";
 
@@ -29,11 +32,11 @@ describe("MODEL Skill catalog Context provider", () => {
     const seen: string[] = [];
     const provider = createSkillCatalogContextSourceProvider({
       port: {
-        async list(input) {
+        async list(input: Parameters<SkillCatalogPort["list"]>[0]) {
           seen.push(input.runId);
           return catalog;
         },
-      } as never,
+      } satisfies SkillCatalogPort,
       tokenEstimator: createUtf8HeuristicTokenEstimator(),
     });
 
@@ -76,7 +79,7 @@ function contextInput(effectiveInputLimitTokens: number): ContextSourceInput {
     },
     turn: { stepId: "step_skill_catalog" as never, sequence: 1 },
     conversation: {} as never,
-    input: { kind: "CONTINUATION", reason: "TEST" },
+    input: { kind: "CONTINUATION", reason: "STEERING" },
     model: MODEL,
     mode: "FORCED_RECOVERY",
     policy: { effectiveInputLimitTokens } as never,

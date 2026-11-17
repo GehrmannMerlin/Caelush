@@ -236,6 +236,10 @@ describe("Phase 2C package edges", () => {
         // or a Step, and a host that reimplemented one would be a second authority over it.
         "AgentStepStateError",
         "AgentTurnInputError",
+        // Phase 05 adds the internal settlement envelope and safe binding rejection to the Agent
+        // Tool pipeline. Storage receives only validated generic binding facts at the authority
+        // transaction boundary.
+        "AgentToolExecutionOutputError",
         // Phase 7A/7B publish the parallel Context Kernel foundation from the Agent root.
         "ContextCurrentTurnTooLargeError",
         "ContextExhaustedError",
@@ -638,6 +642,7 @@ describe("Phase 2C package edges", () => {
         "SUMMARY_SOURCE_POLICY",
         "SemanticSummaryMalformedError",
         "TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION",
+        "TOOL_SETTLEMENT_OUTPUT_CAPABILITIES",
         "agentAssistantTextPart",
         "agentAssistantToolCallPart",
         "agentAttachmentRefPart",
@@ -781,6 +786,8 @@ describe("Phase 2C package edges", () => {
         "HISTORY_SOURCE_PROJECTION_VERSION",
         "MAX_MODEL_SCHEMA_FEEDBACK_BYTES",
         "MAX_MODEL_SCHEMA_ISSUES",
+        "MAX_ACTIVE_WORKFLOW_INSTRUCTION_TOKENS",
+        "MAX_WORKFLOW_INSTRUCTION_BYTES",
         "PROMPT_SURFACE_CAPACITY_DIMENSIONS",
         "PROMPT_SURFACE_CAPACITY_REASONS",
         "PRUNED_TOOL_RESULT_PREFIX",
@@ -825,6 +832,7 @@ describe("Phase 2C package edges", () => {
         "rolloverPromptSurface",
         "ToolResultPruningPolicy",
         "ToolResultPruningStats",
+        "ToolResourceBindingRejectedError",
         // Deep compaction adds its integrity, retry, retention-budget and Session-coverage
         // contracts at the Agent package root; they stay explicit here so future growth is reviewed.
         "COMPACTION_RETRY_MINIMUM_SOURCE_GROWTH_TOKENS",

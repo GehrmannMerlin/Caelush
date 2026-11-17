@@ -5,6 +5,7 @@ import {
   RuntimePathNotFoundError,
 } from "@caelush/runtime";
 import { describe, expect, it } from "vitest";
+import { executeAgentToolResult } from "./support/agent-tool-result.js";
 
 import {
   ENVIRONMENT,
@@ -178,7 +179,7 @@ describe("read_file target builtin", () => {
       { path: "a.ts", offset: 1.5 },
       {},
     ]) {
-      const result = await tool.execute(executionInput(value));
+      const result = await executeAgentToolResult(tool, executionInput(value));
       expect(result.isError).toBe(true);
       expect(result.details).toMatchObject({ ok: false, error: "INVALID_RANGE" });
     }

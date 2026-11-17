@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { JsonObject } from "@caelush/ai";
 import {
   createRunId,
   createSessionId,
@@ -26,6 +27,7 @@ import {
   DEFAULT_CODING_TOOL_ORDER,
   promptSnippetFor,
   type CodingToolDefinition,
+  type SkillOperations,
 } from "@caelush/coding-agent";
 
 const OLD_TOOL_ORDER = [
@@ -250,6 +252,38 @@ describe("fixed Skill discovery Tools", () => {
     expect(output).not.toHaveProperty("preparedResourceBindings");
   });
 
+  it("refuses to treat a supplemental read request as a core binding", async () => {
+    const invocation = runningInvocation();
+    const definitions = createDefaultCodingTools(
+      defaultOperations(
+        skillOperations({
+          async read() {
+            return {
+              kind: "CORE_CONTENT_READY",
+              bindingDraft: bindingFor(invocation.runId, invocation.id),
+            };
+          },
+        }),
+      ),
+    );
+    const registry = registryWith(definitions);
+
+    const output = (await executeTool(registry, invocation, {
+      toolName: "read_skill",
+      args: { skillId: "skill_frontend", resourcePath: "references/guide.md" },
+    })) as {
+      readonly result: {
+        readonly isError: boolean;
+        readonly details: Record<string, unknown>;
+      };
+      readonly preparedResourceBindings?: readonly WorkflowResourceBindingDraftV1[];
+    };
+
+    expect(output.result.isError).toBe(true);
+    expect(output.result.details).toMatchObject({ ok: false, error: "SKILL_RESOURCE_INVALID" });
+    expect(output.preparedResourceBindings).toBeUndefined();
+  });
+
   it("fails a supplemental read over budget instead of returning truncated text", async () => {
     const definitions = createDefaultCodingTools(
       defaultOperations(
@@ -377,7 +411,7 @@ describe("fixed Skill discovery Tools", () => {
   });
 
   it("keeps script execution explicitly unavailable in the Phase 05 test composition", async () => {
-    const runScript = vi.fn(async () => ({ kind: "EXECUTED" }));
+    const runScript = vi.fn(async () => ({ kind: "UNAVAILABLE" as const }));
     const definitions = createDefaultCodingTools(defaultOperations(skillOperations({ runScript })));
     const script = definitions.find(({ tool }) => tool.name === "run_skill_script")?.tool;
     expect(script).toBeDefined();
@@ -411,13 +445,16 @@ function defaultOperations(skills?: unknown): never {
   } as never;
 }
 
-function skillOperations(overrides: Record<string, unknown> = {}): unknown {
+function skillOperations(overrides: Partial<SkillOperations> = {}): SkillOperations {
   return {
     async search() {
       return { items: [], inventoryComplete: true };
     },
     async read() {
       throw new Error("Skill read was not expected.");
+    },
+    async runScript() {
+      return { kind: "UNAVAILABLE" };
     },
     ...overrides,
   };
@@ -429,11 +466,7 @@ function registryWith(definitions: readonly CodingToolDefinition[]): AgentToolRe
   return builder.build();
 }
 
-function preparedCall(
-  registry: AgentToolRegistry,
-  toolName: string,
-  args: Record<string, unknown>,
-) {
+function preparedCall(registry: AgentToolRegistry, toolName: string, args: JsonObject) {
   const outcome = createToolCallPreparer(registry).prepare({
     externalCallId: "call_skill_1",
     toolName: toolName as ToolName,
@@ -446,7 +479,7 @@ function preparedCall(
 async function executeTool(
   registry: AgentToolRegistry,
   invocation: ToolInvocation,
-  request: { readonly toolName: string; readonly args: Record<string, unknown> },
+  request: { readonly toolName: string; readonly args: JsonObject },
 ): Promise<unknown> {
   return await createToolInvocationExecutor({ invocation }).execute({
     call: preparedCall(registry, request.toolName, request.args),

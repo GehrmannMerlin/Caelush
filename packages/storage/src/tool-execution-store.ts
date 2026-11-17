@@ -15,6 +15,7 @@ import {
   assertToolObservationInvariant,
   ToolExecutionConflictError,
   ToolExecutionInvariantError,
+  ToolResourceBindingRejectedError,
   type DurableToolEventDraft,
   type ToolExecutionCommit,
   type ToolExecutionCommitResult,
@@ -25,6 +26,7 @@ import type { CaelushDatabase } from "./database.js";
 import { decodeProtocol, encodeProtocol } from "./codec.js";
 import { appendDurableEventsInTransaction } from "./events/sqlite-durable-event-store.js";
 import { StorageError } from "./errors.js";
+import { writePreparedResourceBindingsInTransaction } from "./prepared-resource-records.js";
 import { SqliteObservationRepository } from "./repositories/observation-repository.js";
 import { SqliteToolInvocationRepository } from "./repositories/tool-invocation-repository.js";
 import { writeStateSnapshot } from "./state-snapshot-writer.js";
@@ -47,7 +49,11 @@ function expectedRevision(actual: number | undefined, expected: number | null): 
 }
 
 function mapStoreError(error: unknown): never {
-  if (error instanceof ToolExecutionConflictError || error instanceof ToolExecutionInvariantError) {
+  if (
+    error instanceof ToolExecutionConflictError ||
+    error instanceof ToolExecutionInvariantError ||
+    error instanceof ToolResourceBindingRejectedError
+  ) {
     throw error;
   }
   if (error instanceof ToolSettlementExtensionError) {
@@ -502,6 +508,20 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
           command.invocation.id,
           command.invocation,
         );
+      }
+      if (command.preparedResourceBindings !== undefined) {
+        if (
+          command.invocation.status !== "COMPLETED" ||
+          command.observation === undefined ||
+          command.observation.isError
+        ) {
+          throw new ToolResourceBindingRejectedError();
+        }
+        writePreparedResourceBindingsInTransaction(this.database, {
+          runId: command.invocation.runId,
+          invocationId: command.invocation.id,
+          bindings: command.preparedResourceBindings,
+        });
       }
       const events = appendDurableEventsInTransaction(client, command.events);
       client.exec("COMMIT");

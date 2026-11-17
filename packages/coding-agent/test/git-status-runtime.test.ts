@@ -17,6 +17,7 @@ import {
   createWorkspaceId,
 } from "@caelush/protocol";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { executeAgentToolResult } from "./support/agent-tool-result.js";
 
 const run = promisify(execFile);
 
@@ -58,7 +59,7 @@ function tool() {
 }
 
 function execute(args: Record<string, unknown>) {
-  return tool().execute({
+  return executeAgentToolResult(tool(), {
     identity: {
       runId: createRunId(),
       sessionId: createRunId() as never,

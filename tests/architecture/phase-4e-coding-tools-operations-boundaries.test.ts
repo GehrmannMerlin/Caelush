@@ -46,6 +46,15 @@ async function read(relativePath: string): Promise<string> {
   return await readFile(abs(relativePath), "utf8");
 }
 
+function declaredToolOrder(source: string, constantName: string): string[] {
+  const declaration = source.match(
+    new RegExp(`export const ${constantName} = Object\\.freeze\\(\\[([\\s\\S]*?)\\] as const`),
+  );
+  return [...(declaration?.[1] ?? "").matchAll(/^\s*"([a-z_]+)",?$/gm)].map(
+    (match) => match[1] ?? "",
+  );
+}
+
 /** True when a path exists. A guard must be able to assert an absence without throwing. */
 async function exists(relativePath: string): Promise<boolean> {
   try {
@@ -140,7 +149,7 @@ describe("Phase 4E guard — builtin ownership", () => {
     const defaultTools = code(
       await read("packages/coding-agent/src/tools/builtins/default-tools.ts"),
     );
-    const order = [...defaultTools.matchAll(/^\s{2}"([a-z_]+)",$/gm)].map((match) => match[1]);
+    const order = declaredToolOrder(defaultTools, "DEFAULT_CODING_TOOL_ORDER");
     expect(order).toEqual([...CODING_BUILTINS]);
   });
 
@@ -166,7 +175,7 @@ describe("Phase 4E guard — builtin ownership", () => {
     const defaultTools = code(
       await read("packages/coding-agent/src/tools/builtins/default-tools.ts"),
     );
-    const order = [...defaultTools.matchAll(/^\s{2}"([a-z_]+)",$/gm)].map((match) => match[1]);
+    const order = declaredToolOrder(defaultTools, "DEFAULT_CODING_TOOL_ORDER");
     expect(order).toEqual([...CODING_BUILTINS]);
   });
 

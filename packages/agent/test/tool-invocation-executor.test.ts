@@ -197,6 +197,45 @@ describe("ToolInvocationExecutor", () => {
     expect(result.result.content).toBe("FILE_NOT_FOUND");
   });
 
+  it("rejects an error result that also tries to carry a durable resource binding", async () => {
+    const bound = invocation();
+    const registry = registryWith(
+      agentTool({
+        settlementOutputCapabilities: ["WORKFLOW_RESOURCE_BINDING"],
+        execute: async () => ({
+          result: {
+            content: "safe error",
+            details: { echoed: "safe error" },
+            isError: true,
+          },
+          preparedResourceBindings: [
+            {
+              runId: bound.runId,
+              resourceKind: "WORKFLOW_INSTRUCTION",
+              resourceId: "skill",
+              resourceRevision: "revision-1",
+              artifactRef: "skill:bundle",
+              sourceFingerprint: "source-1",
+              utf8Bytes: 3,
+              tokenEstimate: 1,
+              sourceToolInvocationId: bound.id,
+            },
+          ],
+        }),
+      }),
+    );
+    const executor = createToolInvocationExecutor({ invocation: bound });
+
+    await expect(
+      executor.execute({
+        call: preparedCall(registry),
+        identity: identityFor(bound),
+        environment,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toBeInstanceOf(ToolExecutionInfrastructureError);
+  });
+
   it("maps an unexpected throw to an EXECUTION infrastructure failure", async () => {
     const registry = registryWith(
       agentTool({

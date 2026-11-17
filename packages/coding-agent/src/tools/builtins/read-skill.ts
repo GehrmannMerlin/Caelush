@@ -78,6 +78,12 @@ export function createReadSkillTool(operations: SkillOperations): CodingToolDefi
           signal: input.signal,
         });
         if (result.kind === "CORE_CONTENT_READY") {
+          if (args.resourcePath !== undefined) {
+            return errorResult(
+              "SKILL_RESOURCE_INVALID",
+              "A supplemental resource read cannot create a Skill core binding.",
+            );
+          }
           return Object.freeze({
             result: successResult(CONTENT_READY_MARKER, { state: "CONTENT_READY" }),
             preparedResourceBindings: Object.freeze([result.bindingDraft]),

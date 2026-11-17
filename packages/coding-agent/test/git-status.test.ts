@@ -1,6 +1,7 @@
 import { createGitStatusTool } from "@caelush/coding-agent";
 import { RuntimeGitError, RuntimeInvariantError } from "@caelush/runtime";
 import { describe, expect, it } from "vitest";
+import { executeAgentToolResult } from "./support/agent-tool-result.js";
 
 import { ENVIRONMENT, executionInput, gitFake, testSignal } from "./support/operations-fixtures.js";
 
@@ -127,7 +128,7 @@ describe("git_status target builtin", () => {
       status({ detached: true, ahead: 0, behind: 0, clean: true, entries: [], truncated: false }),
     ).tool;
 
-    const result = await detached.execute(executionInput({}));
+    const result = await executeAgentToolResult(detached, executionInput({}));
 
     expect(result).toMatchObject({ isError: false, details: { detached: true } });
     expect(result.details).not.toHaveProperty("branch");

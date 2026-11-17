@@ -30,6 +30,7 @@ import {
 import { createLocalRuntimeResolver, LocalRuntime } from "@caelush/runtime";
 import { createRunId, createStepId, createWorkspaceId } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
+import { executeAgentToolResult } from "./support/agent-tool-result.js";
 
 import {
   executionInput,
@@ -685,7 +686,10 @@ describe("Coding Tool execution fidelity", () => {
     const { createRuntimeReadOnlyOperations } = await import("@caelush/coding-agent");
     const tool = createReadFileTool(createRuntimeReadOnlyOperations(RESOLVER)).tool;
 
-    const result = await tool.execute(executionInput({ path: "definitely-missing.ts" }));
+    const result = await executeAgentToolResult(
+      tool,
+      executionInput({ path: "definitely-missing.ts" }),
+    );
     expect(result).toMatchObject({ isError: true });
     expect(result.details.ok).toBe(false);
   });

@@ -1,6 +1,7 @@
 import { createReadAttachmentTool, readAttachmentInputSchema } from "@caelush/coding-agent";
 import { AttachmentIdSchema, type AttachmentReadResult } from "@caelush/protocol";
 import { describe, expect, it, vi } from "vitest";
+import { executeAgentToolResult } from "./support/agent-tool-result.js";
 import { executionInput, testSignal } from "./support/operations-fixtures.js";
 
 const result: AttachmentReadResult = {
@@ -81,7 +82,8 @@ describe("read_attachment Coding Tool", () => {
 
   it("returns image ranges as durable model references without persisting image payloads", async () => {
     const definition = createReadAttachmentTool({ read: async () => result });
-    const output = await definition.tool.execute(
+    const output = await executeAgentToolResult(
+      definition.tool,
       executionInput({ artifactId: result.artifactId, range: result.range }),
     );
 
@@ -119,7 +121,8 @@ describe("read_attachment Coding Tool", () => {
     const read = vi.fn(async () => result);
     const definition = createReadAttachmentTool({ read });
 
-    const output = await definition.tool.execute(
+    const output = await executeAgentToolResult(
+      definition.tool,
       executionInput({
         artifactId: result.artifactId,
         range: { kind: "DOCX_BLOCKS", start: 0, count: 10 },
@@ -135,7 +138,8 @@ describe("read_attachment Coding Tool", () => {
   it("distinguishes an invalid attachment id from an invalid range", async () => {
     const definition = createReadAttachmentTool({ read: async () => result });
 
-    const output = await definition.tool.execute(
+    const output = await executeAgentToolResult(
+      definition.tool,
       executionInput({ artifactId: "简历.pdf", range: { kind: "AUTO" } }),
     );
 

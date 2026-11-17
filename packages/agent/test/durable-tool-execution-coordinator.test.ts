@@ -20,6 +20,7 @@ import {
   createToolFailureSettlement,
   createToolSettlementCoordinator,
   ToolExecutionConflictError,
+  ToolResourceBindingRejectedError,
   ToolExecutionAbortedError,
   ToolExecutionUncertainError,
   type RunEventNotifierPort,
@@ -31,6 +32,8 @@ import {
   type ToolExecutionCommitResult,
   type ToolExecutionSnapshot,
   type ToolExecutionStorePort,
+  type ToolExecutionIdentity,
+  type AgentToolExecutionOutput,
   type ToolPolicyDecision,
   type EffectReconciliationPort,
 } from "@caelush/agent";
@@ -137,11 +140,9 @@ interface Harness {
 }
 
 function harness(options: {
-  readonly execute?: () => Promise<{
-    content: string;
-    details: Record<string, unknown>;
-    isError: boolean;
-  }>;
+  readonly execute?: (
+    identity: ToolExecutionIdentity,
+  ) => Promise<AgentToolExecutionOutput["result"] | AgentToolExecutionOutput>;
   readonly decision?: ToolPolicyDecision;
   readonly approvalLookup?: boolean;
   readonly pipelineOutcome?: ToolResultProcessingOutcome;
@@ -230,14 +231,19 @@ function harness(options: {
     eventIdFactory: { create: createEventId },
     clock: { now: () => createTimestampMs(++now) },
     invocationExecutorFactory: () => ({
-      async execute(): Promise<{ content: string; details: JsonObject; isError: boolean }> {
+      async execute(input): Promise<AgentToolExecutionOutput> {
         executions += 1;
-        const produced = await (options.execute?.() ??
+        const produced = await (options.execute?.(input.identity) ??
           Promise.resolve({ content: "ok", details: {}, isError: false }));
-        // The harness may declare its result with a looser `Record<string, unknown>`, because a test
-        // that throws before returning never builds one. The frozen shape is asserted here, once, at
-        // the single place the harness turns a test's value into a Tool result.
-        return { ...produced, details: produced.details as JsonObject };
+        if ("result" in produced) {
+          return {
+            ...produced,
+            result: { ...produced.result, details: produced.result.details as JsonObject },
+          };
+        }
+        return {
+          result: { ...produced, details: produced.details as JsonObject },
+        };
       },
     }),
     updateSanitizer: { sanitize: () => null },
@@ -325,6 +331,55 @@ function seeded(status: ToolInvocation["status"], overrides: Partial<ToolInvocat
 }
 
 describe("DurableToolExecutionCoordinator", () => {
+  it("safely settles a rejected binding without rerunning the read or escalating the Run", async () => {
+    const h = harness({
+      execute: async (identity) => ({
+        result: {
+          content: "CONTENT_READY: bounded marker",
+          details: {},
+          isError: false,
+        },
+        preparedResourceBindings: [
+          {
+            runId: identity.runId,
+            resourceKind: "WORKFLOW_INSTRUCTION",
+            resourceId: "skill_frontend",
+            resourceRevision: "revision-1",
+            artifactRef: "skill:frontend",
+            sourceFingerprint: "source-fingerprint-1",
+            utf8Bytes: 3,
+            tokenEstimate: 1,
+            sourceToolInvocationId: identity.invocationId,
+          },
+        ],
+      }),
+    });
+    const originalCommit = h.store.commit.bind(h.store);
+    h.store.commit = async (command: ToolExecutionCommit) => {
+      if ((command.preparedResourceBindings?.length ?? 0) > 0) {
+        throw new ToolResourceBindingRejectedError();
+      }
+      return await originalCommit(command);
+    };
+
+    const outcome = await h.coordinator.execute(request({ toolName: "read_skill" }));
+
+    expect(outcome).toMatchObject({
+      kind: "SETTLED",
+      invocation: { status: "FAILED", error: { code: "TOOL_EXECUTION_ERROR" } },
+      observation: { isError: true, content: expect.stringContaining("Choose a smaller Skill") },
+    });
+    expect(h.executions()).toBe(1);
+    expect(h.store.commits.map(({ invocation }) => invocation.status)).toEqual([
+      "REQUESTED",
+      "RUNNING",
+      "FAILED",
+    ]);
+    const last = h.store.commits.at(-1)!;
+    expect(last.preparedResourceBindings).toBeUndefined();
+    expect(JSON.stringify(last.observation)).not.toContain("source-fingerprint-1");
+  });
+
   it("settles a new READY call with a durable observation", async () => {
     const h = harness({});
     const outcome = await h.coordinator.execute(request());
