@@ -124,13 +124,16 @@ describeWindows("Runtime authorized read-only Skill resources", () => {
       expiresAt: Date.now() + 30_000,
       resources: [resourceIdentity, externalResourceIdentity],
     };
+    const evaluationTime = Date.now();
     const projectDecision = authorizeReadOnlyResource(
       { runId: readOnlyPolicy.runId, ...resourceIdentity },
       readOnlyPolicy,
+      evaluationTime,
     );
     const userDecision = authorizeReadOnlyResource(
       { runId: readOnlyPolicy.runId, ...externalResourceIdentity },
       readOnlyPolicy,
+      evaluationTime,
     );
     expect(projectDecision.kind).toBe("ALLOW");
     expect(userDecision.kind).toBe("ALLOW");

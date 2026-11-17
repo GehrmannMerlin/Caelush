@@ -28,6 +28,8 @@ export interface RunSkillOperationsAdapterOptions {
   readonly snapshots: Pick<RunSkillCatalogSnapshotService, "readRunSkillCatalogSnapshot">;
   readonly bundles: SkillBundlePort;
   readonly modelCatalog: RunSkillModelCatalogService;
+  /** Omitted in production until script execution is explicitly ready; test compositions inject it. */
+  readonly scriptExecution?: SkillOperations["runScript"] | undefined;
 }
 
 const MAX_SINGLE_SKILL_CORE_UTF8_BYTES = 64 * 1024;
@@ -120,8 +122,14 @@ export function createRunSkillOperationsAdapter(
       return Object.freeze({ kind: "SUPPLEMENTAL_RESOURCE" as const, resource });
     },
 
-    async runScript() {
-      return Object.freeze({ kind: "UNAVAILABLE" as const });
+    async runScript(
+      input: Parameters<SkillOperations["runScript"]>[0],
+      evaluationContext: Parameters<SkillOperations["runScript"]>[1],
+    ) {
+      if (options.scriptExecution === undefined) {
+        return Object.freeze({ kind: "UNAVAILABLE" as const });
+      }
+      return options.scriptExecution(input, evaluationContext);
     },
   });
 }

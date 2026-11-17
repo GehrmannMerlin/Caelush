@@ -77,11 +77,8 @@ describe("RunController security authority", () => {
   it("uses the durable security policy digest as the resource grant revision", () => {
     const context = createToolSecurityContext(run, state);
     expect(readOnlyResourcePolicyRevisionFor(context)).toBe(run.securityPolicy!.policyDigest);
-    expect(() =>
-      readOnlyResourcePolicyRevisionFor({
-        permissionProfile: "PROJECT_ACCESS",
-        approvalPolicy: "ON_BOUNDARY",
-      }),
-    ).toThrow("immutable security policy");
+    expect(() => readOnlyResourcePolicyRevisionFor({} as never)).toThrow(
+      "immutable security policy",
+    );
   });
 });

@@ -1,5 +1,5 @@
 import { createRunId } from "@caelush/protocol";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   authorizeReadOnlyResource,
   verifyReadOnlyResourceGrant,
@@ -34,13 +34,17 @@ function request(overrides: Record<string, unknown> = {}) {
   } as never;
 }
 
+function authorize(requestValue = request(), policyValue = policy(), now = NOW) {
+  return authorizeReadOnlyResource(requestValue, policyValue, now);
+}
+
+function verify(value: unknown, policyValue = policy(), now = NOW) {
+  return verifyReadOnlyResourceGrant(value, policyValue, now);
+}
+
 describe("generic read-only resource authorization", () => {
-  afterEach(() => vi.useRealTimers());
-
   it("issues a run-, bundle-, policy- and lifetime-bound typed grant", () => {
-    vi.setSystemTime(NOW);
-
-    const decision = authorizeReadOnlyResource(request(), policy());
+    const decision = authorize();
 
     expect(decision.kind).toBe("ALLOW");
     if (decision.kind !== "ALLOW") throw new Error("expected grant");
@@ -53,7 +57,7 @@ describe("generic read-only resource authorization", () => {
       policyRevision: "policy-r1",
       lifetime: { issuedAt: NOW, expiresAt: NOW + 60_000 },
     });
-    expect(verifyReadOnlyResourceGrant(decision.grant, policy())).toMatchObject({
+    expect(verify(decision.grant)).toMatchObject({
       valid: true,
     });
   });
@@ -64,67 +68,54 @@ describe("generic read-only resource authorization", () => {
     ["wrong bundle revision", { bundleRevision: "bundle-r2" }],
     ["arbitrary host path", { canonicalRoot: "C:/Users/test/Documents" }],
   ])("rejects %s", (_label, overrides) => {
-    vi.setSystemTime(NOW);
-    expect(authorizeReadOnlyResource(request(overrides), policy()).kind).toBe("DENY");
+    expect(authorize(request(overrides), policy()).kind).toBe("DENY");
   });
 
   it("rejects disabled, expired and revoked policies", () => {
-    vi.setSystemTime(NOW);
-    expect(authorizeReadOnlyResource(request(), policy({ enabled: false })).kind).toBe("DENY");
-    expect(authorizeReadOnlyResource(request(), policy({ expiresAt: NOW })).kind).toBe("DENY");
+    expect(authorize(request(), policy({ enabled: false })).kind).toBe("DENY");
+    expect(authorize(request(), policy({ expiresAt: NOW })).kind).toBe("DENY");
 
-    const authorized = authorizeReadOnlyResource(request(), policy());
+    const authorized = authorize();
     if (authorized.kind !== "ALLOW") throw new Error("expected grant");
     expect(
-      verifyReadOnlyResourceGrant(
-        authorized.grant,
-        policy({ revision: "policy-r2", resources: [] }),
-      ),
+      verify(authorized.grant, policy({ revision: "policy-r2", resources: [] })),
     ).toMatchObject({ valid: false, reason: "POLICY_REVOKED" });
   });
 
   it("expires the grant at the bounded lifetime even if the policy lasts longer", () => {
-    vi.setSystemTime(NOW);
-    const authorized = authorizeReadOnlyResource(request(), policy({ expiresAt: NOW + 600_000 }));
+    const authorized = authorize(request(), policy({ expiresAt: NOW + 600_000 }));
     if (authorized.kind !== "ALLOW") throw new Error("expected grant");
     expect(authorized.grant.lifetime.expiresAt).toBe(NOW + 60_000);
 
-    vi.setSystemTime(NOW + 60_000);
     expect(
-      verifyReadOnlyResourceGrant(authorized.grant, policy({ expiresAt: NOW + 600_000 })),
+      verify(authorized.grant, policy({ expiresAt: NOW + 600_000 }), NOW + 60_000),
     ).toMatchObject({ valid: false, reason: "GRANT_EXPIRED" });
   });
 
   it("keeps the authority fingerprint stable when an identical grant is renewed", () => {
-    vi.setSystemTime(NOW);
-    const first = authorizeReadOnlyResource(request(), policy({ expiresAt: NOW + 600_000 }));
-    vi.setSystemTime(NOW + 1);
-    const renewed = authorizeReadOnlyResource(request(), policy({ expiresAt: NOW + 600_000 }));
+    const longPolicy = policy({ expiresAt: NOW + 600_000 });
+    const first = authorize(request(), longPolicy);
+    const renewed = authorize(request(), longPolicy, NOW + 1);
     if (first.kind !== "ALLOW" || renewed.kind !== "ALLOW") throw new Error("expected grants");
     expect(renewed.grant.lifetime).not.toEqual(first.grant.lifetime);
     expect(renewed.grant.authorityFingerprint).toBe(first.grant.authorityFingerprint);
   });
 
   it("rejects forged or modified grants at the verification boundary", () => {
-    vi.setSystemTime(NOW);
-    const authorized = authorizeReadOnlyResource(request(), policy());
+    const authorized = authorize();
     if (authorized.kind !== "ALLOW") throw new Error("expected grant");
 
     expect(
-      verifyReadOnlyResourceGrant(
-        { ...authorized.grant, canonicalRoot: "C:/Users/test/Documents" } as never,
-        policy(),
-      ),
+      verify({ ...authorized.grant, canonicalRoot: "C:/Users/test/Documents" } as never, policy()),
     ).toMatchObject({ valid: false });
-    expect(verifyReadOnlyResourceGrant({ ...authorized.grant } as never, policy())).toMatchObject({
+    expect(verify({ ...authorized.grant } as never, policy())).toMatchObject({
       valid: false,
       reason: "UNTRUSTED_GRANT",
     });
   });
 
   it("keeps resource-read authorization separate from process and network capabilities", () => {
-    vi.setSystemTime(NOW);
-    const decision = authorizeReadOnlyResource(request(), policy());
+    const decision = authorize();
     const encoded = JSON.stringify(decision);
     expect(encoded).not.toContain("PROCESS_START");
     expect(encoded).not.toContain("SHELL_EXEC");

@@ -1,4 +1,9 @@
 import type { RunId, ToolInvocationId, WorkflowResourceBindingDraftV1 } from "@caelush/protocol";
+import type {
+  ToolExecutionEnvironment,
+  ToolExecutionIdentity,
+  ToolSecurityContext,
+} from "@caelush/agent";
 import type { BoundedSkillResource, SkillSearchPage } from "@caelush/skills";
 
 export interface SkillSearchOperationInput {
@@ -37,17 +42,44 @@ export interface SkillScriptOperationInput {
   readonly workdir?: string | undefined;
   readonly yieldTimeMs?: number | undefined;
   readonly signal: AbortSignal;
+  readonly onOutput?: ((stream: "stdout" | "stderr", text: string) => void) | undefined;
 }
 
-/** The Phase 05 script adapter has one deliberately unavailable result. */
+/** The Run-bound evaluation facts a host adapter needs to revalidate script admission. */
+export interface SkillScriptEvaluationContext {
+  readonly identity: ToolExecutionIdentity;
+  readonly environment: ToolExecutionEnvironment;
+  readonly securityContext?: ToolSecurityContext | undefined;
+}
+
+/** Safe process facts projected from Runtime; host paths and executable identity never cross this port. */
+export interface SkillScriptOperationExecuted {
+  readonly kind: "EXECUTED";
+  readonly status: "RUNNING" | "EXITED";
+  readonly sessionId?: string | undefined;
+  readonly output: string;
+  readonly exitCode?: number | undefined;
+  readonly signal?: string | undefined;
+  readonly totalOutputBytes: number;
+  readonly omittedBytes: number;
+  readonly durationMs?: number | undefined;
+}
+
+/** An explicit result for hosts that do not have the verified script boundary. */
 export interface SkillScriptOperationUnavailable {
   readonly kind: "UNAVAILABLE";
 }
 
+export type SkillScriptOperationResult =
+  SkillScriptOperationExecuted | SkillScriptOperationUnavailable;
+
 export interface SkillOperations {
   search(input: SkillSearchOperationInput): Promise<SkillSearchPage>;
   read(input: SkillReadOperationInput): Promise<SkillReadOperationResult>;
-  runScript(input: SkillScriptOperationInput): Promise<SkillScriptOperationUnavailable>;
+  runScript(
+    input: SkillScriptOperationInput,
+    evaluationContext: SkillScriptEvaluationContext,
+  ): Promise<SkillScriptOperationResult>;
 }
 
 export type SkillOperationErrorCode =
@@ -59,6 +91,12 @@ export type SkillOperationErrorCode =
   | "SKILL_RESOURCE_DENIED"
   | "SKILL_RESOURCE_INVALID"
   | "SKILL_SEARCH_UNAVAILABLE"
+  | "SKILL_BINDING_INACTIVE"
+  | "SKILL_WORKSPACE_MISMATCH"
+  | "SKILL_PREPARATION_REQUIRED"
+  | "SKILL_SCRIPT_DENIED"
+  | "SKILL_SCRIPT_INTERPRETER_UNAVAILABLE"
+  | "SKILL_SCRIPT_UNAVAILABLE"
   | "SCRIPT_EXECUTION_UNAVAILABLE";
 
 const SAFE_ERROR_MESSAGES: Readonly<Record<SkillOperationErrorCode, string>> = Object.freeze({
@@ -70,7 +108,13 @@ const SAFE_ERROR_MESSAGES: Readonly<Record<SkillOperationErrorCode, string>> = O
   SKILL_RESOURCE_DENIED: "The Skill resource is outside its bound bundle.",
   SKILL_RESOURCE_INVALID: "The Skill resource could not be read completely.",
   SKILL_SEARCH_UNAVAILABLE: "Skill search is unavailable for this Run.",
-  SCRIPT_EXECUTION_UNAVAILABLE: "Skill script execution is unavailable in this phase.",
+  SKILL_BINDING_INACTIVE: "The Skill binding is not active in this Run.",
+  SKILL_WORKSPACE_MISMATCH: "The Skill binding does not belong to this workspace.",
+  SKILL_PREPARATION_REQUIRED: "The Skill content must be prepared in Context before execution.",
+  SKILL_SCRIPT_DENIED: "The requested Skill script or working directory is not allowed.",
+  SKILL_SCRIPT_INTERPRETER_UNAVAILABLE: "The Skill script interpreter is unavailable.",
+  SKILL_SCRIPT_UNAVAILABLE: "The verified Skill script execution boundary is unavailable.",
+  SCRIPT_EXECUTION_UNAVAILABLE: "Skill script execution is unavailable in this environment.",
 });
 
 export class SkillOperationError extends Error {

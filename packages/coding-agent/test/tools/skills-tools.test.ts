@@ -410,7 +410,7 @@ describe("fixed Skill discovery Tools", () => {
     ).rejects.toThrow();
   });
 
-  it("keeps script execution explicitly unavailable in the Phase 05 test composition", async () => {
+  it("keeps script execution unavailable when its adapter is unavailable", async () => {
     const runScript = vi.fn(async () => ({ kind: "UNAVAILABLE" as const }));
     const definitions = createDefaultCodingTools(defaultOperations(skillOperations({ runScript })));
     const script = definitions.find(({ tool }) => tool.name === "run_skill_script")?.tool;
@@ -424,12 +424,90 @@ describe("fixed Skill discovery Tools", () => {
       updates: { publish: () => undefined },
     } as never);
 
-    expect(runScript).not.toHaveBeenCalled();
+    expect(runScript).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       isError: true,
       details: { error: "SCRIPT_EXECUTION_UNAVAILABLE" },
     });
     expect(JSON.stringify(result)).not.toContain("/workspace");
+  });
+
+  it("passes the Run-bound execution context and projects only a safe process result", async () => {
+    const runScript = vi.fn(async () => ({
+      kind: "EXECUTED" as const,
+      status: "EXITED" as const,
+      output: "script completed",
+      exitCode: 0,
+      totalOutputBytes: 16,
+      omittedBytes: 0,
+      durationMs: 12,
+    }));
+    const skills = skillOperations({
+      runScript: runScript as unknown as SkillOperations["runScript"],
+    });
+    const definitions = createDefaultCodingTools(defaultOperations(skills));
+    const script = definitions.find(({ tool }) => tool.name === "run_skill_script")?.tool;
+    expect(script).toBeDefined();
+
+    const invocation = runningInvocation({ toolName: "run_skill_script" });
+    const identity = executionIdentityFor(invocation);
+    const toolEnvironment = environment();
+    const signal = new AbortController().signal;
+    const securityContext = {
+      securityPolicy: {
+        preset: { id: "WORKSPACE_WRITE", version: 1 },
+        policyDigest: "policy-digest-v1",
+        filesystemBoundary: "WORKSPACE_READ_WRITE",
+        processBoundary: "WORKSPACE_WRITE",
+        requiredEnforcement: "OS_RESTRICTED",
+      },
+    };
+    const result = await script!.execute({
+      identity,
+      args: {
+        bindingId: "binding_1",
+        resourcePath: "scripts/check.mjs",
+        args: ["--check", "two words"],
+        workdir: "packages",
+        yieldTimeMs: 1_500,
+      },
+      environment: toolEnvironment,
+      securityContext,
+      signal,
+      updates: { publish: () => undefined },
+    } as never);
+
+    expect(runScript).toHaveBeenCalledWith(
+      {
+        runId: identity.runId,
+        bindingId: "binding_1",
+        resourcePath: "scripts/check.mjs",
+        args: ["--check", "two words"],
+        workdir: "packages",
+        yieldTimeMs: 1_500,
+        signal,
+        onOutput: expect.any(Function),
+      },
+      {
+        identity,
+        environment: toolEnvironment,
+        securityContext,
+      },
+    );
+    expect(result).toMatchObject({
+      content: expect.stringContaining("script completed"),
+      details: {
+        ok: true,
+        status: "EXITED",
+        exitCode: 0,
+        totalOutputBytes: 16,
+        omittedBytes: 0,
+        durationMs: 12,
+      },
+      isError: false,
+    });
+    expect(JSON.stringify(result)).not.toContain(toolEnvironment.workspace.path);
+    expect(JSON.stringify(result)).not.toContain("two words");
   });
 });
 

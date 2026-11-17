@@ -69,6 +69,9 @@ export type {
   SkillReadOperationResult,
   SkillSearchOperationInput,
   SkillScriptOperationInput,
+  SkillScriptEvaluationContext,
+  SkillScriptOperationExecuted,
+  SkillScriptOperationResult,
   SkillScriptOperationUnavailable,
   SkillOperationErrorCode,
 } from "./operations/skill-operations.js";

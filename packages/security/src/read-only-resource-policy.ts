@@ -40,8 +40,8 @@ export interface ReadOnlyResourceAuthorizationRequest extends ReadOnlyResourceId
 export function authorizeReadOnlyResource(
   request: ReadOnlyResourceAuthorizationRequest,
   currentPolicy: ReadOnlyResourcePolicy,
+  now: number,
 ): ReadOnlyResourceGrantDecision {
-  const now = Date.now();
   if (currentPolicy === null || typeof currentPolicy !== "object") {
     return deny("INVALID_RESOURCE_IDENTITY");
   }
@@ -54,7 +54,11 @@ export function authorizeReadOnlyResource(
   if (request.runId !== currentPolicy.runId) return deny("WRONG_RUN");
   if (!validRevision(currentPolicy.revision)) return deny("INVALID_RESOURCE_IDENTITY");
   if (!Array.isArray(currentPolicy.resources)) return deny("INVALID_RESOURCE_IDENTITY");
-  if (!Number.isSafeInteger(currentPolicy.expiresAt) || currentPolicy.expiresAt <= now) {
+  if (
+    !Number.isSafeInteger(now) ||
+    !Number.isSafeInteger(currentPolicy.expiresAt) ||
+    currentPolicy.expiresAt <= now
+  ) {
     return deny("POLICY_EXPIRED");
   }
 
@@ -91,6 +95,7 @@ export function authorizeReadOnlyResource(
 export function verifyReadOnlyResourceGrant(
   value: unknown,
   currentPolicy: ReadOnlyResourcePolicy,
+  now: number,
 ): ReadOnlyResourceGrantVerification {
   if (!isIssuedGrant(value)) {
     return invalid("UNTRUSTED_GRANT");
@@ -99,13 +104,16 @@ export function verifyReadOnlyResourceGrant(
     return invalid("INVALID_RESOURCE_IDENTITY");
   }
   const grant = value;
-  const now = Date.now();
   if (grant.runId !== currentPolicy.runId) return invalid("WRONG_RUN");
   if (!currentPolicy.enabled) return invalid("RESOURCE_AUTHORITY_DISABLED");
   if (grant.policyRevision !== currentPolicy.revision) return invalid("POLICY_REVOKED");
   if (!validRevision(currentPolicy.revision)) return invalid("INVALID_RESOURCE_IDENTITY");
   if (!Array.isArray(currentPolicy.resources)) return invalid("INVALID_RESOURCE_IDENTITY");
-  if (!Number.isSafeInteger(currentPolicy.expiresAt) || currentPolicy.expiresAt <= now) {
+  if (
+    !Number.isSafeInteger(now) ||
+    !Number.isSafeInteger(currentPolicy.expiresAt) ||
+    currentPolicy.expiresAt <= now
+  ) {
     return invalid("POLICY_EXPIRED");
   }
   if (

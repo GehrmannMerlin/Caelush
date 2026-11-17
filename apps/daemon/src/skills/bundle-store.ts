@@ -79,12 +79,26 @@ export interface SkillBundleGarbageCollectionResult {
   readonly removedBytes: number;
 }
 
+/** Private daemon-only locator for a script already verified against a frozen bundle manifest. */
+export interface SkillBundleExecutionResource {
+  readonly rootDirectory: string;
+  readonly absolutePath: string;
+  readonly bundleRevision: string;
+  readonly contentManifestHash: string;
+  readonly fingerprint: string;
+}
+
 export interface FilesystemSkillBundleStore extends SkillBundlePort {
   captureCandidate(input: {
     readonly candidate: SkillCandidate;
     readonly workspaceId: string;
     readonly signal: AbortSignal;
   }): Promise<SkillBundleRefV1>;
+  resolveExecutionResource(input: {
+    readonly bundle: SkillBundleRefV1;
+    readonly relativePath: string;
+    readonly signal: AbortSignal;
+  }): Promise<SkillBundleExecutionResource>;
   collectGarbage(): Promise<SkillBundleGarbageCollectionResult>;
   releasePreparingReference(artifactRef: string): void;
 }
@@ -244,6 +258,60 @@ export function createFilesystemSkillBundleStore(
         const content = verified.files.get(normalizedPath);
         if (content === undefined) throw new SkillBundleStoreError("SKILL_RESOURCE_DENIED");
         return toBoundedSkillResource(normalizedPath, content);
+      });
+    },
+
+    async resolveExecutionResource({ bundle, relativePath, signal }) {
+      return withWriteLock(async () => {
+        checkCancelled(signal);
+        const parsedRef = SkillBundleRefV1Schema.safeParse(bundle);
+        if (!parsedRef.success || !/^sha256:[a-f0-9]{64}$/u.test(bundle.bundleRevision)) {
+          throw new SkillBundleStoreError("SKILL_ARTIFACT_INVALID");
+        }
+        let normalizedPath: string;
+        try {
+          normalizedPath = normalizeSkillRelativePath(relativePath);
+        } catch {
+          throw new SkillBundleStoreError("SKILL_RESOURCE_DENIED");
+        }
+        if (normalizedPath.split("/")[0] !== "scripts") {
+          throw new SkillBundleStoreError("SKILL_RESOURCE_DENIED");
+        }
+        const reference = await readReferenceMetadata(bundle.artifactRef);
+        if (
+          reference === undefined ||
+          reference.bundleRevision !== bundle.bundleRevision ||
+          reference.manifestFingerprint !== bundle.manifestFingerprint
+        ) {
+          throw new SkillBundleStoreError("SKILL_ARTIFACT_INVALID");
+        }
+        const blobPath = join(bundleDirectory, bundle.bundleRevision.slice("sha256:".length));
+        const verified = await verifyBundleSafely(blobPath, bundle.bundleRevision);
+        if (verified.manifest.manifestFingerprint !== bundle.manifestFingerprint) {
+          throw new SkillBundleStoreError("SKILL_ARTIFACT_INVALID");
+        }
+        checkCancelled(signal);
+        const content = verified.files.get(normalizedPath);
+        if (content === undefined) throw new SkillBundleStoreError("SKILL_RESOURCE_DENIED");
+        const canonicalRoot = await realpath(blobPath);
+        const candidatePath = join(canonicalRoot, ...normalizedPath.split("/"));
+        const candidateInfo = await lstat(candidatePath);
+        const canonicalPath = await realpath(candidatePath);
+        if (
+          !candidateInfo.isFile() ||
+          candidateInfo.isSymbolicLink() ||
+          !isWithin(canonicalRoot, canonicalPath)
+        ) {
+          throw new SkillBundleStoreError("SKILL_ARTIFACT_INVALID");
+        }
+        const fingerprint = createSkillFileFingerprint(content);
+        return Object.freeze({
+          rootDirectory: canonicalRoot,
+          absolutePath: canonicalPath,
+          bundleRevision: bundle.bundleRevision,
+          contentManifestHash: bundle.bundleRevision.slice("sha256:".length),
+          fingerprint,
+        });
       });
     },
 

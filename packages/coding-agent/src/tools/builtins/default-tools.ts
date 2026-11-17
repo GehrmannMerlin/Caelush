@@ -171,7 +171,7 @@ export function createDefaultCodingTools(
   definitions.push(
     createSearchSkillsTool(operations.skills),
     createReadSkillTool(operations.skills),
-    createRunSkillScriptTool(),
+    createRunSkillScriptTool(operations.skills.runScript),
   );
   return Object.freeze(definitions.map((definition) => Object.freeze(definition)));
 }
