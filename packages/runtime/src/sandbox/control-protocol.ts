@@ -1,6 +1,7 @@
 import { RuntimeSandboxOperationError, RuntimeSandboxProtocolError } from "../runtime-errors.js";
 
 export const SANDBOX_CONTROL_PROTOCOL_VERSION = 1 as const;
+export const SANDBOX_READ_ONLY_RESOURCE_CAPABILITY_VERSION = 1 as const;
 export const MAX_SANDBOX_CONTROL_MESSAGE_BYTES = 64 * 1024;
 
 export interface SandboxHelloMessage {
@@ -18,6 +19,7 @@ export interface SandboxReadyMessage {
   readonly providerId: string;
   readonly boundaryFingerprint: string;
   readonly enforcement: "HARD" | "PARTIAL" | "NONE";
+  readonly readOnlyResourceCapabilityVersion?: typeof SANDBOX_READ_ONLY_RESOURCE_CAPABILITY_VERSION;
 }
 
 export interface SandboxErrorMessage {
@@ -178,6 +180,13 @@ export function validateSandboxControlMessage(
   }
   if (value.type === "READY" && !["HARD", "PARTIAL", "NONE"].includes(String(value.enforcement))) {
     throw new RuntimeSandboxProtocolError("Sandbox control enforcement is invalid.");
+  }
+  if (
+    value.type === "READY" &&
+    value.readOnlyResourceCapabilityVersion !== undefined &&
+    value.readOnlyResourceCapabilityVersion !== SANDBOX_READ_ONLY_RESOURCE_CAPABILITY_VERSION
+  ) {
+    throw new RuntimeSandboxProtocolError("Sandbox read-only resource capability is invalid.");
   }
   if (
     value.type === "ERROR" &&

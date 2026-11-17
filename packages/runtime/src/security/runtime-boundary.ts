@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import {
   FilesystemBoundarySchema,
   ProcessBoundarySchema,
@@ -7,6 +8,9 @@ import {
   type FilesystemBoundary,
   type ProcessBoundary,
   type RequiredEnforcement,
+  type ReadOnlyResourceGrant,
+  type ReadOnlyResourceIdentity,
+  type ReadOnlyResourcePolicy,
   type RunId,
   type WorkspaceId,
 } from "@caelush/protocol";
@@ -22,6 +26,7 @@ export interface RuntimeFilesystemPolicy {
   readonly hostUserRoot: string;
   readonly boundary: FilesystemBoundary;
   readonly protectedRoots: readonly string[];
+  readonly readOnlyResources?: ReadOnlyResourcePolicy;
 }
 
 export interface RuntimeProcessPolicy {
@@ -47,6 +52,7 @@ export interface RuntimeProcessPolicyInput {
   readonly requiredEnforcement: RequiredEnforcement;
   readonly hostUserRoot?: string;
   readonly protectedRoots?: readonly string[];
+  readonly readOnlyResources?: ReadOnlyResourcePolicy;
 }
 
 export interface RuntimeFilesystemPolicyInput {
@@ -55,6 +61,7 @@ export interface RuntimeFilesystemPolicyInput {
   readonly boundary: FilesystemBoundary;
   readonly hostUserRoot?: string;
   readonly protectedRoots?: readonly string[];
+  readonly readOnlyResources?: ReadOnlyResourcePolicy;
 }
 
 export function createRuntimeFilesystemPolicy(
@@ -79,12 +86,17 @@ export function createRuntimeFilesystemPolicy(
     }
     return path.normalize(root);
   });
+  const readOnlyResources =
+    input.readOnlyResources === undefined
+      ? undefined
+      : normalizeReadOnlyResourcePolicy(input.readOnlyResources);
   return Object.freeze({
     workspaceId: input.workspaceId,
     workspaceRoot,
     hostUserRoot,
     boundary: input.boundary,
     protectedRoots: Object.freeze(protectedRoots),
+    ...(readOnlyResources === undefined ? {} : { readOnlyResources }),
   });
 }
 
@@ -104,7 +116,16 @@ export function createRuntimeProcessPolicy(input: RuntimeProcessPolicyInput): Ru
     boundary: input.filesystemBoundary,
     ...(input.hostUserRoot === undefined ? {} : { hostUserRoot: input.hostUserRoot }),
     ...(input.protectedRoots === undefined ? {} : { protectedRoots: input.protectedRoots }),
+    ...(input.readOnlyResources === undefined
+      ? {}
+      : { readOnlyResources: input.readOnlyResources }),
   });
+  if (
+    filesystem.readOnlyResources !== undefined &&
+    filesystem.readOnlyResources.runId !== input.runId
+  ) {
+    throw new RuntimeAuthorizationError("Read-only resource policy belongs to a different Run.");
+  }
   return Object.freeze({
     runId: input.runId,
     filesystem,
@@ -138,6 +159,7 @@ export function assertAuthorizedRuntimeExecution(
   authorization: AuthorizedRuntimeExecution,
   ownerRunId: RunId,
   cwd: string,
+  readOnlyResourceGrant?: ReadOnlyResourceGrant,
 ): void {
   if (authorization.runId !== ownerRunId) {
     throw new RuntimeAuthorizationError("Runtime authorization belongs to a different Run.");
@@ -146,6 +168,43 @@ export function assertAuthorizedRuntimeExecution(
     throw new RuntimeWorkspaceBoundaryMismatchError("Runtime execution cwd must be absolute.");
   }
   assertRuntimeFilesystemBoundary(authorization.policy.filesystem, cwd);
+  if (readOnlyResourceGrant !== undefined) {
+    assertReadOnlyResourceGrant(authorization, ownerRunId, readOnlyResourceGrant);
+  }
+}
+
+export function assertReadOnlyResourceGrant(
+  authorization: AuthorizedRuntimeExecution,
+  ownerRunId: RunId,
+  grant: ReadOnlyResourceGrant,
+): void {
+  const authority = authorization.policy.filesystem.readOnlyResources;
+  const now = Date.now();
+  if (
+    authority === undefined ||
+    authority.runId !== ownerRunId ||
+    authorization.runId !== ownerRunId ||
+    grant.runId !== ownerRunId ||
+    authority.enabled !== true ||
+    authority.revision !== grant.policyRevision ||
+    !Number.isSafeInteger(authority.expiresAt) ||
+    authority.expiresAt <= now ||
+    !Number.isSafeInteger(grant.lifetime.issuedAt) ||
+    !Number.isSafeInteger(grant.lifetime.expiresAt) ||
+    grant.lifetime.issuedAt > now ||
+    grant.lifetime.expiresAt <= now ||
+    grant.lifetime.expiresAt > authority.expiresAt ||
+    grant.lifetime.expiresAt - grant.lifetime.issuedAt > 60_000 ||
+    !/^[a-f0-9]{64}$/u.test(grant.authorityFingerprint)
+  ) {
+    throw new RuntimeAuthorizationError("The read-only resource grant is invalid or expired.");
+  }
+  const matches = authority.resources.filter((resource) => resourceMatches(resource, grant));
+  if (matches.length !== 1 || readOnlyResourceFingerprint(grant) !== grant.authorityFingerprint) {
+    throw new RuntimeAuthorizationError(
+      "The read-only resource grant is not current for this Run.",
+    );
+  }
 }
 
 export function assertRuntimeFilesystemBoundary(
@@ -179,4 +238,85 @@ export function assertRuntimeWorkspaceBoundary(
 function isPathInsideOrEqual(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative.length === 0 || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function normalizeReadOnlyResourcePolicy(input: ReadOnlyResourcePolicy): ReadOnlyResourcePolicy {
+  if (
+    input === null ||
+    typeof input !== "object" ||
+    typeof input.runId !== "string" ||
+    typeof input.revision !== "string" ||
+    input.revision.length === 0 ||
+    input.revision.length > 256 ||
+    typeof input.enabled !== "boolean" ||
+    !Number.isSafeInteger(input.expiresAt) ||
+    !Array.isArray(input.resources) ||
+    input.resources.length > 64
+  ) {
+    throw new RuntimeAuthorizationError("The read-only resource policy is invalid.");
+  }
+  const resources = input.resources.map((resource) => normalizeResourceIdentity(resource));
+  if (new Set(resources.map((resource) => resource.resourceId)).size !== resources.length) {
+    throw new RuntimeAuthorizationError("The read-only resource policy has duplicate identities.");
+  }
+  return Object.freeze({
+    runId: input.runId,
+    revision: input.revision,
+    enabled: input.enabled,
+    expiresAt: input.expiresAt,
+    resources: Object.freeze(resources),
+  });
+}
+
+function normalizeResourceIdentity(input: ReadOnlyResourceIdentity): ReadOnlyResourceIdentity {
+  if (
+    input === null ||
+    typeof input !== "object" ||
+    !validIdentityField(input.resourceId) ||
+    !validIdentityField(input.bundleRevision) ||
+    typeof input.contentManifestHash !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(input.contentManifestHash) ||
+    typeof input.canonicalRoot !== "string" ||
+    !path.isAbsolute(input.canonicalRoot) ||
+    input.canonicalRoot.includes("\0")
+  ) {
+    throw new RuntimeAuthorizationError("The read-only resource identity is invalid.");
+  }
+  return Object.freeze({
+    resourceId: input.resourceId,
+    bundleRevision: input.bundleRevision,
+    canonicalRoot: path.normalize(input.canonicalRoot).replaceAll("\\", "/"),
+    contentManifestHash: input.contentManifestHash,
+  });
+}
+
+function validIdentityField(value: unknown): value is string {
+  return (
+    typeof value === "string" && value.length > 0 && value.length <= 256 && !value.includes("\0")
+  );
+}
+
+function resourceMatches(
+  resource: ReadOnlyResourceIdentity,
+  grant: ReadOnlyResourceGrant,
+): boolean {
+  return (
+    resource.resourceId === grant.resourceId &&
+    resource.bundleRevision === grant.bundleRevision &&
+    resource.canonicalRoot === grant.canonicalRoot &&
+    resource.contentManifestHash === grant.contentManifestHash
+  );
+}
+
+function readOnlyResourceFingerprint(grant: ReadOnlyResourceGrant): string {
+  const identity = JSON.stringify([
+    "caelush-read-only-resource-grant-v1",
+    grant.runId,
+    grant.resourceId,
+    grant.bundleRevision,
+    grant.canonicalRoot,
+    grant.policyRevision,
+    grant.contentManifestHash,
+  ]);
+  return createHash("sha256").update(identity, "utf8").digest("hex");
 }

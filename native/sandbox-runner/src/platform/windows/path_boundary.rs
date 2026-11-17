@@ -1,12 +1,12 @@
 use super::error::SandboxError;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Storage::FileSystem::{
     GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT,
-    FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,6 +20,15 @@ pub struct FileIdentity {
 pub struct ValidatedPath {
     pub path: PathBuf,
     pub identity: FileIdentity,
+}
+
+/// A validated resource root with a live directory handle opened without delete sharing. Keeping
+/// this handle until the child exits prevents the granted root from being renamed or replaced while
+/// the restricted process is running.
+#[derive(Debug)]
+pub struct PinnedDirectory {
+    pub validated: ValidatedPath,
+    _handle: File,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,14 +89,37 @@ fn validate_directory(path: &Path) -> Result<ValidatedPath, SandboxError> {
     })
 }
 
+pub fn validate_and_pin_directory(path: &Path) -> Result<PinnedDirectory, SandboxError> {
+    let validated = validate_directory(path)?;
+    let handle = OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(&validated.path)
+        .map_err(|_| SandboxError::PathBoundaryInvalid)?;
+    let pinned_identity = capture_identity_from_handle(&handle)?;
+    let second_canonical = fs::canonicalize(path).map_err(|_| SandboxError::PathBoundaryInvalid)?;
+    if second_canonical != validated.path || pinned_identity != validated.identity {
+        return Err(SandboxError::PathBoundaryIdentityChanged);
+    }
+    Ok(PinnedDirectory {
+        validated,
+        _handle: handle,
+    })
+}
+
 fn capture_identity(path: &Path) -> Result<FileIdentity, SandboxError> {
     let directory = OpenOptions::new()
         .read(true)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)
         .map_err(|_| SandboxError::PathBoundaryInvalid)?;
+    capture_identity_from_handle(&directory)
+}
+
+fn capture_identity_from_handle(handle: &File) -> Result<FileIdentity, SandboxError> {
     let mut information = BY_HANDLE_FILE_INFORMATION::default();
-    if unsafe { GetFileInformationByHandle(directory.as_raw_handle(), &mut information) } == 0 {
+    if unsafe { GetFileInformationByHandle(handle.as_raw_handle(), &mut information) } == 0 {
         let _ = unsafe { GetLastError() };
         return Err(SandboxError::PathBoundaryInvalid);
     }
@@ -112,15 +144,15 @@ mod tests {
     use std::ptr::{null, null_mut};
     use std::time::{SystemTime, UNIX_EPOCH};
     use windows_sys::Win32::Foundation::{
-        CloseHandle, GetLastError, HANDLE, GENERIC_WRITE, INVALID_HANDLE_VALUE,
+        CloseHandle, GetLastError, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
         FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
     use windows_sys::Win32::System::Ioctl::FSCTL_SET_REPARSE_POINT;
-    use windows_sys::Win32::System::IO::DeviceIoControl;
     use windows_sys::Win32::System::SystemServices::IO_REPARSE_TAG_MOUNT_POINT;
+    use windows_sys::Win32::System::IO::DeviceIoControl;
 
     #[test]
     fn rejects_missing_files_and_files_that_are_not_directories() {
@@ -270,7 +302,11 @@ mod tests {
         let substitute = format!(r"\??\{}", normal.display())
             .encode_utf16()
             .collect::<Vec<_>>();
-        let print = normal.display().to_string().encode_utf16().collect::<Vec<_>>();
+        let print = normal
+            .display()
+            .to_string()
+            .encode_utf16()
+            .collect::<Vec<_>>();
         let substitute_bytes = u16::try_from(substitute.len() * 2)
             .map_err(|_| "junction target is too long for reparse data".to_string())?;
         let print_bytes = u16::try_from(print.len() * 2)

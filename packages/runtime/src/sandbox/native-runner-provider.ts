@@ -5,7 +5,7 @@ import type {
 } from "./contracts.js";
 import type { ManagedProcessAdapter } from "../exec/contracts.js";
 import { RuntimeExecError } from "../exec/errors.js";
-import { RuntimeSandboxError } from "../runtime-errors.js";
+import { RuntimeSandboxError, RuntimeSandboxOperationError } from "../runtime-errors.js";
 import {
   createNativeRunnerProcessAdapter,
   modeForPolicy,
@@ -69,7 +69,13 @@ export function createNativeRunnerProvider(input: {
       if (platformName(options.platform ?? process.platform) !== input.platform) {
         throw new RuntimeSandboxError("The platform Provider does not match this host.");
       }
-      const mode = modeForPolicy(spec.policy);
+      const mode = modeForPolicy(spec.policy, spec.readOnlyResourceGrant);
+      if (spec.readOnlyResourceGrant !== undefined && input.platform !== "windows") {
+        throw new RuntimeSandboxOperationError("SKILL_SCRIPT_UNAVAILABLE");
+      }
+      if (spec.readOnlyResourceGrant !== undefined && options.adapterFactory !== undefined) {
+        throw new RuntimeSandboxOperationError("SKILL_SCRIPT_UNAVAILABLE");
+      }
       if (options.adapterFactory === undefined) {
         const artifact = await verifyNativeSandboxRunnerArtifact(
           nativeRunnerProbeInput(input, options),
@@ -80,7 +86,7 @@ export function createNativeRunnerProvider(input: {
       }
       const privateRunTemp =
         input.platform === "windows" &&
-        mode === "workspace-write" &&
+        (mode === "workspace-write" || mode === "workspace-write-readonly-resource") &&
         workspaceController !== undefined
           ? await workspaceController.createRunTemp(spec.policy.runId)
           : undefined;

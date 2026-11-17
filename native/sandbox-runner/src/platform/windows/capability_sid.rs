@@ -9,6 +9,7 @@ use windows_sys::Win32::Security::Cryptography::{
 const CAPABILITY_IDENTIFIER_AUTHORITY: &str = "S-1-4";
 const WORKSPACE_DOMAIN: &str = "caelush.workspace-write.v1";
 const TEMP_DOMAIN: &str = "caelush.private-temp.v1";
+const RESOURCE_DOMAIN: &str = "caelush.readonly-resource.v1";
 
 pub fn workspace_capability_sid(canonical_root: &str) -> Result<String, SandboxError> {
     derive_capability_sid(WORKSPACE_DOMAIN, canonical_root)
@@ -16,6 +17,22 @@ pub fn workspace_capability_sid(canonical_root: &str) -> Result<String, SandboxE
 
 pub fn temp_capability_sid(marker_id: &str) -> Result<String, SandboxError> {
     derive_capability_sid(TEMP_DOMAIN, marker_id)
+}
+
+pub fn resource_capability_sid(
+    canonical_root: &str,
+    grant_fingerprint: &str,
+) -> Result<String, SandboxError> {
+    if grant_fingerprint.len() != 64
+        || !grant_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(SandboxError::ResourceGrantInvalid);
+    }
+    let normalized_root = normalize_identity(canonical_root)?;
+    let identity = format!("{normalized_root}|{grant_fingerprint}");
+    derive_capability_sid(RESOURCE_DOMAIN, &identity)
 }
 
 fn derive_capability_sid(domain: &str, identity: &str) -> Result<String, SandboxError> {

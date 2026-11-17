@@ -37,6 +37,7 @@ export type { RuntimeWorkspaceOpenOptions } from "./runtime.js";
 export type { RuntimeWorkspaceScope } from "./workspace-scope.js";
 export {
   assertAuthorizedRuntimeExecution,
+  assertReadOnlyResourceGrant,
   assertRuntimeFilesystemBoundary,
   assertRuntimeWorkspaceBoundary,
   createRuntimeFilesystemPolicy,
@@ -52,6 +53,7 @@ export type {
 } from "./security/runtime-boundary.js";
 export {
   SANDBOX_CONTROL_PROTOCOL_VERSION,
+  SANDBOX_READ_ONLY_RESOURCE_CAPABILITY_VERSION,
   MAX_SANDBOX_CONTROL_MESSAGE_BYTES,
   acceptSandboxMessage,
   acceptSandboxReady,

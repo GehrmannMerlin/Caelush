@@ -19,6 +19,24 @@ pub fn ready(
     )
 }
 
+pub fn ready_with_resource_capability(
+    nonce: &str,
+    provider_id: &str,
+    boundary_fingerprint: &str,
+    enforcement: &str,
+    resource_capability_version: u32,
+) -> String {
+    format!(
+        "{{\"type\":\"READY\",\"protocolVersion\":{},\"nonce\":\"{}\",\"providerId\":\"{}\",\"boundaryFingerprint\":\"{}\",\"enforcement\":\"{}\",\"readOnlyResourceCapabilityVersion\":{}}}\n",
+        PROTOCOL_VERSION,
+        escape(nonce),
+        escape(provider_id),
+        escape(boundary_fingerprint),
+        escape(enforcement),
+        resource_capability_version,
+    )
+}
+
 pub fn error(nonce: &str, code: &str) -> String {
     format!(
         "{{\"type\":\"ERROR\",\"protocolVersion\":{},\"nonce\":\"{}\",\"code\":\"{}\"}}\n",
@@ -78,4 +96,22 @@ fn escape(value: &str) -> String {
             other => vec![other],
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn resource_capability_is_advertised_only_by_its_versioned_ready_frame() {
+        let legacy = super::ready("nonce", "provider", "boundary", "PARTIAL");
+        let resource = super::ready_with_resource_capability(
+            "nonce",
+            "provider",
+            "boundary",
+            "PARTIAL",
+            1,
+        );
+
+        assert!(!legacy.contains("readOnlyResourceCapabilityVersion"));
+        assert!(resource.contains("\"readOnlyResourceCapabilityVersion\":1"));
+    }
 }

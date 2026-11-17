@@ -16,7 +16,7 @@ import {
   RuntimeProcessStaleSessionError,
   RuntimeProcessUncertainError,
 } from "./errors.js";
-import { RuntimeSandboxError } from "../runtime-errors.js";
+import { RuntimeAuthorizationError, RuntimeSandboxError } from "../runtime-errors.js";
 import { createPipeProcessAdapter } from "./pipe-process-adapter.js";
 import { createPtyProcessAdapter } from "./pty-process-adapter.js";
 import { HeadTailOutputBuffer } from "./output-buffer.js";
@@ -71,13 +71,23 @@ export class LocalProcessManager {
   }
 
   async start(request: ManagedProcessStartRequest): Promise<RuntimeExecResult> {
+    if (request.readOnlyResourceGrant !== undefined && request.authorization === undefined) {
+      throw new RuntimeAuthorizationError(
+        "A read-only resource grant requires an authorized restricted Provider.",
+      );
+    }
     const activeCount = [...this.entries.values()].filter(
       (entry) => !isManagedProcessTerminal(entry.state),
     ).length;
     if (activeCount >= this.maxProcesses) throw new RuntimeExecError("PROCESS_LIMIT_REACHED");
     let adapter: ManagedProcessAdapter;
     if (request.authorization !== undefined) {
-      assertAuthorizedRuntimeExecution(request.authorization, request.ownerRunId, request.cwd);
+      assertAuthorizedRuntimeExecution(
+        request.authorization,
+        request.ownerRunId,
+        request.cwd,
+        request.readOnlyResourceGrant,
+      );
       assertProviderMatchesPolicy(request.authorization);
       adapter = await request.authorization.provider.create({
         launch: request.launch,
@@ -86,6 +96,9 @@ export class LocalProcessManager {
         tty: request.tty,
         policy: request.authorization.policy,
         authorizationNonce: request.authorization.authorizationNonce,
+        ...(request.readOnlyResourceGrant === undefined
+          ? {}
+          : { readOnlyResourceGrant: request.readOnlyResourceGrant }),
       });
     } else {
       const factory = request.tty ? this.ptyFactory : this.pipeFactory;

@@ -41,6 +41,9 @@ pub enum SandboxError {
     WorkspaceSecurityPostcondition,
     WorkspaceGrantMissing,
     WorkspaceCwdBoundary,
+    ResourceGrantInvalid,
+    ResourceGrantPostcondition,
+    ResourceRootBoundary,
     /// Test-only. Exists only in a `test-fault-injection` build, so the shipped Runner has neither
     /// this variant nor its code string.
     #[cfg(feature = "test-fault-injection")]
@@ -91,6 +94,9 @@ impl SandboxError {
             }
             Self::WorkspaceGrantMissing => "WINDOWS_WORKSPACE_GRANT_MISSING",
             Self::WorkspaceCwdBoundary => "WINDOWS_WORKSPACE_CWD_BOUNDARY_INVALID",
+            Self::ResourceGrantInvalid => "WINDOWS_RESOURCE_GRANT_INVALID",
+            Self::ResourceGrantPostcondition => "WINDOWS_RESOURCE_GRANT_POSTCONDITION_FAILED",
+            Self::ResourceRootBoundary => "WINDOWS_RESOURCE_ROOT_BOUNDARY_INVALID",
             #[cfg(feature = "test-fault-injection")]
             Self::FaultInjected => "WINDOWS_SANDBOX_FAULT_INJECTED",
         }

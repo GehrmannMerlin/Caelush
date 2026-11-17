@@ -1,4 +1,4 @@
-import type { RunId } from "@caelush/protocol";
+import type { ReadOnlyResourceGrant, RunId } from "@caelush/protocol";
 import type { AuthorizedRuntimeExecution } from "../security/runtime-boundary.js";
 
 export const MAX_EXEC_COMMAND_BYTES = 64 * 1024;
@@ -43,6 +43,7 @@ export interface AuthorizedRuntimeExecRequest extends RuntimeExecRequest {
 
 export interface AuthorizedRuntimeArgvExecRequest extends RuntimeArgvExecRequest {
   readonly authorization: AuthorizedRuntimeExecution;
+  readonly readOnlyResourceGrant?: ReadOnlyResourceGrant;
 }
 
 export interface RuntimeProcessInteractionRequest {
@@ -127,6 +128,7 @@ export interface ManagedProcessStartRequest extends RuntimeExecRequest {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
   readonly authorization?: AuthorizedRuntimeExecution;
+  readonly readOnlyResourceGrant?: ReadOnlyResourceGrant;
 }
 
 export interface RuntimeExecService {

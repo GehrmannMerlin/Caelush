@@ -57,16 +57,20 @@ pub fn spawn_restricted(
     match mode {
         WindowsSandboxMode::ReadOnly => {
             #[cfg(feature = "test-fault-injection")]
-            faults::check(faults::FaultStage::BeforeTokenCreate).map_err(|error| error.to_string())?;
+            faults::check(faults::FaultStage::BeforeTokenCreate)
+                .map_err(|error| error.to_string())?;
             let token =
                 token::RestrictedToken::create_read_only().map_err(|error| error.to_string())?;
             #[cfg(feature = "test-fault-injection")]
-            faults::check(faults::FaultStage::AfterTokenCreate).map_err(|error| error.to_string())?;
+            faults::check(faults::FaultStage::AfterTokenCreate)
+                .map_err(|error| error.to_string())?;
             let environment = std::env::vars_os().collect::<Vec<_>>();
             RestrictedProcess::spawn(&token, program, args, cwd, &environment)
                 .map_err(|error| error.to_string())
         }
-        WindowsSandboxMode::WorkspaceWrite => Err(error::SandboxError::UnsupportedMode.to_string()),
+        WindowsSandboxMode::WorkspaceWrite | WindowsSandboxMode::WorkspaceWriteReadonlyResource => {
+            Err(error::SandboxError::UnsupportedMode.to_string())
+        }
     }
 }
 
@@ -142,6 +146,121 @@ pub fn spawn_workspace_write_restricted(
             Err(error.to_string())
         }
     }
+}
+
+pub fn spawn_workspace_write_readonly_resource(
+    _provider: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+    private_temp: &Path,
+    temp_marker_id: &str,
+    resource_root: &Path,
+    resource_grant_fingerprint: &str,
+    program: &str,
+    args: &[String],
+) -> Result<RestrictedProcess, String> {
+    if resource_grant_fingerprint.len() != 64
+        || !resource_grant_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(error::SandboxError::ResourceGrantInvalid.to_string());
+    }
+    let boundary = path_boundary::validate_workspace_and_temp(workspace_root, Some(private_temp))
+        .map_err(|error| error.to_string())?;
+    let resource_pin = path_boundary::validate_and_pin_directory(resource_root)
+        .map_err(|error| error.to_string())?;
+    let resource = &resource_pin.validated.path;
+    if normalize_windows_path(&resource.to_string_lossy())
+        != normalize_windows_path(&resource_root.to_string_lossy())
+        || path_overlaps(
+            resource,
+            &boundary.temp.as_ref().expect("validated temp").path,
+        )
+        || resource_is_workspace_or_ancestor(resource, &boundary.workspace.path)
+    {
+        return Err(error::SandboxError::ResourceRootBoundary.to_string());
+    }
+
+    let workspace_sid =
+        capability_sid::workspace_capability_sid(&boundary.workspace.path.to_string_lossy())
+            .map_err(|error| error.to_string())?;
+    let temp_sid =
+        capability_sid::temp_capability_sid(temp_marker_id).map_err(|error| error.to_string())?;
+    let resource_sid = capability_sid::resource_capability_sid(
+        &resource.to_string_lossy(),
+        resource_grant_fingerprint,
+    )
+    .map_err(|error| error.to_string())?;
+
+    if acl::inspect_write_grant(&boundary.workspace.path, &workspace_sid)
+        .map_err(|error| error.to_string())?
+        != GrantStatus::Ready
+    {
+        return Err(error::SandboxError::WorkspaceGrantMissing.to_string());
+    }
+    #[cfg(feature = "test-fault-injection")]
+    faults::check(faults::FaultStage::WorkspaceGrant).map_err(|error| error.to_string())?;
+
+    let cwd = validate_cwd(cwd, &boundary)?;
+    #[cfg(feature = "test-fault-injection")]
+    faults::check(faults::FaultStage::BeforeTokenCreate).map_err(|error| error.to_string())?;
+    let resource_grant = acl::ReadOnlyResourceGrantLease::ensure(resource, &resource_sid)
+        .map_err(|error| error.to_string())?;
+    let token = token::RestrictedToken::create_workspace_write_readonly_resource(
+        &workspace_sid,
+        &temp_sid,
+        &resource_sid,
+    )
+    .map_err(|error| error.to_string())?;
+    #[cfg(feature = "test-fault-injection")]
+    faults::check(faults::FaultStage::AfterTokenCreate).map_err(|error| error.to_string())?;
+
+    let temp = &boundary.temp.as_ref().expect("validated temp").path;
+    #[cfg(feature = "test-fault-injection")]
+    faults::check(faults::FaultStage::TempGrant).map_err(|error| error.to_string())?;
+    acl::ensure_write_grant(temp, &temp_sid).map_err(|error| error.to_string())?;
+    let environment = workspace_environment(temp);
+    match RestrictedProcess::spawn_with_temp_grant_and_resource_pin(
+        &token,
+        program,
+        args,
+        &cwd,
+        &environment,
+        temp.clone(),
+        temp_sid.clone(),
+        resource_pin,
+        resource_grant,
+    ) {
+        Ok(process) => Ok(process),
+        Err(error) => {
+            let _ = acl::revoke_write_grant(temp, &temp_sid);
+            Err(error.to_string())
+        }
+    }
+}
+
+fn normalize_windows_path(value: &str) -> String {
+    let mut normalized = value.replace('/', "\\");
+    let lowercase = normalized.to_lowercase();
+    if lowercase.starts_with("\\\\?\\unc\\") {
+        normalized = format!("\\\\{}", &normalized[8..]);
+    } else if normalized.starts_with("\\\\?\\") {
+        normalized = normalized[4..].to_string();
+    }
+    normalized.trim_end_matches('\\').to_lowercase()
+}
+
+fn path_overlaps(left: &Path, right: &Path) -> bool {
+    let left = normalize_windows_path(&left.to_string_lossy());
+    let right = normalize_windows_path(&right.to_string_lossy());
+    left == right || left.starts_with(&(right.clone() + "\\")) || right.starts_with(&(left + "\\"))
+}
+
+fn resource_is_workspace_or_ancestor(resource: &Path, workspace: &Path) -> bool {
+    let resource = normalize_windows_path(&resource.to_string_lossy());
+    let workspace = normalize_windows_path(&workspace.to_string_lossy());
+    resource == workspace || workspace.starts_with(&(resource + "\\"))
 }
 
 fn validate_cwd(

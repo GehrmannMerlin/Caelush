@@ -119,7 +119,12 @@ export class LocalRuntimeExecService implements RuntimeExecService {
     validateArgv(request.executable, request.args);
     const cwd = await this.resolveWorkdir(request.workdir);
     validateYield(request.yieldTimeMs);
-    assertAuthorizedRuntimeExecution(request.authorization, request.ownerRunId, cwd);
+    assertAuthorizedRuntimeExecution(
+      request.authorization,
+      request.ownerRunId,
+      cwd,
+      request.readOnlyResourceGrant,
+    );
     return this.options.processManager.start({
       ownerRunId: request.ownerRunId,
       ...(request.signal === undefined ? {} : { signal: request.signal }),
@@ -134,6 +139,9 @@ export class LocalRuntimeExecService implements RuntimeExecService {
       ),
       launch: { executable: request.executable, args: [...request.args] },
       authorization: request.authorization,
+      ...(request.readOnlyResourceGrant === undefined
+        ? {}
+        : { readOnlyResourceGrant: request.readOnlyResourceGrant }),
     });
   }
 

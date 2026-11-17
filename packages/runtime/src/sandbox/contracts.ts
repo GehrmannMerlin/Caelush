@@ -5,6 +5,7 @@ import type {
 } from "../exec/contracts.js";
 import type { RuntimeProcessPolicy } from "../security/runtime-boundary.js";
 import type { SandboxControlMessage } from "./control-protocol.js";
+import type { ReadOnlyResourceGrant } from "@caelush/protocol";
 
 export type SandboxEnforcement = "HARD" | "PARTIAL" | "NONE";
 export type ProcessSandboxKind = "RESTRICTED" | "UNRESTRICTED";
@@ -17,6 +18,7 @@ export interface SandboxedSpawnSpec {
   readonly policy: RuntimeProcessPolicy;
   readonly authorizationNonce: string;
   readonly controlHello?: SandboxControlMessage;
+  readonly readOnlyResourceGrant?: ReadOnlyResourceGrant;
 }
 
 export interface ProcessSandboxProvider {

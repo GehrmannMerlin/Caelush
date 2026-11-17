@@ -34,6 +34,36 @@ describe("sandbox control protocol", () => {
     );
   });
 
+  it("keeps protocol v1 compatible but rejects a legacy READY for resource execution", async () => {
+    const hello = createSandboxHello({
+      nonce: "nonce-resource-capability-1",
+      providerId: "fake-restricted",
+      boundaryFingerprint: "resource-boundary-fingerprint-1",
+    });
+    const legacyReady = decodeSandboxControlMessage(
+      encodeSandboxControlMessage({
+        type: "READY",
+        protocolVersion: SANDBOX_CONTROL_PROTOCOL_VERSION,
+        nonce: hello.nonce,
+        providerId: hello.providerId,
+        boundaryFingerprint: hello.boundaryFingerprint,
+        enforcement: "PARTIAL",
+      }),
+    );
+    expect(acceptSandboxReady(legacyReady, hello)).toMatchObject({ type: "READY" });
+
+    const adapter = await import("../src/sandbox/native-runner-adapter.js");
+    const assertCapability = (adapter as Record<string, unknown>)[
+      "assertReadOnlyResourceCapability"
+    ];
+    expect(typeof assertCapability).toBe("function");
+    if (typeof assertCapability !== "function") return;
+    expect(() => assertCapability(legacyReady)).toThrow(/resource capability/i);
+    expect(() =>
+      assertCapability({ ...legacyReady, readOnlyResourceCapabilityVersion: 1 }),
+    ).not.toThrow();
+  });
+
   it("rejects oversized or malformed control messages before they become READY", () => {
     expect(() => decodeSandboxControlMessage("READY\n")).toThrow(/protocol/i);
     expect(() => decodeSandboxControlMessage("x".repeat(70_000))).toThrow(/size/i);

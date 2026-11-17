@@ -1,19 +1,61 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { TerminalOutputDecoder } from "../exec/terminal-output.js";
 import { terminateProcessTree } from "../exec/process-tree.js";
 import type { ManagedProcessAdapter, ProcessExit, ProcessOutputEvent } from "../exec/contracts.js";
 import { RuntimeExecError } from "../exec/errors.js";
-import { RuntimeSandboxError, RuntimeSandboxProtocolError } from "../runtime-errors.js";
-import { createSandboxHello } from "./control-protocol.js";
+import {
+  RuntimeSandboxError,
+  RuntimeSandboxOperationError,
+  RuntimeSandboxProtocolError,
+} from "../runtime-errors.js";
+import {
+  createSandboxHello,
+  SANDBOX_READ_ONLY_RESOURCE_CAPABILITY_VERSION,
+  type SandboxReadyMessage,
+} from "./control-protocol.js";
 import { createSandboxControlTransport } from "./control-transport.js";
 import type { SandboxedSpawnSpec } from "./contracts.js";
 import type { PrivateRunTemp } from "./private-temp.js";
 import type { RuntimeProcessPolicy } from "../security/runtime-boundary.js";
 
-export type NativeWindowsSandboxMode = "read-only" | "workspace-write";
+export type NativeWindowsSandboxMode =
+  "read-only" | "workspace-write" | "workspace-write-readonly-resource";
 
-export function modeForPolicy(policy: RuntimeProcessPolicy): NativeWindowsSandboxMode {
+export function modeForPolicy(
+  policy: RuntimeProcessPolicy,
+  grant?: SandboxedSpawnSpec["readOnlyResourceGrant"],
+): NativeWindowsSandboxMode {
+  if (grant !== undefined) {
+    const authority = policy.filesystem.readOnlyResources;
+    const matchingResources = authority?.resources.filter(
+      (resource) =>
+        resource.resourceId === grant.resourceId &&
+        resource.bundleRevision === grant.bundleRevision &&
+        resource.canonicalRoot === grant.canonicalRoot &&
+        resource.contentManifestHash === grant.contentManifestHash,
+    ).length;
+    if (
+      policy.requiredEnforcement === "OS_RESTRICTED" &&
+      policy.processBoundary === "WORKSPACE_WRITE" &&
+      policy.filesystem.boundary === "WORKSPACE_READ_WRITE" &&
+      grant.runId === policy.runId &&
+      authority?.enabled === true &&
+      authority.runId === policy.runId &&
+      authority.revision === grant.policyRevision &&
+      authority.expiresAt > Date.now() &&
+      grant.lifetime.issuedAt <= Date.now() &&
+      grant.lifetime.expiresAt > Date.now() &&
+      grant.lifetime.expiresAt <= authority.expiresAt &&
+      grant.lifetime.expiresAt - grant.lifetime.issuedAt <= 60_000 &&
+      /^[a-f0-9]{64}$/u.test(grant.authorityFingerprint) &&
+      readOnlyResourceAuthorityFingerprint(grant) === grant.authorityFingerprint &&
+      matchingResources === 1
+    ) {
+      return "workspace-write-readonly-resource";
+    }
+    throw new RuntimeSandboxOperationError("SKILL_SCRIPT_UNAVAILABLE");
+  }
   if (
     policy.requiredEnforcement === "OS_RESTRICTED" &&
     policy.processBoundary === "READ_ONLY" &&
@@ -31,6 +73,14 @@ export function modeForPolicy(policy: RuntimeProcessPolicy): NativeWindowsSandbo
   throw new RuntimeSandboxError("The native sandbox policy tuple is inconsistent.");
 }
 
+export function assertReadOnlyResourceCapability(ready: SandboxReadyMessage): void {
+  if (ready.readOnlyResourceCapabilityVersion !== SANDBOX_READ_ONLY_RESOURCE_CAPABILITY_VERSION) {
+    throw new RuntimeSandboxProtocolError(
+      "Sandbox runner did not prove read-only resource capability enforcement.",
+    );
+  }
+}
+
 export async function createNativeRunnerProcessAdapter(input: {
   readonly runnerPath: string;
   readonly providerId: string;
@@ -39,7 +89,21 @@ export async function createNativeRunnerProcessAdapter(input: {
   readonly privateRunTemp?: PrivateRunTemp;
 }): Promise<ManagedProcessAdapter> {
   if (input.spec.tty) throw new RuntimeExecError("PTY_UNAVAILABLE");
-  const mode = modeForPolicy(input.spec.policy);
+  const grant = input.spec.readOnlyResourceGrant;
+  const mode = modeForPolicy(input.spec.policy, grant);
+  const resourceGrantInstanceFingerprint =
+    grant === undefined
+      ? undefined
+      : createHash("sha256")
+          .update(
+            JSON.stringify([
+              "caelush-read-only-resource-instance-v1",
+              grant.authorityFingerprint,
+              randomUUID(),
+            ]),
+            "utf8",
+          )
+          .digest("hex");
   const boundaryFingerprint = createHash("sha256")
     .update(
       JSON.stringify({
@@ -47,6 +111,16 @@ export async function createNativeRunnerProcessAdapter(input: {
         filesystemBoundary: input.spec.policy.filesystem.boundary,
         processBoundary: input.spec.policy.processBoundary,
         requiredEnforcement: input.spec.policy.requiredEnforcement,
+        ...(grant === undefined
+          ? {}
+          : {
+              readOnlyResource: {
+                resourceId: grant.resourceId,
+                canonicalRoot: grant.canonicalRoot,
+                authorityFingerprint: grant.authorityFingerprint,
+                instanceFingerprint: resourceGrantInstanceFingerprint,
+              },
+            }),
       }),
       "utf8",
     )
@@ -82,6 +156,16 @@ export async function createNativeRunnerProcessAdapter(input: {
           "--temp-marker-id",
           input.privateRunTemp.markerId,
         ]),
+    ...(grant === undefined
+      ? []
+      : [
+          "--resource-root",
+          grant.canonicalRoot,
+          "--resource-grant-fingerprint",
+          resourceGrantInstanceFingerprint!,
+          "--resource-grant-version",
+          String(SANDBOX_READ_ONLY_RESOURCE_CAPABILITY_VERSION),
+        ]),
     "--cwd",
     input.spec.cwd,
     "--program",
@@ -109,13 +193,46 @@ export async function createNativeRunnerProcessAdapter(input: {
     throw new RuntimeSandboxError("The native sandbox runner did not provide a control channel.");
   }
   try {
-    await controlTransport.waitForReady(child, hello);
+    const ready = await controlTransport.waitForReady(child, hello);
+    if (grant !== undefined) {
+      try {
+        assertReadOnlyResourceCapability(ready);
+      } catch (error) {
+        await terminateProcessTree({
+          pid: child.pid,
+          kill: () => {
+            child.kill();
+            return true;
+          },
+        });
+        throw error;
+      }
+    }
   } catch (error) {
     throw error instanceof RuntimeSandboxError || error instanceof RuntimeSandboxProtocolError
       ? error
       : new RuntimeSandboxError("The native sandbox runner did not prove its boundary.");
   }
   return new NativeRunnerProcessAdapter(child, input.spec.tty);
+}
+
+function readOnlyResourceAuthorityFingerprint(
+  grant: NonNullable<SandboxedSpawnSpec["readOnlyResourceGrant"]>,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        "caelush-read-only-resource-grant-v1",
+        grant.runId,
+        grant.resourceId,
+        grant.bundleRevision,
+        grant.canonicalRoot,
+        grant.policyRevision,
+        grant.contentManifestHash,
+      ]),
+      "utf8",
+    )
+    .digest("hex");
 }
 
 class NativeRunnerProcessAdapter implements ManagedProcessAdapter {

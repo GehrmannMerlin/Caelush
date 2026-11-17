@@ -2,6 +2,7 @@ use super::acl;
 use super::error::SandboxError;
 use super::handle::OwnedHandle;
 use super::job::JobObject;
+use super::path_boundary::PinnedDirectory;
 use super::token::RestrictedToken;
 use crate::platform::windows::command_line::build_command_line;
 use std::ffi::OsString;
@@ -109,6 +110,8 @@ pub struct RestrictedProcess {
     process: OwnedHandle,
     _job: JobObject,
     temp_grant: Option<TempGrantCleanup>,
+    resource_grant: Option<acl::ReadOnlyResourceGrantLease>,
+    resource_root_pin: Option<PinnedDirectory>,
 }
 
 impl RestrictedProcess {
@@ -131,6 +134,8 @@ impl RestrictedProcess {
             process,
             _job: job,
             temp_grant: None,
+            resource_grant: None,
+            resource_root_pin: None,
         })
     }
 
@@ -152,13 +157,39 @@ impl RestrictedProcess {
         Ok(process)
     }
 
+    pub fn spawn_with_temp_grant_and_resource_pin(
+        token: &RestrictedToken,
+        program: &str,
+        args: &[String],
+        cwd: &Path,
+        environment: &[(OsString, OsString)],
+        temp_path: PathBuf,
+        temp_sid: String,
+        resource_pin: PinnedDirectory,
+        resource_grant: acl::ReadOnlyResourceGrantLease,
+    ) -> Result<Self, SandboxError> {
+        let mut process = Self::spawn_with_temp_grant(
+            token,
+            program,
+            args,
+            cwd,
+            environment,
+            temp_path,
+            temp_sid,
+        )?;
+        process.resource_grant = Some(resource_grant);
+        process.resource_root_pin = Some(resource_pin);
+        Ok(process)
+    }
+
     pub fn wait(&mut self) -> Result<u32, SandboxError> {
         let wait_result = wait_for_process(&self.process);
         let cleanup_result = self.cleanup_temp_grant();
-        match (wait_result, cleanup_result) {
-            (Err(error), _) => Err(error),
-            (Ok(code), Ok(())) => Ok(code),
-            (Ok(_), Err(error)) => Err(error),
+        let resource_cleanup_result = self.cleanup_resource_grant();
+        match (wait_result, cleanup_result, resource_cleanup_result) {
+            (Err(error), _, _) => Err(error),
+            (Ok(code), Ok(()), Ok(())) => Ok(code),
+            (Ok(_), Err(error), _) | (Ok(_), Ok(()), Err(error)) => Err(error),
         }
     }
 
@@ -166,6 +197,15 @@ impl RestrictedProcess {
         if let Some(cleanup) = self.temp_grant.as_mut() {
             cleanup.revoke()?;
             self.temp_grant = None;
+        }
+        Ok(())
+    }
+
+    fn cleanup_resource_grant(&mut self) -> Result<(), SandboxError> {
+        if let Some(grant) = self.resource_grant.as_mut() {
+            grant.revoke()?;
+            self.resource_grant = None;
+            self.resource_root_pin = None;
         }
         Ok(())
     }

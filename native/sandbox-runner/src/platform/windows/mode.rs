@@ -2,6 +2,7 @@
 pub enum WindowsSandboxMode {
     ReadOnly,
     WorkspaceWrite,
+    WorkspaceWriteReadonlyResource,
 }
 
 impl WindowsSandboxMode {
@@ -9,6 +10,7 @@ impl WindowsSandboxMode {
         match value {
             "read-only" => Ok(Self::ReadOnly),
             "workspace-write" => Ok(Self::WorkspaceWrite),
+            "workspace-write-readonly-resource" => Ok(Self::WorkspaceWriteReadonlyResource),
             _ => Err("UNKNOWN_MODE".to_string()),
         }
     }
@@ -19,7 +21,7 @@ mod tests {
     use super::WindowsSandboxMode;
 
     #[test]
-    fn parses_only_the_two_declared_modes() {
+    fn parses_the_declared_modes_and_rejects_unknown_modes() {
         assert_eq!(
             WindowsSandboxMode::parse("read-only"),
             Ok(WindowsSandboxMode::ReadOnly)
@@ -27,6 +29,10 @@ mod tests {
         assert_eq!(
             WindowsSandboxMode::parse("workspace-write"),
             Ok(WindowsSandboxMode::WorkspaceWrite)
+        );
+        assert_eq!(
+            WindowsSandboxMode::parse("workspace-write-readonly-resource"),
+            Ok(WindowsSandboxMode::WorkspaceWriteReadonlyResource)
         );
         assert_eq!(
             WindowsSandboxMode::parse("host-user").err().as_deref(),

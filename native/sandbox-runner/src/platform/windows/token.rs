@@ -32,6 +32,7 @@ pub trait TokenBackend {
         &self,
         token: &Self::Handle,
         restricting_sids: &[&Self::Sid],
+        write_restricted: bool,
     ) -> Result<Self::Handle, SandboxError>;
     fn set_low_integrity(
         &self,
@@ -52,7 +53,8 @@ pub fn create_read_only_with<B: TokenBackend>(backend: &B) -> Result<B::Handle, 
     let everyone_sid = backend.known_sid(KnownSid::Everyone)?;
     let low_sid = backend.known_sid(KnownSid::LowIntegrity)?;
     let restricted_sids = [&logon_sid, &everyone_sid];
-    let restricted_token = backend.create_restricted_token(&current_token, &restricted_sids)?;
+    let restricted_token =
+        backend.create_restricted_token(&current_token, &restricted_sids, true)?;
     backend.set_low_integrity(&restricted_token, &low_sid)?;
     let default_dacl = backend.create_default_dacl(&restricted_token, &[&everyone_sid])?;
     backend.set_default_dacl(&restricted_token, &default_dacl)?;
@@ -73,10 +75,41 @@ pub fn create_workspace_write_with<B: TokenBackend>(
     // same ambient keep-alive SIDs as the read-only token, then append the
     // product capabilities that authorize workspace/temp writes.
     let restricted_sids = [workspace_sid, private_temp_sid, &logon_sid, &everyone_sid];
-    let restricted_token = backend.create_restricted_token(&current_token, &restricted_sids)?;
+    let restricted_token =
+        backend.create_restricted_token(&current_token, &restricted_sids, true)?;
     backend.set_low_integrity(&restricted_token, &low_sid)?;
     let default_dacl =
         backend.create_default_dacl(&restricted_token, &[workspace_sid, private_temp_sid])?;
+    backend.set_default_dacl(&restricted_token, &default_dacl)?;
+    Ok(restricted_token)
+}
+
+pub fn create_workspace_write_readonly_resource_with<B: TokenBackend>(
+    backend: &B,
+    workspace_sid: &B::Sid,
+    private_temp_sid: &B::Sid,
+    resource_sid: &B::Sid,
+) -> Result<B::Handle, SandboxError> {
+    let current_token = backend.open_current_token()?;
+    let logon_sid = backend.logon_sid(&current_token)?;
+    let everyone_sid = backend.known_sid(KnownSid::Everyone)?;
+    let low_sid = backend.known_sid(KnownSid::LowIntegrity)?;
+    // This profile performs a real restricted-SID read check. Unlike the legacy workspace-write
+    // token, WRITE_RESTRICTED is intentionally absent so resource reads are constrained too.
+    let restricted_sids = [
+        workspace_sid,
+        private_temp_sid,
+        resource_sid,
+        &logon_sid,
+        &everyone_sid,
+    ];
+    let restricted_token =
+        backend.create_restricted_token(&current_token, &restricted_sids, false)?;
+    backend.set_low_integrity(&restricted_token, &low_sid)?;
+    let default_dacl = backend.create_default_dacl(
+        &restricted_token,
+        &[workspace_sid, private_temp_sid, resource_sid],
+    )?;
     backend.set_default_dacl(&restricted_token, &default_dacl)?;
     Ok(restricted_token)
 }
@@ -101,6 +134,29 @@ impl RestrictedToken {
         create_workspace_write_with(&Win32TokenBackend, &workspace_sid, &private_temp_sid).map(Self)
     }
 
+    pub fn create_workspace_write_readonly_resource(
+        workspace_sid: &str,
+        private_temp_sid: &str,
+        resource_sid: &str,
+    ) -> Result<Self, SandboxError> {
+        if workspace_sid == private_temp_sid
+            || workspace_sid == resource_sid
+            || private_temp_sid == resource_sid
+        {
+            return Err(SandboxError::CapabilitySidParse);
+        }
+        let workspace_sid = OwnedSid::from_string(workspace_sid)?;
+        let private_temp_sid = OwnedSid::from_string(private_temp_sid)?;
+        let resource_sid = OwnedSid::from_string(resource_sid)?;
+        create_workspace_write_readonly_resource_with(
+            &Win32TokenBackend,
+            &workspace_sid,
+            &private_temp_sid,
+            &resource_sid,
+        )
+        .map(Self)
+    }
+
     pub fn as_raw(&self) -> HANDLE {
         self.0.as_raw()
     }
@@ -109,6 +165,7 @@ impl RestrictedToken {
 struct Win32TokenBackend;
 
 const READ_ONLY_RESTRICTED_TOKEN_FLAGS: u32 = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
+const RESOURCE_READ_RESTRICTED_TOKEN_FLAGS: u32 = DISABLE_MAX_PRIVILEGE | LUA_TOKEN;
 
 impl TokenBackend for Win32TokenBackend {
     type Handle = OwnedHandle;
@@ -144,6 +201,7 @@ impl TokenBackend for Win32TokenBackend {
         &self,
         token: &Self::Handle,
         restricting_sids: &[&Self::Sid],
+        write_restricted: bool,
     ) -> Result<Self::Handle, SandboxError> {
         if restricting_sids.is_empty() {
             return Err(SandboxError::RestrictedTokenCreate);
@@ -156,10 +214,15 @@ impl TokenBackend for Win32TokenBackend {
             })
             .collect::<Vec<_>>();
         let mut raw = null_mut();
+        let flags = if write_restricted {
+            READ_ONLY_RESTRICTED_TOKEN_FLAGS
+        } else {
+            RESOURCE_READ_RESTRICTED_TOKEN_FLAGS
+        };
         let created = unsafe {
             CreateRestrictedToken(
                 token.as_raw(),
-                READ_ONLY_RESTRICTED_TOKEN_FLAGS,
+                flags,
                 0,
                 null(),
                 0,
@@ -319,8 +382,8 @@ fn drop_local_if_present(raw: *mut ACL) {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_read_only_with, create_workspace_write_with, KnownSid, RestrictedToken,
-        SandboxError, TokenBackend,
+        create_read_only_with, create_workspace_write_readonly_resource_with,
+        create_workspace_write_with, KnownSid, RestrictedToken, SandboxError, TokenBackend,
     };
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -416,24 +479,37 @@ mod tests {
             &self,
             _token: &Self::Handle,
             restricting_sids: &[&Self::Sid],
+            write_restricted: bool,
         ) -> Result<Self::Handle, SandboxError> {
             if restricting_sids
                 .first()
                 .map(|sid| sid.name == "workspace-capability")
                 .unwrap_or(false)
             {
-                self.calls
-                    .borrow_mut()
-                    .push("create-workspace-restricted-token");
-                assert_eq!(restricting_sids.len(), 4);
                 assert_eq!(restricting_sids[0].name, "workspace-capability");
                 assert_eq!(restricting_sids[1].name, "private-temp-capability");
-                assert_eq!(restricting_sids[2].name, "logon-sid");
-                assert_eq!(restricting_sids[3].name, "everyone-sid");
+                if restricting_sids.len() == 5 {
+                    self.calls
+                        .borrow_mut()
+                        .push("create-resource-restricted-token");
+                    assert_eq!(restricting_sids[2].name, "resource-capability");
+                    assert_eq!(restricting_sids[3].name, "logon-sid");
+                    assert_eq!(restricting_sids[4].name, "everyone-sid");
+                    assert!(!write_restricted);
+                } else {
+                    self.calls
+                        .borrow_mut()
+                        .push("create-workspace-restricted-token");
+                    assert_eq!(restricting_sids.len(), 4);
+                    assert_eq!(restricting_sids[2].name, "logon-sid");
+                    assert_eq!(restricting_sids[3].name, "everyone-sid");
+                    assert!(write_restricted);
+                }
             } else {
                 self.calls.borrow_mut().push("create-restricted-token");
                 assert_eq!(restricting_sids[0].name, "logon-sid");
                 assert_eq!(restricting_sids[1].name, "everyone-sid");
+                assert!(write_restricted);
             }
             match self.failure {
                 Some(Failure::RestrictedToken) => Err(SandboxError::RestrictedTokenCreate),
@@ -464,7 +540,10 @@ mod tests {
             if restricting_sids[0].name != "everyone-sid" {
                 assert_eq!(restricting_sids[0].name, "workspace-capability");
                 assert_eq!(restricting_sids[1].name, "private-temp-capability");
-                assert_eq!(restricting_sids.len(), 2);
+                assert!(restricting_sids.len() == 2 || restricting_sids.len() == 3);
+                if restricting_sids.len() == 3 {
+                    assert_eq!(restricting_sids[2].name, "resource-capability");
+                }
             }
             if self.failure == Some(Failure::DefaultDaclCreate) {
                 return Err(SandboxError::DefaultDaclCreate);
@@ -506,12 +585,42 @@ mod tests {
     }
 
     #[test]
+    fn creates_a_read_restricted_token_with_exact_resource_capabilities() {
+        let backend = MockBackend::new(None);
+        let workspace = backend.resource("workspace-capability");
+        let temp = backend.resource("private-temp-capability");
+        let resource = backend.resource("resource-capability");
+        let token =
+            create_workspace_write_readonly_resource_with(&backend, &workspace, &temp, &resource)
+                .expect("resource-bound token should succeed");
+        assert_eq!(
+            backend.calls.borrow().as_slice(),
+            [
+                "open-current-token",
+                "find-logon-sid",
+                "create-everyone-sid",
+                "create-low-sid",
+                "create-resource-restricted-token",
+                "set-low-integrity",
+                "create-default-dacl",
+                "set-default-dacl",
+            ]
+        );
+        drop(token);
+    }
+
+    #[test]
     fn uses_all_three_restricted_token_hardening_flags() {
         assert_eq!(
             super::READ_ONLY_RESTRICTED_TOKEN_FLAGS,
             windows_sys::Win32::Security::DISABLE_MAX_PRIVILEGE
                 | windows_sys::Win32::Security::LUA_TOKEN
                 | windows_sys::Win32::Security::WRITE_RESTRICTED
+        );
+        assert_eq!(
+            super::RESOURCE_READ_RESTRICTED_TOKEN_FLAGS,
+            windows_sys::Win32::Security::DISABLE_MAX_PRIVILEGE
+                | windows_sys::Win32::Security::LUA_TOKEN
         );
     }
 

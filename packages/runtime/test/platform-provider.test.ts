@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createLinuxBubblewrapProvider,
   createLinuxLandlockProvider,
@@ -113,5 +113,53 @@ describe("platform process sandbox Providers", () => {
     await expect(provider.create({ ...spec(), tty: true })).rejects.toMatchObject({
       code: "PTY_UNAVAILABLE",
     });
+  });
+
+  it("fails closed for read-only resource grants on unsupported or injected Providers", async () => {
+    const base = spec();
+    const identity = {
+      resourceId: "binding_resource",
+      bundleRevision: "bundle_revision",
+      canonicalRoot: "C:/Users/test/Skill Bundle",
+      contentManifestHash: "a".repeat(64),
+    };
+    const now = Date.now();
+    const readOnlyResourceGrant = {
+      ...identity,
+      runId: base.policy.runId,
+      policyRevision: "security_revision",
+      lifetime: { issuedAt: now, expiresAt: now + 30_000 },
+      authorityFingerprint: "b".repeat(64),
+    } as never;
+    const policy = {
+      ...base.policy,
+      filesystem: {
+        ...base.policy.filesystem,
+        readOnlyResources: {
+          runId: base.policy.runId,
+          revision: "security_revision",
+          enabled: true,
+          expiresAt: now + 30_000,
+          resources: [identity],
+        },
+      },
+    };
+    const requested = { ...base, policy, readOnlyResourceGrant };
+    expect(() => modeForPolicy(policy, readOnlyResourceGrant)).toThrow(/SKILL_SCRIPT_UNAVAILABLE/u);
+    const injectedAdapter = vi.fn(async () => fakeAdapter());
+    const providers = [
+      createLinuxLandlockProvider({ platform: "linux", adapterFactory: injectedAdapter }),
+      createMacSeatbeltProvider({ platform: "darwin", adapterFactory: injectedAdapter }),
+      createWindowsAclRestrictedTokenProvider({
+        platform: "win32",
+        adapterFactory: injectedAdapter,
+      }),
+    ];
+    for (const provider of providers) {
+      await expect(provider.create(requested)).rejects.toMatchObject({
+        reasonCode: "SKILL_SCRIPT_UNAVAILABLE",
+      });
+    }
+    expect(injectedAdapter).not.toHaveBeenCalled();
   });
 });

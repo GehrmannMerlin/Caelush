@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod tests {
     use super::{merge_exact_grant, AccessGrantEntry, GrantChange, WRITE_GRANT_INHERITANCE};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     const CAPABILITY_SID: &str = "S-1-4-101-202-303-404";
     const CUSTOM_SID: &str = "S-1-5-21-100-200-300-400";
@@ -55,6 +57,41 @@ mod tests {
         assert_eq!(change, GrantChange::Removed);
         assert_eq!(remaining, vec![custom_same_sid]);
     }
+
+    #[test]
+    fn readonly_resource_grant_leases_are_independent_and_cleaned_up() {
+        let root = std::env::temp_dir().join(format!(
+            "caelush-resource-grant-lease-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should follow the epoch")
+                .as_nanos()
+        ));
+        fs::create_dir(&root).expect("test directory should be created");
+        let first_sid = "S-1-4-501-502-503-504";
+        let second_sid = "S-1-4-505-506-507-508";
+
+        let first = super::ReadOnlyResourceGrantLease::ensure(&root, first_sid)
+            .expect("first resource lease should be installed");
+        let second = super::ReadOnlyResourceGrantLease::ensure(&root, second_sid)
+            .expect("concurrent resource lease should be installed");
+        assert!(super::readonly_resource_grant_is_ready(&root, first_sid)
+            .expect("first lease should be inspectable"));
+        assert!(super::readonly_resource_grant_is_ready(&root, second_sid)
+            .expect("second lease should be inspectable"));
+
+        drop(first);
+        assert!(super::readonly_resource_grant_is_absent(&root, first_sid)
+            .expect("first lease should be removed"));
+        assert!(super::readonly_resource_grant_is_ready(&root, second_sid)
+            .expect("revoking one lease must preserve the other"));
+
+        drop(second);
+        assert!(super::readonly_resource_grant_is_absent(&root, second_sid)
+            .expect("second lease should be removed"));
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
 }
 use super::error::SandboxError;
 use super::handle::OwnedLocal;
@@ -62,7 +99,7 @@ use super::path_lock::PathLockRegistry;
 use super::sid::{KnownSid, OwnedSid};
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::{
@@ -88,6 +125,9 @@ use windows_sys::Win32::System::SystemServices::{
 };
 
 pub const WORKSPACE_WRITE_MASK: u32 = FILE_ALL_ACCESS;
+const RESOURCE_FILE_READ_MASK: u32 = 0x0012_0089;
+const RESOURCE_DIRECTORY_READ_MASK: u32 = RESOURCE_FILE_READ_MASK | 0x20;
+const RESOURCE_WRITE_DENY_MASK: u32 = 0x000d_0156;
 pub const WRITE_GRANT_INHERITANCE: u32 = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
 const FILE_DELETE_CHILD_MASK: u32 = 0x0000_0040;
 const AMBIENT_DELETE_DENY_INHERITANCE: u32 = CONTAINER_INHERIT_ACE;
@@ -186,6 +226,328 @@ pub fn ensure_write_grant(path: &Path, capability_sid: &str) -> Result<GrantChan
 pub fn revoke_write_grant(path: &Path, capability_sid: &str) -> Result<GrantChange, SandboxError> {
     let registry = acl_path_locks();
     registry.with_lock(path, || revoke_write_grant_locked(path, capability_sid))
+}
+
+/// A temporary, Run-instance read-only grant. Its Drop handler revokes only this resource SID's
+/// exact ACEs, so concurrent processes can hold independent grants without leaving ACL growth.
+#[derive(Debug)]
+pub struct ReadOnlyResourceGrantLease {
+    path: PathBuf,
+    sid: String,
+    armed: bool,
+}
+
+impl ReadOnlyResourceGrantLease {
+    pub fn ensure(path: &Path, sid: &str) -> Result<Self, SandboxError> {
+        ensure_readonly_resource_grant(path, sid)?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            sid: sid.to_string(),
+            armed: true,
+        })
+    }
+
+    pub fn revoke(&mut self) -> Result<(), SandboxError> {
+        if !self.armed {
+            return Ok(());
+        }
+        revoke_readonly_resource_grant(&self.path, &self.sid)?;
+        self.armed = false;
+        Ok(())
+    }
+}
+
+impl Drop for ReadOnlyResourceGrantLease {
+    fn drop(&mut self) {
+        let _ = self.revoke();
+    }
+}
+
+/// Add read/list/traverse access plus a write deny for a unique resource SID. Because the process
+/// token carries this SID alongside the workspace write SID, the deny also protects project Skills
+/// nested beneath the writable workspace. The grant must be paired with a lease and revoked after
+/// the process exits.
+pub fn ensure_readonly_resource_grant(
+    path: &Path,
+    resource_sid: &str,
+) -> Result<GrantChange, SandboxError> {
+    let registry = acl_path_locks();
+    registry.with_lock(path, || {
+        ensure_readonly_resource_grant_locked(path, resource_sid)
+    })
+}
+
+fn ensure_readonly_resource_grant_locked(
+    path: &Path,
+    resource_sid: &str,
+) -> Result<GrantChange, SandboxError> {
+    let resource = OwnedSid::from_string(resource_sid)?;
+    let security = read_security(path)?;
+    let grants = resource_read_grants(resource_sid);
+    let deny = resource_write_deny();
+    let grant_ready = exact_grants_present(security.dacl, resource.as_psid(), &grants)?;
+    let deny_ready = acl_has_exact_deny(security.dacl, resource.as_psid(), &deny)?;
+    if grant_ready && deny_ready {
+        return Ok(GrantChange::Unchanged);
+    }
+
+    // A generated resource SID must not already carry broader or conflicting ACEs.
+    if has_unexpected_allow_for_sid(security.dacl, resource.as_psid(), &grants)?
+        || has_unexpected_deny_for_sid(security.dacl, resource.as_psid(), &deny)?
+    {
+        return Err(SandboxError::ResourceGrantInvalid);
+    }
+
+    let deny_entries = if deny_ready {
+        Vec::new()
+    } else {
+        vec![(resource.as_psid(), &deny)]
+    };
+    let mut grant_entries = Vec::new();
+    for grant in &grants {
+        if !acl_has_exact_grant(security.dacl, resource.as_psid(), grant)? {
+            grant_entries.push((resource.as_psid(), grant));
+        }
+    }
+    let dacl = build_readonly_resource_dacl(security.dacl, &deny_entries, &grant_entries)?;
+    if let Err(error) = apply_dacl(path, &dacl) {
+        return rollback_dacl(path, &security, error);
+    }
+    match readonly_resource_grant_is_ready(path, resource_sid) {
+        Ok(true) => {}
+        Ok(false) => {
+            return rollback_dacl(path, &security, SandboxError::ResourceGrantPostcondition)
+        }
+        Err(error) => return rollback_dacl(path, &security, error),
+    }
+    Ok(GrantChange::Added)
+}
+
+pub fn revoke_readonly_resource_grant(
+    path: &Path,
+    resource_sid: &str,
+) -> Result<GrantChange, SandboxError> {
+    let registry = acl_path_locks();
+    registry.with_lock(path, || {
+        revoke_readonly_resource_grant_locked(path, resource_sid)
+    })
+}
+
+fn revoke_readonly_resource_grant_locked(
+    path: &Path,
+    resource_sid: &str,
+) -> Result<GrantChange, SandboxError> {
+    let resource = OwnedSid::from_string(resource_sid)?;
+    let security = read_security(path)?;
+    let grants = resource_read_grants(resource_sid);
+    let deny = resource_write_deny();
+    let has_grant = grants.iter().try_fold(false, |found, grant| {
+        Ok::<_, SandboxError>(
+            found || acl_has_exact_grant(security.dacl, resource.as_psid(), grant)?,
+        )
+    })?;
+    let has_deny = acl_has_exact_deny(security.dacl, resource.as_psid(), &deny)?;
+    if !has_grant && !has_deny {
+        return Ok(GrantChange::NotFound);
+    }
+    let dacl =
+        build_readonly_resource_cleanup_dacl(security.dacl, resource.as_psid(), &grants, &deny)?;
+    if let Err(error) = apply_dacl(path, &dacl) {
+        return rollback_dacl(path, &security, error);
+    }
+    match readonly_resource_grant_is_absent(path, resource_sid) {
+        Ok(true) => Ok(GrantChange::Removed),
+        Ok(false) => rollback_dacl(path, &security, SandboxError::ResourceGrantPostcondition),
+        Err(error) => rollback_dacl(path, &security, error),
+    }
+}
+
+fn readonly_resource_grant_is_ready(path: &Path, resource_sid: &str) -> Result<bool, SandboxError> {
+    let resource = OwnedSid::from_string(resource_sid)?;
+    let security = read_security(path)?;
+    let grants = resource_read_grants(resource_sid);
+    let deny = resource_write_deny();
+    Ok(
+        exact_grants_present(security.dacl, resource.as_psid(), &grants)?
+            && acl_has_exact_deny(security.dacl, resource.as_psid(), &deny)?
+            && !has_unexpected_allow_for_sid(security.dacl, resource.as_psid(), &grants)?
+            && !has_unexpected_deny_for_sid(security.dacl, resource.as_psid(), &deny)?,
+    )
+}
+
+fn readonly_resource_grant_is_absent(
+    path: &Path,
+    resource_sid: &str,
+) -> Result<bool, SandboxError> {
+    let resource = OwnedSid::from_string(resource_sid)?;
+    let security = read_security(path)?;
+    let grants = resource_read_grants(resource_sid);
+    let deny = resource_write_deny();
+    for grant in &grants {
+        if acl_has_exact_grant(security.dacl, resource.as_psid(), grant)? {
+            return Ok(false);
+        }
+    }
+    Ok(!acl_has_exact_deny(
+        security.dacl,
+        resource.as_psid(),
+        &deny,
+    )?)
+}
+
+fn resource_write_deny() -> AccessDenyEntry {
+    AccessDenyEntry {
+        mask: RESOURCE_WRITE_DENY_MASK,
+        inheritance: WRITE_GRANT_INHERITANCE,
+    }
+}
+
+fn exact_grants_present(
+    acl: *const ACL,
+    target_sid: windows_sys::Win32::Security::PSID,
+    grants: &[AccessGrantEntry],
+) -> Result<bool, SandboxError> {
+    for grant in grants {
+        if !acl_has_exact_grant(acl, target_sid, grant)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn resource_read_grants(resource_sid: &str) -> [AccessGrantEntry; 3] {
+    [
+        AccessGrantEntry {
+            sid: resource_sid.to_string(),
+            mask: RESOURCE_DIRECTORY_READ_MASK,
+            inheritance: 0,
+        },
+        AccessGrantEntry {
+            sid: resource_sid.to_string(),
+            mask: RESOURCE_DIRECTORY_READ_MASK,
+            inheritance: CONTAINER_INHERIT_ACE,
+        },
+        AccessGrantEntry {
+            sid: resource_sid.to_string(),
+            mask: RESOURCE_FILE_READ_MASK,
+            inheritance: OBJECT_INHERIT_ACE,
+        },
+    ]
+}
+
+fn has_unexpected_allow_for_sid(
+    acl: *const ACL,
+    target_sid: windows_sys::Win32::Security::PSID,
+    expected: &[AccessGrantEntry],
+) -> Result<bool, SandboxError> {
+    for_each_ace(acl, |header, raw| {
+        if header.AceType != ACCESS_ALLOWED_ACE_TYPE as u8 {
+            return Ok(false);
+        }
+        let ace = unsafe { &*raw.cast::<ACCESS_ALLOWED_ACE>() };
+        let sid = std::ptr::addr_of!(ace.SidStart)
+            .cast::<u8>()
+            .cast_mut()
+            .cast();
+        if unsafe { EqualSid(sid, target_sid) } == 0 {
+            return Ok(false);
+        }
+        Ok(!expected
+            .iter()
+            .any(|grant| grant.mask == ace.Mask && grant.inheritance == header.AceFlags as u32))
+    })
+}
+
+fn has_unexpected_deny_for_sid(
+    acl: *const ACL,
+    target_sid: windows_sys::Win32::Security::PSID,
+    expected: &AccessDenyEntry,
+) -> Result<bool, SandboxError> {
+    for_each_ace(acl, |header, raw| {
+        if header.AceType != ACCESS_DENIED_ACE_TYPE as u8 {
+            return Ok(false);
+        }
+        let ace = unsafe { &*raw.cast::<ACCESS_DENIED_ACE>() };
+        let sid = std::ptr::addr_of!(ace.SidStart)
+            .cast::<u8>()
+            .cast_mut()
+            .cast();
+        if unsafe { EqualSid(sid, target_sid) } == 0 {
+            return Ok(false);
+        }
+        Ok(ace.Mask != expected.mask || header.AceFlags as u32 != expected.inheritance)
+    })
+}
+
+fn build_readonly_resource_cleanup_dacl(
+    old: *const ACL,
+    target_sid: windows_sys::Win32::Security::PSID,
+    grants: &[AccessGrantEntry],
+    deny: &AccessDenyEntry,
+) -> Result<AclBuffer, SandboxError> {
+    let mut buffer = AclBuffer::new(acl_size_or_header(old)? + 8)?;
+    append_aces(&mut buffer, old, |header, raw| {
+        if header.AceType == ACCESS_ALLOWED_ACE_TYPE as u8 {
+            let ace = unsafe { &*raw.cast::<ACCESS_ALLOWED_ACE>() };
+            let sid = std::ptr::addr_of!(ace.SidStart)
+                .cast::<u8>()
+                .cast_mut()
+                .cast();
+            if unsafe { EqualSid(sid, target_sid) } != 0
+                && grants.iter().any(|grant| {
+                    grant.mask == ace.Mask && grant.inheritance == header.AceFlags as u32
+                })
+            {
+                return Ok(false);
+            }
+        }
+        if header.AceType == ACCESS_DENIED_ACE_TYPE as u8 {
+            let ace = unsafe { &*raw.cast::<ACCESS_DENIED_ACE>() };
+            let sid = std::ptr::addr_of!(ace.SidStart)
+                .cast::<u8>()
+                .cast_mut()
+                .cast();
+            if unsafe { EqualSid(sid, target_sid) } != 0
+                && ace.Mask == deny.mask
+                && header.AceFlags as u32 == deny.inheritance
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    })?;
+    Ok(buffer)
+}
+
+fn build_readonly_resource_dacl(
+    old: *const ACL,
+    denies: &[(windows_sys::Win32::Security::PSID, &AccessDenyEntry)],
+    grants: &[(windows_sys::Win32::Security::PSID, &AccessGrantEntry)],
+) -> Result<AclBuffer, SandboxError> {
+    let old_size = acl_size_or_header(old)?;
+    let deny_size = denies
+        .iter()
+        .map(|(sid, _)| sid_length(*sid).map(|length| aligned_ace_size(8 + length)))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .sum::<usize>();
+    let grant_size = grants
+        .iter()
+        .map(|(sid, _)| sid_length(*sid).map(|length| aligned_ace_size(8 + length)))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .sum::<usize>();
+    let mut buffer = AclBuffer::new(old_size + deny_size + grant_size + 8)?;
+    for (sid, deny) in denies {
+        let ace = access_denied_ace(*sid, deny)?;
+        append_ace(&mut buffer, ace.as_ptr().cast(), ace.len())?;
+    }
+    append_aces(&mut buffer, old, |_, _| Ok(true))?;
+    for (sid, grant) in grants {
+        let ace = access_allowed_ace(*sid, grant)?;
+        append_ace(&mut buffer, ace.as_ptr().cast(), ace.len())?;
+    }
+    Ok(buffer)
 }
 
 fn ensure_write_grant_locked(

@@ -21,6 +21,9 @@ struct RunConfig {
     cwd: PathBuf,
     private_temp: Option<PathBuf>,
     temp_marker_id: Option<String>,
+    resource_root: Option<PathBuf>,
+    resource_grant_fingerprint: Option<String>,
+    resource_grant_version: Option<u32>,
     program: String,
     args: Vec<String>,
 }
@@ -114,6 +117,9 @@ type TargetProcess = std::process::Child;
 fn spawn_target(config: &Config, run: &RunConfig) -> Result<TargetProcess, String> {
     #[cfg(target_os = "linux")]
     {
+        if run.resource_grant_version.is_some() {
+            return Err("SKILL_SCRIPT_UNAVAILABLE".to_string());
+        }
         return platform::linux::spawn_restricted(
             &config.provider,
             &run.workspace_root,
@@ -124,6 +130,9 @@ fn spawn_target(config: &Config, run: &RunConfig) -> Result<TargetProcess, Strin
     }
     #[cfg(target_os = "macos")]
     {
+        if run.resource_grant_version.is_some() {
+            return Err("SKILL_SCRIPT_UNAVAILABLE".to_string());
+        }
         return platform::macos::spawn_restricted(
             &config.provider,
             &run.workspace_root,
@@ -160,6 +169,27 @@ fn spawn_target(config: &Config, run: &RunConfig) -> Result<TargetProcess, Strin
                     &run.args,
                 )
             }
+            platform::windows_mode::WindowsSandboxMode::WorkspaceWriteReadonlyResource => {
+                platform::windows::spawn_workspace_write_readonly_resource(
+                    &config.provider,
+                    &run.workspace_root,
+                    &run.cwd,
+                    run.private_temp
+                        .as_deref()
+                        .ok_or_else(|| "MISSING_PRIVATE_TEMP".to_string())?,
+                    run.temp_marker_id
+                        .as_deref()
+                        .ok_or_else(|| "MISSING_TEMP_MARKER".to_string())?,
+                    run.resource_root
+                        .as_deref()
+                        .ok_or_else(|| "MISSING_RESOURCE_ROOT".to_string())?,
+                    run.resource_grant_fingerprint
+                        .as_deref()
+                        .ok_or_else(|| "MISSING_RESOURCE_GRANT".to_string())?,
+                    &run.program,
+                    &run.args,
+                )
+            }
         };
     }
     #[allow(unreachable_code)]
@@ -188,6 +218,9 @@ fn parse_args(args: Vec<String>) -> Result<Config, String> {
     let mut cwd = None;
     let mut private_temp = None;
     let mut temp_marker_id = None;
+    let mut resource_root = None;
+    let mut resource_grant_fingerprint = None;
+    let mut resource_grant_version = None;
     let mut program = None;
     let mut payload_args = None;
     let mut index = 0;
@@ -217,6 +250,18 @@ fn parse_args(args: Vec<String>) -> Result<Config, String> {
                 set_once(&mut private_temp, PathBuf::from(next(&args, &mut index)?))?
             }
             "--temp-marker-id" => set_once(&mut temp_marker_id, next(&args, &mut index)?)?,
+            "--resource-root" => {
+                set_once(&mut resource_root, PathBuf::from(next(&args, &mut index)?))?
+            }
+            "--resource-grant-fingerprint" => {
+                set_once(&mut resource_grant_fingerprint, next(&args, &mut index)?)?
+            }
+            "--resource-grant-version" => {
+                let value = next(&args, &mut index)?
+                    .parse::<u32>()
+                    .map_err(|_| "INVALID_RESOURCE_GRANT_VERSION".to_string())?;
+                set_once(&mut resource_grant_version, value)?;
+            }
             "--program" => set_once(&mut program, next(&args, &mut index)?)?,
             "--" => {
                 payload_args = Some(args[index + 1..].to_vec());
@@ -234,15 +279,47 @@ fn parse_args(args: Vec<String>) -> Result<Config, String> {
             let mode = platform::windows_mode::WindowsSandboxMode::parse(
                 &mode.ok_or_else(|| "MISSING_MODE".to_string())?,
             )?;
-            if mode == platform::windows_mode::WindowsSandboxMode::WorkspaceWrite {
-                if private_temp.is_none() {
-                    return Err("MISSING_PRIVATE_TEMP".to_string());
+            match mode {
+                platform::windows_mode::WindowsSandboxMode::ReadOnly => {
+                    if private_temp.is_some()
+                        || temp_marker_id.is_some()
+                        || resource_root.is_some()
+                        || resource_grant_fingerprint.is_some()
+                        || resource_grant_version.is_some()
+                    {
+                        return Err("INVALID_READ_ONLY_RESOURCE_ARGUMENT".to_string());
+                    }
                 }
-                if temp_marker_id.is_none() {
-                    return Err("MISSING_TEMP_MARKER".to_string());
+                platform::windows_mode::WindowsSandboxMode::WorkspaceWrite => {
+                    if private_temp.is_none() || temp_marker_id.is_none() {
+                        return Err("MISSING_PRIVATE_TEMP".to_string());
+                    }
+                    if resource_root.is_some()
+                        || resource_grant_fingerprint.is_some()
+                        || resource_grant_version.is_some()
+                    {
+                        return Err("INVALID_READ_ONLY_RESOURCE_ARGUMENT".to_string());
+                    }
                 }
-            } else if private_temp.is_some() || temp_marker_id.is_some() {
-                return Err("INVALID_PRIVATE_TEMP".to_string());
+                platform::windows_mode::WindowsSandboxMode::WorkspaceWriteReadonlyResource => {
+                    if private_temp.is_none() || temp_marker_id.is_none() {
+                        return Err("MISSING_PRIVATE_TEMP".to_string());
+                    }
+                    if resource_root.is_none()
+                        || resource_grant_fingerprint
+                            .as_deref()
+                            .map(|fingerprint| {
+                                fingerprint.len() != 64
+                                    || !fingerprint.bytes().all(|byte| {
+                                        byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()
+                                    })
+                            })
+                            .unwrap_or(true)
+                        || resource_grant_version != Some(1)
+                    {
+                        return Err("INVALID_RESOURCE_GRANT".to_string());
+                    }
+                }
             }
             Operation::Run(RunConfig {
                 mode,
@@ -250,6 +327,9 @@ fn parse_args(args: Vec<String>) -> Result<Config, String> {
                 cwd: cwd.ok_or_else(|| "MISSING_CWD".to_string())?,
                 private_temp,
                 temp_marker_id,
+                resource_root,
+                resource_grant_fingerprint,
+                resource_grant_version,
                 program: program.ok_or_else(|| "MISSING_PROGRAM".to_string())?,
                 args,
             })
@@ -261,6 +341,9 @@ fn parse_args(args: Vec<String>) -> Result<Config, String> {
                 || payload_args.is_some()
                 || private_temp.is_some()
                 || temp_marker_id.is_some()
+                || resource_root.is_some()
+                || resource_grant_fingerprint.is_some()
+                || resource_grant_version.is_some()
             {
                 return Err("INVALID_WORKSPACE_OPERATION_ARGUMENT".to_string());
             }
@@ -317,15 +400,28 @@ fn next(args: &[String], index: &mut usize) -> Result<String, String> {
 }
 
 fn write_ready(config: &Config, enforcement: &str) -> std::io::Result<()> {
-    control::write_message(
-        config,
-        &protocol::ready(
+    let message = match &config.operation {
+        Operation::Run(run)
+            if run.mode
+                == platform::windows_mode::WindowsSandboxMode::WorkspaceWriteReadonlyResource =>
+        {
+            protocol::ready_with_resource_capability(
+                &config.nonce,
+                &config.provider,
+                &config.boundary_fingerprint,
+                enforcement,
+                run.resource_grant_version
+                    .expect("resource mode parser requires the grant version"),
+            )
+        }
+        _ => protocol::ready(
             &config.nonce,
             &config.provider,
             &config.boundary_fingerprint,
             enforcement,
         ),
-    )
+    };
+    control::write_message(config, &message)
 }
 
 #[cfg(target_os = "windows")]
@@ -466,6 +562,74 @@ mod tests {
         assert_eq!(
             parse_args(args).err().as_deref(),
             Some("MISSING_PRIVATE_TEMP")
+        );
+    }
+
+    fn resource_run_args() -> Vec<String> {
+        let mut args = run_args();
+        args[7] = "workspace-write-readonly-resource".to_string();
+        args.splice(
+            18..18,
+            [
+                "--private-temp".to_string(),
+                r"C:\private-temp".to_string(),
+                "--temp-marker-id".to_string(),
+                "marker-123".to_string(),
+                "--resource-root".to_string(),
+                r"C:\Users\test\Skill Bundle".to_string(),
+                "--resource-grant-fingerprint".to_string(),
+                "a".repeat(64),
+                "--resource-grant-version".to_string(),
+                "1".to_string(),
+            ],
+        );
+        args
+    }
+
+    #[test]
+    fn accepts_a_versioned_readonly_resource_grant_only_with_its_full_boundary() {
+        let config = parse_args(resource_run_args()).expect("resource mode should parse");
+        let super::Operation::Run(run) = config.operation else {
+            panic!("expected run operation");
+        };
+        assert_eq!(
+            run.mode,
+            super::platform::windows_mode::WindowsSandboxMode::WorkspaceWriteReadonlyResource
+        );
+        assert_eq!(run.resource_grant_version, Some(1));
+        let expected_fingerprint = "a".repeat(64);
+        assert_eq!(
+            run.resource_grant_fingerprint.as_deref(),
+            Some(expected_fingerprint.as_str())
+        );
+        assert_eq!(
+            run.resource_root.as_deref(),
+            Some(std::path::Path::new(r"C:\Users\test\Skill Bundle"))
+        );
+    }
+
+    #[test]
+    fn rejects_an_unversioned_or_unknown_readonly_resource_grant() {
+        let mut args = resource_run_args();
+        let version = args
+            .windows(2)
+            .position(|pair| pair[0] == "--resource-grant-version")
+            .expect("test fixture includes a version flag");
+        args.drain(version..version + 2);
+        assert_eq!(
+            parse_args(args).err().as_deref(),
+            Some("INVALID_RESOURCE_GRANT")
+        );
+
+        let mut args = resource_run_args();
+        let version = args
+            .windows(2)
+            .position(|pair| pair[0] == "--resource-grant-version")
+            .expect("test fixture includes a version flag");
+        args[version + 1] = "2".to_string();
+        assert_eq!(
+            parse_args(args).err().as_deref(),
+            Some("INVALID_RESOURCE_GRANT")
         );
     }
 
