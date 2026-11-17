@@ -34,7 +34,7 @@ export function createRunSkillScriptTool(): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "run_skill_script",
     description: "Run a script from a loaded Skill bundle when script execution is available.",
-    scheduling: { class: "READ_ONLY" },
+    scheduling: { class: "UNKNOWN" },
     inputSchema: runSkillScriptInputSchema,
     resultDetailsSchema: runSkillScriptOutputSchema,
     execute: async (input) => {
@@ -64,9 +64,9 @@ export function createRunSkillScriptTool(): CodingToolDefinition {
   return {
     tool,
     security: {
-      riskLevel: "LOW",
-      requiredCapabilities: [],
-      runtimeRequirements: { runtimeKinds: [] },
+      riskLevel: "CRITICAL",
+      requiredCapabilities: ["SHELL_EXEC", "PROCESS_START"],
+      runtimeRequirements: { runtimeKinds: ["local"] },
     },
     securityFactsProjector: asOverlaySecurityFactsProjector(projectRunSkillScriptSecurityFacts),
     promptSnippet: RUN_SKILL_SCRIPT_PROMPT_SNIPPET,

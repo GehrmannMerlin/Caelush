@@ -243,20 +243,25 @@ export function projectReadSkillSecurityFacts(args: Readonly<JsonObject>): ToolS
   };
 }
 
-/** The Phase 05 unavailable script Tool exposes no raw argv or path through Guard facts. */
+/** Script admission exposes only bounded identifiers, argument fingerprints and effect scope. */
 export function projectRunSkillScriptSecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
+  const scriptArgs = Array.isArray(args["args"]) ? args["args"] : [];
+  const workdir = typeof args["workdir"] === "string" ? args["workdir"] : "";
   return {
     resourceAccesses: [],
     secretScanInputs: [],
     structuralPreview: {
-      kind: "SKILL_SCRIPT_UNAVAILABLE",
+      kind: "SKILL_SCRIPT",
       bindingDigest: digestText(
         typeof args["bindingId"] === "string" ? args["bindingId"] : "INVALID",
       ),
       resourcePathDigest: digestText(
         typeof args["resourcePath"] === "string" ? args["resourcePath"] : "INVALID",
       ),
-      argumentCount: Array.isArray(args["args"]) ? args["args"].length : 0,
+      argsFingerprint: digestText(canonicalJsonString({ args: scriptArgs })),
+      workdirDigest: digestText(workdir),
+      argumentCount: scriptArgs.length,
+      effectScope: "BOUND_BUNDLE_PROCESS",
     },
   };
 }

@@ -46,6 +46,11 @@ export type {
 } from "./primitives/ids.js";
 export { JsonObjectSchema, JsonValueSchema } from "./primitives/json.js";
 export type { JsonObject, JsonPrimitive, JsonValue } from "./primitives/json.js";
+export type {
+  ReadOnlyResourceGrant,
+  ReadOnlyResourceIdentity,
+  ReadOnlyResourcePolicy,
+} from "./execution-resources.js";
 export {
   ATTACHMENT_ONLY_RUN_GOAL,
   AttachmentDescriptorSchema,

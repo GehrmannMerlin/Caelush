@@ -237,7 +237,10 @@ export type {
   ToolEffectSettlementRoute,
 } from "./run-tool-effect-settlement.js";
 /** The one projection of a Run's durable security policy onto the Tool Layer. */
-export { createToolSecurityContext } from "./tool-security-context.js";
+export {
+  createToolSecurityContext,
+  readOnlyResourcePolicyRevisionFor,
+} from "./tool-security-context.js";
 export { createRunSecurityContext, RunSecurityContextError } from "./run-security-context.js";
 export type { RunSecurityContext } from "./run-security-context.js";
 /**

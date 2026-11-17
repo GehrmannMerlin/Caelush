@@ -82,6 +82,8 @@ export interface ToolGuardProjectionInput {
 export function projectSafeToolGuardFacts(input: ToolGuardProjectionInput): JsonObject {
   const facts = input.securityFacts;
   const structuralKind = facts?.structuralPreview?.kind;
+  const skillScriptPreview =
+    structuralKind === "SKILL_SCRIPT" ? facts?.structuralPreview : undefined;
   const resourceOperationKinds = facts?.resourceAccesses
     .map((access) => access.operation)
     .filter((operation, index, values) => values.indexOf(operation) === index)
@@ -115,7 +117,36 @@ export function projectSafeToolGuardFacts(input: ToolGuardProjectionInput): Json
     ...(typeof structuralKind === "string" && Buffer.byteLength(structuralKind, "utf8") <= 128
       ? { structuralKind }
       : {}),
+    ...(skillScriptPreview === undefined
+      ? {}
+      : {
+          skillScript: {
+            ...(isSha256(skillScriptPreview.bindingDigest)
+              ? { bindingDigest: skillScriptPreview.bindingDigest }
+              : {}),
+            ...(isSha256(skillScriptPreview.resourcePathDigest)
+              ? { resourcePathDigest: skillScriptPreview.resourcePathDigest }
+              : {}),
+            ...(isSha256(skillScriptPreview.argsFingerprint)
+              ? { argsFingerprint: skillScriptPreview.argsFingerprint }
+              : {}),
+            ...(isSha256(skillScriptPreview.workdirDigest)
+              ? { workdirDigest: skillScriptPreview.workdirDigest }
+              : {}),
+            ...(typeof skillScriptPreview.argumentCount === "number" &&
+            Number.isSafeInteger(skillScriptPreview.argumentCount) &&
+            skillScriptPreview.argumentCount >= 0 &&
+            skillScriptPreview.argumentCount <= 64
+              ? { argumentCount: skillScriptPreview.argumentCount }
+              : {}),
+            effectScope: "BOUND_BUNDLE_PROCESS",
+          },
+        }),
   });
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
 
 export function fingerprintPreparedToolArgs(args: Readonly<JsonObject>): string {

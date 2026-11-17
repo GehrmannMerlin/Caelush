@@ -47,3 +47,16 @@ export function createToolSecurityContext(
     }),
   });
 }
+
+/** Return the durable Run policy revision for a per-resource grant, without adding resource paths to Agent context. */
+export function readOnlyResourcePolicyRevisionFor(
+  context: Pick<ToolSecurityContext, "securityPolicy">,
+): string {
+  const revision = context.securityPolicy?.policyDigest;
+  if (typeof revision !== "string" || !/^[a-f0-9]{64}$/u.test(revision)) {
+    throw new RunControllerInvariantError(
+      "Read-only resource grants require the Run's immutable security policy.",
+    );
+  }
+  return revision;
+}

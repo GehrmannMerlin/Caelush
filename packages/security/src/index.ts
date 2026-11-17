@@ -123,6 +123,18 @@ export type {
   PermissionPresetTemplate,
 } from "./preset-catalog.js";
 export { computePolicyDigest, verifyPolicyDigest } from "./policy-digest.js";
+export {
+  authorizeReadOnlyResource,
+  MAX_READ_ONLY_RESOURCE_GRANT_LIFETIME_MS,
+  verifyReadOnlyResourceGrant,
+} from "./read-only-resource-policy.js";
+export type {
+  ReadOnlyResourceAuthorizationRequest,
+  ReadOnlyResourceGrantDecision,
+  ReadOnlyResourceGrantDenialReason,
+  ReadOnlyResourceGrantVerification,
+} from "./read-only-resource-policy.js";
+export type { ReadOnlyResourcePolicy } from "@caelush/protocol";
 export { assessCommandEffect } from "./effect-assessment.js";
 export type {
   AssessCommandEffectInput,

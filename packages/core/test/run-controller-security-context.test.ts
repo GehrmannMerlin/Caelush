@@ -8,7 +8,10 @@ import {
   type AgentState,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
-import { createToolSecurityContext } from "../src/tool-security-context.js";
+import {
+  createToolSecurityContext,
+  readOnlyResourcePolicyRevisionFor,
+} from "../src/tool-security-context.js";
 
 const run = AgentRunSchema.parse({
   id: createRunId(),
@@ -69,5 +72,16 @@ describe("RunController security authority", () => {
         permissionProfile: "READ_ONLY",
       }),
     ).toThrow("security policy does not match");
+  });
+
+  it("uses the durable security policy digest as the resource grant revision", () => {
+    const context = createToolSecurityContext(run, state);
+    expect(readOnlyResourcePolicyRevisionFor(context)).toBe(run.securityPolicy!.policyDigest);
+    expect(() =>
+      readOnlyResourcePolicyRevisionFor({
+        permissionProfile: "PROJECT_ACCESS",
+        approvalPolicy: "ON_BOUNDARY",
+      }),
+    ).toThrow("immutable security policy");
   });
 });
