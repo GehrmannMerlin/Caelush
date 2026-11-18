@@ -7,6 +7,7 @@ import {
   SessionContinuityPreflightResponseSchema,
   SessionTurnPresentationQuerySchema,
   SessionTurnPresentationResponseSchema,
+  SessionTurnPresentationResponseV4Schema,
   SessionTranscriptQuerySchema,
   SessionTranscriptResponseSchema,
   UpdateSessionModelSelectionRequestSchema,
@@ -116,6 +117,21 @@ export function registerSessionRoutes(
   }
 
   if (dependencies.presentation !== undefined) {
+    app.get(
+      "/api/v1/sessions/:sessionId/presentation-v4",
+      {
+        schema: {
+          querystring: SessionTurnPresentationQuerySchema,
+          response: { 200: SessionTurnPresentationResponseV4Schema },
+        },
+      },
+      async (request) => {
+        const { sessionId } = request.params as { sessionId: string };
+        const query = request.query as SessionTurnPresentationQuery;
+        return dependencies.presentation!.getSessionPresentationV4(sessionId as never, query);
+      },
+    );
+
     app.get(
       "/api/v1/sessions/:sessionId/presentation",
       {

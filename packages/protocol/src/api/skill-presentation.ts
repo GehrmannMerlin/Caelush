@@ -41,7 +41,7 @@ export const UserPresentationItemV4Schema = UserPresentationItemSchema.extend({
 export type UserPresentationItemV4 = z.infer<typeof UserPresentationItemV4Schema>;
 
 export const SkillPresentationStatusSchema = z.enum([
-  "LOADING",
+  "READING",
   "CONTENT_READY",
   "LOADED",
   "FAILED",

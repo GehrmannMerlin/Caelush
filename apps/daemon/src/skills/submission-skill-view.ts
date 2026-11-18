@@ -18,6 +18,7 @@ export interface SubmissionSkillViewService {
     readonly runId: RunId;
   }): Promise<SubmissionSkillPreparationV1>;
   getSkillLoadFacts(input: { readonly runId: RunId }): Promise<readonly WorkflowSkillLoadFact[]>;
+  getRunSkillPresentationFacts(input: { readonly runId: RunId }): Promise<RunSkillPresentationFacts>;
 }
 
 export interface WorkflowSkillLoadFact {
@@ -27,13 +28,40 @@ export interface WorkflowSkillLoadFact {
   readonly status: "CONTENT_READY" | "LOADED";
 }
 
-export function createSubmissionSkillViewService(options: {
+export interface SkillBindingPresentationFact extends WorkflowSkillLoadFact {
+  readonly bindingId: string;
+  readonly activationOrdinal: number;
+  readonly sourceToolInvocationId?: string;
+}
+
+export interface RunSkillPresentationFacts {
+  readonly selectedSkills: readonly {
+    readonly skillId: string;
+    readonly name: string;
+    readonly displayName?: string;
+  }[];
+  readonly catalogSkills: readonly {
+    readonly skillId: string;
+    readonly name: string;
+    readonly displayName?: string;
+    readonly modelInvocable: boolean;
+  }[];
+  readonly bindings: readonly SkillBindingPresentationFact[];
+}
+
+interface SubmissionSkillViewOptions {
   readonly runs: Pick<
     RunRepository,
     "get" | "readWorkflowProfile" | "readPreparedResources" | "readPreparedInputReceipts"
   >;
   readonly readCatalogSnapshot: RunSkillCatalogSnapshotService["readRunSkillCatalogSnapshot"];
-}): SubmissionSkillViewService {
+}
+
+export function createSubmissionSkillViewService(
+  options: SubmissionSkillViewOptions,
+): SubmissionSkillViewService {
+  const getRunSkillPresentationFacts = async ({ runId }: { readonly runId: RunId }) =>
+    readRunSkillPresentationFacts(options, runId);
   return Object.freeze({
     async getSubmissionSkillPreparation({ runId }: { readonly runId: RunId }) {
       const run = await options.runs.get(runId);
@@ -59,38 +87,85 @@ export function createSubmissionSkillViewService(options: {
       });
     },
     async getSkillLoadFacts({ runId }: { readonly runId: RunId }) {
-      const run = await options.runs.get(runId);
-      if (run === null) throw new StorageNotFoundError("AgentRun", runId);
-      const profile = await requireWorkflowProfile(options.runs, runId);
-      const snapshot = await options.readCatalogSnapshot(profile.catalogSnapshotRef);
-      if (
-        snapshot.workspaceId !== run.workspace.id ||
-        snapshot.catalogRevision !== profile.catalogSnapshotRef.catalogRevision
-      ) {
-        throw new SkillServiceError("SKILL_ARTIFACT_INVALID");
-      }
-      if (options.runs.readPreparedInputReceipts === undefined) {
-        throw new SkillServiceError("SKILLS_UNAVAILABLE");
-      }
-      const [resources, receipts] = await Promise.all([
-        readResources(options.runs, runId),
-        options.runs.readPreparedInputReceipts(runId),
-      ]);
-      validateReceipts(runId, profile, resources, receipts);
-      const selected = resources.filter(
-        ({ sourceToolInvocationId }) => sourceToolInvocationId === undefined,
-      );
+      const facts = await getRunSkillPresentationFacts({ runId });
       return Object.freeze(
-        selected.map((binding) => {
-          const metadata = selectedDisplayMetadata(binding, snapshot.skills);
-          const loaded = receipts.some((receipt) => receipt.bindingId === binding.bindingId);
-          return Object.freeze({
-            ...metadata,
-            status: loaded ? ("LOADED" as const) : ("CONTENT_READY" as const),
-          });
-        }),
+        facts.bindings
+          .filter(({ sourceToolInvocationId }) => sourceToolInvocationId === undefined)
+          .map(({ skillId, name, displayName, status }) =>
+            Object.freeze({
+              skillId,
+              name,
+              ...(displayName === undefined ? {} : { displayName }),
+              status,
+            }),
+          ),
       );
     },
+    getRunSkillPresentationFacts,
+  });
+}
+
+const EMPTY_PRESENTATION_FACTS: RunSkillPresentationFacts = Object.freeze({
+  selectedSkills: Object.freeze([]),
+  catalogSkills: Object.freeze([]),
+  bindings: Object.freeze([]),
+});
+
+async function readRunSkillPresentationFacts(
+  options: SubmissionSkillViewOptions,
+  runId: RunId,
+): Promise<RunSkillPresentationFacts> {
+  const run = await options.runs.get(runId);
+  if (run === null) throw new StorageNotFoundError("AgentRun", runId);
+  if (options.runs.readWorkflowProfile === undefined) return EMPTY_PRESENTATION_FACTS;
+  const profile = await options.runs.readWorkflowProfile(runId);
+  if (profile === null) return EMPTY_PRESENTATION_FACTS;
+  const snapshot = await options.readCatalogSnapshot(profile.catalogSnapshotRef);
+  if (
+    snapshot.workspaceId !== run.workspace.id ||
+    snapshot.catalogRevision !== profile.catalogSnapshotRef.catalogRevision
+  ) {
+    throw new SkillServiceError("SKILL_ARTIFACT_INVALID");
+  }
+  const [resources, receipts] = await Promise.all([
+    readResources(options.runs, runId),
+    options.runs.readPreparedInputReceipts?.(runId) ?? Promise.resolve([]),
+  ]);
+  validateReceipts(runId, profile, resources, receipts);
+  const bindings = resources
+    .map((binding) => {
+      const metadata = selectedDisplayMetadata(binding, snapshot.skills);
+      const loaded = receipts.some((receipt) => receipt.bindingId === binding.bindingId);
+      return Object.freeze({
+        bindingId: binding.bindingId,
+        ...metadata,
+        activationOrdinal: binding.activationOrdinal,
+        ...(binding.sourceToolInvocationId === undefined
+          ? {}
+          : { sourceToolInvocationId: binding.sourceToolInvocationId }),
+        status: loaded ? ("LOADED" as const) : ("CONTENT_READY" as const),
+      });
+    })
+    .sort((left, right) => left.activationOrdinal - right.activationOrdinal);
+  return Object.freeze({
+    selectedSkills: Object.freeze(
+      bindings
+        .filter(({ sourceToolInvocationId }) => sourceToolInvocationId === undefined)
+        .map(({ skillId, name, displayName }) =>
+          Object.freeze({ skillId, name, ...(displayName === undefined ? {} : { displayName }) }),
+        ),
+    ),
+    catalogSkills: Object.freeze(
+      snapshot.skills.map((skill) =>
+        Object.freeze({
+          skillId: skill.skillId,
+          name: skill.name,
+          ...(skill.displayName === undefined ? {} : { displayName: skill.displayName }),
+          modelInvocable: skill.modelInvocable,
+        }),
+      ),
+    ),
+    bindings: Object.freeze(bindings),
   });
 }
 

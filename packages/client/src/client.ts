@@ -48,6 +48,7 @@ import {
   SessionContinuityPreflightResponseSchema,
   SessionTurnPresentationQuerySchema,
   SessionTurnPresentationResponseSchema,
+  SessionTurnPresentationResponseV4Schema,
   SkillCapabilityResponseSchema,
   SkillCatalogQuerySchema,
   SkillCatalogPageV1Schema,
@@ -111,6 +112,7 @@ import {
   type SessionContinuityPreflightResponse,
   type SessionTurnPresentationQuery,
   type SessionTurnPresentationResponse,
+  type SessionTurnPresentationResponseV4,
   type UpdateAISelectionRequest,
   type UpdateSessionModelSelectionRequest,
   type WorkspaceId,
@@ -1087,6 +1089,36 @@ export class CaelushClient {
       [200],
       options,
     );
+  }
+
+  async getSessionTurnPresentationV4(
+    sessionId: SessionId,
+    query: Partial<SessionTurnPresentationQuery> = {},
+    options: CaelushClientRequestOptions = {},
+  ): Promise<SessionTurnPresentationResponseV4> {
+    const parsed = SessionTurnPresentationQuerySchema.parse(query);
+    const runId = parsed.runId === undefined ? "" : `&runId=${encodeURIComponent(parsed.runId)}`;
+    const cursor =
+      parsed.cursor === undefined ? "" : `&cursor=${encodeURIComponent(parsed.cursor)}`;
+    return this.request(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/presentation-v4?limit=${encodeURIComponent(String(parsed.limit))}${runId}${cursor}`,
+      { method: "GET" },
+      SessionTurnPresentationResponseV4Schema,
+      [200],
+      options,
+    );
+  }
+
+  async getSessionTurnPresentationCompatible(
+    sessionId: SessionId,
+    query: Partial<SessionTurnPresentationQuery> = {},
+    options: CaelushClientRequestOptions = {},
+  ): Promise<SessionTurnPresentationResponse | SessionTurnPresentationResponseV4> {
+    const capabilities = await this.getSkillCapabilities(options);
+    if (capabilities?.presentationVersion === 4) {
+      return this.getSessionTurnPresentationV4(sessionId, query, options);
+    }
+    return this.getSessionTurnPresentation(sessionId, query, options);
   }
 
   async createRun(

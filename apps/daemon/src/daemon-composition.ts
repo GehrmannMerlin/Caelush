@@ -1637,7 +1637,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       workflowArtifactReferenceAuthority !== undefined,
     invocationReady: false,
     scriptExecutionReady: false,
-    presentationReady: false,
+    presentationReady: submissionSkillView !== undefined,
   });
 
   let disposed = false;

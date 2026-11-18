@@ -16,6 +16,7 @@ import {
   NormalRunFinalResultSchema,
   SessionTurnPresentationQuerySchema,
   SessionTurnPresentationResponseV3Schema,
+  SessionTurnPresentationResponseV4Schema,
   VerifiedRunFinalResultSchema,
   toolPresentationCategory,
   type AgentRun,
@@ -24,6 +25,7 @@ import {
   type RunStatus,
   type SessionId,
   type SessionTurnPresentationResponseV3,
+  type SessionTurnPresentationResponseV4,
   type SessionTurnPresentationTurnV3,
   type RunId,
   type ToolPresentationItemV3,
@@ -39,6 +41,8 @@ import type {
 } from "@caelush/storage";
 import { StorageNotFoundError } from "@caelush/storage";
 import { projectPublicAssistantText } from "./assistant-text-projection.js";
+import { projectSkillPresentationTurn } from "./skill-presentation-projector.js";
+import type { SubmissionSkillViewService } from "../skills/submission-skill-view.js";
 
 const TERMINAL_RUN_STATUSES = new Set<RunStatus>([
   "COMPLETED",
@@ -90,6 +94,7 @@ export interface SessionPresentationServiceOptions {
   readonly observations: Pick<ObservationRepository, "listByRun">;
   readonly eventReader: DurableRunEventReaderPort;
   readonly toolPresentation: ToolPresentationPort;
+  readonly skillView?: Pick<SubmissionSkillViewService, "getRunSkillPresentationFacts">;
 }
 
 interface PositionedItem {
@@ -191,6 +196,31 @@ export class SessionPresentationService {
       ...(end < runs.length && turns.length > 0
         ? { nextCursor: turns[turns.length - 1]!.runId }
         : {}),
+    });
+  }
+
+  async getSessionPresentationV4(
+    sessionId: SessionId,
+    input: unknown,
+  ): Promise<SessionTurnPresentationResponseV4> {
+    const legacyProjection = await this.getPresentation(sessionId, input);
+    const turns = await Promise.all(
+      legacyProjection.turns.map(async (turn) => {
+        const [facts, toolInvocations, observations] = await Promise.all([
+          this.options.skillView?.getRunSkillPresentationFacts({ runId: turn.runId }) ??
+            Promise.resolve({ selectedSkills: [], catalogSkills: [], bindings: [] }),
+          this.options.toolInvocations.listByRun(turn.runId),
+          this.options.observations.listByRun(turn.runId),
+        ]);
+        return projectSkillPresentationTurn({ turn, facts, toolInvocations, observations });
+      }),
+    );
+    return SessionTurnPresentationResponseV4Schema.parse({
+      capabilityVersion: 4,
+      turns,
+      ...(legacyProjection.nextCursor === undefined
+        ? {}
+        : { nextCursor: legacyProjection.nextCursor }),
     });
   }
 

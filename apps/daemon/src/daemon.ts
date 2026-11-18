@@ -723,6 +723,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         observations: storage.observations,
         eventReader: storage.eventReader,
         toolPresentation: composition.toolPresentation,
+        ...(composition.submissionSkillView === undefined
+          ? {}
+          : { skillView: composition.submissionSkillView }),
       }),
       ...(options.logger === undefined ? {} : { logger: options.logger }),
       ...(options.web === undefined ? {} : { web: options.web }),
