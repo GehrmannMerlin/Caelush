@@ -36,16 +36,16 @@ describe("attachment composer", () => {
     );
   });
 
-  it("renders the upload-only menu action with a fixed popover above the composer", () => {
+  it("renders the upload-only menu action with an adaptive popover above the composer", () => {
     const html = renderToStaticMarkup(<AttachmentMenu onChooseFiles={vi.fn()} />);
     const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 
-    expect(html).toContain('role="menu" aria-label="添加"');
-    expect(html).toContain('role="menuitem"');
+    expect(html).toContain('role="dialog" aria-label="添加"');
+    expect(html).toContain('class="attachment-menu-item"');
     expect(html).toContain('class="attachment-menu-items"');
     expect(html).toContain("上传文件");
     expect(styles).toMatch(
-      /\.attachment-menu\s*\{[^}]*position:\s*absolute;[^}]*inset-block-end:\s*calc\(100% \+ 12px\);[^}]*inset-inline:\s*0;[^}]*width:\s*100%;[^}]*height:\s*320px;[^}]*max-width:\s*none;[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto;/s,
+      /\.attachment-menu\s*\{[^}]*position:\s*absolute;[^}]*inset-block-end:\s*calc\(100% \+ 12px\);[^}]*inset-inline:\s*0;[^}]*width:\s*100%;[^}]*height:\s*auto;[^}]*max-height:\s*min\(62dvh, 30rem\);[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto;/s,
     );
     expect(styles).toMatch(
       /\.attachment-menu-items\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s,

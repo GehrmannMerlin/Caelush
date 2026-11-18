@@ -25,12 +25,17 @@ import type {
   HistoryLookupQuery,
   HistoryLookupResponse,
   RunId,
+  SkillCatalogItemV1,
+  SkillSelectionV1,
+  WorkspaceId,
 } from "@caelush/protocol";
 import { ContextUsageRing } from "./context-usage-ring.js";
 import type { AttachmentQueueItem } from "../application/attachment-manager.js";
 import type { WebRunInputItem } from "../application/run-input-state.js";
 import { AttachmentList } from "./attachment-list.js";
 import { AttachmentMenu } from "./attachment-menu.js";
+import { SelectedSkillList } from "./selected-skill-list.js";
+import type { SkillCatalogListSkills } from "../application/skill-catalog-store.js";
 
 export interface PromptComposerProps {
   readonly disabled: boolean;
@@ -52,6 +57,15 @@ export interface PromptComposerProps {
   readonly attachmentSubmitBlockedReason?: string | undefined;
   readonly onDraftChange?: ((text: string) => void) | undefined;
   readonly onAddFiles?: ((files: readonly File[]) => void) | undefined;
+  readonly skillsEnabled?: boolean | undefined;
+  readonly workspaceId?: WorkspaceId | undefined;
+  readonly listSkills?: SkillCatalogListSkills | undefined;
+  readonly selectedSkills?: readonly SkillCatalogItemV1[] | undefined;
+  readonly onSelectSkill?: ((selection: SkillSelectionV1) => void) | undefined;
+  readonly onRemoveSkill?: ((skillId: string) => void) | undefined;
+  readonly onSubmitDraft?:
+    | ((draft: PromptComposerSubmissionDraft) => Promise<boolean>)
+    | undefined;
   readonly onRemoveAttachment?: ((id: string) => void) | undefined;
   readonly onRetryAttachment?: ((id: string) => void) | undefined;
   readonly onLoadAttachmentPreview?:
@@ -73,6 +87,12 @@ export interface PromptComposerProps {
   readonly submitDisabled?: boolean | undefined;
   /** Accepted corrections still waiting to be applied, shown above the input. */
   readonly runInputs?: readonly WebRunInputItem[] | undefined;
+}
+
+export interface PromptComposerSubmissionDraft {
+  readonly text: string;
+  readonly skillSelections: readonly SkillSelectionV1[];
+  readonly attachmentIds: readonly AttachmentId[];
 }
 
 export interface PromptSubmitButtonProps {
@@ -176,6 +196,14 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const controlled = props.draftText !== undefined;
   const value = controlled ? props.draftText! : localValue;
+  const selectedSkills = uniqueSkillItems(props.selectedSkills ?? []);
+  const canUseSkills =
+    props.skillsEnabled === true &&
+    props.workspaceId !== undefined &&
+    props.listSkills !== undefined &&
+    props.onSelectSkill !== undefined &&
+    props.onRemoveSkill !== undefined &&
+    props.onSubmitDraft !== undefined;
   // The latest text, read after an await so a submission never clears characters the user typed
   // while the request was in flight.
   const latestValue = useRef(value);
@@ -257,11 +285,37 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
       return;
     }
     const submitted = value;
-    const accepted = await props.onSubmit(submitted);
+    const skillSelections = selectedSkills.map(({ skillId, selectionToken }) => ({
+      skillId,
+      selectionToken,
+    }));
+    const attachmentIds = (props.attachments ?? []).flatMap((item) =>
+      item.artifactId === undefined ? [] : [item.artifactId],
+    );
+    const accepted =
+      props.onSubmitDraft === undefined
+        ? await props.onSubmit(submitted)
+        : await props.onSubmitDraft({ text: submitted, skillSelections, attachmentIds });
     // Only the version that was actually accepted is cleared. Text typed during the request — and
     // an attachment draft stays exactly as it is.
-    if (accepted && latestValue.current === submitted) setValue("");
-  }, [props.disabled, props.draftLoading, props.onSubmit, setValue, steer, submitBlocked, value]);
+    if (
+      accepted &&
+      props.onSubmitDraft === undefined &&
+      latestValue.current === submitted
+    )
+      setValue("");
+  }, [
+    props.attachments,
+    props.disabled,
+    props.draftLoading,
+    props.onSubmit,
+    props.onSubmitDraft,
+    selectedSkills,
+    setValue,
+    steer,
+    submitBlocked,
+    value,
+  ]);
   const submitRunInput = useCallback(async () => {
     if (
       props.disabled ||
@@ -364,6 +418,10 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
     createElement(RunInputPendingList, {
       items: props.runInputs ?? [],
     }),
+    createElement(SelectedSkillList, {
+      skills: selectedSkills,
+      onRemove: (skillId) => props.onRemoveSkill?.(skillId),
+    }),
     createElement(AttachmentList, {
       items: props.attachments ?? [],
       onRemove: (id) => props.onRemoveAttachment?.(id),
@@ -403,13 +461,13 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
                 props.disabled ||
                 props.draftLoading === true ||
                 steer === true ||
-                props.onAddFiles === undefined,
+                (props.onAddFiles === undefined && !canUseSkills),
               onClick: () => setMenuOpen((open) => !open),
-              "aria-label": "添加附件",
+              "aria-label": canUseSkills ? "添加内容" : "添加附件",
               "aria-expanded": menuOpen,
-              "aria-haspopup": "menu",
+              "aria-haspopup": "dialog",
               "aria-controls": "prompt-attachment-menu",
-              title: "添加附件",
+              title: canUseSkills ? "添加内容" : "添加附件",
             },
             createElement(Plus, { size: 18, strokeWidth: 2, "aria-hidden": true }),
           ),
@@ -446,7 +504,13 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
     ),
     menuOpen
       ? createElement(AttachmentMenu, {
-          onChooseFiles: openFilePicker,
+          ...(props.onAddFiles === undefined ? {} : { onChooseFiles: openFilePicker }),
+          skillsEnabled: canUseSkills,
+          workspaceId: props.workspaceId,
+          listSkills: props.listSkills,
+          selectedSkills,
+          onSelectSkill: props.onSelectSkill,
+          onRemoveSkill: props.onRemoveSkill,
           containerRef: menuRef,
         })
       : null,
@@ -480,6 +544,14 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
 
 function containsFiles(dataTransfer: DataTransfer): boolean {
   return Array.from(dataTransfer.types).includes("Files");
+}
+
+function uniqueSkillItems(skills: readonly SkillCatalogItemV1[]): readonly SkillCatalogItemV1[] {
+  const byId = new Map<string, SkillCatalogItemV1>();
+  for (const skill of skills) {
+    if (!byId.has(skill.skillId)) byId.set(skill.skillId, skill);
+  }
+  return [...byId.values()];
 }
 
 function submissionLabel(submission: WebSubmissionState): string {

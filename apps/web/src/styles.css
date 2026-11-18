@@ -9772,12 +9772,14 @@ select {
   inset-inline: 0;
   display: grid;
   width: 100%;
-  height: 320px;
+  height: auto;
   max-width: none;
-  max-height: min(320px, calc(100dvh - 132px));
+  max-height: min(62dvh, 30rem);
   grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
   gap: 0.55rem;
   padding: 0.9rem;
+  box-sizing: border-box;
   border: 1px solid var(--web-line-strong, #d8deea);
   border-radius: 14px;
   background: var(--web-surface, #fff);
@@ -9819,7 +9821,20 @@ select {
 .attachment-menu-item:hover,
 .attachment-menu-item:focus-visible {
   outline: none;
-  background: #edf2fa;
+  background: var(--web-accent-soft, #edf2fa);
+}
+
+.attachment-menu-count {
+  display: inline-grid;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  place-items: center;
+  margin-inline-start: auto;
+  border-radius: 999px;
+  background: var(--web-accent-soft, #edf2fa);
+  color: var(--web-text, #354052);
+  font-size: 0.72rem;
+  font-weight: 650;
 }
 
 .attachment-menu-hint {
@@ -9828,6 +9843,195 @@ select {
   color: var(--web-muted, #667085);
   font-size: 0.75rem;
   line-height: 1.45;
+}
+
+.skill-picker-panel {
+  position: absolute;
+  z-index: 1;
+  inset-block-end: 0;
+  display: grid;
+  width: min(22rem, calc(100vw - 24px));
+  max-height: min(62dvh, 30rem);
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  gap: 0.55rem;
+  padding: 0.9rem;
+  overflow: hidden;
+  box-sizing: border-box;
+  border: 1px solid var(--web-line-strong, #d8deea);
+  border-radius: 14px;
+  background: var(--web-surface, #fff);
+  box-shadow: 0 16px 44px rgb(25 38 61 / 17%);
+}
+
+.attachment-menu[data-panel-side="right"] .skill-picker-panel {
+  inset-inline-start: calc(100% + 0.5rem);
+}
+
+.attachment-menu[data-panel-side="left"] .skill-picker-panel {
+  inset-inline-end: calc(100% + 0.5rem);
+}
+
+.skill-picker-search-label {
+  color: var(--web-muted, #667085);
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.skill-picker-search {
+  width: 100%;
+  min-height: 2.4rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--web-line-strong, #d8deea);
+  border-radius: 9px;
+  background: var(--web-surface, #fff);
+  color: var(--web-text, #354052);
+  font: inherit;
+  font-size: 0.84rem;
+}
+
+.skill-picker-search:focus-visible,
+.skill-picker-item:focus-visible,
+.skill-picker-load-more:focus-visible,
+.skill-picker-back:focus-visible {
+  outline: 2px solid var(--web-accent, #5577c7);
+  outline-offset: 2px;
+}
+
+.skill-picker-list {
+  display: grid;
+  min-height: 0;
+  align-content: start;
+  gap: 0.35rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.skill-picker-item {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--web-surface-muted, #f5f7fb);
+  color: var(--web-text, #354052);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.skill-picker-item:hover,
+.skill-picker-item[aria-pressed="true"] {
+  border-color: var(--web-line-strong, #d8deea);
+  background: var(--web-accent-soft, #edf2fa);
+}
+
+.skill-picker-item-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.skill-picker-item-name {
+  overflow: hidden;
+  font-size: 0.85rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-picker-item-description {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--web-muted, #667085);
+  font-size: 0.74rem;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.skill-picker-item-state {
+  flex: 0 0 auto;
+  color: var(--web-muted, #667085);
+  font-size: 0.72rem;
+}
+
+.skill-picker-status,
+.skill-picker-load-more-error {
+  margin: 0;
+  padding: 0.65rem;
+  color: var(--web-muted, #667085);
+  font-size: 0.8rem;
+}
+
+.skill-picker-load-more,
+.skill-picker-back {
+  min-height: 2.25rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--web-line-strong, #d8deea);
+  border-radius: 9px;
+  background: var(--web-surface, #fff);
+  color: var(--web-text, #354052);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.skill-picker-back {
+  display: none;
+  justify-self: start;
+}
+
+.selected-skill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.15rem 0;
+  list-style: none;
+}
+
+.selected-skill-tag {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.15rem 0.2rem 0.15rem 0.62rem;
+  border: 1px solid var(--web-line-strong, #d8deea);
+  border-radius: 999px;
+  background: var(--web-accent-soft, #edf2fa);
+  color: var(--web-text, #354052);
+  font-size: 0.78rem;
+}
+
+.selected-skill-tag-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-skill-tag-remove {
+  display: inline-grid;
+  width: 1.45rem;
+  height: 1.45rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.selected-skill-tag-remove:hover,
+.selected-skill-tag-remove:focus-visible {
+  outline: none;
+  background: var(--web-surface, #fff);
 }
 
 .prompt-attachment-file-input {
@@ -10136,6 +10340,28 @@ select {
   color: var(--web-text, #edf1f8);
 }
 
+:root[data-caelush-theme="dark"] .skill-picker-panel,
+:root[data-caelush-theme="dark"] .skill-picker-search,
+:root[data-caelush-theme="dark"] .skill-picker-load-more,
+:root[data-caelush-theme="dark"] .skill-picker-back,
+:root[data-caelush-theme="dark"] .selected-skill-tag {
+  border-color: var(--web-line-strong, #414a58);
+  background: var(--web-surface, #232833);
+  color: var(--web-text, #edf1f8);
+}
+
+:root[data-caelush-theme="dark"] .skill-picker-item {
+  background: var(--web-surface-muted, #2d3440);
+  color: var(--web-text, #edf1f8);
+}
+
+:root[data-caelush-theme="dark"] .skill-picker-item:hover,
+:root[data-caelush-theme="dark"] .skill-picker-item[aria-pressed="true"],
+:root[data-caelush-theme="dark"] .selected-skill-tag-remove:hover,
+:root[data-caelush-theme="dark"] .selected-skill-tag-remove:focus-visible {
+  background: var(--web-accent-soft, #35415a);
+}
+
 :root[data-caelush-theme="dark"] .prompt-attachment-button {
   border-color: transparent;
   background: transparent;
@@ -10392,5 +10618,33 @@ button.transcript-attachment-card:disabled {
   .workspace-sidebar-content {
     scrollbar-color: auto;
     scrollbar-width: auto;
+  }
+}
+
+@media (max-width: 680px) {
+  .attachment-menu {
+    max-height: min(68dvh, 34rem);
+  }
+
+  .attachment-menu--skills .attachment-menu-items,
+  .attachment-menu--skills .attachment-menu-hint {
+    display: none;
+  }
+
+  .attachment-menu--skills .skill-picker-panel {
+    position: static;
+    width: 100%;
+    max-height: min(58dvh, 28rem);
+    padding: 0;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .attachment-menu--skills .skill-picker-back {
+    display: inline-flex;
+    align-items: center;
   }
 }
