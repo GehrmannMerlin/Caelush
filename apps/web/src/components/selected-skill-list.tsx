@@ -1,8 +1,14 @@
 import type { ReactElement } from "react";
-import type { SkillCatalogItemV1 } from "@caelush/protocol";
+
+export interface SelectedSkillTag {
+  readonly skillId: string;
+  readonly name: string;
+  readonly displayName?: string | undefined;
+  readonly selectionToken: string;
+}
 
 export interface SelectedSkillListProps {
-  readonly skills: readonly SkillCatalogItemV1[];
+  readonly skills: readonly SelectedSkillTag[];
   readonly onRemove: (skillId: string) => void;
 }
 

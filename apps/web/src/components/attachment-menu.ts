@@ -8,20 +8,17 @@ import {
   type Ref,
 } from "react";
 import { FilePlus2, Pickaxe } from "lucide-react";
-import type {
-  SkillCatalogItemV1,
-  SkillSelectionV1,
-  WorkspaceId,
-} from "@caelush/protocol";
+import type { SkillSelectionV1, WorkspaceId } from "@caelush/protocol";
 import type { SkillCatalogListSkills } from "../application/skill-catalog-store.js";
 import { SkillPicker } from "./skill-picker.js";
+import type { SelectedSkillTag } from "./selected-skill-list.js";
 
 export interface AttachmentMenuProps {
   readonly onChooseFiles?: (() => void) | undefined;
   readonly skillsEnabled?: boolean | undefined;
   readonly workspaceId?: WorkspaceId | undefined;
   readonly listSkills?: SkillCatalogListSkills | undefined;
-  readonly selectedSkills?: readonly SkillCatalogItemV1[] | undefined;
+  readonly selectedSkills?: readonly SelectedSkillTag[] | undefined;
   readonly onSelectSkill?: ((selection: SkillSelectionV1) => void) | undefined;
   readonly onRemoveSkill?: ((skillId: string) => void) | undefined;
   readonly containerRef?: Ref<HTMLDivElement> | undefined;
@@ -43,9 +40,7 @@ export function AttachmentMenu(props: AttachmentMenuProps): ReactElement {
   const selectedSkillIds = new Set((props.selectedSkills ?? []).map((skill) => skill.skillId));
 
   useEffect(() => {
-    const firstAction = rootRef.current?.querySelector<HTMLButtonElement>(
-      ".attachment-menu-item",
-    );
+    const firstAction = rootRef.current?.querySelector<HTMLButtonElement>(".attachment-menu-item");
     if (!pickerOpen) firstAction?.focus();
   }, [pickerOpen]);
 
@@ -114,7 +109,10 @@ export function AttachmentMenu(props: AttachmentMenuProps): ReactElement {
           "aria-controls": "prompt-skill-picker",
           onPointerEnter: openFromHover,
           onPointerLeave: (event: { relatedTarget: EventTarget | null }) => {
-            if (event.relatedTarget instanceof Node && rootRef.current?.contains(event.relatedTarget)) {
+            if (
+              event.relatedTarget instanceof Node &&
+              rootRef.current?.contains(event.relatedTarget)
+            ) {
               cancelHoverTimer();
               return;
             }

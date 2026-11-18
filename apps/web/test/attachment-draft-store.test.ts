@@ -126,4 +126,25 @@ describe("AttachmentDraftStore", () => {
     await store.clear(workspaceOwner, edited.revision);
     expect(store.getSnapshot(workspaceOwner)).toMatchObject({ text: "", artifactIds: [] });
   });
+
+  it("drops an accepted but unprepared submission id before a fresh retry", async () => {
+    let saved = { ...emptyDraft(workspaceOwner), text: "use a Skill" };
+    const client: AttachmentDraftClient = {
+      getAttachmentDraft: vi.fn(async () => saved),
+      saveAttachmentDraft: vi.fn(async (owner, input) => {
+        saved = { owner, revision: input.expectedRevision + 1, ...input };
+        return saved;
+      }),
+    };
+    const store = new AttachmentDraftStore(client);
+    const loaded = await store.load(workspaceOwner);
+    const prepared = await store.prepareSubmission(workspaceOwner, loaded.revision);
+
+    const reset = await store.resetSubmission(workspaceOwner, prepared.revision);
+    const retry = await store.prepareSubmission(workspaceOwner, reset.revision);
+
+    expect(reset.submissionId).toBeUndefined();
+    expect(retry.submissionId).not.toBe(prepared.submissionId);
+    expect(retry.text).toBe("use a Skill");
+  });
 });

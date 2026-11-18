@@ -1,6 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { createWorkspaceId, type SkillCatalogItemV1, type SkillSelectionV1 } from "@caelush/protocol";
+import {
+  createWorkspaceId,
+  type SkillCatalogItemV1,
+  type SkillSelectionV1,
+} from "@caelush/protocol";
 import { PromptComposer } from "../src/components/prompt-composer.js";
 
 const selectedSkill: SkillCatalogItemV1 = {
@@ -29,7 +33,7 @@ function pickerProps() {
       complete: true,
       diagnostics: [],
     })),
-    onSubmitDraft: vi.fn(async () => true),
+    onSubmitDraft: vi.fn(async () => undefined),
   };
 }
 

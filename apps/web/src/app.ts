@@ -15,8 +15,11 @@ import type {
   AttachmentId,
   AttachmentDraftItem,
   AttachmentOwner,
+  SkillCapabilityResponse,
   TranscriptAttachmentRef,
   SessionId,
+  SkillCatalogItemV1,
+  SkillSelectionV1,
   WorkspaceId,
   WorkspaceRecord,
   WorkspaceRef,
@@ -43,6 +46,21 @@ import {
   AttachmentDraftStore,
   AttachmentDraftConflictError,
 } from "./application/attachment-draft-store.js";
+import { SkillSelectionStore } from "./application/skill-selection-store.js";
+import {
+  ComposerSubmissionDraftSchema,
+  createInitialSkillSubmissionState,
+  reduceSkillSubmission,
+  type ComposerSubmissionDraft,
+  type SkillSubmissionEvent,
+  type SkillSubmissionState,
+  type SubmissionAccepted,
+} from "./application/skill-submission-state.js";
+import {
+  createSkillCatalogStore,
+  type SkillCatalogListSkills,
+  type SkillCatalogStore,
+} from "./application/skill-catalog-store.js";
 import {
   WebWorkspaceManager,
   WorkspaceExpansionStore,
@@ -56,6 +74,7 @@ import { sessionArchiveStore } from "./application/session-archive-store.js";
 import { archiveErrorMessage } from "./application/archive-errors.js";
 import { resolveComposerCapabilities } from "./application/composer-state.js";
 import { PromptComposer } from "./components/prompt-composer.js";
+import type { SelectedSkillTag } from "./components/selected-skill-list.js";
 import { SessionWorkspace } from "./components/session-workspace.js";
 import { WorkbenchAppearanceRoute } from "./components/appearance-page.js";
 import {
@@ -105,6 +124,8 @@ const EMPTY_SESSION_SNAPSHOT: WebSessionSnapshot = {
   runs: [],
   history: [],
   turnPresentation: undefined,
+  skillPresentation: undefined,
+  skillPreparation: undefined,
   activeRuns: [],
   continuityWarning: false,
   timeline: createInitialTimelineState(),
@@ -134,6 +155,12 @@ interface ComposerDraftBinding {
   readonly text: string;
   readonly loading: boolean;
   readonly error?: string | undefined;
+}
+
+interface SkillSubmissionBinding {
+  readonly ownerKey: string;
+  readonly state: SkillSubmissionState;
+  readonly loading: boolean;
 }
 
 export function WebHostApp(props: {
@@ -293,8 +320,42 @@ export function WebHostApp(props: {
       saveAttachmentDraft: (owner, input) => writeDraft.call(props.client, owner, input),
     });
   }, [props.client]);
+  const skillCatalogStore = useMemo<SkillCatalogStore | undefined>(() => {
+    const getCapabilities = props.client.getSkillCapabilities;
+    const listSkills = props.client.listSkills;
+    if (getCapabilities === undefined || listSkills === undefined) return undefined;
+    return createSkillCatalogStore({
+      getSkillCapabilities: getCapabilities.bind(props.client),
+      listSkills: listSkills.bind(props.client),
+    });
+  }, [props.client]);
+  const skillSelectionStore = useMemo(() => new SkillSelectionStore(), []);
   const [composerDraft, setComposerDraft] = useState<ComposerDraftBinding | undefined>();
+  const [skillSubmissionBinding, setSkillSubmissionBinding] = useState<
+    SkillSubmissionBinding | undefined
+  >();
+  const [skillCapabilities, setSkillCapabilities] = useState<SkillCapabilityResponse | undefined>();
+  const skillCatalogItems = useRef(new Map<string, SkillCatalogItemV1>());
+  const skillSubmissionBindingRef = useRef<SkillSubmissionBinding | undefined>();
   const draftLoadGeneration = useRef(0);
+  const skillDraftLoadGeneration = useRef(0);
+
+  const publishSkillSubmissionBinding = useCallback((binding: SkillSubmissionBinding) => {
+    skillSubmissionBindingRef.current = binding;
+    setSkillSubmissionBinding(binding);
+  }, []);
+
+  const listSkills = useCallback<SkillCatalogListSkills>(
+    async (request) => {
+      if (skillCatalogStore === undefined) throw new Error("Skill catalog is unavailable.");
+      const page = await skillCatalogStore.listSkills(request);
+      for (const item of page.items) {
+        skillCatalogItems.current.set(`${request.workspaceId}:${item.skillId}`, item);
+      }
+      return page;
+    },
+    [skillCatalogStore],
+  );
 
   useEffect(() => {
     attachmentManager?.activate();
@@ -340,6 +401,23 @@ export function WebHostApp(props: {
     sessionGetSnapshot,
   );
 
+  useEffect(() => {
+    setSkillCapabilities(undefined);
+    if (state.bootstrap !== "READY" || skillCatalogStore === undefined) return undefined;
+    let active = true;
+    void skillCatalogStore
+      .getCapabilities()
+      .then((capabilities) => {
+        if (active && capabilities !== null) setSkillCapabilities(capabilities);
+      })
+      .catch(() => {
+        if (active) setSkillCapabilities(undefined);
+      });
+    return () => {
+      active = false;
+    };
+  }, [skillCatalogStore, state.bootstrap]);
+
   const attachmentOwner = useMemo<AttachmentOwner | undefined>(() => {
     if (selectedWorkspace === undefined) return undefined;
     return sessionSnapshot.selectedSessionId === undefined
@@ -373,6 +451,51 @@ export function WebHostApp(props: {
     .map((item) => `${item.id}:${item.artifactId ?? ""}`)
     .join("|");
 
+  const updateSkillSubmission = useCallback(
+    (owner: AttachmentOwner, event: SkillSubmissionEvent): SkillSubmissionState => {
+      const key = ownerKey(owner);
+      const current = skillSelectionStore.load(owner) ?? createInitialSkillSubmissionState();
+      const next = reduceSkillSubmission(current, event);
+      const saved = next === current ? current : skillSelectionStore.save(owner, next);
+      const binding = skillSubmissionBindingRef.current;
+      if (binding?.ownerKey === key) {
+        publishSkillSubmissionBinding({ ownerKey: key, state: saved, loading: false });
+      }
+      return saved;
+    },
+    [publishSkillSubmissionBinding, skillSelectionStore],
+  );
+
+  useEffect(() => {
+    if (attachmentOwner === undefined || attachmentOwnerKey === undefined) {
+      skillDraftLoadGeneration.current += 1;
+      skillSubmissionBindingRef.current = undefined;
+      setSkillSubmissionBinding(undefined);
+      return undefined;
+    }
+    const generation = ++skillDraftLoadGeneration.current;
+    const saved = skillSelectionStore.load(attachmentOwner);
+    publishSkillSubmissionBinding({
+      ownerKey: attachmentOwnerKey,
+      state: saved ?? createInitialSkillSubmissionState(),
+      loading: attachmentDraftStore !== undefined,
+    });
+    if (attachmentDraftStore === undefined) {
+      return () => {
+        if (skillDraftLoadGeneration.current === generation) skillDraftLoadGeneration.current += 1;
+      };
+    }
+    return () => {
+      if (skillDraftLoadGeneration.current === generation) skillDraftLoadGeneration.current += 1;
+    };
+  }, [
+    attachmentDraftStore,
+    attachmentOwner,
+    attachmentOwnerKey,
+    publishSkillSubmissionBinding,
+    skillSelectionStore,
+  ]);
+
   useEffect(() => {
     if (
       attachmentOwner === undefined ||
@@ -383,32 +506,51 @@ export function WebHostApp(props: {
       return;
     }
     const generation = ++draftLoadGeneration.current;
+    const skillGeneration = skillDraftLoadGeneration.current;
     let active = true;
     setComposerDraft({ ownerKey: attachmentOwnerKey, revision: 0, text: "", loading: true });
     void (async () => {
       const draft = await attachmentDraftStore.load(attachmentOwner);
+      const savedSkillState = skillSelectionStore.load(attachmentOwner);
+      const artifactIds = savedSkillState?.draft.attachments ?? draft.artifactIds;
       const metadataClient = props.client.getAttachmentMetadata;
       const metadataResults = await Promise.allSettled(
-        draft.artifactIds.map((artifactId) =>
+        artifactIds.map((artifactId) =>
           metadataClient === undefined
             ? Promise.reject(new Error("Attachment metadata is unavailable."))
             : metadataClient.call(props.client, artifactId, attachmentOwner),
         ),
       );
       const attachments: AttachmentDraftItem[] = [];
-      const unavailableIds = [] as (typeof draft.artifactIds)[number][];
+      const unavailableIds = [] as (typeof artifactIds)[number][];
       metadataResults.forEach((result, index) => {
-        const artifactId = draft.artifactIds[index];
+        const artifactId = artifactIds[index];
         if (artifactId === undefined) return;
         if (result.status === "fulfilled") attachments.push(result.value);
         else unavailableIds.push(artifactId);
       });
       if (!active || draftLoadGeneration.current !== generation) return;
       attachmentManager?.restore(attachmentOwner, attachments, unavailableIds);
+      const skillState =
+        savedSkillState ??
+        createInitialSkillSubmissionState({
+          draftVersion: 0,
+          userText: draft.text,
+          skillSelections: [],
+          attachments: draft.artifactIds,
+        });
+      if (savedSkillState === undefined) skillSelectionStore.save(attachmentOwner, skillState);
+      if (skillDraftLoadGeneration.current === skillGeneration) {
+        publishSkillSubmissionBinding({
+          ownerKey: attachmentOwnerKey,
+          state: skillState,
+          loading: false,
+        });
+      }
       setComposerDraft({
         ownerKey: attachmentOwnerKey,
         revision: draft.revision,
-        text: draft.text,
+        text: savedSkillState?.draft.userText ?? draft.text,
         loading: false,
         ...(unavailableIds.length === 0
           ? {}
@@ -416,10 +558,16 @@ export function WebHostApp(props: {
       });
     })().catch(() => {
       if (!active || draftLoadGeneration.current !== generation) return;
+      const savedSkillState = skillSelectionStore.load(attachmentOwner);
+      if (skillDraftLoadGeneration.current === skillGeneration) {
+        const state = savedSkillState ?? createInitialSkillSubmissionState();
+        if (savedSkillState === undefined) skillSelectionStore.save(attachmentOwner, state);
+        publishSkillSubmissionBinding({ ownerKey: attachmentOwnerKey, state, loading: false });
+      }
       setComposerDraft({
         ownerKey: attachmentOwnerKey,
         revision: 0,
-        text: "",
+        text: savedSkillState?.draft.userText ?? "",
         loading: false,
         error: "无法恢复附件草稿，请检查本地服务后重试。",
       });
@@ -427,7 +575,16 @@ export function WebHostApp(props: {
     return () => {
       active = false;
     };
-  }, [attachmentDraftStore, attachmentManager, attachmentOwnerKey, props.client]);
+  }, [
+    attachmentDraftStore,
+    attachmentManager,
+    attachmentOwner,
+    attachmentOwnerKey,
+    props.client,
+    publishSkillSubmissionBinding,
+    skillDraftLoadGeneration,
+    skillSelectionStore,
+  ]);
 
   useEffect(() => {
     if (
@@ -470,6 +627,188 @@ export function WebHostApp(props: {
     attachmentFingerprint,
     attachmentManager,
     attachmentOwnerKey,
+  ]);
+
+  useEffect(() => {
+    const binding = skillSubmissionBinding;
+    if (
+      attachmentOwner === undefined ||
+      attachmentOwnerKey === undefined ||
+      binding?.ownerKey !== attachmentOwnerKey ||
+      binding.loading ||
+      attachmentDraftBinding === undefined ||
+      attachmentDraftBinding.loading
+    ) {
+      return;
+    }
+    const attachments = attachmentManager?.getReadyAttachmentIds(attachmentOwner) ?? [];
+    updateSkillSubmission(attachmentOwner, {
+      type: "DRAFT_CHANGED",
+      userText: attachmentDraftBinding.text,
+      skillSelections: binding.state.draft.skillSelections,
+      attachments,
+    });
+  }, [
+    attachmentDraftBinding?.loading,
+    attachmentDraftBinding?.text,
+    attachmentFingerprint,
+    attachmentManager,
+    attachmentOwner,
+    attachmentOwnerKey,
+    skillSubmissionBinding,
+    updateSkillSubmission,
+  ]);
+
+  const onPreparedInputReceipt = useCallback(
+    async (
+      runId: import("@caelush/protocol").RunId,
+      submissionId: import("@caelush/protocol").SubmissionId,
+      draftVersion: number,
+    ) => {
+      if (attachmentOwner === undefined || attachmentOwnerKey === undefined) return;
+      const before = skillSelectionStore.load(attachmentOwner);
+      const accepted = before?.acceptedSubmission;
+      if (
+        before === undefined ||
+        accepted?.runId !== runId ||
+        accepted.submissionId !== submissionId ||
+        accepted.draftVersion !== draftVersion
+      ) {
+        return;
+      }
+      const sameSubmittedVersion =
+        before.draft.draftVersion === draftVersion &&
+        sameSkillDraftContent(before.draft, accepted.draft);
+      const next = reduceSkillSubmission(before, {
+        type: "PREPARED_INPUT_RECEIVED",
+        runId,
+        submissionId,
+        draftVersion,
+      });
+      skillSelectionStore.save(attachmentOwner, next);
+      publishSkillSubmissionBinding({ ownerKey: attachmentOwnerKey, state: next, loading: false });
+      if (!sameSubmittedVersion) return;
+
+      if (attachmentDraftStore === undefined) {
+        attachmentManager?.clear(attachmentOwner);
+        setComposerDraft((previous) =>
+          previous?.ownerKey === attachmentOwnerKey
+            ? { ...previous, text: "", loading: false }
+            : previous,
+        );
+        return;
+      }
+      try {
+        const current =
+          attachmentDraftStore.getSnapshot(attachmentOwner) ??
+          (await attachmentDraftStore.load(attachmentOwner));
+        if (
+          current.text !== accepted.draft.userText ||
+          !sameIds(current.artifactIds, accepted.draft.attachments)
+        ) {
+          return;
+        }
+        await attachmentDraftStore.clear(attachmentOwner, current.revision);
+        const cleared = attachmentDraftStore.getSnapshot(attachmentOwner);
+        if (cleared === undefined) return;
+        const latest = skillSelectionStore.load(attachmentOwner);
+        if (latest?.draft.draftVersion !== next.draft.draftVersion) {
+          const readyIds = attachmentManager?.getReadyAttachmentIds(attachmentOwner) ?? [];
+          const restored = await attachmentDraftStore.save(attachmentOwner, cleared.revision, {
+            text: latest?.draft.userText ?? "",
+            artifactIds: readyIds,
+          });
+          setComposerDraft((previous) =>
+            previous?.ownerKey === attachmentOwnerKey
+              ? { ...previous, revision: restored.revision, text: latest?.draft.userText ?? "" }
+              : previous,
+          );
+          return;
+        }
+        attachmentManager?.clear(attachmentOwner);
+        setComposerDraft((previous) =>
+          previous?.ownerKey === attachmentOwnerKey
+            ? { ...previous, revision: cleared.revision, text: "", loading: false }
+            : previous,
+        );
+      } catch (error) {
+        setComposerDraft((previous) =>
+          previous?.ownerKey === attachmentOwnerKey
+            ? {
+                ...previous,
+                error:
+                  error instanceof AttachmentDraftConflictError
+                    ? "技能已准备，但另一窗口更新的草稿已保留。"
+                    : "技能已准备，草稿清理未完成；请检查后再继续。",
+              }
+            : previous,
+        );
+      }
+    },
+    [
+      attachmentDraftStore,
+      attachmentManager,
+      attachmentOwner,
+      attachmentOwnerKey,
+      publishSkillSubmissionBinding,
+      skillSelectionStore,
+    ],
+  );
+
+  useEffect(() => {
+    const owner = attachmentOwner;
+    const binding = skillSubmissionBinding;
+    const accepted =
+      binding?.ownerKey === attachmentOwnerKey ? binding.state.acceptedSubmission : undefined;
+    if (owner === undefined || accepted === undefined || binding?.loading === true) {
+      return;
+    }
+    if (owner.kind === "SESSION") {
+      void sessionManager?.refreshSkillPreparation(owner.sessionId, accepted.runId);
+    }
+
+    const receipt = sessionSnapshot.skillPreparation;
+    if (
+      receipt !== undefined &&
+      receipt.runId === accepted.runId &&
+      receipt.userText === accepted.draft.userText.trim() &&
+      sameSkillIds(
+        receipt.selectedSkills.map((skill) => skill.skillId),
+        accepted.draft.skillSelections.map((selection) => selection.skillId),
+      )
+    ) {
+      void onPreparedInputReceipt(receipt.runId, accepted.submissionId, accepted.draftVersion);
+      return;
+    }
+
+    const turn = sessionSnapshot.skillPresentation?.turns.find(
+      (item) => item.runId === accepted.runId,
+    );
+    const expectedSkills = new Set(accepted.draft.skillSelections.map((item) => item.skillId));
+    if (
+      turn?.items.some(
+        (item) =>
+          item.kind === "SKILL" &&
+          expectedSkills.has(item.skillId) &&
+          item.skillStatus === "FAILED",
+      )
+    ) {
+      updateSkillSubmission(owner, {
+        type: "PREPARATION_FAILED",
+        runId: accepted.runId,
+        submissionId: accepted.submissionId,
+        draftVersion: accepted.draftVersion,
+      });
+    }
+  }, [
+    attachmentOwner,
+    attachmentOwnerKey,
+    onPreparedInputReceipt,
+    sessionManager,
+    sessionSnapshot.skillPreparation,
+    sessionSnapshot.skillPresentation,
+    skillSubmissionBinding,
+    updateSkillSubmission,
   ]);
 
   useEffect(() => {
@@ -619,7 +958,7 @@ export function WebHostApp(props: {
             item.mediaType === "image/webp",
           downloadAvailable: true,
         }));
-        const accepted = await sessionManager.submitPrompt({
+        await sessionManager.submitPrompt({
           text,
           attachmentIds: artifactIds,
           ...(prepared.submissionId === undefined ? {} : { submissionId: prepared.submissionId }),
@@ -700,6 +1039,273 @@ export function WebHostApp(props: {
       }
     },
     [attachmentDraftStore, attachmentManager, attachmentOwner, attachmentOwnerKey, sessionManager],
+  );
+
+  const submitSkillComposerDraft = useCallback(
+    async (input: ComposerSubmissionDraft): Promise<SubmissionAccepted | undefined> => {
+      if (
+        sessionManager === undefined ||
+        attachmentOwner === undefined ||
+        attachmentOwnerKey === undefined
+      ) {
+        return undefined;
+      }
+      const parsed = ComposerSubmissionDraftSchema.safeParse(input);
+      if (!parsed.success) return undefined;
+      const sourceOwner = attachmentOwner;
+      const sourceOwnerKey = attachmentOwnerKey;
+      const sourceState = skillSelectionStore.load(sourceOwner);
+      if (
+        sourceState === undefined ||
+        sourceState.draft.draftVersion !== parsed.data.draftVersion ||
+        !sameSkillDraftContent(sourceState.draft, parsed.data)
+      ) {
+        return undefined;
+      }
+      if (parsed.data.skillSelections.length === 0) {
+        const accepted = await submitComposerPrompt(parsed.data.userText);
+        if (accepted) {
+          const current = skillSelectionStore.load(sourceOwner);
+          if (
+            current !== undefined &&
+            current.draft.draftVersion === parsed.data.draftVersion &&
+            sameSkillDraftContent(current.draft, parsed.data)
+          ) {
+            updateSkillSubmission(sourceOwner, {
+              type: "DRAFT_CHANGED",
+              userText: "",
+              skillSelections: [],
+              attachments: [],
+            });
+          }
+        }
+        return undefined;
+      }
+      const queuedItems = attachmentManager?.getSnapshot(sourceOwner) ?? [];
+      if (queuedItems.some((item) => item.status !== "READY" || item.artifactId === undefined)) {
+        return undefined;
+      }
+      const readyById = new Map(
+        queuedItems.flatMap((item) =>
+          item.artifactId === undefined ? [] : [[item.artifactId, item] as const],
+        ),
+      );
+      const readyItems = parsed.data.attachments
+        .map((artifactId) => readyById.get(artifactId))
+        .filter((item): item is AttachmentQueueItem => item !== undefined);
+      if (readyItems.length !== parsed.data.attachments.length) return undefined;
+
+      let pendingState: SkillSubmissionState | undefined;
+      let submissionId: import("@caelush/protocol").SubmissionId | undefined;
+      let ownerForPending = sourceOwner;
+      let savedAttachmentDraft = attachmentDraftStore?.getSnapshot(sourceOwner);
+      try {
+        if (attachmentDraftStore !== undefined) {
+          savedAttachmentDraft ??= await attachmentDraftStore.load(sourceOwner);
+          if (
+            savedAttachmentDraft.text !== parsed.data.userText ||
+            !sameIds(savedAttachmentDraft.artifactIds, parsed.data.attachments)
+          ) {
+            savedAttachmentDraft = await attachmentDraftStore.save(
+              sourceOwner,
+              savedAttachmentDraft.revision,
+              { text: parsed.data.userText, artifactIds: parsed.data.attachments },
+            );
+          }
+          const currentSkillState = skillSelectionStore.load(sourceOwner);
+          const exactNetworkRetry =
+            currentSkillState?.pendingSubmission !== undefined &&
+            currentSkillState.pendingSubmission.draft.draftVersion === parsed.data.draftVersion &&
+            sameSkillDraftContent(currentSkillState.pendingSubmission.draft, parsed.data);
+          const preparationRetry =
+            currentSkillState?.preparationStatus === "FAILED" &&
+            currentSkillState.pendingSubmission === undefined;
+          const changedPendingPayload =
+            currentSkillState?.pendingSubmission !== undefined && !exactNetworkRetry;
+          if (
+            savedAttachmentDraft.submissionId !== undefined &&
+            (changedPendingPayload || preparationRetry)
+          ) {
+            savedAttachmentDraft = await attachmentDraftStore.resetSubmission(
+              sourceOwner,
+              savedAttachmentDraft.revision,
+            );
+          }
+          savedAttachmentDraft = await attachmentDraftStore.prepareSubmission(
+            sourceOwner,
+            savedAttachmentDraft.revision,
+          );
+        }
+        pendingState = skillSelectionStore.prepareSubmission(
+          sourceOwner,
+          parsed.data,
+          savedAttachmentDraft?.submissionId,
+        );
+        submissionId = pendingState.pendingSubmission?.submissionId;
+        if (submissionId === undefined) return undefined;
+        publishSkillSubmissionBinding({
+          ownerKey: sourceOwnerKey,
+          state: pendingState,
+          loading: false,
+        });
+
+        const existingRunIds = new Set(sessionManager.getSnapshot().runs.map((run) => run.id));
+        const accepted = await sessionManager.submitPrompt({
+          text: parsed.data.userText,
+          attachmentIds: parsed.data.attachments,
+          skillSelections: parsed.data.skillSelections,
+          submissionId,
+          attachmentMetadata: readyItems.map((item) => ({
+            artifactId: item.artifactId!,
+            name: item.name,
+            mediaType: item.mediaType,
+            byteLength: item.byteLength,
+            previewAvailable:
+              item.mediaType === "image/png" ||
+              item.mediaType === "image/jpeg" ||
+              item.mediaType === "image/webp",
+            downloadAvailable: true,
+          })),
+        });
+
+        const postSubmitSnapshot = sessionManager.getSnapshot();
+        const createdRun =
+          postSubmitSnapshot.runs.find(
+            (run) =>
+              run.sessionId === postSubmitSnapshot.selectedSessionId && !existingRunIds.has(run.id),
+          ) ??
+          (postSubmitSnapshot.activeRun !== undefined &&
+          !existingRunIds.has(postSubmitSnapshot.activeRun.id)
+            ? postSubmitSnapshot.activeRun
+            : undefined);
+        const createdSessionId = postSubmitSnapshot.selectedSessionId;
+        if (sourceOwner.kind === "WORKSPACE" && createdSessionId !== undefined) {
+          const targetOwner: AttachmentOwner = { kind: "SESSION", sessionId: createdSessionId };
+          const latestSourceState = skillSelectionStore.load(sourceOwner) ?? pendingState;
+          if (latestSourceState === undefined) {
+            throw new Error("The Skill submission draft is unavailable.");
+          }
+          if (attachmentDraftStore !== undefined && savedAttachmentDraft !== undefined) {
+            const currentDraft =
+              attachmentDraftStore.getSnapshot(sourceOwner) ?? savedAttachmentDraft;
+            const sourceDraft = await attachmentDraftStore.save(
+              sourceOwner,
+              currentDraft.revision,
+              {
+                text: latestSourceState.draft.userText,
+                artifactIds: latestSourceState.draft.attachments,
+              },
+            );
+            const transferred = await attachmentDraftStore.transfer(
+              sourceOwner,
+              sourceDraft.revision,
+              targetOwner,
+            );
+            await attachmentDraftStore.clear(sourceOwner, sourceDraft.revision);
+            savedAttachmentDraft = transferred;
+          }
+          attachmentManager?.restore(
+            targetOwner,
+            readyItems.map((item) => ({
+              artifactId: item.artifactId!,
+              name: item.name,
+              mediaType: item.mediaType,
+              byteLength: item.byteLength,
+              visualRequirement: item.visualRequirement ?? "UNKNOWN",
+            })),
+          );
+          attachmentManager?.clear(sourceOwner);
+          const transferredState = skillSelectionStore.transfer(sourceOwner, targetOwner);
+          ownerForPending = targetOwner;
+          pendingState = transferredState ?? latestSourceState;
+          if (transferredState === undefined) skillSelectionStore.save(targetOwner, pendingState);
+          publishSkillSubmissionBinding({
+            ownerKey: ownerKey(targetOwner),
+            state: pendingState,
+            loading: false,
+          });
+          draftLoadGeneration.current += 1;
+          skillDraftLoadGeneration.current += 1;
+          setComposerDraft({
+            ownerKey: ownerKey(targetOwner),
+            revision: savedAttachmentDraft?.revision ?? 0,
+            text: pendingState.draft.userText,
+            loading: false,
+          });
+        }
+
+        if (createdRun !== undefined) {
+          const currentState = skillSelectionStore.load(ownerForPending) ?? pendingState;
+          if (currentState !== undefined) {
+            const acceptedState = reduceSkillSubmission(currentState, {
+              type: "SUBMISSION_ACCEPTED",
+              runId: createdRun.id,
+              submissionId,
+            });
+            skillSelectionStore.save(ownerForPending, acceptedState);
+            publishSkillSubmissionBinding({
+              ownerKey: ownerKey(ownerForPending),
+              state: acceptedState,
+              loading: false,
+            });
+            void sessionManager.refreshSkillPreparation(createdRun.sessionId, createdRun.id);
+          }
+          return { runId: createdRun.id, submissionId, draftVersion: parsed.data.draftVersion };
+        }
+
+        const currentState = skillSelectionStore.load(ownerForPending) ?? pendingState;
+        if (currentState !== undefined) {
+          const failedState = reduceSkillSubmission(currentState, {
+            type: "SUBMISSION_FAILED",
+            submissionId,
+          });
+          skillSelectionStore.save(ownerForPending, failedState);
+          publishSkillSubmissionBinding({
+            ownerKey: ownerKey(ownerForPending),
+            state: failedState,
+            loading: false,
+          });
+        }
+        return undefined;
+      } catch (error) {
+        const currentState = skillSelectionStore.load(ownerForPending) ?? pendingState;
+        if (currentState !== undefined && submissionId !== undefined) {
+          const failedState = reduceSkillSubmission(currentState, {
+            type: "SUBMISSION_FAILED",
+            submissionId,
+          });
+          skillSelectionStore.save(ownerForPending, failedState);
+          publishSkillSubmissionBinding({
+            ownerKey: ownerKey(ownerForPending),
+            state: failedState,
+            loading: false,
+          });
+        }
+        setComposerDraft((previous) =>
+          previous?.ownerKey === ownerKey(ownerForPending)
+            ? {
+                ...previous,
+                error:
+                  error instanceof AttachmentDraftConflictError
+                    ? "草稿已在其他窗口更新，请加载最新内容后重试。"
+                    : "技能任务未能提交，文字和所选技能仍保留。",
+              }
+            : previous,
+        );
+        return undefined;
+      }
+    },
+    [
+      attachmentDraftStore,
+      attachmentManager,
+      attachmentOwner,
+      attachmentOwnerKey,
+      publishSkillSubmissionBinding,
+      sessionManager,
+      skillSelectionStore,
+      submitComposerPrompt,
+      updateSkillSubmission,
+    ],
   );
 
   if (state.bootstrap !== "READY" || workspaceManager === undefined) {
@@ -872,6 +1478,30 @@ export function WebHostApp(props: {
         }
       : undefined;
 
+  const skillDraftBinding =
+    skillSubmissionBinding?.ownerKey === attachmentOwnerKey && !skillSubmissionBinding.loading
+      ? skillSubmissionBinding
+      : undefined;
+  const selectedSkillTags = (skillDraftBinding?.state.draft.skillSelections ?? []).map(
+    (selection) => {
+      const catalogItem = skillCatalogItems.current.get(
+        `${selectedWorkspace?.id ?? ""}:${selection.skillId}`,
+      );
+      return {
+        skillId: selection.skillId,
+        name: catalogItem?.name ?? selection.skillId.split(":").at(-1) ?? selection.skillId,
+        ...(catalogItem?.displayName === undefined ? {} : { displayName: catalogItem.displayName }),
+        selectionToken: selection.selectionToken,
+      };
+    },
+  );
+  const skillsAvailable =
+    skillCapabilities?.enabled === true &&
+    skillCapabilities.catalog &&
+    skillCapabilities.invocation &&
+    skillCatalogStore !== undefined;
+  const skillsEnabled = skillsAvailable && sessionSnapshot.activeRun === undefined;
+
   return renderWorkspaceApp({
     host: state,
     desktopHostLoadingUI,
@@ -881,13 +1511,62 @@ export function WebHostApp(props: {
     sessionManager,
     attachmentItems,
     attachmentOwner,
-    draftText: attachmentDraftBinding?.text ?? "",
+    draftText:
+      skillsAvailable && skillDraftBinding !== undefined
+        ? skillDraftBinding.state.draft.userText
+        : (attachmentDraftBinding?.text ?? ""),
+    draftVersion: skillDraftBinding?.state.draft.draftVersion,
+    skillSubmissionStatus: skillDraftBinding?.state.preparationStatus,
+    skillsEnabled,
+    listSkills: skillCatalogStore === undefined ? undefined : listSkills,
+    selectedSkills: skillsAvailable ? selectedSkillTags : [],
+    onSelectSkill: (selection) => {
+      if (attachmentOwner === undefined) return;
+      const current = skillSelectionStore.load(attachmentOwner) ?? skillDraftBinding?.state;
+      if (current === undefined) return;
+      const selections = current.draft.skillSelections.some(
+        (item) => item.skillId === selection.skillId,
+      )
+        ? current.draft.skillSelections
+        : [...current.draft.skillSelections, selection];
+      updateSkillSubmission(attachmentOwner, {
+        type: "DRAFT_CHANGED",
+        userText: current.draft.userText,
+        skillSelections: selections,
+        attachments: current.draft.attachments,
+      });
+    },
+    onRemoveSkill: (skillId) => {
+      if (attachmentOwner === undefined) return;
+      const current = skillSelectionStore.load(attachmentOwner) ?? skillDraftBinding?.state;
+      if (current === undefined) return;
+      updateSkillSubmission(attachmentOwner, {
+        type: "DRAFT_CHANGED",
+        userText: current.draft.userText,
+        skillSelections: current.draft.skillSelections.filter(
+          (selection) => selection.skillId !== skillId,
+        ),
+        attachments: current.draft.attachments,
+      });
+    },
+    onSubmitSkillDraft: skillsAvailable ? submitSkillComposerDraft : undefined,
     draftLoading:
       attachmentOwnerKey !== undefined &&
-      (attachmentDraftBinding === undefined || attachmentDraftBinding.loading),
+      (attachmentDraftBinding === undefined ||
+        attachmentDraftBinding.loading ||
+        (skillsAvailable && skillDraftBinding === undefined)),
     draftError: attachmentDraftBinding?.error,
     onDraftChange: (text) => {
-      if (attachmentOwnerKey === undefined) return;
+      if (attachmentOwnerKey === undefined || attachmentOwner === undefined) return;
+      const current = skillSelectionStore.load(attachmentOwner) ?? skillDraftBinding?.state;
+      if (current !== undefined) {
+        updateSkillSubmission(attachmentOwner, {
+          type: "DRAFT_CHANGED",
+          userText: text,
+          skillSelections: current.draft.skillSelections,
+          attachments: attachmentManager?.getReadyAttachmentIds(attachmentOwner) ?? [],
+        });
+      }
       setComposerDraft((previous) =>
         previous?.ownerKey === attachmentOwnerKey
           ? { ...previous, text, error: undefined }
@@ -975,6 +1654,15 @@ function renderWorkspaceApp(input: {
   readonly attachmentItems: readonly AttachmentQueueItem[];
   readonly attachmentOwner?: AttachmentOwner | undefined;
   readonly draftText: string;
+  readonly draftVersion?: number | undefined;
+  readonly skillSubmissionStatus?: SkillSubmissionState["preparationStatus"] | undefined;
+  readonly skillsEnabled: boolean;
+  readonly listSkills?: SkillCatalogListSkills | undefined;
+  readonly selectedSkills: readonly SelectedSkillTag[];
+  readonly onSelectSkill: (selection: SkillSelectionV1) => void;
+  readonly onRemoveSkill: (skillId: string) => void;
+  readonly onSubmitSkillDraft?:
+    ((draft: ComposerSubmissionDraft) => Promise<SubmissionAccepted | undefined>) | undefined;
   readonly draftLoading: boolean;
   readonly draftError?: string | undefined;
   readonly onDraftChange: (text: string) => void;
@@ -1121,10 +1809,19 @@ function renderWorkspaceApp(input: {
       : {}),
     submission: snapshot.submission,
     draftText: input.draftText,
+    draftVersion: input.draftVersion,
+    skillPreparationStatus: input.skillSubmissionStatus,
     draftLoading: input.draftLoading,
     attachments: input.attachmentItems,
     attachmentSubmitBlockedReason,
     onDraftChange: input.onDraftChange,
+    skillsEnabled: input.skillsEnabled,
+    workspaceId: selectedWorkspace?.id,
+    listSkills: input.listSkills,
+    selectedSkills: input.selectedSkills,
+    onSelectSkill: input.onSelectSkill,
+    onRemoveSkill: input.onRemoveSkill,
+    onSubmitDraft: input.onSubmitSkillDraft,
     onAddFiles: input.onAddFiles,
     onRemoveAttachment: input.onRemoveAttachment,
     onRetryAttachment: input.onRetryAttachment,
@@ -1527,4 +2224,26 @@ function ownerKey(owner: AttachmentOwner): string {
 
 function sameIds(left: readonly AttachmentId[], right: readonly AttachmentId[]): boolean {
   return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+function sameSkillIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+function sameSkillDraftContent(
+  left: ComposerSubmissionDraft,
+  right: ComposerSubmissionDraft,
+): boolean {
+  return (
+    left.userText === right.userText &&
+    sameSkillIds(
+      left.skillSelections.map((selection) => selection.skillId),
+      right.skillSelections.map((selection) => selection.skillId),
+    ) &&
+    left.skillSelections.every(
+      (selection, index) =>
+        selection.selectionToken === right.skillSelections[index]?.selectionToken,
+    ) &&
+    sameIds(left.attachments, right.attachments)
+  );
 }

@@ -10290,7 +10290,8 @@ select {
 }
 
 .attachment-submit-warning,
-.prompt-draft-loading {
+.prompt-draft-loading,
+.skill-preparation-status {
   margin: 0.15rem 0.5rem 0.3rem;
   color: #9a6700;
   font-size: 0.76rem;

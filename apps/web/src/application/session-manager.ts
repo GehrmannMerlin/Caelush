@@ -46,7 +46,10 @@ import type {
   SessionId,
   SessionTranscriptResponse,
   SessionTurnPresentationResponse,
+  SessionTurnPresentationResponseV4,
   SessionTurnPresentationTurnV3,
+  SubmissionSkillPreparationV1,
+  SkillSelectionV1,
   SessionContinuityPreflightResponse,
   TurnPresentationItem,
   TurnPresentationItemV3,
@@ -73,6 +76,7 @@ import type {
 import {
   ATTACHMENT_ONLY_RUN_GOAL,
   AttachmentIdsSchema,
+  SkillSelectionV1Schema,
   SubmissionIdSchema,
   TranscriptAttachmentRefSchema,
 } from "@caelush/protocol";
@@ -102,6 +106,8 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
   downloadAttachment?: CaelushClient["downloadAttachment"];
   getAttachmentDraft?: CaelushClient["getAttachmentDraft"];
   saveAttachmentDraft?: CaelushClient["saveAttachmentDraft"];
+  getSkillCapabilities?: CaelushClient["getSkillCapabilities"];
+  listSkills?: CaelushClient["listSkills"];
   getSession?: CaelushClient["getSession"];
   archiveSession?: CaelushClient["archiveSession"];
   getArchiveState?: CaelushClient["getArchiveState"];
@@ -146,6 +152,8 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
     sessionId: SessionId,
     query?: { readonly runId?: RunId; readonly limit?: number; readonly cursor?: string },
   ): Promise<SessionTurnPresentationResponse>;
+  getSessionTurnPresentationCompatible?: CaelushClient["getSessionTurnPresentationCompatible"];
+  getSubmissionSkillPreparation?: CaelushClient["getSubmissionSkillPreparation"];
   listPendingApprovals(
     runId: RunId,
   ): Promise<{ readonly items: readonly import("@caelush/protocol").ApprovalRequest[] }>;
@@ -166,6 +174,7 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
 export interface WebPromptSubmission {
   readonly text: string;
   readonly attachmentIds?: readonly AttachmentId[];
+  readonly skillSelections?: readonly SkillSelectionV1[];
   readonly submissionId?: SubmissionId;
   readonly attachmentMetadata?: readonly TranscriptAttachmentRef[];
   readonly acceptanceRequirements?: CreateRunRequest["acceptanceRequirements"];
@@ -219,6 +228,9 @@ export interface WebSessionSnapshot {
   readonly runs: readonly ClientAgentRun[];
   readonly history: readonly TranscriptEntry[];
   readonly turnPresentation?: SessionTurnPresentationResponse | undefined;
+  /** V4 is kept separate so legacy presentation consumers stay strict and unchanged. */
+  readonly skillPresentation?: SessionTurnPresentationResponseV4 | undefined;
+  readonly skillPreparation?: SubmissionSkillPreparationV1 | undefined;
   readonly activeRuns: readonly ClientAgentRun[];
   readonly activeRun?: ClientAgentRun;
   readonly timeline: TimelineState;
@@ -333,6 +345,7 @@ export class WebSessionManager {
   private selectionGeneration = 0;
   private archiveGeneration = 0;
   private archiveReadOnly = false;
+  private readonly skillPreparationRefreshRuns = new Set<RunId>();
 
   constructor(
     private readonly options: {
@@ -429,6 +442,8 @@ export class WebSessionManager {
       runs: [],
       history: [],
       turnPresentation: undefined,
+      skillPresentation: undefined,
+      skillPreparation: undefined,
       continuityWarning: false,
       activeRuns: [],
       activeRun: undefined,
@@ -460,7 +475,12 @@ export class WebSessionManager {
     // daemon-owned Run continues independently of the selected Web Session.
     this.cancelActiveLifecycle();
     this.clearApprovals();
-    this.publish({ status: "LOADING", error: undefined });
+    this.publish({
+      status: "LOADING",
+      skillPresentation: undefined,
+      skillPreparation: undefined,
+      error: undefined,
+    });
     try {
       const runs = (await this.options.client.listRuns(sessionId, { limit: 100 })).items;
       const state = await this.options.client.getArchiveState?.({ type: "SESSION", sessionId });
@@ -503,6 +523,8 @@ export class WebSessionManager {
         runs: [],
         history: [],
         turnPresentation: undefined,
+        skillPresentation: undefined,
+        skillPreparation: undefined,
         activeRuns: [],
         activeRun: undefined,
         timeline: createInitialTimelineState(),
@@ -614,6 +636,31 @@ export class WebSessionManager {
       return false;
     }
     const attachmentIds = parsedAttachmentIds.data;
+    const parsedSkillSelections = SkillSelectionV1Schema.array()
+      .max(4096)
+      .safeParse(request.skillSelections ?? []);
+    if (!parsedSkillSelections.success) {
+      this.publish({
+        error: { code: "RUN_CREATE_FAILED", message: "所选技能信息无效，请刷新后重新选择。" },
+      });
+      return false;
+    }
+    const skillSelections = parsedSkillSelections.data;
+    if (
+      new TextEncoder().encode(JSON.stringify(skillSelections)).byteLength > 64 * 1024 ||
+      new Set(skillSelections.map((selection) => selection.skillId)).size !== skillSelections.length
+    ) {
+      this.publish({
+        error: { code: "RUN_CREATE_FAILED", message: "所选技能过多或重复，请刷新后重新选择。" },
+      });
+      return false;
+    }
+    if (skillSelections.length > 0 && request.submissionId === undefined) {
+      this.publish({
+        error: { code: "RUN_CREATE_FAILED", message: "手动选择技能需要提交标识，请重试。" },
+      });
+      return false;
+    }
     const trimmedText = request.text.trim();
     let userText: string;
     let goal: string;
@@ -720,6 +767,7 @@ export class WebSessionManager {
           ? {}
           : { acceptanceRequirements: request.acceptanceRequirements }),
         ...(attachmentIds.length === 0 ? {} : { attachmentIds }),
+        ...(skillSelections.length === 0 ? {} : { skillSelections }),
         ...(submissionId === undefined
           ? {}
           : { submissionId: deriveRunSubmissionId(submissionId) }),
@@ -734,6 +782,7 @@ export class WebSessionManager {
           ? { resourcePolicy: defaultRunConfiguration.resourcePolicy! }
           : { limits: defaultRunConfiguration.limits }),
       });
+      if (skillSelections.length > 0) this.skillPreparationRefreshRuns.add(run.id);
       const boundPreset = runPermissionPreset(run) ?? permissionPreset;
       const runs = [...this.snapshot.runs, run];
       const optimisticUser: TranscriptEntry = {
@@ -759,6 +808,7 @@ export class WebSessionManager {
         runs,
         history,
         turnPresentation,
+        skillPreparation: undefined,
         activeRuns: [run],
         activeRun: run,
         timeline: createInitialTimelineState(run.id),
@@ -803,6 +853,32 @@ export class WebSessionManager {
         error: submissionError(code, error),
       });
       return false;
+    }
+  }
+
+  async refreshSkillPreparation(sessionId: SessionId, runId: RunId): Promise<void> {
+    const getPreparation = this.options.client.getSubmissionSkillPreparation;
+    if (
+      this.disposed ||
+      getPreparation === undefined ||
+      this.snapshot.selectedSessionId !== sessionId
+    ) {
+      return;
+    }
+    if (this.activeLifecycle?.run.id === runId) this.skillPreparationRefreshRuns.add(runId);
+    try {
+      const receipt = await getPreparation.call(this.options.client, sessionId, runId);
+      if (
+        this.disposed ||
+        this.snapshot.selectedSessionId !== sessionId ||
+        receipt.runId !== runId
+      ) {
+        return;
+      }
+      this.publish({ skillPreparation: receipt });
+    } catch {
+      // A missing or not-yet-ready receipt is not evidence of preparation. Durable presentation
+      // refreshes and explicit retries can ask again without changing the composer draft.
     }
   }
 
@@ -863,6 +939,8 @@ export class WebSessionManager {
           composerEnabled: false,
           history: [],
           turnPresentation: undefined,
+          skillPresentation: undefined,
+          skillPreparation: undefined,
         });
       } else {
         this.archiveReadOnly = true;
@@ -930,6 +1008,8 @@ export class WebSessionManager {
         runs: [],
         history: [],
         turnPresentation: undefined,
+        skillPresentation: undefined,
+        skillPreparation: undefined,
         activeRuns: [],
         activeRun: undefined,
         timeline: createInitialTimelineState(),
@@ -1569,6 +1649,43 @@ export class WebSessionManager {
     return reconcileTurnPresentation(presentation, optimistic);
   }
 
+  private async loadSessionSkillPresentation(
+    sessionId: SessionId,
+    runId?: RunId,
+  ): Promise<SessionTurnPresentationResponseV4 | undefined> {
+    const getPresentation = this.options.client.getSessionTurnPresentationCompatible;
+    if (
+      this.options.info.capabilities.sessionTurnPresentation !== true ||
+      getPresentation === undefined
+    ) {
+      return undefined;
+    }
+
+    const turns: SessionTurnPresentationResponseV4["turns"][number][] = [];
+    const seenRunIds = new Set<RunId>();
+    const seenTurnIds = new Set<string>();
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const response = await getPresentation.call(this.options.client, sessionId, {
+        ...(runId === undefined ? {} : { runId }),
+        limit: 100,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      if (response.capabilityVersion !== 4) return undefined;
+      for (const turn of response.turns) {
+        if (seenRunIds.has(turn.runId) || seenTurnIds.has(turn.conversationTurnId)) {
+          throw new CaelushProtocolCompatibilityError();
+        }
+        seenRunIds.add(turn.runId);
+        seenTurnIds.add(turn.conversationTurnId);
+        turns.push(turn);
+      }
+      cursor = nextPageCursor(response.nextCursor, seenCursors);
+    } while (cursor !== undefined);
+    return { capabilityVersion: 4, turns };
+  }
+
   private async listWorkspaceSessionCandidates(): Promise<readonly SessionCandidate[]> {
     const listWorkspaceSessions = this.options.client.listWorkspaceSessions;
     if (listWorkspaceSessions === undefined) return [];
@@ -1594,9 +1711,10 @@ export class WebSessionManager {
     runs: readonly ClientAgentRun[],
     generation: number,
   ): Promise<boolean> {
-    const [history, turnPresentation] = await Promise.all([
+    const [history, turnPresentation, skillPresentation] = await Promise.all([
       this.loadSessionTranscript(session.id),
       this.loadSessionTurnPresentation(session.id),
+      this.loadSessionSkillPresentation(session.id),
     ]);
     if (this.disposed || generation !== this.selectionGeneration) return false;
     const activeRuns = nonTerminalRuns(runs);
@@ -1609,6 +1727,7 @@ export class WebSessionManager {
       runs,
       history,
       turnPresentation,
+      skillPresentation,
       activeRuns,
       activeRun: activeRuns.length === 1 ? activeRuns[0] : undefined,
       selectedPreset:
@@ -1962,15 +2081,40 @@ export class WebSessionManager {
     generation: number,
   ): Promise<void> {
     try {
-      const response = await this.loadActiveTurnPresentation(active);
+      const [response, skillPresentation, skillPreparation] = await Promise.all([
+        this.loadActiveTurnPresentation(active),
+        this.loadSessionSkillPresentation(active.run.sessionId, active.run.id),
+        this.loadActiveSkillPreparation(active),
+      ]);
       if (response === undefined || !this.isCurrentStream(active, generation)) return;
       this.publish({
         turnPresentation: response,
+        skillPresentation,
+        ...(skillPreparation === undefined ? {} : { skillPreparation }),
         liveActivity: prunePresentationForRun(this.snapshot.liveActivity, response, active.run.id),
       });
     } catch {
       // The durable timeline remains authoritative if the optional read-model refresh races a
       // reconnect or an older daemon. It must never interrupt Run control.
+    }
+  }
+
+  private async loadActiveSkillPreparation(
+    active: ActiveLifecycle,
+  ): Promise<SubmissionSkillPreparationV1 | undefined> {
+    const getPreparation = this.options.client.getSubmissionSkillPreparation;
+    if (getPreparation === undefined || !this.skillPreparationRefreshRuns.has(active.run.id)) {
+      return undefined;
+    }
+    try {
+      const receipt = await getPreparation.call(
+        this.options.client,
+        active.run.sessionId,
+        active.run.id,
+      );
+      return receipt.runId === active.run.id ? receipt : undefined;
+    } catch {
+      return undefined;
     }
   }
 
@@ -2491,6 +2635,7 @@ export class WebSessionManager {
     this.invalidateContextUsageRefresh();
     const active = this.activeLifecycle;
     if (active !== undefined) {
+      this.skillPreparationRefreshRuns.delete(active.run.id);
       active.presentationRefreshPending = false;
       active.scheduler.dispose();
       active.controller.abort();
@@ -2622,6 +2767,8 @@ function initialSnapshot(): WebSessionSnapshot {
     runs: [],
     history: [],
     turnPresentation: undefined,
+    skillPresentation: undefined,
+    skillPreparation: undefined,
     activeRuns: [],
     timeline: createInitialTimelineState(),
     liveActivity: createInitialLiveActivityState(),

@@ -25,7 +25,6 @@ import type {
   HistoryLookupQuery,
   HistoryLookupResponse,
   RunId,
-  SkillCatalogItemV1,
   SkillSelectionV1,
   WorkspaceId,
 } from "@caelush/protocol";
@@ -36,6 +35,12 @@ import { AttachmentList } from "./attachment-list.js";
 import { AttachmentMenu } from "./attachment-menu.js";
 import { SelectedSkillList } from "./selected-skill-list.js";
 import type { SkillCatalogListSkills } from "../application/skill-catalog-store.js";
+import type {
+  ComposerSubmissionDraft,
+  SkillPreparationStatus,
+  SubmissionAccepted,
+} from "../application/skill-submission-state.js";
+import type { SelectedSkillTag } from "./selected-skill-list.js";
 
 export interface PromptComposerProps {
   readonly disabled: boolean;
@@ -52,6 +57,7 @@ export interface PromptComposerProps {
   readonly modelPicker?: ReactElement;
   readonly permissionSelector?: ReactElement;
   readonly draftText?: string | undefined;
+  readonly draftVersion?: number | undefined;
   readonly draftLoading?: boolean | undefined;
   readonly attachments?: readonly AttachmentQueueItem[] | undefined;
   readonly attachmentSubmitBlockedReason?: string | undefined;
@@ -60,12 +66,12 @@ export interface PromptComposerProps {
   readonly skillsEnabled?: boolean | undefined;
   readonly workspaceId?: WorkspaceId | undefined;
   readonly listSkills?: SkillCatalogListSkills | undefined;
-  readonly selectedSkills?: readonly SkillCatalogItemV1[] | undefined;
+  readonly selectedSkills?: readonly SelectedSkillTag[] | undefined;
+  readonly skillPreparationStatus?: SkillPreparationStatus | undefined;
   readonly onSelectSkill?: ((selection: SkillSelectionV1) => void) | undefined;
   readonly onRemoveSkill?: ((skillId: string) => void) | undefined;
   readonly onSubmitDraft?:
-    | ((draft: PromptComposerSubmissionDraft) => Promise<boolean>)
-    | undefined;
+    ((draft: ComposerSubmissionDraft) => Promise<SubmissionAccepted | undefined>) | undefined;
   readonly onRemoveAttachment?: ((id: string) => void) | undefined;
   readonly onRetryAttachment?: ((id: string) => void) | undefined;
   readonly onLoadAttachmentPreview?:
@@ -89,11 +95,7 @@ export interface PromptComposerProps {
   readonly runInputs?: readonly WebRunInputItem[] | undefined;
 }
 
-export interface PromptComposerSubmissionDraft {
-  readonly text: string;
-  readonly skillSelections: readonly SkillSelectionV1[];
-  readonly attachmentIds: readonly AttachmentId[];
-}
+export type PromptComposerSubmissionDraft = ComposerSubmissionDraft;
 
 export interface PromptSubmitButtonProps {
   readonly action?: PromptPrimaryAction | undefined;
@@ -295,19 +297,21 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
     const accepted =
       props.onSubmitDraft === undefined
         ? await props.onSubmit(submitted)
-        : await props.onSubmitDraft({ text: submitted, skillSelections, attachmentIds });
+        : await props.onSubmitDraft({
+            draftVersion: props.draftVersion ?? 0,
+            userText: submitted,
+            skillSelections,
+            attachments: attachmentIds,
+          });
     // Only the version that was actually accepted is cleared. Text typed during the request — and
     // an attachment draft stays exactly as it is.
-    if (
-      accepted &&
-      props.onSubmitDraft === undefined &&
-      latestValue.current === submitted
-    )
+    if (accepted && props.onSubmitDraft === undefined && latestValue.current === submitted)
       setValue("");
   }, [
     props.attachments,
     props.disabled,
     props.draftLoading,
+    props.draftVersion,
     props.onSubmit,
     props.onSubmitDraft,
     selectedSkills,
@@ -536,6 +540,19 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
           "正在恢复草稿…",
         )
       : null,
+    props.skillPreparationStatus === "ACCEPTED"
+      ? createElement(
+          "p",
+          { className: "skill-preparation-status", role: "status" },
+          "技能任务已接受，正在准备所选技能……",
+        )
+      : props.skillPreparationStatus === "FAILED"
+        ? createElement(
+            "p",
+            { className: "skill-preparation-status", role: "alert" },
+            "技能准备失败，任务草稿已保留。刷新技能目录并重试。",
+          )
+        : null,
     props.error === undefined
       ? null
       : createElement("p", { className: "web-error", role: "alert" }, props.error.message),
@@ -546,8 +563,8 @@ function containsFiles(dataTransfer: DataTransfer): boolean {
   return Array.from(dataTransfer.types).includes("Files");
 }
 
-function uniqueSkillItems(skills: readonly SkillCatalogItemV1[]): readonly SkillCatalogItemV1[] {
-  const byId = new Map<string, SkillCatalogItemV1>();
+function uniqueSkillItems(skills: readonly SelectedSkillTag[]): readonly SelectedSkillTag[] {
+  const byId = new Map<string, SelectedSkillTag>();
   for (const skill of skills) {
     if (!byId.has(skill.skillId)) byId.set(skill.skillId, skill);
   }

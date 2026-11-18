@@ -121,6 +121,19 @@ export class AttachmentDraftStore {
     await this.saveRevision(owner, expectedRevision, { text: "", artifactIds: [] }, true);
   }
 
+  async resetSubmission(
+    owner: AttachmentOwner,
+    expectedRevision: number,
+  ): Promise<AttachmentDraft> {
+    const current = await this.current(owner, expectedRevision);
+    return this.saveRevision(
+      owner,
+      expectedRevision,
+      { text: current.text, artifactIds: current.artifactIds },
+      true,
+    );
+  }
+
   private async saveRevision(
     owner: AttachmentOwner,
     expectedRevision: number,
