@@ -1958,6 +1958,7 @@ async function assertAttachmentComposerAndUpload() {
     return {
       panelWidth: panel.width,
       panelHeight: panel.height,
+      panelTop: panel.top,
       panelLeft: panel.left,
       panelRight: panel.right,
       panelBottom: panel.bottom,
@@ -1966,14 +1967,20 @@ async function assertAttachmentComposerAndUpload() {
       footerCenter: footerBounds.left + footerBounds.width / 2,
       ringCenter: ringBounds.left + ringBounds.width / 2,
       viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
     };
   });
+  const maximumPanelHeight = Math.min(geometry.viewportHeight * 0.62, 480);
   if (
     Math.abs(geometry.panelWidth - geometry.composerWidth) > 3 ||
-    Math.abs(geometry.panelHeight - 320) > 1
+    geometry.panelHeight <= 0 ||
+    geometry.panelHeight > maximumPanelHeight + 1 ||
+    geometry.panelTop < 0 ||
+    geometry.panelBottom > geometry.viewportHeight
   ) {
     throw new Error(
-      "attachment menu does not fill the composer at 320 pixels high: " + JSON.stringify(geometry),
+      "attachment menu exceeds its adaptive size above the composer: " +
+        JSON.stringify({ ...geometry, maximumPanelHeight }),
     );
   }
   if (geometry.panelLeft < 0 || geometry.panelRight > geometry.viewportWidth) {
@@ -1998,7 +2005,7 @@ async function assertAttachmentComposerAndUpload() {
   await plus.click();
   await waitVisible(menu);
   const chooserPromise = page.waitForEvent("filechooser");
-  await menu.getByRole("menuitem", { name: "上传文件" }).click();
+  await menu.getByRole("button", { name: "上传文件" }).click();
   const chooser = await chooserPromise;
   let releaseRefresh;
   const refreshGate = new Promise((resolve) => {
