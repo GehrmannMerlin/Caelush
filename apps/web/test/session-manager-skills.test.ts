@@ -15,6 +15,7 @@ import {
 } from "@caelush/protocol";
 import type { WebSessionClient } from "../src/application/session-manager.js";
 import { WebSessionManager } from "../src/application/session-manager.js";
+import { CaelushClientHttpError } from "@caelush/client";
 import { describe, expect, it, vi } from "vitest";
 
 const workspace: WorkspaceRef = { id: createWorkspaceId(), path: "C:\\workspace\\project" };
@@ -109,6 +110,7 @@ function createClient(session: ClientAgentSession) {
       await new Promise<void>((resolve) =>
         options?.signal?.addEventListener("abort", () => resolve(), { once: true }),
       );
+      yield* [];
     }),
   } as unknown as WebSessionClient & {
     readonly createSession: ReturnType<typeof vi.fn>;
@@ -164,6 +166,54 @@ describe("WebSessionManager Skill submission", () => {
       false,
     );
     expect(client.createRun).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  it("identifies a stale Skill token and leaves the selected Session available for explicit reselection", async () => {
+    const session = makeSession();
+    const client = createClient(session);
+    client.createRun.mockRejectedValue(
+      new CaelushClientHttpError({
+        status: 409,
+        code: "CONFLICT",
+        message: "Skill selection changed.",
+        details: { reason: "SKILL_SELECTION_STALE" },
+      }),
+    );
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    await manager.loadSessions();
+    await manager.selectSession(session.id);
+
+    await manager.submitPrompt({ text: "Keep this draft", skillSelections, submissionId });
+
+    expect(manager.getSnapshot().error).toMatchObject({
+      code: "RUN_CREATE_FAILED",
+      reasonCode: "SKILL_SELECTION_STALE",
+      message: expect.stringMatching(/技能目录.*重新选择/u),
+    });
+    expect(manager.getSnapshot().selectedSessionId).toBe(session.id);
+    expect(manager.getSnapshot().activeRun).toBeUndefined();
+    manager.dispose();
+  });
+
+  it("returns the authoritative idempotent Run even when that Run was already visible", async () => {
+    const session = makeSession();
+    const existingRun = makeRun(session.id, "COMPLETED");
+    const client = createClient(session);
+    client.listRuns = vi.fn(async () => ({ items: [existingRun] }));
+    client.createRun.mockResolvedValue(existingRun);
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    await manager.loadSessions();
+    await manager.selectSession(session.id);
+    expect(manager.getSnapshot().runs.map((run) => run.id)).toContain(existingRun.id);
+
+    const result = await manager.submitPromptWithResult({
+      text: "Review this change.",
+      skillSelections,
+      submissionId,
+    });
+
+    expect(result).toEqual({ accepted: false, session, run: existingRun });
     manager.dispose();
   });
 

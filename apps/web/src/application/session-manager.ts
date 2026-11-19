@@ -84,7 +84,10 @@ import { derivePromptTitle, validatePrompt, type PromptError } from "./prompt.js
 import { upsertRunInput, type WebRunInputItem } from "./run-input-state.js";
 import { archiveErrorMessage } from "./archive-errors.js";
 import type { WebHostClient } from "../host/bootstrap.js";
-import { mergeActiveTurnPresentation } from "./session-presentation-merge.js";
+import {
+  mergeActiveSkillPresentation,
+  mergeActiveTurnPresentation,
+} from "./session-presentation-merge.js";
 import {
   browserFrameScheduler,
   type FrameHandle,
@@ -108,6 +111,9 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
   saveAttachmentDraft?: CaelushClient["saveAttachmentDraft"];
   getSkillCapabilities?: CaelushClient["getSkillCapabilities"];
   listSkills?: CaelushClient["listSkills"];
+  listManagedSkills?: CaelushClient["listManagedSkills"];
+  updateSkillSettings?: CaelushClient["updateSkillSettings"];
+  importSkills?: CaelushClient["importSkills"];
   getSession?: CaelushClient["getSession"];
   archiveSession?: CaelushClient["archiveSession"];
   getArchiveState?: CaelushClient["getArchiveState"];
@@ -263,6 +269,12 @@ export interface WebSessionSnapshot {
   /** Whether this daemon composes the durable Run input path. */
   readonly runInputSupported: boolean;
   readonly error?: WebSessionError;
+}
+
+export interface WebPromptSubmissionOutcome {
+  readonly accepted: boolean;
+  readonly session?: ClientAgentSession;
+  readonly run?: ClientAgentRun;
 }
 
 export type WebSessionListener = (snapshot: WebSessionSnapshot) => void;
@@ -615,6 +627,12 @@ export class WebSessionManager {
   }
 
   async submitPrompt(input: string | WebPromptSubmission): Promise<boolean> {
+    return (await this.submitPromptWithResult(input)).accepted;
+  }
+
+  async submitPromptWithResult(
+    input: string | WebPromptSubmission,
+  ): Promise<WebPromptSubmissionOutcome> {
     if (
       this.archiveReadOnly ||
       this.disposed ||
@@ -622,7 +640,7 @@ export class WebSessionManager {
       this.snapshot.submission !== "IDLE" ||
       this.snapshot.preparingPreset !== undefined
     )
-      return false;
+      return { accepted: false };
     const request = typeof input === "string" ? { text: input } : input;
     const requestedAttachmentIds = request.attachmentIds ?? [];
     const parsedAttachmentIds =
@@ -633,7 +651,7 @@ export class WebSessionManager {
       this.publish({
         error: { code: "RUN_CREATE_FAILED", message: "附件数量不能超过 10 个，且不能重复。" },
       });
-      return false;
+      return { accepted: false };
     }
     const attachmentIds = parsedAttachmentIds.data;
     const parsedSkillSelections = SkillSelectionV1Schema.array()
@@ -643,7 +661,7 @@ export class WebSessionManager {
       this.publish({
         error: { code: "RUN_CREATE_FAILED", message: "所选技能信息无效，请刷新后重新选择。" },
       });
-      return false;
+      return { accepted: false };
     }
     const skillSelections = parsedSkillSelections.data;
     if (
@@ -653,13 +671,13 @@ export class WebSessionManager {
       this.publish({
         error: { code: "RUN_CREATE_FAILED", message: "所选技能过多或重复，请刷新后重新选择。" },
       });
-      return false;
+      return { accepted: false };
     }
     if (skillSelections.length > 0 && request.submissionId === undefined) {
       this.publish({
         error: { code: "RUN_CREATE_FAILED", message: "手动选择技能需要提交标识，请重试。" },
       });
-      return false;
+      return { accepted: false };
     }
     const trimmedText = request.text.trim();
     let userText: string;
@@ -669,7 +687,7 @@ export class WebSessionManager {
         this.publish({
           error: promptError({ code: "PROMPT_REQUIRED", message: "请输入任务内容或添加附件。" }),
         });
-        return false;
+        return { accepted: false };
       }
       userText = "";
       goal = ATTACHMENT_ONLY_RUN_GOAL;
@@ -677,7 +695,7 @@ export class WebSessionManager {
       const validation = validatePrompt(request.text);
       if (!validation.ok) {
         this.publish({ error: promptError(validation.error) });
-        return false;
+        return { accepted: false };
       }
       userText = validation.value;
       goal = userText;
@@ -687,7 +705,7 @@ export class WebSessionManager {
       const parsedSubmissionId = SubmissionIdSchema.safeParse(request.submissionId);
       if (!parsedSubmissionId.success) {
         this.publish({ error: { code: "RUN_CREATE_FAILED", message: "提交标识无效，请重试。" } });
-        return false;
+        return { accepted: false };
       }
       submissionId = parsedSubmissionId.data;
     }
@@ -702,7 +720,7 @@ export class WebSessionManager {
     const selection = this.currentModelSelection();
     if (selection === undefined || !this.isSelectionAvailable(selection)) {
       this.publish({ error: sessionError("DEFAULT_MODEL_UNAVAILABLE") });
-      return false;
+      return { accepted: false };
     }
     const model = { provider: selection.provider, model: selection.model };
     const permissionPreset = this.currentPermissionPreset();
@@ -714,11 +732,12 @@ export class WebSessionManager {
             : "PERMISSION_PRESET_UNAVAILABLE",
         ),
       });
-      return false;
+      return { accepted: false };
     }
 
     this.publish({ submission: "SUBMITTING", error: undefined });
     let session = this.snapshot.selectedSession;
+    let createdRun: ClientAgentRun | undefined;
     try {
       if (session === undefined) {
         session = await this.options.client.createSession(
@@ -782,9 +801,10 @@ export class WebSessionManager {
           ? { resourcePolicy: defaultRunConfiguration.resourcePolicy! }
           : { limits: defaultRunConfiguration.limits }),
       });
+      createdRun = run;
       if (skillSelections.length > 0) this.skillPreparationRefreshRuns.add(run.id);
       const boundPreset = runPermissionPreset(run) ?? permissionPreset;
-      const runs = [...this.snapshot.runs, run];
+      const runs = [...this.snapshot.runs.filter((item) => item.id !== run.id), run];
       const optimisticUser: TranscriptEntry = {
         id: `optimistic:user:${run.id}`,
         runId: run.id,
@@ -825,12 +845,14 @@ export class WebSessionManager {
 
       const active = this.attachLifecycle(run);
       await Promise.resolve();
-      if (this.disposed || this.activeLifecycle !== active) return false;
+      if (this.disposed || this.activeLifecycle !== active) {
+        return { accepted: false, session, run };
+      }
       if (active.failure !== undefined) {
-        return false;
+        return { accepted: false, session, run };
       }
       this.publish({ submission: "STARTING", error: undefined });
-      return this.confirmPendingRun(run.id);
+      return { accepted: await this.confirmPendingRun(run.id), session, run };
     } catch (error) {
       if (
         this.activeLifecycle !== undefined &&
@@ -844,7 +866,11 @@ export class WebSessionManager {
           submission: "ACTIVE",
           error: sessionError(code),
         });
-        return false;
+        return {
+          accepted: false,
+          ...(session === undefined ? {} : { session }),
+          ...(createdRun === undefined ? {} : { run: createdRun }),
+        };
       }
       const code = session === undefined ? "SESSION_CREATE_FAILED" : "RUN_CREATE_FAILED";
       this.publish({
@@ -852,7 +878,11 @@ export class WebSessionManager {
         composerEnabled: true,
         error: submissionError(code, error),
       });
-      return false;
+      return {
+        accepted: false,
+        ...(session === undefined ? {} : { session }),
+        ...(createdRun === undefined ? {} : { run: createdRun }),
+      };
     }
   }
 
@@ -1714,7 +1744,7 @@ export class WebSessionManager {
     const [history, turnPresentation, skillPresentation] = await Promise.all([
       this.loadSessionTranscript(session.id),
       this.loadSessionTurnPresentation(session.id),
-      this.loadSessionSkillPresentation(session.id),
+      this.loadSessionSkillPresentation(session.id).catch(() => undefined),
     ]);
     if (this.disposed || generation !== this.selectionGeneration) return false;
     const activeRuns = nonTerminalRuns(runs);
@@ -2087,9 +2117,20 @@ export class WebSessionManager {
         this.loadActiveSkillPreparation(active),
       ]);
       if (response === undefined || !this.isCurrentStream(active, generation)) return;
+      const mergedSkillPresentation =
+        skillPresentation === undefined
+          ? this.snapshot.skillPresentation
+          : this.snapshot.skillPresentation === undefined
+            ? skillPresentation
+            : mergeActiveSkillPresentation(
+                this.snapshot.skillPresentation,
+                skillPresentation,
+                this.snapshot.runs,
+                active.run,
+              );
       this.publish({
         turnPresentation: response,
-        skillPresentation,
+        skillPresentation: mergedSkillPresentation,
         ...(skillPreparation === undefined ? {} : { skillPreparation }),
         liveActivity: prunePresentationForRun(this.snapshot.liveActivity, response, active.run.id),
       });
@@ -2244,11 +2285,13 @@ export class WebSessionManager {
       this.clearApprovals();
       const activeRuns = nonTerminalRuns(runs);
       const activeRun = activeRuns.length === 1 ? activeRuns[0] : undefined;
-      const history = await this.loadSessionTranscript(
-        run.sessionId,
-        this.optimisticTranscriptEntries(),
-      );
-      const turnPresentation = await this.loadSessionTurnPresentation(run.sessionId);
+      const [history, turnPresentation, skillPresentation] = await Promise.all([
+        this.loadSessionTranscript(run.sessionId, this.optimisticTranscriptEntries()),
+        this.loadSessionTurnPresentation(run.sessionId),
+        this.loadSessionSkillPresentation(run.sessionId).catch(
+          () => this.snapshot.skillPresentation,
+        ),
+      ]);
       if (this.snapshot.selectedSessionId !== run.sessionId) return;
       const retainedLiveActivity =
         turnPresentation === undefined
@@ -2266,6 +2309,7 @@ export class WebSessionManager {
         runs,
         history,
         turnPresentation,
+        skillPresentation,
         activeRuns,
         activeRun,
         timeline:
@@ -2488,11 +2532,11 @@ export class WebSessionManager {
     const activeRun = activeRuns.length === 1 ? activeRuns[0] : undefined;
     this.clearApprovals();
     const reconciliationGeneration = this.approvalContextGeneration;
-    const history = await this.loadSessionTranscript(
-      run.sessionId,
-      this.optimisticTranscriptEntries(),
-    );
-    const turnPresentation = await this.loadSessionTurnPresentation(run.sessionId);
+    const [history, turnPresentation, skillPresentation] = await Promise.all([
+      this.loadSessionTranscript(run.sessionId, this.optimisticTranscriptEntries()),
+      this.loadSessionTurnPresentation(run.sessionId),
+      this.loadSessionSkillPresentation(run.sessionId).catch(() => this.snapshot.skillPresentation),
+    ]);
     if (
       this.disposed ||
       this.snapshot.selectedSessionId !== context.sessionId ||
@@ -2514,6 +2558,7 @@ export class WebSessionManager {
       runs,
       history,
       turnPresentation,
+      skillPresentation,
       activeRuns,
       activeRun,
       timeline:
@@ -3011,6 +3056,13 @@ function submissionError(
   error: unknown,
 ): WebSessionError {
   if (error instanceof CaelushClientHttpError) {
+    if (error.details?.reason === "SKILL_SELECTION_STALE") {
+      return {
+        code: fallback,
+        reasonCode: "SKILL_SELECTION_STALE",
+        message: "Skill 选择已过期，请刷新技能目录并重新选择；当前文字草稿已保留。",
+      };
+    }
     const messages: Record<typeof error.code, string> = {
       INVALID_REQUEST: "请求参数无效，工作区状态可能已过期。请重新选择工作区后重试。",
       INVALID_EVENT_CURSOR: "事件游标无效，请刷新会话后重试。",

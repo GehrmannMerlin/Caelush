@@ -2,7 +2,9 @@ import type {
   ClientAgentRun,
   SessionTurnPresentationResponse,
   SessionTurnPresentationResponseV3,
+  SessionTurnPresentationResponseV4,
   SessionTurnPresentationTurnV3,
+  SessionTurnPresentationTurnV4,
   TurnPresentationItemV3,
 } from "@caelush/protocol";
 
@@ -31,6 +33,25 @@ export function mergeActiveTurnPresentation(
   return { capabilityVersion: 3, turns };
 }
 
+/** Replace one targeted V4 Turn without dropping the Session's already-loaded Skill history. */
+export function mergeActiveSkillPresentation(
+  current: SessionTurnPresentationResponseV4,
+  targeted: SessionTurnPresentationResponseV4 | undefined,
+  runs: readonly RunPresentationOrder[],
+  activeRun: ActivePresentationRun,
+): SessionTurnPresentationResponseV4 {
+  const refreshedTurn = targeted?.turns.find((turn) => turn.runId === activeRun.id);
+  if (refreshedTurn === undefined) return current;
+
+  const previousTurn = current.turns.find((turn) => turn.runId === activeRun.id);
+  const mergedTurn = withOptimisticV4UserIfNeeded(refreshedTurn, previousTurn, activeRun);
+  const turns = current.turns.filter((turn) => turn.runId !== activeRun.id);
+  turns.push(mergedTurn);
+  const runCreatedAt = runsByCreatedAt(runs);
+  turns.sort((left, right) => compareTurnOrder(left, right, runCreatedAt));
+  return { capabilityVersion: 4, turns };
+}
+
 function withOptimisticUserIfNeeded(
   refreshedTurn: SessionTurnPresentationTurnV3,
   previousTurn: SessionTurnPresentationTurnV3 | undefined,
@@ -57,9 +78,34 @@ function withOptimisticUserIfNeeded(
   return { ...refreshedTurn, items };
 }
 
+function withOptimisticV4UserIfNeeded(
+  refreshedTurn: SessionTurnPresentationTurnV4,
+  previousTurn: SessionTurnPresentationTurnV4 | undefined,
+  activeRun: ActivePresentationRun,
+): SessionTurnPresentationTurnV4 {
+  if (refreshedTurn.items.some((item) => item.kind === "USER")) return refreshedTurn;
+
+  const previousUser = previousTurn?.items.find((item) => item.kind === "USER");
+  const user = {
+    ...(previousUser ?? {
+      id: `optimistic:presentation:user:${activeRun.id}`,
+      runId: activeRun.id,
+      status: "COMPLETED" as const,
+      createdAt: activeRun.createdAt,
+      kind: "USER" as const,
+      text: activeRun.goal,
+      selectedSkills: [],
+    }),
+    conversationTurnId: refreshedTurn.conversationTurnId,
+    ordinal: 0,
+  };
+  const items = [user, ...refreshedTurn.items].map((item, ordinal) => ({ ...item, ordinal }));
+  return { ...refreshedTurn, items };
+}
+
 function compareTurnOrder(
-  left: SessionTurnPresentationTurnV3,
-  right: SessionTurnPresentationTurnV3,
+  left: Pick<SessionTurnPresentationTurnV3, "runId" | "openedAt">,
+  right: Pick<SessionTurnPresentationTurnV3, "runId" | "openedAt">,
   runCreatedAt: ReadonlyMap<string, number>,
 ): number {
   const leftOpenedAt = runCreatedAt.get(left.runId) ?? Number(left.openedAt);

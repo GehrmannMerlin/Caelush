@@ -10,9 +10,11 @@ type CompatiblePresentationReader = (
 ) => Promise<{ readonly capabilityVersion: number }>;
 
 function compatibleReader(client: CaelushClient): CompatiblePresentationReader | undefined {
-  return (client as unknown as {
-    getSessionTurnPresentationCompatible?: CompatiblePresentationReader;
-  }).getSessionTurnPresentationCompatible;
+  return (
+    client as unknown as {
+      getSessionTurnPresentationCompatible?: CompatiblePresentationReader;
+    }
+  ).getSessionTurnPresentationCompatible;
 }
 
 describe("Skill presentation client compatibility", () => {
@@ -67,9 +69,7 @@ describe("Skill presentation client compatibility", () => {
     await expect(read.call(client, sessionId, { limit: 10 })).resolves.toMatchObject({
       capabilityVersion: 4,
     });
-    expect(new URL(requests[1]!).pathname).toBe(
-      `/api/v1/sessions/${sessionId}/presentation-v4`,
-    );
+    expect(new URL(requests[1]!).pathname).toBe(`/api/v1/sessions/${sessionId}/presentation-v4`);
 
     const unauthorized = new CaelushClient({
       baseUrl: "http://daemon.test",

@@ -2,11 +2,16 @@ import {
   createRunId,
   createTimestampMs,
   type ClientAgentRun,
+  type SessionTurnPresentationResponseV4,
+  type SessionTurnPresentationTurnV4,
   type SessionTurnPresentationResponseV3,
   type SessionTurnPresentationTurnV3,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
-import { mergeActiveTurnPresentation } from "../src/application/session-presentation-merge.js";
+import {
+  mergeActiveSkillPresentation,
+  mergeActiveTurnPresentation,
+} from "../src/application/session-presentation-merge.js";
 
 describe("mergeActiveTurnPresentation", () => {
   it("replaces only the refreshed Turn and preserves historical Turns in canonical order", () => {
@@ -113,6 +118,34 @@ describe("mergeActiveTurnPresentation", () => {
   });
 });
 
+describe("mergeActiveSkillPresentation", () => {
+  it("updates the targeted V4 Skill facts and keeps every earlier historical turn", () => {
+    const firstRun = run(100);
+    const activeRun = run(300);
+    const firstTurn = skillTurn(firstRun.id, 100, []);
+    const oldActiveTurn = skillTurn(activeRun.id, 300, [skillItem(activeRun.id, "CONTENT_READY")]);
+    const current: SessionTurnPresentationResponseV4 = {
+      capabilityVersion: 4,
+      turns: [firstTurn, oldActiveTurn],
+    };
+    const refreshed = skillTurn(activeRun.id, 300, [skillItem(activeRun.id, "LOADED", 8)]);
+
+    const merged = mergeActiveSkillPresentation(
+      current,
+      { capabilityVersion: 4, turns: [refreshed] },
+      [activeRun, firstRun],
+      activeRun,
+    );
+
+    expect(merged?.turns[0]).toEqual(firstTurn);
+    expect(merged?.turns).toHaveLength(2);
+    expect(merged?.turns[1]?.runId).toBe(activeRun.id);
+    expect(merged?.turns[1]?.items).toContainEqual(
+      expect.objectContaining({ kind: "SKILL", skillStatus: "LOADED" }),
+    );
+  });
+});
+
 function run(createdAt: number): Pick<ClientAgentRun, "id" | "createdAt" | "goal"> {
   return {
     id: createRunId(),
@@ -151,5 +184,35 @@ function user(
     createdAt: createTimestampMs(createdAt),
     kind: "USER",
     text,
+  };
+}
+
+function skillTurn(
+  runId: ClientAgentRun["id"],
+  openedAt: number,
+  items: SessionTurnPresentationTurnV4["items"],
+): SessionTurnPresentationTurnV4 {
+  return {
+    runId,
+    conversationTurnId: `turn:${runId}`,
+    runStatus: "RUNNING",
+    openedAt: createTimestampMs(openedAt),
+    highWatermark: 10,
+    items: items.map((item, ordinal) => ({ ...item, ordinal })),
+  };
+}
+
+function skillItem(runId: ClientAgentRun["id"], status: "CONTENT_READY" | "LOADED", ordinal = 0) {
+  return {
+    id: `${runId}:skill:user:review-notes`,
+    runId,
+    conversationTurnId: `turn:${runId}`,
+    ordinal,
+    createdAt: createTimestampMs(1),
+    status: "COMPLETED" as const,
+    kind: "SKILL" as const,
+    skillId: "user:review-notes" as never,
+    name: "review-notes",
+    skillStatus: status,
   };
 }

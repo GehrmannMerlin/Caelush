@@ -10,6 +10,7 @@ import {
   createToolInvocationId,
   type ClientAgentRun,
   type SessionTurnPresentationResponseV3,
+  type SessionTurnPresentationResponseV4,
 } from "@caelush/protocol";
 
 import { SessionWorkspace } from "../src/components/session-workspace.js";
@@ -161,6 +162,53 @@ function liveToolActivity(runId: ReturnType<typeof createRunId>): LiveActivitySt
 }
 
 describe("SessionConversation V3 rendering", () => {
+  it("renders V4 selected Skill tags and durable loading state beside the strict V3 feed", () => {
+    const target = turnPresentation().turns[2]!;
+    const v3: SessionTurnPresentationResponseV3 = {
+      capabilityVersion: 3,
+      turns: [{ ...target, items: [user(runThreeId, "turn-three", 0, "任务三")] }],
+    };
+    const skillPresentation: SessionTurnPresentationResponseV4 = {
+      capabilityVersion: 4,
+      turns: [
+        {
+          ...target,
+          items: [
+            {
+              ...user(runThreeId, "turn-three", 0, "任务三"),
+              selectedSkills: [{ skillId: "user:review-notes" as never, name: "review-notes" }],
+            },
+            {
+              id: `${runThreeId}:skill:user:review-notes`,
+              runId: runThreeId,
+              conversationTurnId: "turn-three",
+              ordinal: 1,
+              status: "COMPLETED",
+              createdAt: 1_000,
+              kind: "SKILL",
+              skillId: "user:review-notes" as never,
+              name: "review-notes",
+              skillStatus: "CONTENT_READY",
+            },
+          ],
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <SessionWorkspace
+        title="Skill 使用状态"
+        history={[]}
+        turnPresentation={v3}
+        skillPresentation={skillPresentation}
+        composer={<footer className="prompt-composer">输入</footer>}
+      />,
+    );
+
+    expect(html).toContain("review-notes");
+    expect(html).toContain("正文已就绪，尚未载入");
+    expect(html).not.toContain("SKILL.md");
+  });
+
   it("coalesces near-bottom scroll reconciliation to one frame", () => {
     const scheduler = new TestScrollFrameScheduler();
     const pending: { current: FrameHandle | undefined } = { current: undefined };

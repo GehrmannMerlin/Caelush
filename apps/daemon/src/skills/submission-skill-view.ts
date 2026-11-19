@@ -18,7 +18,9 @@ export interface SubmissionSkillViewService {
     readonly runId: RunId;
   }): Promise<SubmissionSkillPreparationV1>;
   getSkillLoadFacts(input: { readonly runId: RunId }): Promise<readonly WorkflowSkillLoadFact[]>;
-  getRunSkillPresentationFacts(input: { readonly runId: RunId }): Promise<RunSkillPresentationFacts>;
+  getRunSkillPresentationFacts(input: {
+    readonly runId: RunId;
+  }): Promise<RunSkillPresentationFacts>;
 }
 
 export interface WorkflowSkillLoadFact {

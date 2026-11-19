@@ -233,7 +233,7 @@ describe("automatic Skill loading through the Run Tool and Context paths", () =>
     expect(composition.toolRegistry.names()).toHaveLength(16);
     expect(composition.skillFeatureReadiness).toMatchObject({
       enabled: true,
-      invocationReady: false,
+      invocationReady: true,
       scriptExecutionReady: false,
     });
 

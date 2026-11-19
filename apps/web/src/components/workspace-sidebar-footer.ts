@@ -2,6 +2,7 @@ import { createElement, useEffect, useRef, useState, type ReactElement } from "r
 import {
   Archive,
   LogOut,
+  BookOpen,
   RefreshCw,
   Settings,
   SlidersHorizontal,
@@ -21,6 +22,7 @@ export interface WorkspaceSidebarDesktopActions {
 export interface WorkspaceSettingsMenuProps {
   readonly onOpenArchives?: (() => void) | undefined;
   readonly onOpenAppearance?: (() => void) | undefined;
+  readonly onOpenSkillManager?: (() => void) | undefined;
   readonly archiveHref?: string | undefined;
   readonly onSelect: () => void;
   readonly onCheckUpdates?: (() => void) | undefined;
@@ -47,6 +49,19 @@ export function WorkspaceSettingsMenu(props: WorkspaceSettingsMenuProps): ReactE
       createElement(SlidersHorizontal, { size: 16, strokeWidth: 2, "aria-hidden": true }),
       createElement("span", null, "模型与配置"),
     ),
+    props.onOpenSkillManager === undefined
+      ? null
+      : createElement(
+          "button",
+          {
+            type: "button",
+            className: "workspace-settings-menu-item",
+            role: "menuitem",
+            onClick: props.onOpenSkillManager,
+          },
+          createElement(BookOpen, { size: 16, strokeWidth: 2, "aria-hidden": true }),
+          createElement("span", null, "技能管理"),
+        ),
     props.onOpenAppearance === undefined
       ? null
       : createElement(
@@ -112,6 +127,7 @@ export function WorkspaceSettingsMenu(props: WorkspaceSettingsMenuProps): ReactE
 export function WorkspaceSidebarFooter(props: {
   readonly onOpenArchives?: (() => void) | undefined;
   readonly onOpenSettings?: (() => void) | undefined;
+  readonly onOpenSkillManager?: (() => void) | undefined;
   readonly onOpenAppearance?: (() => void) | undefined;
   readonly desktopActions?: WorkspaceSidebarDesktopActions | undefined;
 }): ReactElement {
@@ -200,6 +216,7 @@ export function WorkspaceSidebarFooter(props: {
         ? createElement(WorkspaceSettingsMenu, {
             onOpenArchives: select(props.onOpenArchives),
             onOpenAppearance: select(props.onOpenAppearance),
+            onOpenSkillManager: select(props.onOpenSkillManager),
             archiveHref: desktopActions?.archiveHref,
             onSelect: () => {
               setSettingsMenuOpen(false);

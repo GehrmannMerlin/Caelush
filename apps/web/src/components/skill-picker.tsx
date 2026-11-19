@@ -170,7 +170,10 @@ export function SkillPicker(props: SkillPickerProps): ReactElement {
                   aria-label={`${label}${selected ? "，已选择" : ""}`}
                   onClick={() => {
                     if (!selected) {
-                      props.onSelect({ skillId: item.skillId, selectionToken: item.selectionToken });
+                      props.onSelect({
+                        skillId: item.skillId,
+                        selectionToken: item.selectionToken,
+                      });
                     }
                   }}
                 >

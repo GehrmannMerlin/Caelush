@@ -12,6 +12,7 @@ import {
 import {
   PublicRunEventSchema,
   RunEventSchema,
+  SessionTurnPresentationResponseV4Schema,
   createEventId,
   createRunId,
   createSessionId,
@@ -742,6 +743,66 @@ describe("TurnPresentationFeed", () => {
     expect(flattenTurnsForLegacyRenderer(legacy).map((item) => item.id)).toEqual(
       legacy.items.map((item) => item.id),
     );
+  });
+
+  it("renders additive V4 Skill facts when the base client still returns V1", async () => {
+    const skillPresentation = SessionTurnPresentationResponseV4Schema.parse({
+      capabilityVersion: 4,
+      turns: [
+        {
+          runId,
+          conversationTurnId: "turn-1",
+          runStatus: "COMPLETED",
+          openedAt: 1,
+          closedAt: 4,
+          highWatermark: 8,
+          items: [
+            {
+              id: "user:skill-selection",
+              runId,
+              conversationTurnId: "turn-1",
+              ordinal: 0,
+              status: "COMPLETED",
+              createdAt: 1,
+              kind: "USER",
+              text: "检查项目",
+              selectedSkills: [{ skillId: "user:review-notes", name: "review-notes" }],
+            },
+            {
+              id: `${runId}:skill:user:review-notes`,
+              runId,
+              conversationTurnId: "turn-1",
+              ordinal: 1,
+              status: "COMPLETED",
+              createdAt: 1,
+              kind: "SKILL",
+              skillId: "user:review-notes",
+              name: "review-notes",
+              skillStatus: "CONTENT_READY",
+            },
+            {
+              id: "user:run-steer",
+              runId,
+              conversationTurnId: "turn-1",
+              ordinal: 2,
+              status: "COMPLETED",
+              createdAt: 2,
+              kind: "USER",
+              text: "更正：优先检查安全边界",
+              selectedSkills: [],
+            },
+          ],
+        },
+      ],
+    });
+    const html = await renderResolvedMarkup(
+      <TurnPresentationFeed presentation={presentation()} skillPresentation={skillPresentation} />,
+    );
+
+    expect(html).toContain("review-notes");
+    expect(html).toContain("正文已就绪，尚未载入");
+    expect(html).toContain("更正：优先检查安全边界");
+    expect(html).not.toContain("SKILL.md");
   });
 
   it("shows animated thinking text while an LLM is active without transient output", () => {

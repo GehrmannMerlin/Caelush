@@ -1635,7 +1635,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       runSkillCatalogSnapshots !== undefined &&
       selectedSkillPreparer !== undefined &&
       workflowArtifactReferenceAuthority !== undefined,
-    invocationReady: false,
+    // Explicit selection is available only after the host opts into the preview feature gate.
+    // Script execution remains separately closed until its own readiness contract is met.
+    invocationReady: options.skillFeatureEnabled ?? false,
     scriptExecutionReady: false,
     presentationReady: submissionSkillView !== undefined,
   });

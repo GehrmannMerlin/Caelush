@@ -8,6 +8,8 @@ import type {
   WorkspaceRef,
   PermissionPresetDescriptor,
   PermissionPresetSelection,
+  SkillPresentationStatus,
+  SubmissionSkillPreparationV1,
 } from "@caelush/protocol";
 import { createInitialLiveActivityState, type LiveActivityState } from "@caelush/client";
 import type { CliApprovalState, CliControlMode, CliTransportState } from "./cli-control.js";
@@ -81,6 +83,9 @@ export interface CliViewState {
   readonly activeRun?: CliActiveRun;
   readonly availablePermissionPresets: readonly CliPermissionPresetView[];
   readonly selectedPreset?: PermissionPresetSelection;
+  readonly skillPreparation?: SubmissionSkillPreparationV1;
+  readonly skillRunStatuses?: readonly CliSkillRunStatus[];
+  readonly skillPreparationWarning?: string;
   readonly approvalChannelAvailable: boolean;
   readonly composerEnabled: boolean;
   readonly activity: CliActivity;
@@ -88,6 +93,12 @@ export interface CliViewState {
   readonly controlError?: string;
   readonly transportError?: string;
   readonly fatalError?: string;
+}
+
+export interface CliSkillRunStatus {
+  readonly skillId: string;
+  readonly name: string;
+  readonly status: SkillPresentationStatus | "CONTENT_READY";
 }
 
 export type CliStateListener = (state: CliViewState) => void;

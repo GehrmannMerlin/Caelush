@@ -1,4 +1,5 @@
 import { basename, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import type {
   PublicRunEvent,
   ApprovalListResponse,
@@ -26,8 +27,19 @@ import type {
   PermissionPresetSelection,
   SecurityCapabilitiesResponse,
   WorkspaceSecurityCapabilitiesResponse,
+  SkillCapabilityResponse,
+  SkillCatalogPageV1,
+  SessionTurnPresentationResponseV4,
+  SkillSelectionV1,
+  SubmissionSkillPreparationV1,
+  WorkspaceId,
 } from "@caelush/protocol";
-import { createRunId, createTimestampMs, createWorkspaceId } from "@caelush/protocol";
+import {
+  createRunId,
+  createTimestampMs,
+  createWorkspaceId,
+  SubmissionIdSchema,
+} from "@caelush/protocol";
 import { CaelushProtocolCompatibilityError, createInitialLiveActivityState } from "@caelush/client";
 import type { WatchRunEventsOptions } from "@caelush/client";
 import type { LaunchIntent } from "../bootstrap/cli-args.js";
@@ -37,6 +49,7 @@ import {
   type CliActivity,
   type CliPermissionPresetView,
   type CliStateListener,
+  type CliSkillRunStatus,
   type CliViewState,
 } from "./cli-state.js";
 import { toSafeCliError } from "../bootstrap/safe-errors.js";
@@ -63,6 +76,24 @@ const systemCliTimer: CliTimer = {
 export interface CliDaemonClient {
   getHealth(options?: { readonly signal?: AbortSignal }): Promise<HealthResponse>;
   getInfo(options?: { readonly signal?: AbortSignal }): Promise<DaemonInfo>;
+  getSkillCapabilities?(options?: {
+    readonly signal?: AbortSignal;
+  }): Promise<SkillCapabilityResponse | null>;
+  listSkills?(
+    workspaceId: WorkspaceId,
+    query?: { readonly q?: string; readonly pageSize?: number; readonly cursor?: string },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<SkillCatalogPageV1>;
+  getSubmissionSkillPreparation?(
+    sessionId: SessionId,
+    runId: RunId,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<SubmissionSkillPreparationV1>;
+  getSessionTurnPresentationV4?(
+    sessionId: SessionId,
+    query?: { readonly runId?: RunId },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<SessionTurnPresentationResponseV4>;
   getSecurityCapabilities?(options?: {
     readonly signal?: AbortSignal;
   }): Promise<SecurityCapabilitiesResponse>;
@@ -156,10 +187,12 @@ export class CliConversationController {
   private cancelPromise: Promise<boolean> | undefined;
   private readonly approvalInFlight = new Set<ApprovalRequestId>();
   private readonly reconnectScheduler: CliReconnectScheduler;
+  private skillPresentationVersion: 4 | null | undefined;
   private historySequence = 0;
   private disposed = false;
   private selectedPresetApprovalPolicy:
     "ALWAYS_ASK" | "ON_BOUNDARY" | "DANGEROUS_ONLY" | "NEVER_ASK" | undefined;
+  private launchSkillSelections: readonly SkillSelectionV1[] = [];
 
   constructor(private readonly options: CliConversationControllerOptions) {
     this.currentWorkspacePath = resolve(options.workspacePath);
@@ -199,8 +232,17 @@ export class CliConversationController {
     const optimisticId = this.nextTranscriptId("user");
     const optimisticRunId = createRunId();
     this.submissionInFlight = true;
-    this.publish({
-      ...this.state,
+    const {
+      skillPreparation: ignoredPreparation,
+      skillRunStatuses: ignoredSkillRunStatuses,
+      skillPreparationWarning: ignoredPreparationWarning,
+      ...stateWithoutSkillPreparation
+    } = this.state;
+    void ignoredPreparation;
+    void ignoredSkillRunStatuses;
+    void ignoredPreparationWarning;
+    const submittingState: CliViewState = {
+      ...stateWithoutSkillPreparation,
       displayHistory: [
         ...this.state.displayHistory,
         {
@@ -214,12 +256,19 @@ export class CliConversationController {
       ],
       composerEnabled: false,
       activity: "Preparing",
-    });
+    };
+    this.publish(submittingState);
 
+    const skillSelections = this.launchSkillSelections;
+    const submissionId =
+      skillSelections.length === 0 ? undefined : SubmissionIdSchema.parse(randomUUID());
     let run: ClientAgentRun;
     try {
       run = await this.options.client.createRun(session.id, {
         goal,
+        ...(skillSelections.length === 0
+          ? {}
+          : { skillSelections: [...skillSelections], submissionId }),
         workspace,
         model: session.defaultModel ?? info.defaultModel!,
         runtime: info.defaultRunConfiguration.runtime,
@@ -235,6 +284,37 @@ export class CliConversationController {
       this.submissionInFlight = false;
       this.removeOptimisticEntry(optimisticId, toSafeCliError(error));
       return false;
+    }
+    if (skillSelections.length > 0) this.launchSkillSelections = [];
+
+    let skillPreparation: SubmissionSkillPreparationV1 | undefined;
+    let skillPreparationWarning: string | undefined;
+    if (skillSelections.length > 0) {
+      const getPreparation = this.options.client.getSubmissionSkillPreparation;
+      if (getPreparation === undefined) {
+        skillPreparationWarning = "Run 已创建；当前 daemon 无法读取 Skill 准备状态回执。";
+      } else {
+        try {
+          const receipt = await getPreparation.call(this.options.client, session.id, run.id);
+          if (
+            receipt.runId !== run.id ||
+            receipt.userText !== goal ||
+            receipt.preparationStatus !== "CONTENT_READY" ||
+            !sameSkillIds(
+              receipt.selectedSkills.map((skill) => skill.skillId),
+              skillSelections.map((skill) => skill.skillId),
+            )
+          ) {
+            throw new CliSkillError("Run 已创建，但 daemon 返回的 Skill 状态回执不匹配。");
+          }
+          skillPreparation = receipt;
+        } catch (error) {
+          skillPreparationWarning =
+            error instanceof CliSkillError
+              ? error.message
+              : "Run 已创建；暂时无法读取 Skill 准备状态回执。";
+        }
+      }
     }
 
     this.submissionInFlight = false;
@@ -252,6 +332,8 @@ export class CliConversationController {
       timeline: createInitialCliTimelineState(run.id),
       liveActivity: createInitialLiveActivityState(run.id),
       activeRun: { runId: run.id, status: run.status },
+      ...(skillPreparation === undefined ? {} : { skillPreparation }),
+      ...(skillPreparationWarning === undefined ? {} : { skillPreparationWarning }),
       ...(boundPreset === undefined ? {} : { selectedPreset: boundPreset }),
       composerEnabled: false,
       activity: "Preparing",
@@ -585,6 +667,7 @@ export class CliConversationController {
         : { workspace: workspaceOverride };
     if ("error" in workspaceResult) throw new CliResumeError(workspaceResult.error);
     this.workspace = workspaceResult.workspace;
+    await this.resolveLaunchSkills();
     await this.loadPermissionPresets(this.state.daemonInfo!);
 
     const activeRuns = nonTerminalRuns(runs);
@@ -662,6 +745,70 @@ export class CliConversationController {
       return;
     }
     this.attachActiveRun(run, true);
+  }
+
+  private async resolveLaunchSkills(): Promise<void> {
+    const names = this.options.launchIntent?.skillNames ?? [];
+    if (names.length === 0) return;
+    const getCapabilities = this.options.client.getSkillCapabilities;
+    const listSkills = this.options.client.listSkills;
+    if (getCapabilities === undefined || listSkills === undefined) {
+      throw new CliSkillError("当前 daemon 不支持 --skill；请升级本地 Caelush daemon。");
+    }
+
+    let capabilities: SkillCapabilityResponse | null;
+    try {
+      capabilities = await getCapabilities.call(this.options.client);
+    } catch {
+      throw new CliSkillError("无法确认本地 daemon 的 Skill 兼容性；请检查服务版本和连接状态。");
+    }
+    if (capabilities === null) {
+      throw new CliSkillError("当前 daemon 不支持 --skill；请升级本地 Caelush daemon。");
+    }
+    this.skillPresentationVersion = capabilities.presentationVersion;
+    if (!capabilities.enabled || !capabilities.catalog || !capabilities.invocation) {
+      throw new CliSkillError("本地 daemon 当前未启用 Skill 手动调用。");
+    }
+
+    const selections: SkillSelectionV1[] = [];
+    const selectedIds = new Set<string>();
+    for (const name of names) {
+      let match: SkillCatalogPageV1["items"][number] | undefined;
+      let cursor: string | undefined;
+      const seenCursors = new Set<string>();
+      while (match === undefined) {
+        let page: SkillCatalogPageV1;
+        try {
+          page = await listSkills.call(this.options.client, this.workspace!.id, {
+            q: name,
+            pageSize: 100,
+            ...(cursor === undefined ? {} : { cursor }),
+          });
+        } catch {
+          throw new CliSkillError("无法从本地 daemon 读取 Skill 目录。");
+        }
+        match = page.items.find((item) => item.name === name && item.enabled && item.userInvocable);
+        if (
+          match !== undefined ||
+          page.nextCursor === undefined ||
+          seenCursors.has(page.nextCursor)
+        ) {
+          break;
+        }
+        cursor = page.nextCursor;
+        seenCursors.add(cursor);
+      }
+      if (match === undefined) {
+        throw new CliSkillError(
+          `技能 “${name}” 不存在、已禁用或不允许手动调用；请刷新 Skill 目录后重试。`,
+        );
+      }
+      if (!selectedIds.has(match.skillId)) {
+        selections.push({ skillId: match.skillId, selectionToken: match.selectionToken });
+        selectedIds.add(match.skillId);
+      }
+    }
+    this.launchSkillSelections = Object.freeze(selections);
   }
 
   private async loadPermissionPresets(info: DaemonInfo): Promise<void> {
@@ -999,7 +1146,8 @@ export class CliConversationController {
       fatalError:
         error instanceof CliConfigurationError ||
         error instanceof CliResumeError ||
-        error instanceof CliPermissionError
+        error instanceof CliPermissionError ||
+        error instanceof CliSkillError
           ? error.message
           : toSafeCliError(error),
     });
@@ -1078,6 +1226,7 @@ export class CliConversationController {
       refreshedRuns = upsertConfirmedRun(listedRuns, run);
       remainingRuns = nonTerminalRuns(refreshedRuns);
       const transcript = await this.loadSessionTranscript(run.sessionId);
+      const skillRunStatuses = await this.loadSkillRunStatuses(run.sessionId, run.id);
       const displayHistory = [
         ...transcript,
         ...this.state.displayHistory.filter((entry) => !isTranscriptEntry(entry)),
@@ -1101,6 +1250,7 @@ export class CliConversationController {
         recoveryCandidates: remainingRuns,
         recoverySelectionIndex: 0,
         displayHistory,
+        ...(skillRunStatuses === undefined ? {} : { skillRunStatuses }),
         composerEnabled: remainingRuns.length === 0,
         activity:
           remainingRuns.length > 0
@@ -1128,6 +1278,39 @@ export class CliConversationController {
         controlError: toSafeCliError(error),
       });
       return;
+    }
+  }
+
+  private async loadSkillRunStatuses(
+    sessionId: SessionId,
+    runId: RunId,
+  ): Promise<readonly CliSkillRunStatus[] | undefined> {
+    const preparation = this.state.skillPreparation;
+    const getPresentation = this.options.client.getSessionTurnPresentationV4;
+    if (
+      preparation?.runId !== runId ||
+      preparation.selectedSkills.length === 0 ||
+      this.skillPresentationVersion !== 4 ||
+      getPresentation === undefined
+    ) {
+      return undefined;
+    }
+    try {
+      const response = await getPresentation.call(this.options.client, sessionId, { runId });
+      const turn = response.turns.find((item) => item.runId === runId);
+      if (turn === undefined) return undefined;
+      return preparation.selectedSkills.map((selected) => {
+        const projected = turn.items.find(
+          (item) => item.kind === "SKILL" && item.skillId === selected.skillId,
+        );
+        return {
+          skillId: selected.skillId,
+          name: selected.displayName ?? selected.name,
+          status: projected?.kind === "SKILL" ? projected.skillStatus : "CONTENT_READY",
+        };
+      });
+    } catch {
+      return undefined;
     }
   }
 
@@ -1316,6 +1499,17 @@ class CliPermissionError extends Error {
     super(message);
     this.name = "CliPermissionError";
   }
+}
+
+class CliSkillError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CliSkillError";
+  }
+}
+
+function sameSkillIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((skillId, index) => skillId === right[index]);
 }
 
 function activeStatus(state: CliViewState, runId: RunId): RunStatus {

@@ -282,12 +282,14 @@ function usageFixture(options: {
 }
 
 function getV4(service: SessionPresentationService) {
-  const getter = (service as unknown as {
-    getSessionPresentationV4?: (
-      sessionId: SessionId,
-      query: unknown,
-    ) => Promise<SessionTurnPresentationResponseV4>;
-  }).getSessionPresentationV4;
+  const getter = (
+    service as unknown as {
+      getSessionPresentationV4?: (
+        sessionId: SessionId,
+        query: unknown,
+      ) => Promise<SessionTurnPresentationResponseV4>;
+    }
+  ).getSessionPresentationV4;
   expect(getter).toBeTypeOf("function");
   return getter?.call(service, SESSION_ID, {});
 }
@@ -332,7 +334,9 @@ describe("Skill V4 session presentation", () => {
         toolInvocations: routeStorage.toolInvocations,
         observations: routeStorage.observations,
         eventReader: routeStorage.eventReader,
-        toolPresentation: new CaelushToolPresentation({ terminalOutputSanitizer: (value) => value }),
+        toolPresentation: new CaelushToolPresentation({
+          terminalOutputSanitizer: (value) => value,
+        }),
       }),
     });
     const created = await app.inject({
@@ -367,7 +371,9 @@ describe("Skill V4 session presentation", () => {
     const turn = before!.turns[0]!;
     const user = turn.items.find((item) => item.kind === "USER");
     expect(user).toMatchObject({
-      selectedSkills: [{ skillId: manualSkillId, name: "review-helper", displayName: "Review helper" }],
+      selectedSkills: [
+        { skillId: manualSkillId, name: "review-helper", displayName: "Review helper" },
+      ],
     });
     expect(turn.items.filter((item) => item.kind === "SKILL")).toEqual(
       expect.arrayContaining([
@@ -423,19 +429,22 @@ describe("Skill V4 session presentation", () => {
     ["RUNNING", "STREAMING", "READING"],
     ["FAILED", "FAILED", "FAILED"],
     ["CANCELLED", "CANCELLED", "FAILED"],
-  ] as const)("projects %s read_skill as a safe %s state", async (invocationStatus, itemStatus, skillStatus) => {
-    const fixture = usageFixture({
-      invocationStatus,
-      hasAutomaticBinding: false,
-      ...(invocationStatus === "FAILED" ? { isError: true } : {}),
-    });
-    const response = await getV4(fixture.service);
-    expect(response).toBeDefined();
-    const item = response!.turns[0]!.items.find(
-      (candidate) => candidate.kind === "SKILL" && candidate.skillId === automaticSkillId,
-    );
-    expect(item).toMatchObject({ kind: "SKILL", status: itemStatus, skillStatus });
-    expect(JSON.stringify(response)).not.toContain("private skill body");
-    expect(JSON.stringify(response)).not.toContain("D:\\\\private");
-  });
+  ] as const)(
+    "projects %s read_skill as a safe %s state",
+    async (invocationStatus, itemStatus, skillStatus) => {
+      const fixture = usageFixture({
+        invocationStatus,
+        hasAutomaticBinding: false,
+        ...(invocationStatus === "FAILED" ? { isError: true } : {}),
+      });
+      const response = await getV4(fixture.service);
+      expect(response).toBeDefined();
+      const item = response!.turns[0]!.items.find(
+        (candidate) => candidate.kind === "SKILL" && candidate.skillId === automaticSkillId,
+      );
+      expect(item).toMatchObject({ kind: "SKILL", status: itemStatus, skillStatus });
+      expect(JSON.stringify(response)).not.toContain("private skill body");
+      expect(JSON.stringify(response)).not.toContain("D:\\\\private");
+    },
+  );
 });

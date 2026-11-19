@@ -3,6 +3,7 @@ import {
   createRunId,
   createSessionId,
   createStepId,
+  createTimestampMs,
   createVerificationPlanId,
   createWorkspaceId,
   type PublicRunEvent,
@@ -60,6 +61,104 @@ describe("CLI terminal lifecycle", () => {
     });
     expect(JSON.stringify(controller.getState())).not.toContain("ignored");
     expect(controller.getState().composerEnabled).toBe(true);
+  });
+
+  it("refreshes safe V4 Skill usage at terminal settlement", async () => {
+    const session = makeSession();
+    const run = makeRun("complete with a Skill", { sessionId: session.id });
+    const completed = makeRun("complete with a Skill", {
+      id: run.id,
+      sessionId: session.id,
+      status: "COMPLETED",
+      finishedAt: 3,
+    });
+    const skillId = "project:review-notes";
+    const skill = {
+      skillId,
+      name: "review-notes",
+      selectionToken: "opaque-selection-token",
+      enabled: true,
+      userInvocable: true,
+      modelInvocable: false,
+    };
+    const targetedReads: unknown[] = [];
+    const client = makeClient({
+      getSkillCapabilities: async () => ({
+        schemaVersion: 1,
+        enabled: true,
+        catalog: true,
+        invocation: true,
+        scriptExecution: false,
+        presentationVersion: 4,
+      }),
+      listSkills: async () => ({
+        schemaVersion: 1,
+        catalogRevision: "revision-1",
+        items: [skill],
+        complete: true,
+        diagnostics: [],
+      }),
+      getSubmissionSkillPreparation: async (_sessionId, runId) => ({
+        schemaVersion: 1,
+        runId,
+        userText: "complete with a Skill",
+        preparationStatus: "CONTENT_READY",
+        selectedSkills: [{ skillId, name: "review-notes" }],
+      }),
+      createRun: async () => run,
+      watchRunEvents: async function* () {
+        yield terminalEvent(run, "run.completed", { result: { ignored: true } });
+      },
+      startRun: async () => actionResponse(makeRun(run.goal, { ...run, status: "RUNNING" })),
+      getRun: async () => completed,
+      getSessionTranscript: async () => ({ items: [] }),
+      listRuns: async () => ({ items: [completed] }),
+      getSessionTurnPresentationV4: async (sessionId, query) => {
+        targetedReads.push([sessionId, query]);
+        return {
+          capabilityVersion: 4,
+          turns: [
+            {
+              runId: run.id,
+              conversationTurnId: run.id,
+              runStatus: "COMPLETED",
+              openedAt: createTimestampMs(1),
+              closedAt: createTimestampMs(3),
+              highWatermark: 1,
+              items: [
+                {
+                  id: `${run.id}:skill:${skillId}`,
+                  runId: run.id,
+                  conversationTurnId: run.id,
+                  ordinal: 0,
+                  status: "COMPLETED",
+                  createdAt: createTimestampMs(2),
+                  kind: "SKILL",
+                  skillId,
+                  name: "review-notes",
+                  skillStatus: "LOADED",
+                },
+              ],
+            },
+          ],
+        };
+      },
+    });
+    const controller = new CliConversationController({
+      client,
+      workspacePath: "C:\\workspace\\project",
+      launchIntent: { kind: "RESUME_EXACT", sessionId: session.id, skillNames: ["review-notes"] },
+    });
+    await controller.bootstrap();
+
+    await controller.submitPrompt("complete with a Skill");
+    await waitFor(() => controller.getState().activeRun === undefined);
+
+    expect(targetedReads).toEqual([[session.id, { runId: run.id }]]);
+    expect(controller.getState().skillRunStatuses).toEqual([
+      { skillId, name: "review-notes", status: "LOADED" },
+    ]);
+    controller.dispose();
   });
 
   it("renders non-completed canonical status without fabricating an assistant answer", async () => {

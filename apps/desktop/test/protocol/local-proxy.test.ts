@@ -110,6 +110,8 @@ describe("Main-owned Desktop Daemon proxy", () => {
     "caelush-app://app/api/v1/%25252e%25252e/health",
     "caelush-app://app/api/v1/runs/%2fetc/events",
     "caelush-app://app/api/v1/runs/%25252fetc/events",
+    "caelush-app://app/api/v1/health/notes%3Aunsafe",
+    "caelush-app://app/api/v1/workspaces/wsp_91cb0bb7-3599-7332-9a36-d28046e20350/skills/not%3Acanonical/other",
     "caelush-app://app/api/v1x/health",
   ])("rejects unsafe proxy URL %s", async (source) => {
     const fetcher = vi.fn<typeof fetch>();
@@ -119,6 +121,41 @@ describe("Main-owned Desktop Daemon proxy", () => {
     expect((await setup.proxy.handle(request)).status).toBe(400);
     expect(fetcher).not.toHaveBeenCalled();
     expect(setup.acquireLease).not.toHaveBeenCalled();
+  });
+
+  it("forwards a canonical Skill settings route with its versioned Skill ID", async () => {
+    let receivedUrl = "";
+    let receivedInit: RequestInit | undefined;
+    const setup = createProxy(async (input, init) => {
+      receivedUrl = String(input);
+      receivedInit = init;
+      return new Response(JSON.stringify({ schemaVersion: 1 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const workspaceId = "wsp_91cb0bb7-3599-7332-9a36-d28046e20350";
+    const skillId = `skill:v1:${"a".repeat(64)}`;
+    const path = `/api/v1/workspaces/${workspaceId}/skills/${encodeURIComponent(skillId)}/settings`;
+
+    const response = await setup.proxy.handle(
+      rendererRequest({
+        path,
+        method: "PATCH",
+        body: JSON.stringify({
+          enabled: true,
+          modelInvocable: false,
+          expectedCatalogRevision: `sha256:${"b".repeat(64)}`,
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ schemaVersion: 1 });
+    expect(receivedUrl).toBe(`http://127.0.0.1:43219${path}`);
+    expect(receivedInit?.method).toBe("PATCH");
+    expect(await new Response(receivedInit?.body).text()).toContain('"modelInvocable":false');
+    expect(setup.release).toHaveBeenCalledOnce();
   });
 
   it("rejects a Renderer Host Token and strips other identity credentials", async () => {

@@ -10,6 +10,16 @@ const sessionWorkspaceSource = readFileSync(
 );
 
 describe("responsive workspace layout", () => {
+  it("keeps the mobile sidebar backdrop behind the interactive sidebar", () => {
+    const backdropLayers = [...styles.matchAll(/\.sidebar-backdrop\s*\{([^}]*)\}/gu)]
+      .map((rule) => rule[1]?.match(/z-index:\s*(\d+)/u)?.[1])
+      .filter((layer): layer is string => layer !== undefined)
+      .map(Number);
+
+    expect(backdropLayers.length).toBeGreaterThan(0);
+    expect(backdropLayers.every((layer) => layer < 30)).toBe(true);
+  });
+
   it("does not render a desktop top navigation bar outside the two-panel shell", () => {
     expect(appSource).not.toContain('className: "web-topbar"');
     expect(appSource).toMatch(

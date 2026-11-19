@@ -16,7 +16,7 @@ import {
   type SessionListResponse,
   type WorkspaceSecurityCapabilitiesResponse,
 } from "@caelush/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CaelushClientProtocolError } from "@caelush/client";
 import {
   CliConversationController,
@@ -31,6 +31,299 @@ const defaultRunConfiguration: DefaultRunConfiguration = {
 };
 
 describe("CliConversationController", () => {
+  it("resolves repeated manual Skill names through the daemon and submits the selection receipt", async () => {
+    const workspace = { id: createWorkspaceId(), path: "C:\\workspace\\project" };
+    const session = { ...makeSession(), defaultWorkspace: workspace };
+    const selected = {
+      skillId: "project:review-notes",
+      name: "review-notes",
+      description: "Review notes manually.",
+      selectionToken: "opaque-selection-token",
+      enabled: true,
+      userInvocable: true,
+      modelInvocable: false,
+    };
+    const secondSelected = {
+      ...selected,
+      skillId: "user:release-checklist",
+      name: "release-checklist",
+      selectionToken: "another-opaque-selection-token",
+    };
+    let createRunInput: Parameters<CliDaemonClient["createRun"]>[1] | undefined;
+    const receiptReads: string[] = [];
+    const client = makeClient({
+      getSkillCapabilities: async () => ({
+        schemaVersion: 1,
+        enabled: true,
+        catalog: true,
+        invocation: true,
+        scriptExecution: false,
+        presentationVersion: 4,
+      }),
+      listSkills: async (workspaceId, query) => {
+        expect(workspaceId).toBe(workspace.id);
+        return {
+          schemaVersion: 1,
+          catalogRevision: "revision-1",
+          items:
+            query.q === selected.name
+              ? [selected]
+              : query.q === secondSelected.name
+                ? [secondSelected]
+                : [],
+          complete: true,
+          diagnostics: [],
+        };
+      },
+      getSession: async () => session,
+      getSessionTranscript: async () => ({ items: [] }),
+      listRuns: async (): Promise<RunListResponse> => ({ items: [] }),
+      createRun: async (_sessionId, input) => {
+        createRunInput = input;
+        return makeRun(input.goal);
+      },
+      getSubmissionSkillPreparation: async (_sessionId, runId) => {
+        receiptReads.push(runId);
+        return {
+          schemaVersion: 1,
+          runId,
+          userText: "review the changes",
+          preparationStatus: "CONTENT_READY",
+          selectedSkills: [
+            { skillId: selected.skillId, name: selected.name },
+            { skillId: secondSelected.skillId, name: secondSelected.name },
+          ],
+        };
+      },
+      startRun: async () => actionResponse(makeRun("review the changes")),
+    });
+    const controller = new CliConversationController({
+      client,
+      workspacePath: workspace.path,
+      launchIntent: {
+        kind: "RESUME_EXACT",
+        sessionId: session.id,
+        skillNames: ["review-notes", "release-checklist"],
+      },
+    });
+
+    await controller.bootstrap();
+    await controller.submitPrompt("review the changes");
+
+    expect(createRunInput).toMatchObject({
+      submissionId: expect.any(String),
+      skillSelections: [
+        { skillId: selected.skillId, selectionToken: selected.selectionToken },
+        { skillId: secondSelected.skillId, selectionToken: secondSelected.selectionToken },
+      ],
+    });
+    expect(receiptReads).toHaveLength(1);
+    expect(controller.getState().skillPreparation).toMatchObject({
+      preparationStatus: "CONTENT_READY",
+      selectedSkills: [{ name: "review-notes" }, { name: "release-checklist" }],
+    });
+    controller.dispose();
+  });
+
+  it("continues resolving an exact manual Skill name on a later catalog page", async () => {
+    const workspace = { id: createWorkspaceId(), path: "C:\\workspace\\project" };
+    const session = { ...makeSession(), defaultWorkspace: workspace };
+    const exact = {
+      skillId: "project:target-skill",
+      name: "target-skill",
+      description: "Exact match on page two.",
+      selectionToken: "fresh-token",
+      enabled: true,
+      userInvocable: true,
+      modelInvocable: false,
+    };
+    const decoys = Array.from({ length: 100 }, (_, index) => ({
+      ...exact,
+      skillId: `project:decoy-${String(index)}`,
+      name: `decoy-${String(index)}`,
+      description: "target-skill appears only in the description",
+    }));
+    const cursors: (string | undefined)[] = [];
+    let createRunInput: Parameters<CliDaemonClient["createRun"]>[1] | undefined;
+    const controller = new CliConversationController({
+      client: makeClient({
+        getSkillCapabilities: async () => ({
+          schemaVersion: 1,
+          enabled: true,
+          catalog: true,
+          invocation: true,
+          scriptExecution: false,
+          presentationVersion: 4,
+        }),
+        listSkills: async (_workspaceId, query) => {
+          cursors.push(query.cursor);
+          return query.cursor === undefined
+            ? {
+                schemaVersion: 1,
+                catalogRevision: "revision-1",
+                items: decoys,
+                complete: false,
+                nextCursor: "page-two",
+              }
+            : {
+                schemaVersion: 1,
+                catalogRevision: "revision-1",
+                items: [exact],
+                complete: true,
+                diagnostics: [],
+              };
+        },
+        getSession: async () => session,
+        getSessionTranscript: async () => ({ items: [] }),
+        listRuns: async (): Promise<RunListResponse> => ({ items: [] }),
+        createRun: async (_sessionId, input) => {
+          createRunInput = input;
+          return makeRun(input.goal);
+        },
+        getSubmissionSkillPreparation: async (_sessionId, runId) => ({
+          schemaVersion: 1,
+          runId,
+          userText: "Use the later result",
+          preparationStatus: "CONTENT_READY",
+          selectedSkills: [{ skillId: exact.skillId as never, name: exact.name }],
+        }),
+      }),
+      workspacePath: workspace.path,
+      launchIntent: { kind: "RESUME_EXACT", sessionId: session.id, skillNames: [exact.name] },
+    });
+
+    await controller.bootstrap();
+    await controller.submitPrompt("Use the later result");
+
+    expect(cursors).toEqual([undefined, "page-two"]);
+    expect(createRunInput?.skillSelections).toEqual([
+      { skillId: exact.skillId, selectionToken: exact.selectionToken },
+    ]);
+    controller.dispose();
+  });
+
+  it("retains and starts the created Run when its follow-up Skill receipt read fails", async () => {
+    const workspace = { id: createWorkspaceId(), path: "C:\\workspace\\project" };
+    const session = { ...makeSession(), defaultWorkspace: workspace };
+    const createdRun = makeRun("Use this Skill");
+    const createRun = vi.fn<CliDaemonClient["createRun"]>(async () => createdRun);
+    const startRun = vi.fn<CliDaemonClient["startRun"]>(async () => actionResponse(createdRun));
+    const controller = new CliConversationController({
+      client: makeClient({
+        getSkillCapabilities: async () => ({
+          schemaVersion: 1,
+          enabled: true,
+          catalog: true,
+          invocation: true,
+          scriptExecution: false,
+          presentationVersion: 4,
+        }),
+        listSkills: async () => ({
+          schemaVersion: 1,
+          catalogRevision: "revision-1",
+          items: [
+            {
+              skillId: "project:review-notes",
+              name: "review-notes",
+              description: "Review notes manually.",
+              selectionToken: "opaque-token",
+              enabled: true,
+              userInvocable: true,
+              modelInvocable: false,
+            },
+          ],
+          complete: true,
+          diagnostics: [],
+        }),
+        getSession: async () => session,
+        getSessionTranscript: async () => ({ items: [] }),
+        listRuns: async (): Promise<RunListResponse> => ({ items: [] }),
+        createRun,
+        getSubmissionSkillPreparation: async () => {
+          throw new Error("transient read failure");
+        },
+        startRun,
+      }),
+      workspacePath: workspace.path,
+      launchIntent: {
+        kind: "RESUME_EXACT",
+        sessionId: session.id,
+        skillNames: ["review-notes"],
+      },
+    });
+
+    await controller.bootstrap();
+    await controller.submitPrompt("Use this Skill");
+    await controller.submitPrompt("Do not create another Run");
+
+    expect(createRun).toHaveBeenCalledOnce();
+    expect(startRun).toHaveBeenCalledWith(createdRun.id);
+    expect(controller.getState().activeRun?.runId).toBe(createdRun.id);
+    expect(controller.getState().composerEnabled).toBe(false);
+    expect(controller.getState().skillPreparationWarning).toContain("暂时无法读取");
+    controller.dispose();
+  });
+
+  it("rejects an unknown or non-invocable Skill name before creating a Run", async () => {
+    const workspace = { id: createWorkspaceId(), path: "C:\\workspace\\project" };
+    const session = { ...makeSession(), defaultWorkspace: workspace };
+    const createRun = vi.fn<CliDaemonClient["createRun"]>(async (_sessionId, input) =>
+      makeRun(input.goal),
+    );
+    const controller = new CliConversationController({
+      client: makeClient({
+        getSkillCapabilities: async () => ({
+          schemaVersion: 1,
+          enabled: true,
+          catalog: true,
+          invocation: true,
+          scriptExecution: false,
+          presentationVersion: 4,
+        }),
+        listSkills: async () => ({
+          schemaVersion: 1,
+          catalogRevision: "revision-1",
+          items: [],
+          complete: true,
+          diagnostics: [],
+        }),
+        getSession: async () => session,
+        getSessionTranscript: async () => ({ items: [] }),
+        listRuns: async (): Promise<RunListResponse> => ({ items: [] }),
+        createRun,
+      }),
+      workspacePath: workspace.path,
+      launchIntent: { kind: "RESUME_EXACT", sessionId: session.id, skillNames: ["missing-skill"] },
+    });
+
+    await controller.bootstrap();
+
+    expect(controller.getState().fatalError).toContain("missing-skill");
+    expect(createRun).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("fails with an explicit compatibility error instead of ignoring --skill on an old daemon", async () => {
+    const workspace = { id: createWorkspaceId(), path: "C:\\workspace\\project" };
+    const session = { ...makeSession(), defaultWorkspace: workspace };
+    const controller = new CliConversationController({
+      client: makeClient({
+        getSkillCapabilities: async () => null,
+        getSession: async () => session,
+        getSessionTranscript: async () => ({ items: [] }),
+        listRuns: async (): Promise<RunListResponse> => ({ items: [] }),
+      }),
+      workspacePath: workspace.path,
+      launchIntent: { kind: "RESUME_EXACT", sessionId: session.id, skillNames: ["review-notes"] },
+    });
+
+    await controller.bootstrap();
+
+    expect(controller.getState().bootstrap).toBe("BOOTSTRAP_ERROR");
+    expect(controller.getState().fatalError).toMatch(/daemon 不支持 --skill/u);
+    controller.dispose();
+  });
+
   it("uses --continue to select a current-workspace Session without creating one", async () => {
     const workspace = { id: createWorkspaceId(), path: "C:\\workspace\\project" };
     const session = { ...makeSession(), defaultWorkspace: workspace };

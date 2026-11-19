@@ -21,10 +21,14 @@ import type {
   AttachmentOwner,
   RunStatus,
   SessionTurnPresentationResponse,
+  SessionTurnPresentationResponseV4,
   SessionTurnPresentationTurnV3,
+  SessionTurnPresentationTurnV4,
+  SkillPresentationItem,
   TurnPresentationItem,
   TurnPresentationItemV2,
   TurnPresentationItemV3,
+  TurnPresentationItemV4,
   TranscriptAttachmentRef,
 } from "@caelush/protocol";
 import {
@@ -57,6 +61,7 @@ const AssistantMarkdown = lazy(async () => {
 
 export interface TurnPresentationFeedProps {
   readonly presentation: SessionTurnPresentationResponse;
+  readonly skillPresentation?: SessionTurnPresentationResponseV4 | undefined;
   readonly theme?: ResolvedTheme | undefined;
   readonly transcriptUsers?: readonly Extract<TranscriptEntry, { kind: "USER" }>[] | undefined;
   readonly attachmentOwner?: AttachmentOwner | undefined;
@@ -72,6 +77,7 @@ export interface TurnPresentationFeedProps {
 
 export interface TurnPresentationProps {
   readonly turn: SessionTurnPresentationTurnV3;
+  readonly skillTurn?: SessionTurnPresentationTurnV4 | undefined;
   readonly theme?: ResolvedTheme | undefined;
   readonly optimisticUser?: Extract<TranscriptEntry, { kind: "USER" }> | undefined;
   readonly userAttachments?: readonly TranscriptAttachmentRef[] | undefined;
@@ -87,6 +93,7 @@ export interface TurnPresentationProps {
 
 export interface SessionConversationProps {
   readonly presentation: Extract<SessionTurnPresentationResponse, { capabilityVersion: 3 }>;
+  readonly skillPresentation?: SessionTurnPresentationResponseV4 | undefined;
   readonly theme?: ResolvedTheme | undefined;
   readonly optimisticUsers?: readonly Extract<TranscriptEntry, { kind: "USER" }>[] | undefined;
   readonly transcriptUsers?: readonly Extract<TranscriptEntry, { kind: "USER" }>[] | undefined;
@@ -158,6 +165,10 @@ export function SessionConversation(props: SessionConversationProps): ReactEleme
     () => new Map((props.transcriptUsers ?? []).map((item) => [item.runId, item])),
     [props.transcriptUsers],
   );
+  const skillTurnsByRun = useMemo(
+    () => new Map((props.skillPresentation?.turns ?? []).map((turn) => [turn.runId, turn])),
+    [props.skillPresentation?.turns],
+  );
   const runsWithTurn = useMemo(
     () => new Set(props.presentation.turns.map((turn) => turn.runId)),
     [props.presentation.turns],
@@ -220,6 +231,7 @@ export function SessionConversation(props: SessionConversationProps): ReactEleme
       return createElement(TurnPresentation, {
         key: turn.runId,
         turn,
+        skillTurn: skillTurnsByRun.get(turn.runId),
         theme: props.theme,
         ...(withoutUserItem === undefined ? {} : { optimisticUser: withoutUserItem }),
         userAttachments: transcriptUser?.attachments ?? withoutUserItem?.attachments,
@@ -285,6 +297,7 @@ function turnPresentationPropsEqual(
 ): boolean {
   return (
     previous.turn === next.turn &&
+    previous.skillTurn === next.skillTurn &&
     previous.theme === next.theme &&
     previous.activeRun?.id === next.activeRun?.id &&
     previous.activeRun?.status === next.activeRun?.status &&
@@ -333,6 +346,7 @@ function TurnPresentationView(props: TurnPresentationProps): ReactElement {
     createElement(TurnPresentationContent, {
       items: props.turn.items,
       turn: props.turn,
+      skillTurn: props.skillTurn,
       theme: props.theme ?? "light",
       ...(props.optimisticUser === undefined ? {} : { optimisticUser: props.optimisticUser }),
       userAttachments: props.userAttachments ?? props.optimisticUser?.attachments,
@@ -357,6 +371,21 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
   if (props.presentation.capabilityVersion === 3) {
     return createElement(SessionConversation, {
       presentation: props.presentation,
+      skillPresentation: props.skillPresentation,
+      theme: props.theme ?? "light",
+      transcriptUsers: props.transcriptUsers,
+      attachmentOwner: props.attachmentOwner,
+      onLoadAttachment: props.onLoadAttachment,
+      onDownloadAttachment: props.onDownloadAttachment,
+      ...(props.activeRun === undefined ? {} : { activeRun: props.activeRun }),
+      ...(props.liveActivity === undefined ? {} : { liveActivity: props.liveActivity }),
+      ...(props.timeline === undefined ? {} : { timeline: props.timeline }),
+    });
+  }
+  if (props.skillPresentation !== undefined) {
+    return createElement(SessionConversation, {
+      presentation: downgradeSkillPresentation(props.skillPresentation),
+      skillPresentation: props.skillPresentation,
       theme: props.theme ?? "light",
       transcriptUsers: props.transcriptUsers,
       attachmentOwner: props.attachmentOwner,
@@ -391,11 +420,35 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
   });
 }
 
+function downgradeSkillPresentation(
+  presentation: SessionTurnPresentationResponseV4,
+): Extract<SessionTurnPresentationResponse, { capabilityVersion: 3 }> {
+  return {
+    capabilityVersion: 3,
+    turns: presentation.turns.map((turn) => ({
+      ...turn,
+      items: turn.items
+        .flatMap<TurnPresentationItemV3>((item): TurnPresentationItemV3[] => {
+          if (item.kind === "SKILL") return [];
+          if (item.kind === "USER") {
+            const { selectedSkills: _selectedSkills, ...legacyUser } = item;
+            void _selectedSkills;
+            return [legacyUser];
+          }
+          return [item];
+        })
+        .map((item, ordinal) => ({ ...item, ordinal })),
+    })),
+    ...(presentation.nextCursor === undefined ? {} : { nextCursor: presentation.nextCursor }),
+  };
+}
+
 interface TurnPresentationContentProps {
   readonly items: readonly (
     TurnPresentationItem | TurnPresentationItemV2 | TurnPresentationItemV3
   )[];
   readonly turn?: SessionTurnPresentationTurnV3 | undefined;
+  readonly skillTurn?: SessionTurnPresentationTurnV4 | undefined;
   readonly optimisticUser?: Extract<TranscriptEntry, { kind: "USER" }> | undefined;
   readonly userAttachments?: readonly TranscriptAttachmentRef[] | undefined;
   readonly attachmentOwner?: AttachmentOwner | undefined;
@@ -536,18 +589,27 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
     (item) =>
       item.runStatus !== "COMPLETED" || !finalAnswers.some((answer) => answer.runId === item.runId),
   );
+  const openingSkillUserItemId = props.skillTurn?.items.find((item) => item.kind === "USER")?.id;
   const processItems =
-    viewModel?.processItems ??
-    presentationItems.filter(
-      (item) =>
-        item.kind !== "USER" &&
-        item.kind !== "RUN_SUMMARY" &&
-        !(item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER"),
-    );
+    props.skillTurn === undefined
+      ? (viewModel?.processItems ??
+        presentationItems.filter(
+          (item) =>
+            item.kind !== "USER" &&
+            item.kind !== "RUN_SUMMARY" &&
+            !(item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER"),
+        ))
+      : props.skillTurn.items.flatMap((item) => {
+          const projected = projectSkillProcessItem(item, openingSkillUserItemId);
+          return projected === undefined ? [] : [projected];
+        });
   const userItems =
     viewModel?.userItems ?? presentationItems.filter((item) => item.kind === "USER");
+  const selectedSkills =
+    props.skillTurn?.items.find((item) => item.kind === "USER")?.selectedSkills ?? [];
   const activityCount =
     (viewModel?.activityCount ?? processItems.length) +
+    processItems.filter((item) => item.kind === "SKILL").length +
     processActivities.length +
     modelDrafts.length;
   const hasProcess =
@@ -573,7 +635,7 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
     {
       className: "turn-presentation-feed",
     },
-    userItems.length === 0 && props.optimisticUser === undefined
+    userItems.length === 0 && props.optimisticUser === undefined && selectedSkills.length === 0
       ? null
       : createElement(
           "div",
@@ -584,6 +646,20 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
             onLoad: props.onLoadAttachment,
             onDownload: props.onDownloadAttachment,
           }),
+          selectedSkills.length === 0
+            ? null
+            : createElement(
+                "div",
+                { className: "turn-presentation-selected-skills", "aria-label": "所选技能" },
+                createElement("span", null, "技能"),
+                selectedSkills.map((skill) =>
+                  createElement(
+                    "span",
+                    { className: "turn-presentation-selected-skill", key: skill.skillId },
+                    skill.displayName ?? skill.name,
+                  ),
+                ),
+              ),
           userItems.length === 0
             ? props.optimisticUser !== undefined && props.optimisticUser.text.trim().length > 0
               ? createElement(
@@ -662,7 +738,11 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
               terminalStates.length === 0
               ? createElement("p", { className: "turn-presentation-empty" }, "正在准备任务活动……")
               : null,
-            processItems.map((item) => renderItem(item, now, item.runId === verifyingRunId)),
+            processItems.map((item) =>
+              item.kind === "SKILL"
+                ? renderSkillPresentationItem(item)
+                : renderItem(item, now, item.runId === verifyingRunId),
+            ),
             terminalStates.map((item) =>
               createElement(
                 "p",
@@ -840,6 +920,54 @@ function streamingTail(text: string): string {
   // Start at a line boundary when there is one, so the visible tail does not begin mid-word.
   const lineBreak = tail.indexOf("\n");
   return `…${lineBreak >= 0 && lineBreak < 200 ? tail.slice(lineBreak + 1) : tail}`;
+}
+
+function projectSkillProcessItem(
+  item: TurnPresentationItemV4,
+  openingUserItemId: string | undefined,
+): TurnPresentationItemV3 | SkillPresentationItem | undefined {
+  if (item.kind === "RUN_SUMMARY" || (item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER")) {
+    return undefined;
+  }
+  if (item.kind === "USER") {
+    if (item.id === openingUserItemId) return undefined;
+    const { selectedSkills: _selectedSkills, ...legacyUser } = item;
+    void _selectedSkills;
+    return legacyUser;
+  }
+  return item;
+}
+
+function renderSkillPresentationItem(item: SkillPresentationItem): ReactElement {
+  const labels = {
+    READING: "正在读取",
+    CONTENT_READY: "正文已就绪，尚未载入",
+    LOADED: "已加入上下文",
+    FAILED: "准备失败",
+  } satisfies Record<SkillPresentationItem["skillStatus"], string>;
+  const label = labels[item.skillStatus];
+  const icon =
+    item.skillStatus === "LOADED"
+      ? createElement(CircleCheck, { size: 15, "aria-hidden": true })
+      : item.skillStatus === "FAILED"
+        ? createElement(CircleX, { size: 15, "aria-hidden": true })
+        : createElement(LoaderCircle, { size: 15, "aria-hidden": true });
+  return createElement(
+    "article",
+    {
+      className: `turn-presentation-skill turn-presentation-skill--${item.skillStatus.toLowerCase()}`,
+      key: item.id,
+      role: item.skillStatus === "FAILED" ? "alert" : "status",
+      "aria-label": `${item.displayName ?? item.name}，${label}`,
+    },
+    createElement("span", { className: "turn-presentation-skill-mark", "aria-hidden": true }, icon),
+    createElement(
+      "span",
+      { className: "turn-presentation-skill-name" },
+      item.displayName ?? item.name,
+    ),
+    createElement("span", { className: "turn-presentation-skill-status" }, label),
+  );
 }
 
 function renderItem(

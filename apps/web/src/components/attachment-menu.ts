@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type ReactElement,
   type Ref,
 } from "react";
@@ -28,6 +29,9 @@ export function AttachmentMenu(props: AttachmentMenuProps): ReactElement {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [autoFocusSearch, setAutoFocusSearch] = useState(false);
   const [panelSide, setPanelSide] = useState<"left" | "right">("right");
+  const [panelShiftX, setPanelShiftX] = useState(0);
+  const [panelShiftY, setPanelShiftY] = useState(0);
+  const [panelMaxHeight, setPanelMaxHeight] = useState<number | undefined>();
   const rootRef = useRef<HTMLDivElement>(null);
   const skillButtonRef = useRef<HTMLButtonElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -46,11 +50,58 @@ export function AttachmentMenu(props: AttachmentMenuProps): ReactElement {
 
   useLayoutEffect(() => {
     if (!pickerOpen) return;
-    const bounds = rootRef.current?.getBoundingClientRect();
-    if (bounds === undefined) return;
-    const estimatedPanelWidth = Math.min(320, window.innerWidth * 0.82);
-    setPanelSide(bounds.right + estimatedPanelWidth + 12 > window.innerWidth ? "left" : "right");
-  }, [pickerOpen]);
+    const updatePlacement = () => {
+      const rootBounds = rootRef.current?.getBoundingClientRect();
+      const panel = rootRef.current?.querySelector<HTMLElement>(".skill-picker-panel");
+      const panelBounds = panel?.getBoundingClientRect();
+      if (rootBounds === undefined || panelBounds === undefined) return;
+      if (window.innerWidth <= 680) {
+        const composerBounds = rootRef.current
+          ?.closest<HTMLElement>(".prompt-composer")
+          ?.getBoundingClientRect();
+        if (composerBounds === undefined) return;
+        setPanelMaxHeight(
+          resolveMobileSkillMenuMaxHeight({
+            composerTop: composerBounds.top,
+            viewportHeight: window.innerHeight,
+          }),
+        );
+        setPanelSide("right");
+        setPanelShiftX(0);
+        setPanelShiftY(0);
+        return;
+      }
+      setPanelMaxHeight(undefined);
+      const estimatedPanelWidth = Math.min(352, window.innerWidth - 24);
+      const sidebarRight =
+        window.innerWidth > 680
+          ? Math.max(
+              0,
+              document.getElementById("caelush-workspace-sidebar")?.getBoundingClientRect().right ??
+                0,
+            )
+          : 0;
+      const placement = resolveSkillPanelPlacement({
+        viewportWidth: window.innerWidth,
+        panelWidth: estimatedPanelWidth,
+        menuLeft: rootBounds.left,
+        menuRight: rootBounds.right,
+        contentLeft: sidebarRight,
+      });
+      setPanelSide(placement.side);
+      setPanelShiftX(window.innerWidth > 680 ? placement.shiftX : 0);
+      setPanelShiftY(
+        resolveSkillPanelVerticalShift({
+          panelTop: panelBounds.top - panelShiftY,
+          panelHeight: panelBounds.height,
+          viewportHeight: window.innerHeight,
+        }),
+      );
+    };
+    updatePlacement();
+    window.addEventListener("resize", updatePlacement);
+    return () => window.removeEventListener("resize", updatePlacement);
+  }, [panelShiftY, pickerOpen]);
 
   useEffect(
     () => () => {
@@ -141,7 +192,10 @@ export function AttachmentMenu(props: AttachmentMenuProps): ReactElement {
       )
     : null;
   const skillPicker =
-    canChooseSkills && props.workspaceId !== undefined && props.listSkills !== undefined
+    pickerOpen &&
+    canChooseSkills &&
+    props.workspaceId !== undefined &&
+    props.listSkills !== undefined
       ? createElement(SkillPicker, {
           workspaceId: props.workspaceId,
           listSkills: props.listSkills,
@@ -188,6 +242,13 @@ export function AttachmentMenu(props: AttachmentMenuProps): ReactElement {
         actions[(index + offset + actions.length) % actions.length]?.focus();
       },
       "data-panel-side": panelSide,
+      style: {
+        "--skill-picker-inline-shift": `${panelShiftX}px`,
+        "--skill-picker-block-shift": `${panelShiftY}px`,
+        ...(panelMaxHeight === undefined
+          ? {}
+          : { "--skill-picker-menu-max-height": `${panelMaxHeight}px` }),
+      } as CSSProperties,
     },
     createElement(
       "span",
@@ -204,4 +265,53 @@ export function AttachmentMenu(props: AttachmentMenuProps): ReactElement {
         ),
     skillPicker,
   );
+}
+
+export function resolveSkillPanelPlacement(input: {
+  readonly viewportWidth: number;
+  readonly panelWidth: number;
+  readonly menuLeft: number;
+  readonly menuRight: number;
+  readonly contentLeft: number;
+}): { readonly side: "left" | "right"; readonly shiftX: number } {
+  const gutter = 12;
+  const gap = 8;
+  const minimumLeft = Math.min(input.contentLeft + gutter, input.viewportWidth - gutter);
+  const maximumLeft = Math.max(gutter, input.viewportWidth - gutter - input.panelWidth);
+  const rightLeft = input.menuRight + gap;
+  if (rightLeft <= maximumLeft) return { side: "right", shiftX: 0 };
+
+  const preferredLeft = input.menuLeft - input.panelWidth - gap;
+  if (preferredLeft >= minimumLeft && preferredLeft <= maximumLeft) {
+    return { side: "left", shiftX: 0 };
+  }
+
+  const clampedLeft = Math.min(Math.max(preferredLeft, minimumLeft), maximumLeft);
+  const shift = clampedLeft - preferredLeft;
+  return {
+    side: "left",
+    shiftX: shift > 0 ? Math.ceil(shift) : Math.floor(shift),
+  };
+}
+
+export function resolveSkillPanelVerticalShift(input: {
+  readonly panelTop: number;
+  readonly panelHeight: number;
+  readonly viewportHeight: number;
+  readonly gutter?: number;
+}): number {
+  const gutter = Math.max(0, input.gutter ?? 12);
+  const minimumTop = gutter;
+  const maximumTop = Math.max(minimumTop, input.viewportHeight - input.panelHeight - gutter);
+  const targetTop = Math.min(Math.max(input.panelTop, minimumTop), maximumTop);
+  const shift = targetTop - input.panelTop;
+  return shift > 0 ? Math.ceil(shift) : Math.floor(shift);
+}
+
+export function resolveMobileSkillMenuMaxHeight(input: {
+  readonly composerTop: number;
+  readonly viewportHeight: number;
+}): number {
+  const gutter = 12;
+  return Math.max(0, Math.min(input.viewportHeight - gutter * 2, input.composerTop - gutter * 2));
 }

@@ -412,7 +412,7 @@ describe("frozen Skill script execution resources", () => {
         });
         expect(composition.toolRegistry.names()).toHaveLength(16);
         expect(composition.skillFeatureReadiness).toMatchObject({
-          invocationReady: false,
+          invocationReady: true,
           scriptExecutionReady: false,
         });
 

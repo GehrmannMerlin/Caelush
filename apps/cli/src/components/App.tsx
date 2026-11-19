@@ -134,7 +134,12 @@ export function App({ controller, writeMessage = defaultWriteMessage }: AppProps
         <Text color="yellow">{state.transportError}</Text>
       )}
       {state.controlError === undefined ? null : <Text color="yellow">{state.controlError}</Text>}
-      <ActivityStatus activity={state.activity} />
+      <ActivityStatus
+        activity={state.activity}
+        skillPreparation={state.skillPreparation}
+        skillRunStatuses={state.skillRunStatuses}
+        skillPreparationWarning={state.skillPreparationWarning}
+      />
       {state.fatalError === undefined ? (
         <Composer
           enabled={state.composerEnabled}

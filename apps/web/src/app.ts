@@ -1,5 +1,6 @@
 import {
   createElement,
+  Fragment,
   lazy,
   Suspense,
   useCallback,
@@ -15,7 +16,6 @@ import type {
   AttachmentId,
   AttachmentDraftItem,
   AttachmentOwner,
-  SkillCapabilityResponse,
   TranscriptAttachmentRef,
   SessionId,
   SkillCatalogItemV1,
@@ -50,7 +50,11 @@ import { SkillSelectionStore } from "./application/skill-selection-store.js";
 import {
   ComposerSubmissionDraftSchema,
   createInitialSkillSubmissionState,
+  hasSubmissionSkillLoadFailure,
+  hasSubmissionSkillLoadReceipt,
   reduceSkillSubmission,
+  shouldSuppressStaleReceiptDraftMirror,
+  transitionSkillSubmission,
   type ComposerSubmissionDraft,
   type SkillSubmissionEvent,
   type SkillSubmissionState,
@@ -73,7 +77,16 @@ import { importLegacySessionArchives } from "./application/legacy-archive-import
 import { sessionArchiveStore } from "./application/session-archive-store.js";
 import { archiveErrorMessage } from "./application/archive-errors.js";
 import { resolveComposerCapabilities } from "./application/composer-state.js";
+import {
+  canSubmitManualSkillSelections,
+  claimSkillPreparationRefresh,
+  canOpenSkillManager,
+  isComposerDraftLoading,
+  resolveSkillCapabilityReadState,
+  type SkillCapabilityReadState,
+} from "./application/skill-workbench-availability.js";
 import { PromptComposer } from "./components/prompt-composer.js";
+import { SkillManager, type SkillManagerClient } from "./components/skill-manager.js";
 import type { SelectedSkillTag } from "./components/selected-skill-list.js";
 import { SessionWorkspace } from "./components/session-workspace.js";
 import { WorkbenchAppearanceRoute } from "./components/appearance-page.js";
@@ -180,6 +193,7 @@ export function WebHostApp(props: {
   const [workspacePickerBusy, setWorkspacePickerBusy] = useState(false);
   const [workspaceActionError, setWorkspaceActionError] = useState<string | undefined>();
   const [settingsOpen, setSettingsOpen] = useState(props.initialSettingsOpen ?? false);
+  const [skillManagerOpen, setSkillManagerOpen] = useState(false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [archivesOpen, setArchivesOpen] = useState(false);
   const [desktopPanelApi, setDesktopPanelApi] = useState<DesktopPanelApi | null>(null);
@@ -329,14 +343,42 @@ export function WebHostApp(props: {
       listSkills: listSkills.bind(props.client),
     });
   }, [props.client]);
+  const skillManagerClient = useMemo<SkillManagerClient | undefined>(() => {
+    const listManagedSkills = props.client.listManagedSkills;
+    const updateSkillSettings = props.client.updateSkillSettings;
+    const importSkills = props.client.importSkills;
+    if (
+      listManagedSkills === undefined ||
+      updateSkillSettings === undefined ||
+      importSkills === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      listManagedSkills: listManagedSkills.bind(props.client),
+      updateSkillSettings: updateSkillSettings.bind(props.client),
+      importSkills: importSkills.bind(props.client),
+    };
+  }, [props.client]);
   const skillSelectionStore = useMemo(() => new SkillSelectionStore(), []);
   const [composerDraft, setComposerDraft] = useState<ComposerDraftBinding | undefined>();
   const [skillSubmissionBinding, setSkillSubmissionBinding] = useState<
     SkillSubmissionBinding | undefined
   >();
-  const [skillCapabilities, setSkillCapabilities] = useState<SkillCapabilityResponse | undefined>();
+  const [skillCapabilityRead, setSkillCapabilityRead] = useState<SkillCapabilityReadState>({
+    status: "PENDING",
+  });
+  const [skillCapabilityRetry, setSkillCapabilityRetry] = useState(0);
   const skillCatalogItems = useRef(new Map<string, SkillCatalogItemV1>());
-  const skillSubmissionBindingRef = useRef<SkillSubmissionBinding | undefined>();
+  const skillSubmissionBindingRef = useRef<SkillSubmissionBinding | undefined>(undefined);
+  const receiptMirrorSuppression = useRef<
+    | {
+        readonly ownerKey: string;
+        readonly submittedDraft: Pick<ComposerSubmissionDraft, "userText" | "attachments">;
+      }
+    | undefined
+  >(undefined);
+  const requestedPreparationReads = useRef(new Set<string>());
   const draftLoadGeneration = useRef(0);
   const skillDraftLoadGeneration = useRef(0);
 
@@ -402,21 +444,37 @@ export function WebHostApp(props: {
   );
 
   useEffect(() => {
-    setSkillCapabilities(undefined);
-    if (state.bootstrap !== "READY" || skillCatalogStore === undefined) return undefined;
+    setSkillCapabilityRead({ status: "PENDING" });
+    if (state.bootstrap !== "READY") return undefined;
+    if (skillCatalogStore === undefined) {
+      setSkillCapabilityRead({ status: "UNAVAILABLE" });
+      return undefined;
+    }
     let active = true;
+    let retryTimer: number | undefined;
     void skillCatalogStore
       .getCapabilities()
       .then((capabilities) => {
-        if (active && capabilities !== null) setSkillCapabilities(capabilities);
+        if (active) setSkillCapabilityRead(resolveSkillCapabilityReadState(capabilities));
       })
       .catch(() => {
-        if (active) setSkillCapabilities(undefined);
+        if (active) {
+          setSkillCapabilityRead({ status: "FAILED" });
+          retryTimer = window.setTimeout(() => {
+            if (active) setSkillCapabilityRetry((attempt) => attempt + 1);
+          }, 3_000);
+        }
       });
     return () => {
       active = false;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [skillCatalogStore, state.bootstrap]);
+  }, [skillCatalogStore, skillCapabilityRetry, state.bootstrap]);
+
+  const skillCapabilities =
+    skillCapabilityRead.status === "AVAILABLE" || skillCapabilityRead.status === "UNAVAILABLE"
+      ? skillCapabilityRead.capabilities
+      : undefined;
 
   const attachmentOwner = useMemo<AttachmentOwner | undefined>(() => {
     if (selectedWorkspace === undefined) return undefined;
@@ -455,13 +513,14 @@ export function WebHostApp(props: {
     (owner: AttachmentOwner, event: SkillSubmissionEvent): SkillSubmissionState => {
       const key = ownerKey(owner);
       const current = skillSelectionStore.load(owner) ?? createInitialSkillSubmissionState();
-      const next = reduceSkillSubmission(current, event);
-      const saved = next === current ? current : skillSelectionStore.save(owner, next);
-      const binding = skillSubmissionBindingRef.current;
-      if (binding?.ownerKey === key) {
-        publishSkillSubmissionBinding({ ownerKey: key, state: saved, loading: false });
-      }
-      return saved;
+      return transitionSkillSubmission(current, event, (next) => {
+        const saved = skillSelectionStore.save(owner, next);
+        const binding = skillSubmissionBindingRef.current;
+        if (binding?.ownerKey === key) {
+          publishSkillSubmissionBinding({ ownerKey: key, state: saved, loading: false });
+        }
+        return saved;
+      });
     },
     [publishSkillSubmissionBinding, skillSelectionStore],
   );
@@ -641,6 +700,26 @@ export function WebHostApp(props: {
     ) {
       return;
     }
+    const mirrorSuppression = receiptMirrorSuppression.current;
+    if (mirrorSuppression !== undefined) {
+      if (
+        shouldSuppressStaleReceiptDraftMirror(
+          mirrorSuppression.ownerKey,
+          attachmentOwnerKey,
+          binding.state.draft,
+          {
+            userText: attachmentDraftBinding.text,
+            attachments: attachmentManager?.getReadyAttachmentIds(attachmentOwner) ?? [],
+          },
+          mirrorSuppression.submittedDraft,
+        )
+      ) {
+        return;
+      }
+      if (mirrorSuppression.ownerKey !== attachmentOwnerKey) {
+        receiptMirrorSuppression.current = undefined;
+      }
+    }
     const attachments = attachmentManager?.getReadyAttachmentIds(attachmentOwner) ?? [];
     updateSkillSubmission(attachmentOwner, {
       type: "DRAFT_CHANGED",
@@ -679,6 +758,15 @@ export function WebHostApp(props: {
       const sameSubmittedVersion =
         before.draft.draftVersion === draftVersion &&
         sameSkillDraftContent(before.draft, accepted.draft);
+      if (sameSubmittedVersion && attachmentDraftStore !== undefined) {
+        receiptMirrorSuppression.current = {
+          ownerKey: attachmentOwnerKey,
+          submittedDraft: {
+            userText: accepted.draft.userText,
+            attachments: accepted.draft.attachments,
+          },
+        };
+      }
       const next = reduceSkillSubmission(before, {
         type: "PREPARED_INPUT_RECEIVED",
         runId,
@@ -755,42 +843,54 @@ export function WebHostApp(props: {
     ],
   );
 
-  useEffect(() => {
-    const owner = attachmentOwner;
-    const binding = skillSubmissionBinding;
-    const accepted =
-      binding?.ownerKey === attachmentOwnerKey ? binding.state.acceptedSubmission : undefined;
-    if (owner === undefined || accepted === undefined || binding?.loading === true) {
-      return;
-    }
-    if (owner.kind === "SESSION") {
-      void sessionManager?.refreshSkillPreparation(owner.sessionId, accepted.runId);
-    }
+  const acceptedForCurrentOwner =
+    skillSubmissionBinding !== undefined &&
+    skillSubmissionBinding.ownerKey === attachmentOwnerKey &&
+    !skillSubmissionBinding.loading
+      ? skillSubmissionBinding.state.acceptedSubmission
+      : undefined;
 
-    const receipt = sessionSnapshot.skillPreparation;
+  useEffect(() => {
     if (
-      receipt !== undefined &&
-      receipt.runId === accepted.runId &&
-      receipt.userText === accepted.draft.userText.trim() &&
-      sameSkillIds(
-        receipt.selectedSkills.map((skill) => skill.skillId),
-        accepted.draft.skillSelections.map((selection) => selection.skillId),
+      attachmentOwner?.kind !== "SESSION" ||
+      attachmentOwnerKey === undefined ||
+      acceptedForCurrentOwner === undefined ||
+      !claimSkillPreparationRefresh(
+        requestedPreparationReads.current,
+        attachmentOwnerKey,
+        acceptedForCurrentOwner.runId,
+        acceptedForCurrentOwner.submissionId,
+        acceptedForCurrentOwner.draftVersion,
       )
     ) {
-      void onPreparedInputReceipt(receipt.runId, accepted.submissionId, accepted.draftVersion);
       return;
     }
+    void sessionManager?.refreshSkillPreparation(
+      attachmentOwner.sessionId,
+      acceptedForCurrentOwner.runId,
+    );
+  }, [
+    acceptedForCurrentOwner?.draftVersion,
+    acceptedForCurrentOwner?.runId,
+    acceptedForCurrentOwner?.submissionId,
+    attachmentOwner,
+    attachmentOwnerKey,
+    sessionManager,
+  ]);
+
+  useEffect(() => {
+    const owner = attachmentOwner;
+    const accepted = acceptedForCurrentOwner;
+    if (owner === undefined || accepted === undefined) return;
 
     const turn = sessionSnapshot.skillPresentation?.turns.find(
       (item) => item.runId === accepted.runId,
     );
-    const expectedSkills = new Set(accepted.draft.skillSelections.map((item) => item.skillId));
     if (
-      turn?.items.some(
-        (item) =>
-          item.kind === "SKILL" &&
-          expectedSkills.has(item.skillId) &&
-          item.skillStatus === "FAILED",
+      hasSubmissionSkillLoadFailure(
+        accepted.runId,
+        accepted.draft.skillSelections.map((item) => item.skillId),
+        turn,
       )
     ) {
       updateSkillSubmission(owner, {
@@ -799,12 +899,16 @@ export function WebHostApp(props: {
         submissionId: accepted.submissionId,
         draftVersion: accepted.draftVersion,
       });
+      return;
+    }
+
+    if (hasSubmissionSkillLoadReceipt(accepted, sessionSnapshot.skillPreparation, turn)) {
+      void onPreparedInputReceipt(accepted.runId, accepted.submissionId, accepted.draftVersion);
     }
   }, [
     attachmentOwner,
     attachmentOwnerKey,
     onPreparedInputReceipt,
-    sessionManager,
     sessionSnapshot.skillPreparation,
     sessionSnapshot.skillPresentation,
     skillSubmissionBinding,
@@ -958,7 +1062,7 @@ export function WebHostApp(props: {
             item.mediaType === "image/webp",
           downloadAvailable: true,
         }));
-        await sessionManager.submitPrompt({
+        const accepted = await sessionManager.submitPrompt({
           text,
           attachmentIds: artifactIds,
           ...(prepared.submissionId === undefined ? {} : { submissionId: prepared.submissionId }),
@@ -1052,6 +1156,11 @@ export function WebHostApp(props: {
       }
       const parsed = ComposerSubmissionDraftSchema.safeParse(input);
       if (!parsed.success) return undefined;
+      if (
+        !canSubmitManualSkillSelections(skillCapabilityRead, parsed.data.skillSelections.length)
+      ) {
+        return undefined;
+      }
       const sourceOwner = attachmentOwner;
       const sourceOwnerKey = attachmentOwnerKey;
       const sourceState = skillSelectionStore.load(sourceOwner);
@@ -1149,8 +1258,7 @@ export function WebHostApp(props: {
           loading: false,
         });
 
-        const existingRunIds = new Set(sessionManager.getSnapshot().runs.map((run) => run.id));
-        const accepted = await sessionManager.submitPrompt({
+        const submissionResult = await sessionManager.submitPromptWithResult({
           text: parsed.data.userText,
           attachmentIds: parsed.data.attachments,
           skillSelections: parsed.data.skillSelections,
@@ -1168,17 +1276,9 @@ export function WebHostApp(props: {
           })),
         });
 
-        const postSubmitSnapshot = sessionManager.getSnapshot();
-        const createdRun =
-          postSubmitSnapshot.runs.find(
-            (run) =>
-              run.sessionId === postSubmitSnapshot.selectedSessionId && !existingRunIds.has(run.id),
-          ) ??
-          (postSubmitSnapshot.activeRun !== undefined &&
-          !existingRunIds.has(postSubmitSnapshot.activeRun.id)
-            ? postSubmitSnapshot.activeRun
-            : undefined);
-        const createdSessionId = postSubmitSnapshot.selectedSessionId;
+        const createdRun = submissionResult.run;
+        const createdSessionId =
+          submissionResult.session?.id ?? sessionManager.getSnapshot().selectedSessionId;
         if (sourceOwner.kind === "WORKSPACE" && createdSessionId !== undefined) {
           const targetOwner: AttachmentOwner = { kind: "SESSION", sessionId: createdSessionId };
           const latestSourceState = skillSelectionStore.load(sourceOwner) ?? pendingState;
@@ -1248,7 +1348,6 @@ export function WebHostApp(props: {
               state: acceptedState,
               loading: false,
             });
-            void sessionManager.refreshSkillPreparation(createdRun.sessionId, createdRun.id);
           }
           return { runId: createdRun.id, submissionId, draftVersion: parsed.data.draftVersion };
         }
@@ -1265,6 +1364,28 @@ export function WebHostApp(props: {
             state: failedState,
             loading: false,
           });
+        }
+        const submitError = sessionManager.getSnapshot().error;
+        if (submitError?.reasonCode === "SKILL_SELECTION_STALE") {
+          const failedOwnerKey = ownerKey(ownerForPending);
+          const failedDraft = skillSelectionStore.load(ownerForPending)?.draft ?? parsed.data;
+          const workspaceId = selectedWorkspace?.id;
+          if (workspaceId !== undefined) {
+            const refreshController = new AbortController();
+            void listSkills({ workspaceId, query: "", signal: refreshController.signal }).catch(
+              () => undefined,
+            );
+          }
+          setComposerDraft((previous) => ({
+            ownerKey: failedOwnerKey,
+            revision:
+              previous?.ownerKey === failedOwnerKey
+                ? previous.revision
+                : (savedAttachmentDraft?.revision ?? 0),
+            text: failedDraft.userText,
+            loading: false,
+            error: "技能选择已过期，目录已刷新；请移除过期标签并重新选择。文字草稿已保留。",
+          }));
         }
         return undefined;
       } catch (error) {
@@ -1300,8 +1421,11 @@ export function WebHostApp(props: {
       attachmentManager,
       attachmentOwner,
       attachmentOwnerKey,
+      listSkills,
       publishSkillSubmissionBinding,
+      selectedWorkspace?.id,
       sessionManager,
+      skillCapabilityRead,
       skillSelectionStore,
       submitComposerPrompt,
       updateSkillSubmission,
@@ -1479,7 +1603,9 @@ export function WebHostApp(props: {
       : undefined;
 
   const skillDraftBinding =
-    skillSubmissionBinding?.ownerKey === attachmentOwnerKey && !skillSubmissionBinding.loading
+    skillSubmissionBinding !== undefined &&
+    skillSubmissionBinding.ownerKey === attachmentOwnerKey &&
+    !skillSubmissionBinding.loading
       ? skillSubmissionBinding
       : undefined;
   const selectedSkillTags = (skillDraftBinding?.state.draft.skillSelections ?? []).map(
@@ -1496,11 +1622,16 @@ export function WebHostApp(props: {
     },
   );
   const skillsAvailable =
-    skillCapabilities?.enabled === true &&
-    skillCapabilities.catalog &&
-    skillCapabilities.invocation &&
-    skillCatalogStore !== undefined;
+    skillCapabilityRead.status === "AVAILABLE" && skillCatalogStore !== undefined;
   const skillsEnabled = skillsAvailable && sessionSnapshot.activeRun === undefined;
+  const skillSelectionBlockedMessage =
+    selectedSkillTags.length === 0 || skillCapabilityRead.status === "AVAILABLE"
+      ? undefined
+      : skillCapabilityRead.status === "PENDING"
+        ? "正在检查技能能力；已保留所选技能，检查完成前不能发送。"
+        : skillCapabilityRead.status === "FAILED"
+          ? "技能能力检查暂时失败；已保留所选技能，正在自动重试。"
+          : "当前 daemon 不支持手动技能选择；已保留草稿，请移除技能后再发送。";
 
   return renderWorkspaceApp({
     host: state,
@@ -1512,14 +1643,14 @@ export function WebHostApp(props: {
     attachmentItems,
     attachmentOwner,
     draftText:
-      skillsAvailable && skillDraftBinding !== undefined
+      skillDraftBinding !== undefined
         ? skillDraftBinding.state.draft.userText
         : (attachmentDraftBinding?.text ?? ""),
     draftVersion: skillDraftBinding?.state.draft.draftVersion,
     skillSubmissionStatus: skillDraftBinding?.state.preparationStatus,
     skillsEnabled,
     listSkills: skillCatalogStore === undefined ? undefined : listSkills,
-    selectedSkills: skillsAvailable ? selectedSkillTags : [],
+    selectedSkills: selectedSkillTags,
     onSelectSkill: (selection) => {
       if (attachmentOwner === undefined) return;
       const current = skillSelectionStore.load(attachmentOwner) ?? skillDraftBinding?.state;
@@ -1549,13 +1680,16 @@ export function WebHostApp(props: {
         attachments: current.draft.attachments,
       });
     },
-    onSubmitSkillDraft: skillsAvailable ? submitSkillComposerDraft : undefined,
-    draftLoading:
-      attachmentOwnerKey !== undefined &&
-      (attachmentDraftBinding === undefined ||
-        attachmentDraftBinding.loading ||
-        (skillsAvailable && skillDraftBinding === undefined)),
-    draftError: attachmentDraftBinding?.error,
+    onSubmitSkillDraft: submitSkillComposerDraft,
+    draftLoading: isComposerDraftLoading({
+      hasOwner: attachmentOwnerKey !== undefined,
+      attachmentDraftStoreAvailable: attachmentDraftStore !== undefined,
+      attachmentBindingReady: attachmentDraftBinding !== undefined,
+      attachmentBindingLoading: attachmentDraftBinding?.loading ?? false,
+      skillsAvailable,
+      skillBindingReady: skillDraftBinding !== undefined,
+    }),
+    draftError: attachmentDraftBinding?.error ?? skillSelectionBlockedMessage,
     onDraftChange: (text) => {
       if (attachmentOwnerKey === undefined || attachmentOwner === undefined) return;
       const current = skillSelectionStore.load(attachmentOwner) ?? skillDraftBinding?.state;
@@ -1612,9 +1746,21 @@ export function WebHostApp(props: {
     onPickWorkspaceDirectory,
     onRegisterWorkspace,
     settingsOpen,
+    skillManagerOpen:
+      skillManagerOpen && canOpenSkillManager(skillCapabilities, skillManagerClient !== undefined),
+    skillManagerClient: canOpenSkillManager(skillCapabilities, skillManagerClient !== undefined)
+      ? skillManagerClient
+      : undefined,
     onOpenSettings: () => {
       setAppearanceOpen(false);
+      setSkillManagerOpen(false);
       setSettingsOpen(true);
+      setSidebarOpen(false);
+    },
+    onOpenSkillManager: () => {
+      setSettingsOpen(false);
+      setAppearanceOpen(false);
+      setSkillManagerOpen(true);
       setSidebarOpen(false);
     },
     onOpenAppearance:
@@ -1627,6 +1773,7 @@ export function WebHostApp(props: {
         : undefined,
     desktopActions,
     onCloseSettings: () => setSettingsOpen(false),
+    onCloseSkillManager: () => setSkillManagerOpen(false),
     onCloseAppearance: () => setAppearanceOpen(false),
   });
 }
@@ -1703,10 +1850,14 @@ function renderWorkspaceApp(input: {
   readonly onPickWorkspaceDirectory: () => void;
   readonly onRegisterWorkspace: (event: FormEvent<HTMLFormElement>) => void;
   readonly settingsOpen: boolean;
+  readonly skillManagerOpen: boolean;
+  readonly skillManagerClient?: SkillManagerClient | undefined;
   readonly onOpenSettings: () => void;
+  readonly onOpenSkillManager: () => void;
   readonly onOpenAppearance?: (() => void) | undefined;
   readonly desktopActions?: WorkspaceSidebarDesktopActions | undefined;
   readonly onCloseSettings: () => void;
+  readonly onCloseSkillManager: () => void;
   readonly onCloseAppearance: () => void;
 }): ReactElement {
   const { snapshot, selectedWorkspace } = input;
@@ -1898,6 +2049,10 @@ function renderWorkspaceApp(input: {
             onArchiveSession: input.onArchiveSession,
             onOpenArchives: input.onOpenArchives,
             onOpenSettings: input.onOpenSettings,
+            onOpenSkillManager:
+              selectedWorkspace === undefined || input.skillManagerClient === undefined
+                ? undefined
+                : input.onOpenSkillManager,
             onOpenAppearance: input.onOpenAppearance,
             desktopActions: input.desktopActions,
           }),
@@ -1961,6 +2116,7 @@ function renderWorkspaceApp(input: {
                 })),
                 history: snapshot.history,
                 turnPresentation: snapshot.turnPresentation,
+                skillPresentation: snapshot.skillPresentation,
                 timeline: snapshot.timeline,
                 liveActivity: snapshot.liveActivity,
                 continuityWarning: snapshot.continuityWarning,
@@ -2036,7 +2192,20 @@ function renderWorkspaceApp(input: {
     snapshot: input.appearanceSnapshot,
     onBack: input.onCloseAppearance,
     onPreferenceChange: (preference) => input.appearanceController.setPreference(preference),
-    workbench,
+    workbench: createElement(
+      Fragment,
+      null,
+      workbench,
+      input.skillManagerOpen &&
+        selectedWorkspace !== undefined &&
+        input.skillManagerClient !== undefined
+        ? createElement(SkillManager, {
+            workspaceId: selectedWorkspace.id,
+            client: input.skillManagerClient,
+            onClose: input.onCloseSkillManager,
+          })
+        : null,
+    ),
   });
 }
 

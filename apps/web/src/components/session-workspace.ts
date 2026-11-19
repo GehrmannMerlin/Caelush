@@ -9,7 +9,10 @@ import type {
 import { type LiveActivityState, type TimelineState, type TranscriptEntry } from "@caelush/client";
 import type { ApprovalResolution, RunId } from "@caelush/protocol";
 import type { ApprovalView } from "@caelush/client";
-import type { SessionTurnPresentationResponse } from "@caelush/protocol";
+import type {
+  SessionTurnPresentationResponse,
+  SessionTurnPresentationResponseV4,
+} from "@caelush/protocol";
 import type { ResolvedTheme } from "@caelush/ui-theme/appearance";
 import type { WebControlMode } from "../application/session-manager.js";
 import { runStatusClass, runStatusLabel } from "./run-status.js";
@@ -36,6 +39,7 @@ export interface SessionWorkspaceProps {
   readonly activeRun?: ClientAgentRun | undefined;
   readonly history: readonly TranscriptEntry[];
   readonly turnPresentation?: SessionTurnPresentationResponse | undefined;
+  readonly skillPresentation?: SessionTurnPresentationResponseV4 | undefined;
   readonly timeline: TimelineState;
   readonly liveActivity?: LiveActivityState;
   readonly composer: ReactElement;
@@ -143,6 +147,7 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
         props.turnPresentation?.capabilityVersion === 3
           ? createElement(SessionConversation, {
               presentation: props.turnPresentation,
+              skillPresentation: props.skillPresentation,
               theme: props.theme,
               activeRun:
                 props.activeRun === undefined || !isActiveRun(props.activeRun.status)
@@ -166,6 +171,7 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
           : props.turnPresentation !== undefined
             ? createElement(TurnPresentationFeed, {
                 presentation: props.turnPresentation,
+                skillPresentation: props.skillPresentation,
                 theme: props.theme,
                 transcriptUsers: props.history.filter(
                   (entry): entry is Extract<TranscriptEntry, { kind: "USER" }> =>

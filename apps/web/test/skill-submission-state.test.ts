@@ -9,7 +9,11 @@ import {
 import { SkillSelectionStore } from "../src/application/skill-selection-store.js";
 import {
   createInitialSkillSubmissionState,
+  hasSubmissionSkillLoadFailure,
+  hasSubmissionSkillLoadReceipt,
   reduceSkillSubmission,
+  shouldSuppressStaleReceiptDraftMirror,
+  transitionSkillSubmission,
   type ComposerSubmissionDraft,
 } from "../src/application/skill-submission-state.js";
 
@@ -32,6 +36,28 @@ function draft(overrides: Partial<ComposerSubmissionDraft> = {}): ComposerSubmis
 }
 
 describe("Skill submission state", () => {
+  it("does not publish or persist a draft transition when the draft is unchanged", () => {
+    const current = createInitialSkillSubmissionState(draft());
+    let changes = 0;
+
+    const next = transitionSkillSubmission(
+      current,
+      {
+        type: "DRAFT_CHANGED",
+        userText: current.draft.userText,
+        skillSelections: current.draft.skillSelections,
+        attachments: current.draft.attachments,
+      },
+      () => {
+        changes += 1;
+        return current;
+      },
+    );
+
+    expect(next).toBe(current);
+    expect(changes).toBe(0);
+  });
+
   it("U04 never clears a newer draft on an older preparation receipt", () => {
     const latestDraft = draft({ draftVersion: 2, userText: "Keep this newer instruction." });
     const before = {
@@ -107,6 +133,129 @@ describe("Skill submission state", () => {
     });
     expect(prepared.preparationStatus).toBe("PREPARED");
     expect(prepared.acceptedSubmission).toBeUndefined();
+  });
+
+  it("does not treat CONTENT_READY as a prepared-input receipt", () => {
+    const submitted = draft();
+    const pending = reduceSkillSubmission(createInitialSkillSubmissionState(submitted), {
+      type: "SUBMISSION_STARTED",
+      submissionId: currentSubmissionId,
+      draft: submitted,
+    });
+    const accepted = reduceSkillSubmission(pending, {
+      type: "SUBMISSION_ACCEPTED",
+      runId: olderRunId,
+      submissionId: currentSubmissionId,
+    });
+    const contentReadyTurn = skillTurn("CONTENT_READY").turns[0]!;
+    const contentReadyReceipt = {
+      schemaVersion: 1 as const,
+      runId: olderRunId,
+      userText: submitted.userText,
+      preparationStatus: "CONTENT_READY" as const,
+      selectedSkills: [{ skillId: skillSelection.skillId as never, name: "review-notes" }],
+    };
+
+    expect(
+      hasSubmissionSkillLoadReceipt(
+        accepted.acceptedSubmission!,
+        contentReadyReceipt,
+        contentReadyTurn,
+      ),
+    ).toBe(false);
+    const afterContentReady = hasSubmissionSkillLoadReceipt(
+      accepted.acceptedSubmission!,
+      contentReadyReceipt,
+      contentReadyTurn,
+    )
+      ? reduceSkillSubmission(accepted, {
+          type: "PREPARED_INPUT_RECEIVED",
+          runId: olderRunId,
+          submissionId: currentSubmissionId,
+          draftVersion: submitted.draftVersion,
+        })
+      : accepted;
+    expect(afterContentReady.draft).toEqual(submitted);
+    expect(
+      hasSubmissionSkillLoadFailure(olderRunId, [skillSelection.skillId], contentReadyTurn),
+    ).toBe(false);
+  });
+
+  it("suppresses only the stale attachment mirror while receipt cleanup is reconciling", () => {
+    const staleDraft = { userText: "submitted text", attachments: ["artifact_stale"] };
+    const newerDraft = {
+      userText: "new text typed during cleanup",
+      attachments: ["artifact_stale"],
+    };
+
+    expect(
+      shouldSuppressStaleReceiptDraftMirror(
+        "session:one",
+        "session:one",
+        newerDraft,
+        staleDraft,
+        staleDraft,
+      ),
+    ).toBe(true);
+    expect(
+      shouldSuppressStaleReceiptDraftMirror(
+        "session:one",
+        "session:one",
+        newerDraft,
+        newerDraft,
+        staleDraft,
+      ),
+    ).toBe(false);
+    expect(
+      shouldSuppressStaleReceiptDraftMirror(
+        "session:one",
+        "session:two",
+        newerDraft,
+        staleDraft,
+        staleDraft,
+      ),
+    ).toBe(false);
+  });
+
+  it("confirms only a matching V4 LOADED binding and recognizes preparation failure", () => {
+    const submitted = draft();
+    const pending = reduceSkillSubmission(createInitialSkillSubmissionState(submitted), {
+      type: "SUBMISSION_STARTED",
+      submissionId: currentSubmissionId,
+      draft: submitted,
+    });
+    const accepted = reduceSkillSubmission(pending, {
+      type: "SUBMISSION_ACCEPTED",
+      runId: olderRunId,
+      submissionId: currentSubmissionId,
+    });
+    const receipt = {
+      schemaVersion: 1 as const,
+      runId: olderRunId,
+      userText: submitted.userText,
+      preparationStatus: "CONTENT_READY" as const,
+      selectedSkills: [{ skillId: skillSelection.skillId as never, name: "review-notes" }],
+    };
+    const loadedTurn = skillTurn("LOADED").turns[0]!;
+    const failedTurn = skillTurn("FAILED").turns[0]!;
+
+    expect(hasSubmissionSkillLoadReceipt(accepted.acceptedSubmission!, receipt, loadedTurn)).toBe(
+      true,
+    );
+    expect(hasSubmissionSkillLoadReceipt(accepted.acceptedSubmission!, receipt, failedTurn)).toBe(
+      false,
+    );
+    expect(hasSubmissionSkillLoadFailure(olderRunId, [skillSelection.skillId], failedTurn)).toBe(
+      true,
+    );
+    expect(
+      reduceSkillSubmission(accepted, {
+        type: "PREPARED_INPUT_RECEIVED",
+        runId: olderRunId,
+        submissionId: currentSubmissionId,
+        draftVersion: submitted.draftVersion,
+      }).draft.userText,
+    ).toBe("");
   });
 
   it("preserves text, attachments, and Skills when submission or preparation fails", () => {
@@ -202,6 +351,35 @@ describe("Skill submission state", () => {
     expect(isolated).toBeUndefined();
   });
 });
+
+function skillTurn(status: "CONTENT_READY" | "LOADED" | "FAILED") {
+  return {
+    capabilityVersion: 4 as const,
+    turns: [
+      {
+        runId: olderRunId,
+        conversationTurnId: `turn:${olderRunId}`,
+        runStatus: status === "FAILED" ? ("FAILED" as const) : ("RUNNING" as const),
+        openedAt: 1,
+        highWatermark: 1,
+        items: [
+          {
+            id: `${olderRunId}:skill:${skillSelection.skillId}`,
+            runId: olderRunId,
+            conversationTurnId: `turn:${olderRunId}`,
+            ordinal: 0,
+            createdAt: 1,
+            status: status === "FAILED" ? ("FAILED" as const) : ("COMPLETED" as const),
+            kind: "SKILL" as const,
+            skillId: skillSelection.skillId,
+            name: "review-notes",
+            skillStatus: status,
+          },
+        ],
+      },
+    ],
+  };
+}
 
 class MemoryStorage {
   private readonly values = new Map<string, string>();

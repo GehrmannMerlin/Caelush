@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { MAX_ATTACHMENT_BYTES } from "@caelush/protocol";
+import { MAX_ATTACHMENT_BYTES, SkillIdSchema, WorkspaceIdSchema } from "@caelush/protocol";
 import type { AccountProfile } from "../profiles/profile-manager.js";
 import {
   isOwnedLoopbackTarget,
@@ -223,6 +223,7 @@ function parseTrustedApiUrl(value: string): URL | null {
     return null;
   }
   const segments = url.pathname.split("/");
+  const decodedSegments: string[] = [];
   for (const segment of segments) {
     let decoded: string;
     try {
@@ -236,13 +237,32 @@ function parseTrustedApiUrl(value: string): URL | null {
       decoded.includes("/") ||
       decoded.includes("\\") ||
       decoded.includes("\0") ||
-      decoded.includes(":") ||
       /%(?:25)*(?:2f|5c|2e|00)/iu.test(decoded)
     ) {
       return null;
     }
+    decodedSegments.push(decoded);
+  }
+  if (
+    decodedSegments.some((segment, index) => segment.includes(":") && index !== 6) ||
+    (decodedSegments[6]?.includes(":") === true && !isSkillSettingsPath(decodedSegments))
+  ) {
+    return null;
   }
   return url;
+}
+
+function isSkillSettingsPath(segments: readonly string[]): boolean {
+  return (
+    segments.length === 8 &&
+    segments[1] === "api" &&
+    segments[2] === "v1" &&
+    segments[3] === "workspaces" &&
+    WorkspaceIdSchema.safeParse(segments[4]).success &&
+    segments[5] === "skills" &&
+    SkillIdSchema.safeParse(segments[6]).success &&
+    segments[7] === "settings"
+  );
 }
 
 function createUpstreamHeaders(

@@ -1,7 +1,4 @@
-import type {
-  CaelushClient,
-  CaelushClientRequestOptions,
-} from "@caelush/client";
+import type { CaelushClient, CaelushClientRequestOptions } from "@caelush/client";
 import type {
   SkillCatalogPageV1,
   SkillCatalogQuery,
@@ -21,16 +18,11 @@ export type SkillCatalogListSkills = (
 ) => Promise<SkillCatalogPageV1>;
 
 export interface SkillCatalogStore {
-  getCapabilities(
-    options?: CaelushClientRequestOptions,
-  ): Promise<SkillCapabilityResponse | null>;
+  getCapabilities(options?: CaelushClientRequestOptions): Promise<SkillCapabilityResponse | null>;
   listSkills: SkillCatalogListSkills;
 }
 
-export type SkillCatalogStoreClient = Pick<
-  CaelushClient,
-  "getSkillCapabilities" | "listSkills"
->;
+export type SkillCatalogStoreClient = Pick<CaelushClient, "getSkillCapabilities" | "listSkills">;
 
 export function createSkillCatalogStore(client: SkillCatalogStoreClient): SkillCatalogStore {
   return {

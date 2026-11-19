@@ -1,12 +1,15 @@
 import {
   SelectablePermissionPresetIdSchema,
   SessionIdSchema,
+  SkillNameSchema,
   type SelectablePermissionPresetId,
+  type SkillName,
   type SessionId,
 } from "@caelush/protocol";
 
 export interface PermissionPresetLaunchOption {
   readonly permissionPresetId?: SelectablePermissionPresetId;
+  readonly skillNames?: readonly SkillName[];
 }
 
 export type LaunchIntent =
@@ -48,6 +51,7 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
   let outputFormatSet = false;
   let permissionPresetId: SelectablePermissionPresetId | undefined;
   let permissionPresetSet = false;
+  const skillNames: SkillName[] = [];
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -105,6 +109,17 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
       index += 1;
       continue;
     }
+    if (token === "--skill") {
+      const candidate = argv[index + 1];
+      if (candidate === undefined || candidate.startsWith("-")) {
+        throw new CliArgsError("--skill requires a Skill name.");
+      }
+      const parsed = SkillNameSchema.safeParse(candidate);
+      if (!parsed.success) throw new CliArgsError("--skill requires a valid Skill name.");
+      skillNames.push(parsed.data);
+      index += 1;
+      continue;
+    }
     if (!token.startsWith("-") && print && !promptSet) {
       prompt = token;
       promptSet = true;
@@ -114,8 +129,11 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
   }
 
   if (!print && outputFormatSet) throw new CliArgsError();
-  const selectedLaunchIntent =
-    permissionPresetId === undefined ? launchIntent : { ...launchIntent, permissionPresetId };
+  const selectedLaunchIntent = {
+    ...launchIntent,
+    ...(permissionPresetId === undefined ? {} : { permissionPresetId }),
+    ...(skillNames.length === 0 ? {} : { skillNames: Object.freeze([...skillNames]) }),
+  };
   if (print) {
     if (selectedLaunchIntent.kind === "RESUME_PICKER") throw new CliArgsError();
     return {

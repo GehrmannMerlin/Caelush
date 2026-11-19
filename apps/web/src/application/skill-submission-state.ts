@@ -8,6 +8,8 @@ import {
   type RunId,
   type SubmissionId,
   type SkillSelectionV1,
+  type SessionTurnPresentationTurnV4,
+  type SubmissionSkillPreparationV1,
 } from "@caelush/protocol";
 
 export const ComposerSubmissionDraftSchema = z
@@ -132,7 +134,7 @@ export function reduceSkillSubmission(
         skillSelections: event.skillSelections,
         attachments: event.attachments,
       });
-      if (sameDraftContent(state.draft, candidate)) return state;
+      if (sameDraftContent(state.draft, candidate)) return current;
       return freezeState({
         ...state,
         draft: candidate,
@@ -186,9 +188,78 @@ export function reduceSkillSubmission(
     }
     case "PREPARATION_FAILED": {
       if (matchingAcceptedSubmission(state, event) === undefined) return state;
+      if (state.preparationStatus === "FAILED") return current;
       return freezeState({ draft: state.draft, preparationStatus: "FAILED" });
     }
   }
+}
+
+/** `CONTENT_READY` proves the binding was frozen; only V4's durable LOADED fact confirms Context
+ * recorded every selected manual Skill in a concrete PreparedInput Step. */
+export function hasSubmissionSkillLoadReceipt(
+  accepted: NonNullable<SkillSubmissionState["acceptedSubmission"]>,
+  receipt: SubmissionSkillPreparationV1 | undefined,
+  turn: SessionTurnPresentationTurnV4 | undefined,
+): boolean {
+  if (
+    receipt === undefined ||
+    turn?.runId !== accepted.runId ||
+    receipt.runId !== accepted.runId ||
+    receipt.userText !== accepted.draft.userText.trim()
+  ) {
+    return false;
+  }
+  const expectedSkillIds = accepted.draft.skillSelections.map((selection) => selection.skillId);
+  const receiptSkillIds = receipt.selectedSkills.map((skill) => skill.skillId);
+  if (expectedSkillIds.length === 0 || !sameSkillIds(expectedSkillIds, receiptSkillIds))
+    return false;
+  return expectedSkillIds.every((skillId) =>
+    turn.items.some(
+      (item) =>
+        item.kind === "SKILL" &&
+        item.id === `${accepted.runId}:skill:${skillId}` &&
+        item.skillStatus === "LOADED",
+    ),
+  );
+}
+
+export function hasSubmissionSkillLoadFailure(
+  runId: RunId,
+  skillIds: readonly string[],
+  turn: SessionTurnPresentationTurnV4 | undefined,
+): boolean {
+  if (turn?.runId !== runId) return false;
+  return skillIds.some((skillId) =>
+    turn.items.some(
+      (item) =>
+        item.kind === "SKILL" &&
+        item.id === `${runId}:skill:${skillId}` &&
+        item.skillStatus === "FAILED",
+    ),
+  );
+}
+
+export function shouldSuppressStaleReceiptDraftMirror(
+  suppressionOwnerKey: string,
+  currentOwnerKey: string,
+  currentDraft: Pick<ComposerSubmissionDraft, "userText" | "attachments">,
+  attachmentDraft: Pick<ComposerSubmissionDraft, "userText" | "attachments">,
+  submittedDraft: Pick<ComposerSubmissionDraft, "userText" | "attachments">,
+): boolean {
+  return (
+    suppressionOwnerKey === currentOwnerKey &&
+    sameDraftTextAndAttachments(attachmentDraft, submittedDraft) &&
+    !sameDraftTextAndAttachments(currentDraft, submittedDraft)
+  );
+}
+
+export function transitionSkillSubmission(
+  current: SkillSubmissionState,
+  event: SkillSubmissionEvent,
+  onChanged: (next: SkillSubmissionState) => SkillSubmissionState,
+): SkillSubmissionState {
+  const next = reduceSkillSubmission(current, event);
+  return next === current ? current : onChanged(next);
 }
 
 function matchingAcceptedSubmission(
@@ -219,6 +290,21 @@ function sameDraftContent(left: ComposerSubmissionDraft, right: ComposerSubmissi
     left.attachments.length === right.attachments.length &&
     left.attachments.every((id, index) => id === right.attachments[index])
   );
+}
+
+function sameSkillIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((skillId, index) => skillId === right[index]);
+}
+
+function sameDraftTextAndAttachments(
+  left: Pick<ComposerSubmissionDraft, "userText" | "attachments">,
+  right: Pick<ComposerSubmissionDraft, "userText" | "attachments">,
+): boolean {
+  return left.userText === right.userText && sameIds(left.attachments, right.attachments);
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function emptyDraft(draftVersion: number): ComposerSubmissionDraft {

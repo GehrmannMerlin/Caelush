@@ -8,6 +8,12 @@ import type {
 } from "@caelush/protocol";
 import type { CaelushClientRequestOptions } from "@caelush/client";
 import { createSkillCatalogStore } from "../src/application/skill-catalog-store.js";
+import {
+  AttachmentMenu,
+  resolveMobileSkillMenuMaxHeight,
+  resolveSkillPanelPlacement,
+  resolveSkillPanelVerticalShift,
+} from "../src/components/attachment-menu.js";
 import { SkillPicker } from "../src/components/skill-picker.js";
 
 const workspaceId = "ws_skillpicker12345678901234567890" as WorkspaceId;
@@ -41,6 +47,46 @@ const catalogPage: SkillCatalogPageV1 = {
 };
 
 describe("Skill picker", () => {
+  it("does not mount an interactive picker before the menu is opened", () => {
+    const html = renderToStaticMarkup(
+      <AttachmentMenu
+        skillsEnabled
+        workspaceId={workspaceId}
+        listSkills={vi.fn(async () => catalogPage)}
+        onSelectSkill={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain('id="prompt-skill-picker"');
+    expect(html).not.toContain('id="skill-picker-search"');
+  });
+
+  it("keeps a flipped picker within the workspace beside the fixed sidebar", () => {
+    expect(
+      resolveSkillPanelPlacement({
+        viewportWidth: 1440,
+        panelWidth: 352,
+        menuLeft: 437,
+        menuRight: 1295,
+        contentLeft: 292,
+      }),
+    ).toEqual({ side: "left", shiftX: 227 });
+  });
+
+  it("keeps the picker panel within the viewport above or below its anchor", () => {
+    expect(
+      resolveSkillPanelVerticalShift({ panelTop: -66, panelHeight: 480, viewportHeight: 900 }),
+    ).toBe(78);
+    expect(
+      resolveSkillPanelVerticalShift({ panelTop: 620, panelHeight: 480, viewportHeight: 900 }),
+    ).toBe(-212);
+  });
+
+  it("limits the mobile picker to the space above the composer", () => {
+    expect(resolveMobileSkillMenuMaxHeight({ composerTop: 356, viewportHeight: 844 })).toBe(332);
+  });
+
   it("renders an accessible search and explicit loading state", () => {
     const html = renderToStaticMarkup(
       <SkillPicker
@@ -60,10 +106,15 @@ describe("Skill picker", () => {
   it("passes the workspace, query, cursor, and abort signal to the catalog", async () => {
     const listSkills = vi.fn(
       async (
-        _workspace: WorkspaceId,
-        _query: Partial<SkillCatalogQuery>,
-        _options: CaelushClientRequestOptions,
-      ) => catalogPage,
+        workspace: WorkspaceId,
+        query: Partial<SkillCatalogQuery>,
+        options: CaelushClientRequestOptions,
+      ) => {
+        expect(workspace).toBe(workspaceId);
+        expect(query).toEqual({ q: "review", cursor: "cursor-1" });
+        expect(options).toEqual({ signal });
+        return catalogPage;
+      },
     );
     const store = createSkillCatalogStore({ listSkills });
     const signal = new AbortController().signal;
