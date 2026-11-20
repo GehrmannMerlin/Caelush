@@ -162,6 +162,52 @@ fn resource_root_cannot_be_replaced_until_the_restricted_child_exits() {
         .expect("the resource root should be replaceable after its grant is revoked");
 }
 
+#[test]
+fn junction_resource_root_cannot_redirect_a_grant_outside_its_canonical_directory() {
+    let fixture = Fixture::new();
+    let workspace = fixture.path.join("workspace");
+    let target = fixture.path.join("external resource target");
+    let resource_link = fixture.path.join("authorized bundle junction");
+    let private_temp = fixture.path.join("private temp");
+    fs::create_dir_all(&workspace).expect("workspace should be created");
+    fs::create_dir_all(&target).expect("external target should be created");
+    fs::create_dir_all(&private_temp).expect("private temp should be created");
+    workspace_prepare(&workspace).expect("workspace write grant should be prepared");
+
+    let linked = Command::new("cmd.exe")
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(&resource_link)
+        .arg(&target)
+        .output()
+        .expect("cmd should create a directory junction without elevation");
+    assert!(
+        linked.status.success(),
+        "the fixture must create a real directory junction"
+    );
+    assert_eq!(
+        fs::canonicalize(&resource_link).expect("junction should resolve"),
+        fs::canonicalize(&target).expect("target should resolve")
+    );
+
+    let program = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string());
+    let result = spawn_workspace_write_readonly_resource(
+        "windows-acl-restricted-token",
+        &workspace,
+        &workspace,
+        &private_temp,
+        "skill-resource-junction-test-run",
+        &resource_link,
+        &"c".repeat(64),
+        &program,
+        &["/d".to_string(), "/c".to_string(), "exit 0".to_string()],
+    );
+    assert_eq!(
+        result.err().as_deref(),
+        Some("WINDOWS_PATH_BOUNDARY_REPARSE_UNSUPPORTED"),
+        "a junction must not redirect an immutable bundle grant"
+    );
+}
+
 struct Fixture {
     path: PathBuf,
 }

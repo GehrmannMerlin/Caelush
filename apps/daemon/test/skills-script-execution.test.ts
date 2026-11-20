@@ -1,5 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelDescriptor, ModelDescriptorSourcePort } from "@caelush/ai";
@@ -12,6 +12,8 @@ import {
   createAuthorizedRuntimeExecution,
   createRuntimeProcessPolicy,
   LocalRuntime,
+  createNativeWorkspaceSandboxController,
+  createWindowsAclRestrictedTokenProvider,
   type ManagedProcessAdapter,
   type ProcessExit,
   type ProcessOutputEvent,
@@ -31,6 +33,10 @@ import { SecurityCapabilityService } from "../src/services/security-capability-s
 import { composeDaemon, type DaemonComposition } from "../src/daemon-composition.js";
 import { SessionTranscriptService } from "../src/services/session-transcript-service.js";
 import { WorkspaceService } from "../src/workspaces/workspace-service.js";
+import {
+  buildSandboxRunner,
+  // @ts-expect-error The release helper is a checked-in JavaScript build script without a declaration file.
+} from "../../../scripts/build-sandbox-runner.mjs";
 import {
   beginOpenAISse,
   createControllableProviderServer,
@@ -125,11 +131,39 @@ describe("frozen Skill script execution resources", () => {
       const builtinRoot = join(directory, "builtin-skills");
       const artifactRoot = join(directory, "skill-artifacts");
       await mkdir(workspaceRoot, { recursive: true });
+      const privateTempBaseDirectory = join(directory, "private-run-temp");
+      await mkdir(privateTempBaseDirectory, { recursive: true });
+      const nativeRunner = await buildSandboxRunner({
+        repositoryRoot: process.cwd(),
+        outputDirectory: join(directory, "native-runner"),
+        cargo:
+          process.env.CARGO ??
+          join(homedir(), ".cargo", "bin", process.platform === "win32" ? "cargo.exe" : "cargo"),
+      });
+      const nativeWorkspaceController = createNativeWorkspaceSandboxController({
+        runnerPath: nativeRunner.binaryPath,
+        providerId: "windows-acl-restricted-token",
+        privateTempBaseDirectory,
+        readyTimeoutMs: 5_000,
+      });
+      await nativeWorkspaceController.prepare(workspaceRoot, "WORKSPACE_WRITE");
+      const nativeSandboxProvider = createWindowsAclRestrictedTokenProvider({
+        platform: "win32",
+        runnerPath: nativeRunner.binaryPath,
+        manifest: nativeRunner.manifest,
+        workspaceController: nativeWorkspaceController,
+        readyTimeoutMs: 5_000,
+      });
       const skillSources = [
         {
           name: "sample-skill",
           root: join(userRoot, "sample-skill"),
-          frozenSource: "console.log('FROZEN_USER_SCRIPT_V1')\n",
+          frozenSource: [
+            "console.log('FROZEN_USER_SCRIPT_V1')",
+            "console.log(JSON.stringify(process.argv.slice(2)))",
+            "console.log('API_KEY=sk-test-provider-secret-0123456789')",
+            "",
+          ].join("\n"),
         },
         {
           name: "project-skill",
@@ -205,6 +239,22 @@ describe("frozen Skill script execution resources", () => {
           readonly spec: SandboxedSpawnSpec;
           readonly scriptSource: string;
         }> = [];
+        const nativeScriptOutcomes: Array<{
+          output: string;
+          exitCode?: number;
+        }> = [];
+        const restrictedRuntimeVersionChecks: Array<{
+          status: "EXITED" | "TIMED_OUT" | "ERROR";
+          output: string;
+          exitCode?: number;
+          error?: string;
+        }> = [];
+        const workspaceWriteRuntimeVersionChecks: Array<{
+          status: "EXITED" | "TIMED_OUT" | "ERROR";
+          output: string;
+          exitCode?: number;
+          error?: string;
+        }> = [];
         const additionalProcessObservations: Array<{
           readonly spec: SandboxedSpawnSpec;
           readonly scriptSource: string;
@@ -218,23 +268,46 @@ describe("frozen Skill script execution resources", () => {
         const additionalScriptExecutor: {
           run?: ((activeBindingId: string) => Promise<void>) | undefined;
         } = {};
-        const sandboxProvider = createControlledSandboxProvider(async (spec) => {
-          const scriptPath = spec.launch.args[0];
-          if (scriptPath === undefined)
-            throw new Error("The Runtime launch lacked its script path.");
-          const scriptSource = await readFile(scriptPath, "utf8");
-          processObservations.push({ spec, scriptSource });
-          const activeBindingId = spec.readOnlyResourceGrant?.resourceId;
-          if (activeBindingId === undefined)
-            throw new Error("The script grant did not identify its binding.");
-          await additionalScriptExecutor.run?.(activeBindingId);
-          return [
-            scriptSource,
-            JSON.stringify(spec.launch.args.slice(1)),
-            spec.readOnlyResourceGrant?.canonicalRoot ?? "NO_RESOURCE_GRANT",
-            "API_KEY=sk-test-provider-secret-0123456789",
-          ].join("\n");
-        });
+        const sandboxProvider: ProcessSandboxProvider = {
+          ...nativeSandboxProvider,
+          async create(spec) {
+            const scriptPath = spec.launch.args[0];
+            if (scriptPath === undefined)
+              throw new Error("The Runtime launch lacked its script path.");
+            const scriptSource = await readFile(scriptPath, "utf8");
+            processObservations.push({ spec, scriptSource });
+            if (spec.readOnlyResourceGrant === undefined)
+              throw new Error("The script grant did not identify its binding.");
+
+            const versionSpec: SandboxedSpawnSpec = {
+              ...spec,
+              launch: { executable: process.execPath, args: ["--version"] },
+            };
+            restrictedRuntimeVersionChecks.push(
+              await observeNativeSandboxLaunch(nativeSandboxProvider, versionSpec),
+            );
+            const { readOnlyResourceGrant: omittedResourceGrant, ...workspaceWriteSpec } = spec;
+            void omittedResourceGrant;
+            const workspaceWriteVersionSpec: SandboxedSpawnSpec = {
+              ...workspaceWriteSpec,
+              launch: { executable: process.execPath, args: ["--version"] },
+            };
+            workspaceWriteRuntimeVersionChecks.push(
+              await observeNativeSandboxLaunch(nativeSandboxProvider, workspaceWriteVersionSpec),
+            );
+
+            const adapter = await nativeSandboxProvider.create(spec);
+            const outcome: { output: string; exitCode?: number } = { output: "" };
+            nativeScriptOutcomes.push(outcome);
+            adapter.onOutput((event) => {
+              outcome.output += event.text;
+            });
+            adapter.onExit((exit) => {
+              if (exit.exitCode !== undefined) outcome.exitCode = exit.exitCode;
+            });
+            return adapter;
+          },
+        };
         runtime = new LocalRuntime();
         const runtimeResolver = createLocalRuntimeResolver(runtime);
         const scriptSecurity = new SecurityCapabilityService({
@@ -505,6 +578,30 @@ describe("frozen Skill script execution resources", () => {
         expect(finalRun?.status).toBe("COMPLETED");
         expect(controlledProvider.requests).toHaveLength(3);
         expect(processObservations).toHaveLength(1);
+        expect(workspaceWriteRuntimeVersionChecks).toHaveLength(1);
+        const workspaceWriteRuntimeCheck = workspaceWriteRuntimeVersionChecks[0];
+        if (
+          workspaceWriteRuntimeCheck?.status !== "EXITED" ||
+          workspaceWriteRuntimeCheck.exitCode !== 0
+        ) {
+          throw new Error(
+            `Workspace-write Node check failed: ${workspaceWriteRuntimeCheck?.status ?? "missing"}/${workspaceWriteRuntimeCheck?.error ?? "no-code"}.`,
+          );
+        }
+        expect(workspaceWriteRuntimeCheck.output).toMatch(/^v\d/u);
+        expect(restrictedRuntimeVersionChecks).toHaveLength(1);
+        const restrictedRuntimeCheck = restrictedRuntimeVersionChecks[0];
+        if (restrictedRuntimeCheck?.status !== "EXITED" || restrictedRuntimeCheck.exitCode !== 0) {
+          throw new Error(
+            `Resource-read Node check failed: ${restrictedRuntimeCheck?.status ?? "missing"}/${restrictedRuntimeCheck?.error ?? "no-code"}.`,
+          );
+        }
+        expect(restrictedRuntimeCheck.output).toMatch(/^v\d/u);
+        expect(nativeScriptOutcomes).toHaveLength(1);
+        expect(nativeScriptOutcomes[0]?.exitCode).toBe(0);
+        expect(nativeScriptOutcomes[0]?.output).toContain("FROZEN_USER_SCRIPT_V1");
+        expect(nativeScriptOutcomes[0]?.output).toContain(JSON.stringify(scriptArgs));
+        await additionalScriptExecutor.run?.(selectedBindings[0]!.bindingId);
         expect(additionalProcessObservations).toHaveLength(2);
         expect(runScopedCancellationVerified).toBe(true);
         const { spec, scriptSource } = processObservations[0]!;
@@ -550,6 +647,9 @@ describe("frozen Skill script execution resources", () => {
         expect(spec.readOnlyResourceGrant?.resourceId).toBe(bindings[0]?.bindingId);
 
         const observations = await storage.observations.listByRun(runId);
+        expect(observations.map(({ content }) => content).join("\n")).toContain(
+          JSON.stringify(scriptArgs),
+        );
         const transcript = await new SessionTranscriptService({
           sessions: storage.sessions,
           runs: storage.runs,
@@ -817,21 +917,74 @@ function collectStrings(value: unknown): string[] {
   return [];
 }
 
-function createControlledSandboxProvider(
-  outputFor: (spec: SandboxedSpawnSpec) => Promise<string>,
-): ProcessSandboxProvider {
-  return {
-    id: "phase06-controlled-read-only-resource",
-    kind: "RESTRICTED",
-    enforcement: "HARD",
-    probe: async () => ({ available: true, enforcement: "HARD" }),
-    async create(spec) {
-      if (spec.readOnlyResourceGrant === undefined) {
-        throw new Error("The Runtime did not pass the immutable resource grant to the provider.");
-      }
-      return new ControlledProcessAdapter(await outputFor(spec));
-    },
-  };
+async function observeManagedProcess(adapter: ManagedProcessAdapter): Promise<{
+  readonly status: "EXITED" | "TIMED_OUT" | "ERROR";
+  readonly exitCode?: number;
+  readonly output: string;
+  readonly error?: string;
+}> {
+  let output = "";
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      void adapter.close().finally(() => resolve({ status: "TIMED_OUT", output }));
+    }, 5_000);
+    adapter.onOutput((event) => {
+      output += event.text;
+    });
+    adapter.onError((error) => {
+      clearTimeout(timeout);
+      void adapter.close().finally(() =>
+        resolve({
+          status: "ERROR",
+          output,
+          error: error instanceof Error ? error.name : "unknown",
+        }),
+      );
+    });
+    adapter.onExit((exit) => {
+      clearTimeout(timeout);
+      void adapter
+        .close()
+        .then(() =>
+          resolve({
+            status: "EXITED",
+            ...(exit.exitCode === undefined ? {} : { exitCode: exit.exitCode }),
+            output,
+          }),
+        )
+        .catch((error: unknown) =>
+          resolve({
+            status: "ERROR",
+            output,
+            error: error instanceof Error ? error.message : "unknown",
+          }),
+        );
+    });
+  });
+}
+
+async function observeNativeSandboxLaunch(
+  provider: ProcessSandboxProvider,
+  spec: SandboxedSpawnSpec,
+): Promise<{
+  readonly status: "EXITED" | "TIMED_OUT" | "ERROR";
+  readonly exitCode?: number;
+  readonly output: string;
+  readonly error?: string;
+}> {
+  try {
+    return await observeManagedProcess(await provider.create(spec));
+  } catch (error) {
+    const code =
+      error !== null && typeof error === "object" && "code" in error
+        ? (error as { readonly code?: unknown }).code
+        : undefined;
+    return {
+      status: "ERROR",
+      output: "",
+      error: typeof code === "string" ? code : error instanceof Error ? error.name : "unknown",
+    };
+  }
 }
 
 function createPersistentControlledSandboxProvider(
@@ -891,53 +1044,6 @@ class PersistentControlledProcessAdapter implements ManagedProcessAdapter {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    for (const exit of this.exits) exit({ signal: "KILLED" });
-  }
-}
-
-class ControlledProcessAdapter implements ManagedProcessAdapter {
-  readonly tty = false;
-  private readonly starts = new Set<() => void>();
-  private readonly outputs = new Set<(event: ProcessOutputEvent) => void>();
-  private readonly exits = new Set<(exit: ProcessExit) => void>();
-  private readonly errors = new Set<(error: unknown) => void>();
-  private emitted = false;
-
-  constructor(private readonly output: string) {}
-
-  onStart(listener: () => void): () => void {
-    this.starts.add(listener);
-    return () => this.starts.delete(listener);
-  }
-
-  onOutput(listener: (event: ProcessOutputEvent) => void): () => void {
-    this.outputs.add(listener);
-    return () => this.outputs.delete(listener);
-  }
-
-  onExit(listener: (exit: ProcessExit) => void): () => void {
-    this.exits.add(listener);
-    if (!this.emitted) {
-      this.emitted = true;
-      queueMicrotask(() => {
-        for (const start of this.starts) start();
-        for (const output of this.outputs) output({ stream: "stdout", text: this.output });
-        for (const exit of this.exits) exit({ exitCode: 0 });
-      });
-    }
-    return () => this.exits.delete(listener);
-  }
-
-  onError(listener: (error: unknown) => void): () => void {
-    this.errors.add(listener);
-    return () => this.errors.delete(listener);
-  }
-
-  async write(): Promise<void> {}
-
-  async close(): Promise<void> {
-    if (this.emitted) return;
-    this.emitted = true;
     for (const exit of this.exits) exit({ signal: "KILLED" });
   }
 }
