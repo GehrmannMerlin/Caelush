@@ -195,6 +195,32 @@ describe("Skill catalog watcher", () => {
     expect(close).toHaveBeenCalledTimes(1);
     expect(refresh).toHaveBeenCalledTimes(2);
   });
+
+  it("waits for operating-system watcher handles to finish closing before disposal resolves", async () => {
+    let finishClose: (() => void) | undefined;
+    const closed = new Promise<void>((resolve) => {
+      finishClose = resolve;
+    });
+    const watcherFactory = getDaemonFunction("createSkillCatalogWatcher");
+    const watcher = watcherFactory({
+      roots: ["C:/test/skills"],
+      debounceMs: 0,
+      refresh: async () => undefined,
+      watchFactory: () => ({ close: vi.fn(), closed }),
+    }) as { start(): Promise<void>; dispose(): Promise<void> };
+
+    await watcher.start();
+    let disposalFinished = false;
+    const disposal = watcher.dispose().then(() => {
+      disposalFinished = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(disposalFinished).toBe(false);
+
+    finishClose?.();
+    await disposal;
+    expect(disposalFinished).toBe(true);
+  });
 });
 
 describe("effective Skill catalog service", () => {

@@ -2,6 +2,7 @@ import { watch, type FSWatcher } from "node:fs";
 
 export interface SkillCatalogWatchHandle {
   close(): void;
+  readonly closed?: Promise<void>;
 }
 
 export type SkillCatalogWatchFactory = (
@@ -74,14 +75,17 @@ export function createSkillCatalogWatcher(
       if (disposed) return;
       disposed = true;
       clearScheduledRefresh();
+      const closeCompletions: Promise<void>[] = [];
       for (const handle of handles.values()) {
         try {
+          if (handle.closed !== undefined) closeCompletions.push(handle.closed);
           handle.close();
         } catch {
           options.onError?.();
         }
       }
       handles.clear();
+      await Promise.all(closeCompletions);
     },
   };
 
@@ -129,5 +133,6 @@ function createNodeWatch(
 ): SkillCatalogWatchHandle {
   const watcher: FSWatcher = watch(root, { persistent: false, recursive: true }, onChange);
   watcher.on("error", onError);
-  return { close: () => watcher.close() };
+  const closed = new Promise<void>((resolve) => watcher.once("close", resolve));
+  return { close: () => watcher.close(), closed };
 }

@@ -250,6 +250,8 @@ function observeAsyncShutdownPhase<T>(
 }
 
 export interface DaemonOptions {
+  /** Injects one post-commit notification failure for the bounded Phase 08 recovery test. */
+  readonly faultPoint?: "AFTER_COMMIT_BEFORE_NOTIFY";
   /** Persistent trusted-host secret injection; never accepted over HTTP or placed in config JSON. */
   readonly replayKeyProvider?: ReplayKeyProvider;
   readonly databasePath: string;
@@ -556,6 +558,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   try {
     composition = await composeDaemon({
       storage,
+      ...(options.faultPoint === undefined ? {} : { faultPoint: options.faultPoint }),
       skillProvider,
       skillArtifactRoot: join(dirname(options.databasePath), "skill-artifacts"),
       skillGlobalWatchRoots: [skillRoot, builtinSkillRoot],
