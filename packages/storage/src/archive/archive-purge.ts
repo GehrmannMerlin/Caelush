@@ -53,6 +53,11 @@ export function purgeArchiveGraphInTransaction(
   );
   // Explicit child-first deletion. FKs stay enabled and any unknown external reference aborts all work.
   const runTables = [
+    // These generic workflow facts were added after archive purge's original table inventory.
+    // Delete receipts first because they reference both Steps and prepared-resource bindings.
+    "prepared_input_resource_receipts",
+    "run_prepared_resources",
+    "run_workflow_profiles",
     "private_replays",
     "agent_messages",
     "agent_events",

@@ -43,6 +43,10 @@ import {
 } from "./application/session-manager.js";
 import { AttachmentManager, type AttachmentQueueItem } from "./application/attachment-manager.js";
 import {
+  clearComposerDraftError,
+  type ComposerDraftBinding,
+} from "./application/composer-draft.js";
+import {
   AttachmentDraftStore,
   AttachmentDraftConflictError,
 } from "./application/attachment-draft-store.js";
@@ -161,14 +165,6 @@ const EMPTY_WORKSPACE_STATE: WorkspaceManagerState = {
 };
 
 const EMPTY_ATTACHMENT_ITEMS: readonly AttachmentQueueItem[] = Object.freeze([]);
-
-interface ComposerDraftBinding {
-  readonly ownerKey: string;
-  readonly revision: number;
-  readonly text: string;
-  readonly loading: boolean;
-  readonly error?: string | undefined;
-}
 
 interface SkillSubmissionBinding {
   readonly ownerKey: string;
@@ -1349,6 +1345,9 @@ export function WebHostApp(props: {
               loading: false,
             });
           }
+          setComposerDraft((previous) =>
+            clearComposerDraftError(previous, ownerKey(ownerForPending)),
+          );
           return { runId: createdRun.id, submissionId, draftVersion: parsed.data.draftVersion };
         }
 

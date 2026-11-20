@@ -2,6 +2,21 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { isTerminalRunStatus } from "@caelush/core";
+import {
+  AgentRunSchema,
+  AgentSessionSchema,
+  createRunId,
+  createSessionId,
+  createTimestampMs,
+  createWorkspaceId,
+} from "@caelush/protocol";
+import { expandPermissionPreset } from "@caelush/security";
+import { openCaelushStorage } from "@caelush/storage";
+import { createHash } from "node:crypto";
+import { ArchiveService } from "../src/services/archive-service.js";
+import { LegacyArchiveReconciler } from "../src/workspaces/legacy-archive-reconciler.js";
+import { legacyWorkspaceMatches } from "../src/workspaces/workspace-identity.js";
 
 const daemon = (await import("../src/index.js")) as unknown as Record<string, unknown>;
 const directories: string[] = [];
@@ -71,6 +86,105 @@ describe("Skill bundle quota and garbage collection", () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toMatchObject({ code: "SKILL_ARTIFACT_INVALID" });
+  });
+
+  it("A39 keeps a shared bundle through one archived Run and collects it after the last reference is purged", async () => {
+    const fixture = await makeFixture("skills-bundle-gc-archive-shared-");
+    const storage = await openCaelushStorage({
+      path: path.join(fixture.directory, "archive-shared.db"),
+      archivePolicy: { isTerminalRunStatus, legacyWorkspaceMatches },
+    });
+    try {
+      const referenceAuthority = {
+        isReferenced: async (reference: BundleReference) =>
+          (await storage.runs.isWorkflowArtifactReferenced?.(reference.artifactRef)) ?? true,
+      };
+      const store = makeStore(fixture, { references: referenceAuthority });
+      const bundle = await store.capture({
+        skillId: fixture.candidate.skillId,
+        signal: new AbortController().signal,
+      });
+      const workspace = { id: createWorkspaceId(), path: fixture.directory };
+      const sessions = [makeSession(), makeSession()];
+      for (const session of sessions) await storage.sessions.insert(session);
+
+      for (const [index, session] of sessions.entries()) {
+        const run = makeRun(session.id, {
+          workspace,
+          status: "COMPLETED",
+          startedAt: createTimestampMs(101 + index),
+          finishedAt: createTimestampMs(102 + index),
+        });
+        await storage.runs.insertRunWithPreparedResources?.({
+          run,
+          workflowProfile: {
+            runId: run.id,
+            profileVersion: 1,
+            workflowRendererVersion: "workflow-renderer@1",
+            catalogSnapshotRef: {
+              catalogRevision: "phase08-catalog-v1",
+              artifactRef: `catalog_phase08_archive_${run.id}`,
+              manifestFingerprint: createHash("sha256").update(run.id).digest("hex"),
+            },
+          },
+          resourcesInOrder: [
+            {
+              runId: run.id,
+              resourceKind: "WORKFLOW_INSTRUCTION",
+              resourceId: fixture.candidate.skillId,
+              resourceRevision: bundle.bundleRevision,
+              artifactRef: bundle.artifactRef,
+              sourceFingerprint: bundle.manifestFingerprint,
+              utf8Bytes: 128,
+              tokenEstimate: 32,
+            },
+          ],
+          events: [],
+        });
+      }
+      store.releasePreparingReference(bundle.artifactRef);
+
+      const archive = new ArchiveService({
+        archives: storage.archives,
+        reconciler: new LegacyArchiveReconciler(storage.archives),
+        scopeId: "phase08-a39-archive-scope",
+        onDeleted: () => undefined,
+      });
+      for (const session of sessions)
+        await archive.archive({ type: "SESSION", sessionId: session.id });
+
+      const firstDeletion = await archive.previewDeletion({
+        type: "SESSION",
+        sessionId: sessions[0]!.id,
+      });
+      await archive.permanentlyDelete(firstDeletion.confirmationToken);
+      expect(await storage.runs.isWorkflowArtifactReferenced?.(bundle.artifactRef)).toBe(true);
+      expect(await store.collectGarbage()).toMatchObject({ removedBundles: 0 });
+      expect(
+        await store.read({
+          bundle,
+          relativePath: "SKILL.md",
+          signal: new AbortController().signal,
+        }),
+      ).toMatchObject({ kind: "TEXT" });
+
+      const secondDeletion = await archive.previewDeletion({
+        type: "SESSION",
+        sessionId: sessions[1]!.id,
+      });
+      await archive.permanentlyDelete(secondDeletion.confirmationToken);
+      expect(await storage.runs.isWorkflowArtifactReferenced?.(bundle.artifactRef)).toBe(false);
+      expect(await store.collectGarbage()).toMatchObject({ removedBundles: 1 });
+      await expect(
+        store.read({
+          bundle,
+          relativePath: "SKILL.md",
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toMatchObject({ code: "SKILL_ARTIFACT_INVALID" });
+    } finally {
+      await storage.close();
+    }
   });
 
   it("rejects quota overflow without deleting content protected by a Run reference", async () => {
@@ -144,6 +258,54 @@ describe("Skill bundle quota and garbage collection", () => {
     ).toContain("original body");
   });
 });
+
+function makeSession() {
+  return AgentSessionSchema.parse({
+    id: createSessionId(),
+    createdAt: createTimestampMs(100),
+    updatedAt: createTimestampMs(100),
+    metadata: { test: true },
+  });
+}
+
+function makeRun(
+  sessionId: ReturnType<typeof createSessionId>,
+  overrides: {
+    readonly workspace: {
+      readonly id: ReturnType<typeof createWorkspaceId>;
+      readonly path: string;
+    };
+    readonly status: "COMPLETED";
+    readonly startedAt: ReturnType<typeof createTimestampMs>;
+    readonly finishedAt: ReturnType<typeof createTimestampMs>;
+  },
+) {
+  return AgentRunSchema.parse({
+    id: createRunId(),
+    sessionId,
+    goal: "test goal",
+    status: overrides.status,
+    workspace: overrides.workspace,
+    model: { provider: "test", model: "test-model" },
+    runtime: { id: "local", kind: "test" },
+    permissionProfile: "READ_ONLY",
+    approvalPolicy: "ON_BOUNDARY",
+    securityPolicy: expandPermissionPreset({
+      presetId: "VIEW_ONLY",
+      expectedVersion: 1,
+      createdAt: new Date(100).toISOString(),
+    }),
+    limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
+    contextBudgetPolicy: {
+      version: "ADAPTIVE_V1",
+      outputReserveTokens: 16_384,
+      safetyReserveTokens: 4_096,
+    },
+    createdAt: createTimestampMs(100),
+    startedAt: overrides.startedAt,
+    finishedAt: overrides.finishedAt,
+  });
+}
 
 interface BundleReference {
   readonly bundleRevision: string;
